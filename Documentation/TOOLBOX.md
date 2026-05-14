@@ -1,36 +1,45 @@
 # Toolbox — Automated DJ Mixes
 
-Module reference for all pipeline components. Updated as modules are built.
+Module reference for all pipeline components.
 
 ## Modules
 
 ### `Source/automated_dj_mixes/orchestrator.py`
-Main pipeline controller. Wires analysis → sequencing → warping → automation → ALS generation.
-**Status:** Scaffold only
+Main pipeline controller. Wires analysis → sequencing → gain offsets → warping → arrangement positions → transition automation → ALS generation. CLI via `python -m automated_dj_mixes.orchestrator --input "Tracks/" --output "Output/"`.
+
+Key functions: `run_pipeline()` (full pipeline), `_find_template()`, `_next_version()`, `main()` (CLI).
 
 ### `Source/automated_dj_mixes/analysis.py`
-Reads key/BPM from file tags (mutagen). Transient/downbeat detection (Librosa). LUFS measurement (pyloudnorm). Falls back to Mixed In Key CSV if tags missing.
-**Status:** Scaffold only
+Reads key/BPM from file tags (mutagen ID3/Vorbis). Transient/downbeat detection (librosa). LUFS measurement (pyloudnorm). Falls back to librosa beat detection if BPM tag missing.
+
+Key types: `TrackAnalysis` (dataclass with path, key, camelot, bpm, lufs, first_downbeat_sec, duration_sec, sample_rate, warnings).
+Key functions: `analyse_track()`, `analyse_folder()`, `_read_tags()`, `_detect_downbeat()`, `_measure_lufs()`.
 
 ### `Source/automated_dj_mixes/sequencer.py`
-Camelot wheel mapping (musical key → Camelot code). Builds optimal harmonic path through all tracks. Rules: +-1 = smooth, +-2 = power mix, A<->B = key change.
-**Status:** Scaffold only
+Full Camelot wheel mapping (24 keys + common aliases like "Am", "Bbm", "F#"). Compatibility scoring: 4=identical, 3=smooth/relative, 2=power, 1=diagonal, 0=clash. Greedy nearest-neighbour harmonic path. **20 tests.**
+
+Key functions: `key_to_camelot()`, `compatibility_score()`, `is_compatible()`, `build_harmonic_path()`.
 
 ### `Source/automated_dj_mixes/warping.py`
-Calculates warp markers from BPM + detected downbeat. Aligns first kick/transient to grid. Assumes constant BPM, 4/4 time (V1 constraint).
-**Status:** Scaffold only
+Two-marker warp calculation: first downbeat → beat 0, end of track → total beats. Ableton interpolates linearly. Works for constant-BPM tracks. **5 tests.**
+
+Key types: `WarpMarker` (beat_time, sample_time).
+Key function: `calculate_warp_markers()`.
 
 ### `Source/automated_dj_mixes/automation.py`
-Generates filter automation envelopes (bass cut on incoming until energy change, bass cut on outgoing). Crossfade curves (configurable 16 or 32 bars). Gain offsets — finds quietest track, brings all others down to match.
-**Status:** Scaffold only
+Transition generation: outgoing LP filter sweeps 20kHz→200Hz, incoming HP filter starts 500Hz then drops to 20Hz at midpoint, volume crossfade. Gain offsets: match to quietest (min LUFS), cap at max_reduction_db. **11 tests.**
+
+Key types: `AutomationPoint`, `TransitionAutomation`.
+Key functions: `generate_transition()`, `calculate_gain_offsets()`.
 
 ### `Source/automated_dj_mixes/als_generator.py`
-Template-based ALS XML patching. Loads known-good Ableton Live 12 template, patches in tracks, clips, warp markers, automation lanes, gain offsets. gzip-compresses and writes .als file. Handles versioning (V1, V2, V3).
-**Status:** Scaffold only
+Template-based ALS XML patching. Decompresses gzip, patches raw lines (not DOM — Ableton rejects reformatted XML), recompresses. Inserts: AudioClip XML (FileRef, WarpMarkers, Complex Pro mode), track names, utility gain, filter automation envelopes (discovers LP/HP target IDs by frequency value), project BPM. **14 tests.**
+
+Key types: `TrackPatch` (analysis, track_index, warp_markers, gain_offset_db, arrangement_start_beats).
+Key functions: `generate_session()`, `decompress_als()`, `compress_als()`, `_build_audio_clip_xml()`, `_find_filter_target_id()`, `_insert_audio_clip()`, `_insert_automation_envelopes()`.
 
 ### `Source/automated_dj_mixes/config.py`
-Loads settings from `Config/settings.json`. Provides defaults for crossfade bars, filter depth, gain strategy, Ableton version, project tempo, versioning prefix.
-**Status:** Scaffold only
+Loads settings from `Config/settings.json` with sensible defaults (crossfade_bars=32, max_gain_reduction_db=12, default_project_tempo=128, versioning_prefix="V").
 
 ## Dependencies
 

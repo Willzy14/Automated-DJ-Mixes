@@ -68,23 +68,27 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-Scaffolding complete. Template analysed. Awaiting first module implementation.
-- Template `DJ Mix Template 2026.als` committed — 12 audio tracks, effects chain studied, XML structure mapped
-- Decompressed XML at `Templates/DJ Mix Template 2026.xml` (gitignored, regeneratable)
-- All 7 source modules scaffolded with dataclasses, signatures, and `NotImplementedError`
-- 4 passing tests for Camelot wheel mapping
+**All 7 pipeline modules fully implemented.** 50 tests passing across 4 test files.
+
+- **analysis.py** — Reads key/BPM from ID3/Vorbis tags (mutagen), detects downbeats (librosa), measures LUFS (pyloudnorm). Falls back to librosa beat detection if BPM tag missing.
+- **sequencer.py** — Full Camelot wheel mapping (24 keys + aliases), compatibility scoring (identical/smooth/relative/power/diagonal/clash), greedy nearest-neighbour harmonic path. 20 tests.
+- **warping.py** — Two-marker warp calculation: first downbeat anchored to beat 0, end marker defines tempo relationship. Ableton interpolates linearly between them. 5 tests.
+- **automation.py** — Transition generation (LP filter sweep, HP filter with midpoint bass drop, volume crossfade). Gain offsets (match to quietest, capped). 11 tests.
+- **als_generator.py** — Full template-based ALS patching: audio clip insertion (AudioClip XML with FileRef, WarpMarkers, Complex Pro warp mode), track naming, utility gain, filter automation envelopes (LP/HP target discovery by frequency value), project BPM. 14 tests.
+- **orchestrator.py** — Wires all modules: analyse → sequence → gain offsets → warp markers → arrangement positions (sequential with crossfade overlap) → transition automation → ALS generation. CLI via argparse.
+- **config.py** — Settings loader with defaults from `Config/settings.json`.
+
+**Proven**: ALS roundtrip (decompress→modify→recompress) verified — Ableton loads patched files cleanly.
+
+**Not yet validated with real audio files** — the AudioClip XML structure is built from the Ableton 12 schema but hasn't been tested with actual tracks in Ableton yet. This is the critical next step.
 
 ## What's Next
 
-1. **Analysis module** — read key/BPM from tags (mutagen), transient detection (Librosa), LUFS measurement (pyloudnorm)
-2. **Sequencer module** — Camelot wheel mapping + optimal harmonic path algorithm
-3. **Sequencer tests** — unit tests for Camelot logic
-4. **Ableton template** — Sam creates minimal Live 12 session, commit + decompress to study XML schema
-5. **ALS generator** — template-based XML patching
-6. **Warping module** — warp marker calculation from BPM + detected downbeat
-7. **Automation module** — filter envelopes, crossfade curves, gain offsets (match to quietest track)
-8. **Orchestrator** — wire everything together
-9. **CLI** — argparse entry point
+1. **Real audio test** — Drop 3-5 tagged tracks into `Tracks/`, run the pipeline, open result in Ableton. Validate clips load, warping works, automation renders.
+2. **Fix AudioClip schema if needed** — Ableton may reject the generated AudioClip XML. If so, study a real clip (manually drag a file onto Track 2, save, decompress, compare).
+3. **Volume automation** — Add mixer volume crossfade to transitions (currently only filter automation).
+4. **ChannelEQ bass kill** — Wire ChannelEq Low band automation for cleaner bass transitions.
+5. **pyproject.toml** — Proper packaging with editable install.
 
 ## Key Decisions
 
