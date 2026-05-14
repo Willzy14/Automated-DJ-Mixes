@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+venv/
+.env
+
+# Ableton Live
+*.als.bak
+*.asd
+Backup/
+Ableton Project Info/
+
+# Audio (don't commit large audio files)
+*.wav
+*.mp3
+*.flac
+*.aiff
+*.ogg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

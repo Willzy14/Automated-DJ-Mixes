@@ -1,0 +1,10 @@
+{
+  "crossfade_bars": 32,
+  "filter_automation_depth_db": -16,
+  "gain_strategy": "match_quietest",
+  "max_gain_reduction_db": 12,
+  "true_peak_ceiling_db": -1,
+  "ableton_version": "12",
+  "default_project_tempo": 128,
+  "versioning_prefix": "V"
+}

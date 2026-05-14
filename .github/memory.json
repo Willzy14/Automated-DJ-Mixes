@@ -1,0 +1,47 @@
+{
+  "project": "Automated DJ Mixes",
+  "description": "Automated DJ mix pipeline — template-based ALS generation with harmonic sequencing, beatgrid placement, gain offsets, transition automation for dance tracks",
+  "tech_stack": ["Python", "Librosa", "pyloudnorm", "mutagen", "Ableton Live 12"],
+  "modules": {
+    "orchestrator": {
+      "path": "Source/automated_dj_mixes/orchestrator.py",
+      "purpose": "Main pipeline controller",
+      "status": "scaffold"
+    },
+    "analysis": {
+      "path": "Source/automated_dj_mixes/analysis.py",
+      "purpose": "Tag reading, transient detection, LUFS measurement",
+      "status": "scaffold"
+    },
+    "sequencer": {
+      "path": "Source/automated_dj_mixes/sequencer.py",
+      "purpose": "Camelot wheel logic, harmonic path optimisation",
+      "status": "scaffold"
+    },
+    "warping": {
+      "path": "Source/automated_dj_mixes/warping.py",
+      "purpose": "Warp marker calculation from BPM + downbeat",
+      "status": "scaffold"
+    },
+    "automation": {
+      "path": "Source/automated_dj_mixes/automation.py",
+      "purpose": "Filter curves, crossfades, gain offsets",
+      "status": "scaffold"
+    },
+    "als_generator": {
+      "path": "Source/automated_dj_mixes/als_generator.py",
+      "purpose": "Template-based ALS XML patching",
+      "status": "scaffold"
+    },
+    "config": {
+      "path": "Source/automated_dj_mixes/config.py",
+      "purpose": "Settings loader",
+      "status": "scaffold"
+    }
+  },
+  "config_path": "Config/settings.json",
+  "template_path": "Templates/",
+  "test_fixtures": "Tests/Fixtures/",
+  "v1_constraints": ["electronic/dance only", "constant BPM", "4/4 time", "first-kick downbeat detection"],
+  "connections": ["Social Media Content Engine", "samwillsmixing.com"]
+}
