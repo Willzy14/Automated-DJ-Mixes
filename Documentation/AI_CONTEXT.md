@@ -40,8 +40,9 @@ ALS generation is **template-based** — a real Ableton Live 12 session is decom
 - **Track 1**: "Session Time" — HOFA Project Time only, no audio. Always skip.
 - **Tracks 2-12**: "2-Audio" through "12-Audio" — each has identical effects chain:
   - `StereoGain` (Utility) — stereo/mono, width, gain, balance, bass mono @ 120Hz
-  - `ChannelEq` — 3-band EQ (Low/Mid/High) + output gain
-  - `AutoFilter2` — SVF low-pass, 24dB slope, frequency at 20kHz (fully open)
+  - `ChannelEq` — 3-band EQ (Low/Mid/High) + output gain. **Use Low band for bass kills** (cleaner than filter)
+  - `AutoFilter2` Id="1" — **Low-pass**, SVF, 24dB slope, freq at 20kHz (fully open). Sweep DOWN to cut highs.
+  - `AutoFilter2` Id="3" — **High-pass**, SVF, 24dB slope, freq at 20Hz (fully open). Sweep UP to cut lows.
 - **Device hierarchy**: `AudioTrack > DeviceChain > Devices > AudioEffectGroupDevice > Branches > AudioEffectBranch > DeviceChain > AudioToAudioDeviceChain > Devices`
 - Each parameter has a unique `AutomationTarget Id` — must be found dynamically per track
 
@@ -51,8 +52,9 @@ ALS generation is **template-based** — a real Ableton Live 12 session is decom
 |-----------|------------|---------|
 | Mixer Volume | `Mixer > Volume > AutomationTarget` | Crossfade curves |
 | Utility Gain | `StereoGain > Gain > AutomationTarget` | LUFS-based gain offsets |
-| Auto Filter Freq | `AutoFilter2 > Filter_Frequency > AutomationTarget` | Filter sweeps during transitions |
-| Channel EQ Low | `ChannelEq > Low > Gain > AutomationTarget` | Bass kill during transitions |
+| LP Filter Freq | `AutoFilter2[0] > Filter_Frequency` (Type=0) | Low-pass sweep — cut highs |
+| HP Filter Freq | `AutoFilter2[1] > Filter_Frequency` (Type=1) | High-pass sweep — cut lows |
+| Channel EQ Low | `ChannelEq > Low > Gain > AutomationTarget` | Bass kill (cleaner than filter) |
 
 ## How to Run
 
