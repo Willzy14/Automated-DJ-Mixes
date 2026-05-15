@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+WARP_MODE_REPITCH = 6
+WARP_MODE_COMPLEX_PRO = 4
+
 
 @dataclass
 class WarpMarker:
@@ -14,6 +17,18 @@ class WarpMarker:
     """
     beat_time: float
     sample_time: float
+
+
+def choose_warp_mode(track_bpm: float, project_bpm: float) -> int:
+    """Choose warp mode based on BPM difference.
+
+    Repitch sounds more natural but shifts pitch with tempo.
+    Beyond ~1 BPM difference the pitch change becomes audible,
+    so switch to Complex Pro (time-stretch without pitch change).
+    """
+    if abs(track_bpm - project_bpm) <= 1.0:
+        return WARP_MODE_REPITCH
+    return WARP_MODE_COMPLEX_PRO
 
 
 def calculate_warp_markers(

@@ -10,6 +10,7 @@ ElementTree reformats the document and Ableton rejects it as corrupt.
 from __future__ import annotations
 
 import gzip
+import os
 import re
 from pathlib import Path
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ class TrackPatch:
     warp_markers: list[WarpMarker]
     gain_offset_db: float = 0.0
     arrangement_start_beats: float = 0.0
+    warp_mode: int = 4  # 4 = Complex Pro, 6 = Repitch
 
 
 def decompress_als(als_path: Path) -> list[str]:
@@ -150,52 +152,242 @@ def _find_filter_target_id(lines: list[str], start: int, end: int, filter_type: 
     return None
 
 
-def _build_envelope_xml(target_id: str, points: list[tuple[float, float]], indent: str = "\t\t\t\t") -> list[str]:
+def _find_volume_target_id(lines: list[str], start: int, end: int) -> str | None:
+    """Find the Mixer Volume AutomationTarget Id for a track."""
+    in_mixer = False
+    in_volume = False
+    for i in range(start, end + 1):
+        line = lines[i]
+        if "<Mixer>" in line:
+            in_mixer = True
+        if in_mixer and "</Mixer>" in line:
+            return None
+        if in_mixer and "<Volume>" in line:
+            in_volume = True
+        if in_volume:
+            if "AutomationTarget Id=" in line:
+                m = re.search(r'Id="(\d+)"', line)
+                if m:
+                    return m.group(1)
+            if "</Volume>" in line:
+                in_volume = False
+    return None
+
+
+def _find_utility_gain_target_id(lines: list[str], start: int, end: int) -> str | None:
+    """Find the Utility plugin's Gain AutomationTarget Id (StereoGain > Gain).
+
+    This is the gain control on the Utility plugin (first in device chain),
+    NOT the channel mixer fader on the right. Volume automation goes here
+    so the mixer fader stays free for manual tweaking during playback.
+    """
+    in_stereogain = False
+    in_gain = False
+    for i in range(start, end + 1):
+        line = lines[i]
+        if "<StereoGain " in line or "<StereoGain>" in line:
+            in_stereogain = True
+        if in_stereogain and "</StereoGain>" in line:
+            return None
+        if in_stereogain and "<Gain>" in line:
+            in_gain = True
+        if in_gain:
+            if "AutomationTarget Id=" in line:
+                m = re.search(r'Id="(\d+)"', line)
+                if m:
+                    return m.group(1)
+            if "</Gain>" in line:
+                in_gain = False
+    return None
+
+
+def _find_main_track_envelopes_line(lines: list[str]) -> int | None:
+    """Find the <Envelopes> line inside <MainTrack><AutomationEnvelopes>."""
+    in_main = False
+    for i, line in enumerate(lines):
+        if "<MainTrack" in line:
+            in_main = True
+        if in_main and "<AutomationEnvelopes>" in line:
+            for j in range(i, min(i + 5, len(lines))):
+                if "<Envelopes" in lines[j]:
+                    return j
+            return None
+    return None
+
+
+def _remove_existing_envelope_for_target(lines: list[str], target_id: str) -> int:
+    """Remove any AutomationEnvelope with the given PointeeId. Returns lines removed."""
+    pointee_match = f'PointeeId Value="{target_id}"'
+    for i, line in enumerate(lines):
+        if pointee_match in line:
+            # Walk backwards to find <AutomationEnvelope opening
+            env_start = i
+            while env_start > 0 and "<AutomationEnvelope " not in lines[env_start]:
+                env_start -= 1
+            # Walk forwards to find </AutomationEnvelope>
+            env_end = i
+            while env_end < len(lines) and "</AutomationEnvelope>" not in lines[env_end]:
+                env_end += 1
+            if env_end < len(lines):
+                removed = env_end - env_start + 1
+                del lines[env_start:env_end + 1]
+                return removed
+    return 0
+
+
+def _insert_main_track_tempo_envelope(
+    lines: list[str], tempo_points: list[tuple[float, float]], target_id: str = "8"
+) -> int:
+    """Insert a tempo automation envelope into the MainTrack. Removes any existing
+    envelope for the same target first, so the template's default 120 BPM envelope
+    doesn't conflict with our new one."""
+    _remove_existing_envelope_for_target(lines, target_id)
+
+    env_line = _find_main_track_envelopes_line(lines)
+    if env_line is None:
+        return 0
+
+    env_indent = lines[env_line].split("<Envelopes")[0].replace("\r", "").replace("\n", "")
+    content_indent = env_indent + "\t"
+    envelope_lines = _build_envelope_xml(target_id, tempo_points, indent=content_indent)
+
+    if "<Envelopes />" in lines[env_line]:
+        lines[env_line:env_line + 1] = [
+            f"{env_indent}<Envelopes>\r\n",
+            *envelope_lines,
+            f"{env_indent}</Envelopes>\r\n",
+        ]
+        return len(envelope_lines) + 1
+    elif "<Envelopes>" in lines[env_line]:
+        close_idx = env_line + 1
+        depth = 1
+        while close_idx < len(lines):
+            if "<Envelopes>" in lines[close_idx]:
+                depth += 1
+            if "</Envelopes>" in lines[close_idx]:
+                depth -= 1
+                if depth == 0:
+                    break
+            close_idx += 1
+        lines[close_idx:close_idx] = envelope_lines
+        return len(envelope_lines)
+    return 0
+
+
+def _find_eq_bass_target_id(lines: list[str], start: int, end: int) -> str | None:
+    """Find the ChannelEq LowShelfGain AutomationTarget Id for a track."""
+    in_eq = False
+    in_low = False
+    for i in range(start, end + 1):
+        line = lines[i]
+        if "<ChannelEq " in line or "<ChannelEq>" in line:
+            in_eq = True
+        if in_eq and "</ChannelEq>" in line:
+            in_eq = False
+            in_low = False
+        if in_eq and "<LowShelfGain>" in line:
+            in_low = True
+        if in_low:
+            if "AutomationTarget Id=" in line:
+                m = re.search(r'Id="(\d+)"', line)
+                if m:
+                    return m.group(1)
+            if "</LowShelfGain>" in line:
+                in_low = False
+    return None
+
+
+def _build_envelope_xml(target_id: str, points: list[tuple[float, float]], indent: str = "\t\t\t\t\t\t") -> list[str]:
     """Build automation envelope XML lines for a given AutomationTarget."""
+    t = indent
+    default_value = points[0][1] if points else 0.0
     envelope_lines = [
-        f"{indent}<AutomationEnvelope Id=\"{_alloc_id()}\">\n",
-        f"{indent}\t<EnvelopeTarget>\n",
-        f"{indent}\t\t<PointeeId Value=\"{target_id}\" />\n",
-        f"{indent}\t</EnvelopeTarget>\n",
-        f"{indent}\t<Automation>\n",
-        f"{indent}\t\t<Events>\n",
+        f"{t}<AutomationEnvelope Id=\"{_alloc_id()}\">\r\n",
+        f"{t}\t<EnvelopeTarget>\r\n",
+        f"{t}\t\t<PointeeId Value=\"{target_id}\" />\r\n",
+        f"{t}\t</EnvelopeTarget>\r\n",
+        f"{t}\t<Automation>\r\n",
+        f"{t}\t\t<Events>\r\n",
+        f"{t}\t\t\t<FloatEvent Id=\"{_alloc_id()}\" Time=\"-63072000\" Value=\"{default_value}\" />\r\n",
     ]
-    for i, (time_val, value) in enumerate(points):
+    for time_val, value in points:
         envelope_lines.append(
-            f"{indent}\t\t\t<AutomationEvent Id=\"{i}\" Time=\"{time_val}\" Value=\"{value}\" />\n"
+            f"{t}\t\t\t<FloatEvent Id=\"{_alloc_id()}\" Time=\"{time_val}\" Value=\"{value}\" />\r\n"
         )
     envelope_lines.extend([
-        f"{indent}\t\t</Events>\n",
-        f"{indent}\t</Automation>\n",
-        f"{indent}</AutomationEnvelope>\n",
+        f"{t}\t\t</Events>\r\n",
+        f"{t}\t\t<AutomationTransformViewState>\r\n",
+        f"{t}\t\t\t<IsTransformPending Value=\"false\" />\r\n",
+        f"{t}\t\t\t<TimeAndValueTransforms />\r\n",
+        f"{t}\t\t</AutomationTransformViewState>\r\n",
+        f"{t}\t</Automation>\r\n",
+        f"{t}</AutomationEnvelope>\r\n",
     ])
     return envelope_lines
 
 
+def _xml_escape(value: str) -> str:
+    """Escape XML special characters for use inside attribute values."""
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
 def _set_track_name(lines: list[str], start: int, end: int, name: str) -> None:
     """Set the track's EffectiveName and UserName."""
+    safe = _xml_escape(name)
     for i in range(start, min(start + 30, end)):
         if "<EffectiveName" in lines[i]:
-            lines[i] = re.sub(r'Value="[^"]*"', f'Value="{name}"', lines[i])
+            lines[i] = re.sub(r'Value="[^"]*"', f'Value="{safe}"', lines[i])
         if "<UserName" in lines[i] and i > start + 5:
-            lines[i] = re.sub(r'Value="[^"]*"', f'Value="{name}"', lines[i])
+            lines[i] = re.sub(r'Value="[^"]*"', f'Value="{safe}"', lines[i])
             break
 
 
-def _set_utility_gain(lines: list[str], start: int, end: int, gain_db: float) -> None:
-    """Set the Utility (StereoGain) Gain parameter."""
+def _set_master_volume_level(lines: list[str], gain_db: float) -> None:
+    """Set the MainTrack (master) Volume Manual value to a fixed level.
+
+    Used to attenuate the whole project (e.g. -6 dB) to prevent clipping when
+    summing many mastered tracks. The mixer fader on the master shows this
+    level but isn't automated — Sam can still ride it manually.
+    """
     ableton_val = _db_to_ableton_volume(gain_db)
-    in_stereogain = False
-    in_gain = False
+    in_main = False
+    in_volume = False
+    for i, line in enumerate(lines):
+        if "<MainTrack" in line:
+            in_main = True
+        if in_main and "</MainTrack>" in line:
+            return
+        if in_main and "<Volume>" in line:
+            in_volume = True
+        if in_volume and "Manual Value=" in line:
+            lines[i] = re.sub(r'Manual Value="[^"]*"', f'Manual Value="{ableton_val}"', lines[i])
+            return
 
+
+def _set_mixer_volume_level(lines: list[str], start: int, end: int, gain_db: float) -> None:
+    """Set the Mixer Volume fader to a static level (for LUFS matching).
+
+    The fader stays at this position by default but is not automated, so it
+    remains available for manual tweaking during playback. Volume automation
+    goes on the Utility plugin's Gain parameter instead.
+    """
+    ableton_val = _db_to_ableton_volume(gain_db)
+    in_mixer = False
+    in_volume = False
     for i in range(start, end + 1):
-        if "<StereoGain " in lines[i]:
-            in_stereogain = True
-        if in_stereogain and "</StereoGain>" in lines[i]:
-            break
-        if in_stereogain and "<Gain>" in lines[i]:
-            in_gain = True
-        if in_gain and 'Manual Value=' in lines[i]:
+        if "<Mixer>" in lines[i]:
+            in_mixer = True
+        if in_mixer and "</Mixer>" in lines[i]:
+            return
+        if in_mixer and "<Volume>" in lines[i]:
+            in_volume = True
+        if in_volume and "Manual Value=" in lines[i]:
             lines[i] = re.sub(r'Manual Value="[^"]*"', f'Manual Value="{ableton_val}"', lines[i])
             return
 
@@ -224,15 +416,22 @@ def _find_track_envelopes_line(lines: list[str], start: int, end: int) -> int | 
     return None
 
 
-def _build_file_ref_xml(track_path: Path, indent: str) -> list[str]:
-    """Build FileRef XML block for an audio file."""
-    abs_path = str(track_path.resolve())
+def _build_file_ref_xml(track_path: Path, output_path: Path, indent: str) -> list[str]:
+    """Build FileRef XML block matching Ableton Live 12.3 format."""
+    abs_path = str(track_path.resolve()).replace("\\", "/")
     file_size = track_path.stat().st_size if track_path.exists() else 0
+
+    try:
+        rel_path = os.path.relpath(track_path.resolve(), output_path.resolve().parent).replace("\\", "/")
+        rel_type = "1"
+    except ValueError:
+        rel_path = ""
+        rel_type = "0"
 
     return [
         f"{indent}<FileRef>\n",
-        f"{indent}\t<RelativePathType Value=\"3\" />\n",
-        f"{indent}\t<RelativePath Value=\"\" />\n",
+        f"{indent}\t<RelativePathType Value=\"{rel_type}\" />\n",
+        f"{indent}\t<RelativePath Value=\"{rel_path}\" />\n",
         f"{indent}\t<Path Value=\"{abs_path}\" />\n",
         f"{indent}\t<Type Value=\"1\" />\n",
         f"{indent}\t<LivePackName Value=\"\" />\n",
@@ -246,151 +445,166 @@ def _build_file_ref_xml(track_path: Path, indent: str) -> list[str]:
 
 def _build_audio_clip_xml(
     patch: TrackPatch,
-    indent: str = "\t\t\t\t\t\t\t",
+    output_path: Path,
+    indent: str = "\t\t\t\t\t\t\t\t\t",
 ) -> list[str]:
-    """Build AudioClip XML for insertion into ArrangerAutomation Events."""
+    """Build AudioClip XML using Ableton Live 12.3's proven reference format."""
     clip_id = _alloc_id()
+    take_id = _alloc_id()
     a = patch.analysis
-    name = a.path.stem
+    name = _xml_escape(a.path.stem)
     warp_markers = patch.warp_markers
     arr_start = patch.arrangement_start_beats
 
-    duration_beats = warp_markers[-1].beat_time if len(warp_markers) >= 2 else 0.0
-    sample_count = int(a.duration_sec * a.sample_rate) if a.duration_sec and a.sample_rate else 0
+    duration_sec = a.duration_sec or 0.0
+    duration_beats = warp_markers[-1].beat_time if warp_markers else duration_sec
+    sample_count = int(duration_sec * (a.sample_rate or 44100))
     sr = a.sample_rate or 44100
 
+    abs_path = _xml_escape(str(a.path.resolve()).replace("\\", "/"))
+    try:
+        rel_path = _xml_escape(os.path.relpath(a.path.resolve(), output_path.resolve().parent).replace("\\", "/"))
+    except ValueError:
+        rel_path = abs_path
+    file_size = a.path.stat().st_size if a.path.exists() else 0
+
     t = indent
-    lines = []
-
-    lines.append(f'{t}<AudioClip Id="{clip_id}" Time="{arr_start}">\n')
-    lines.append(f'{t}\t<LomId Value="0" />\n')
-    lines.append(f'{t}\t<LomIdView Value="0" />\n')
-    lines.append(f'{t}\t<CurrentStart Value="{arr_start}" />\n')
-    lines.append(f'{t}\t<CurrentEnd Value="{arr_start + duration_beats}" />\n')
-
-    lines.append(f'{t}\t<Loop>\n')
-    lines.append(f'{t}\t\t<LoopStart Value="0" />\n')
-    lines.append(f'{t}\t\t<LoopEnd Value="{duration_beats}" />\n')
-    lines.append(f'{t}\t\t<StartRelative Value="0" />\n')
-    lines.append(f'{t}\t\t<LoopOn Value="false" />\n')
-    lines.append(f'{t}\t\t<OutMarker Value="{duration_beats}" />\n')
-    lines.append(f'{t}\t\t<HiddenLoopStart Value="0" />\n')
-    lines.append(f'{t}\t\t<HiddenLoopEnd Value="{duration_beats}" />\n')
-    lines.append(f'{t}\t</Loop>\n')
-
-    lines.append(f'{t}\t<Name Value="{name}" />\n')
-    lines.append(f'{t}\t<Annotation Value="" />\n')
-    lines.append(f'{t}\t<Color Value="-1" />\n')
-    lines.append(f'{t}\t<LaunchMode Value="0" />\n')
-    lines.append(f'{t}\t<LaunchQuantisation Value="0" />\n')
-
-    lines.append(f'{t}\t<TimeSignature>\n')
-    lines.append(f'{t}\t\t<TimeSignatures>\n')
-    lines.append(f'{t}\t\t\t<RemoteableTimeSignature Id="0">\n')
-    lines.append(f'{t}\t\t\t\t<Numerator Value="4" />\n')
-    lines.append(f'{t}\t\t\t\t<Denominator Value="4" />\n')
-    lines.append(f'{t}\t\t\t\t<Time Value="0" />\n')
-    lines.append(f'{t}\t\t\t</RemoteableTimeSignature>\n')
-    lines.append(f'{t}\t\t</TimeSignatures>\n')
-    lines.append(f'{t}\t</TimeSignature>\n')
-
-    lines.append(f'{t}\t<Envelopes>\n')
-    lines.append(f'{t}\t\t<Envelopes />\n')
-    lines.append(f'{t}\t</Envelopes>\n')
-
-    lines.append(f'{t}\t<ScrollerTimePreserver>\n')
-    lines.append(f'{t}\t\t<LeftTime Value="0" />\n')
-    lines.append(f'{t}\t\t<RightTime Value="{duration_beats}" />\n')
-    lines.append(f'{t}\t</ScrollerTimePreserver>\n')
-
-    lines.append(f'{t}\t<TimeSelection>\n')
-    lines.append(f'{t}\t\t<AnchorTime Value="0" />\n')
-    lines.append(f'{t}\t\t<OtherTime Value="0" />\n')
-    lines.append(f'{t}\t</TimeSelection>\n')
-
-    lines.append(f'{t}\t<Legato Value="false" />\n')
-    lines.append(f'{t}\t<Ram Value="false" />\n')
-    lines.append(f'{t}\t<GrooveSettings>\n')
-    lines.append(f'{t}\t\t<GrooveId Value="-1" />\n')
-    lines.append(f'{t}\t</GrooveSettings>\n')
-    lines.append(f'{t}\t<Disabled Value="false" />\n')
-    lines.append(f'{t}\t<VelocityAmount Value="0" />\n')
-
-    lines.append(f'{t}\t<FollowAction>\n')
-    lines.append(f'{t}\t\t<FollowTime Value="4" />\n')
-    lines.append(f'{t}\t\t<IsLinked Value="true" />\n')
-    lines.append(f'{t}\t\t<LoopIterations Value="1" />\n')
-    lines.append(f'{t}\t\t<FollowActionA Value="4" />\n')
-    lines.append(f'{t}\t\t<FollowActionB Value="0" />\n')
-    lines.append(f'{t}\t\t<FollowChanceA Value="100" />\n')
-    lines.append(f'{t}\t\t<FollowChanceB Value="0" />\n')
-    lines.append(f'{t}\t\t<JumpIndexA Value="1" />\n')
-    lines.append(f'{t}\t\t<JumpIndexB Value="1" />\n')
-    lines.append(f'{t}\t\t<FollowActionEnabled Value="false" />\n')
-    lines.append(f'{t}\t</FollowAction>\n')
-
-    lines.append(f'{t}\t<Grid>\n')
-    lines.append(f'{t}\t\t<FixedNumerator Value="1" />\n')
-    lines.append(f'{t}\t\t<FixedDenominator Value="16" />\n')
-    lines.append(f'{t}\t\t<GridIntervalPixel Value="20" />\n')
-    lines.append(f'{t}\t\t<Ntoles Value="2" />\n')
-    lines.append(f'{t}\t\t<SnapToGrid Value="true" />\n')
-    lines.append(f'{t}\t\t<Fixed Value="false" />\n')
-    lines.append(f'{t}\t</Grid>\n')
-
-    lines.append(f'{t}\t<SampleRef>\n')
-    lines.extend(_build_file_ref_xml(a.path, f'{t}\t\t'))
-    lines.append(f'{t}\t\t<LastModDate Value="0" />\n')
-    lines.append(f'{t}\t\t<SourceContext>\n')
-    lines.append(f'{t}\t\t\t<SourceContext Id="0">\n')
-    lines.append(f'{t}\t\t\t\t<OriginalFileRef>\n')
-    lines.extend(_build_file_ref_xml(a.path, f'{t}\t\t\t\t\t'))
-    lines.append(f'{t}\t\t\t\t</OriginalFileRef>\n')
-    lines.append(f'{t}\t\t\t\t<BrowserContentPath Value="" />\n')
-    lines.append(f'{t}\t\t\t</SourceContext>\n')
-    lines.append(f'{t}\t\t</SourceContext>\n')
-    lines.append(f'{t}\t\t<SampleUsageHint Value="0" />\n')
-    lines.append(f'{t}\t\t<DefaultDuration Value="{sample_count}" />\n')
-    lines.append(f'{t}\t\t<DefaultSampleRate Value="{sr}" />\n')
-    lines.append(f'{t}\t</SampleRef>\n')
-
-    lines.append(f'{t}\t<Onsets>\n')
-    lines.append(f'{t}\t\t<UserOnsets />\n')
-    lines.append(f'{t}\t\t<HasUserOnsets Value="false" />\n')
-    lines.append(f'{t}\t</Onsets>\n')
-
-    lines.append(f'{t}\t<WarpMode Value="4" />\n')
-    lines.append(f'{t}\t<GranularityTones Value="30" />\n')
-    lines.append(f'{t}\t<GranularityTexture Value="65" />\n')
-    lines.append(f'{t}\t<FluctuationTexture Value="25" />\n')
-    lines.append(f'{t}\t<ComplexProFormants Value="100" />\n')
-    lines.append(f'{t}\t<ComplexProEnvelope Value="128" />\n')
-    lines.append(f'{t}\t<TransientResolution Value="6" />\n')
-    lines.append(f'{t}\t<TransientLoopMode Value="2" />\n')
-    lines.append(f'{t}\t<TransientEnvelope Value="100" />\n')
-    lines.append(f'{t}\t<IsWarped Value="true" />\n')
-    lines.append(f'{t}\t<TimeShift Value="0" />\n')
-    lines.append(f'{t}\t<PitchCoarse Value="0" />\n')
-    lines.append(f'{t}\t<PitchFine Value="0" />\n')
-    lines.append(f'{t}\t<SampleVolume Value="1" />\n')
-    lines.append(f'{t}\t<MarkerDensity Value="2" />\n')
-    lines.append(f'{t}\t<AutoWarpTolerance Value="4" />\n')
-
-    lines.append(f'{t}\t<WarpMarkers>\n')
+    xml = f"""{t}<AudioClip Id="{clip_id}" Time="{arr_start}">
+{t}\t<LomId Value="0" />
+{t}\t<LomIdView Value="0" />
+{t}\t<CurrentStart Value="{arr_start}" />
+{t}\t<CurrentEnd Value="{arr_start + duration_beats}" />
+{t}\t<Loop>
+{t}\t\t<LoopStart Value="0" />
+{t}\t\t<LoopEnd Value="{duration_beats}" />
+{t}\t\t<StartRelative Value="0" />
+{t}\t\t<LoopOn Value="false" />
+{t}\t\t<OutMarker Value="{duration_beats}" />
+{t}\t\t<HiddenLoopStart Value="0" />
+{t}\t\t<HiddenLoopEnd Value="{duration_beats}" />
+{t}\t</Loop>
+{t}\t<Name Value="{name}" />
+{t}\t<Annotation Value="" />
+{t}\t<Color Value="37" />
+{t}\t<LaunchMode Value="0" />
+{t}\t<LaunchQuantisation Value="0" />
+{t}\t<TimeSignature>
+{t}\t\t<TimeSignatures>
+{t}\t\t\t<RemoteableTimeSignature Id="0">
+{t}\t\t\t\t<Numerator Value="4" />
+{t}\t\t\t\t<Denominator Value="4" />
+{t}\t\t\t\t<Time Value="0" />
+{t}\t\t\t</RemoteableTimeSignature>
+{t}\t\t</TimeSignatures>
+{t}\t</TimeSignature>
+{t}\t<Envelopes>
+{t}\t\t<Envelopes />
+{t}\t</Envelopes>
+{t}\t<ScrollerTimePreserver>
+{t}\t\t<LeftTime Value="0" />
+{t}\t\t<RightTime Value="{duration_beats}" />
+{t}\t</ScrollerTimePreserver>
+{t}\t<TimeSelection>
+{t}\t\t<AnchorTime Value="0" />
+{t}\t\t<OtherTime Value="0" />
+{t}\t</TimeSelection>
+{t}\t<Legato Value="false" />
+{t}\t<Ram Value="false" />
+{t}\t<GrooveSettings>
+{t}\t\t<GrooveId Value="-1" />
+{t}\t</GrooveSettings>
+{t}\t<Disabled Value="false" />
+{t}\t<VelocityAmount Value="0" />
+{t}\t<FollowAction>
+{t}\t\t<FollowTime Value="4" />
+{t}\t\t<IsLinked Value="true" />
+{t}\t\t<LoopIterations Value="1" />
+{t}\t\t<FollowActionA Value="4" />
+{t}\t\t<FollowActionB Value="0" />
+{t}\t\t<FollowChanceA Value="100" />
+{t}\t\t<FollowChanceB Value="0" />
+{t}\t\t<JumpIndexA Value="1" />
+{t}\t\t<JumpIndexB Value="1" />
+{t}\t\t<FollowActionEnabled Value="false" />
+{t}\t</FollowAction>
+{t}\t<Grid>
+{t}\t\t<FixedNumerator Value="1" />
+{t}\t\t<FixedDenominator Value="16" />
+{t}\t\t<GridIntervalPixel Value="20" />
+{t}\t\t<Ntoles Value="2" />
+{t}\t\t<SnapToGrid Value="true" />
+{t}\t\t<Fixed Value="false" />
+{t}\t</Grid>
+{t}\t<FreezeStart Value="0" />
+{t}\t<FreezeEnd Value="0" />
+{t}\t<IsWarped Value="true" />
+{t}\t<TakeId Value="{take_id}" />
+{t}\t<IsInKey Value="true" />
+{t}\t<ScaleInformation>
+{t}\t\t<Root Value="0" />
+{t}\t\t<Name Value="0" />
+{t}\t</ScaleInformation>
+{t}\t<SampleRef>
+{t}\t\t<FileRef>
+{t}\t\t\t<RelativePathType Value="1" />
+{t}\t\t\t<RelativePath Value="{rel_path}" />
+{t}\t\t\t<Path Value="{abs_path}" />
+{t}\t\t\t<Type Value="1" />
+{t}\t\t\t<LivePackName Value="" />
+{t}\t\t\t<LivePackId Value="" />
+{t}\t\t\t<OriginalFileSize Value="{file_size}" />
+{t}\t\t\t<OriginalCrc Value="0" />
+{t}\t\t\t<SourceHint Value="" />
+{t}\t\t</FileRef>
+{t}\t\t<LastModDate Value="0" />
+{t}\t\t<SourceContext />
+{t}\t\t<SampleUsageHint Value="0" />
+{t}\t\t<DefaultDuration Value="{sample_count}" />
+{t}\t\t<DefaultSampleRate Value="{sr}" />
+{t}\t\t<SamplesToAutoWarp Value="0" />
+{t}\t</SampleRef>
+{t}\t<Onsets>
+{t}\t\t<UserOnsets />
+{t}\t\t<HasUserOnsets Value="false" />
+{t}\t</Onsets>
+{t}\t<WarpMode Value="{patch.warp_mode}" />
+{t}\t<GranularityTones Value="30" />
+{t}\t<GranularityTexture Value="65" />
+{t}\t<FluctuationTexture Value="25" />
+{t}\t<TransientResolution Value="6" />
+{t}\t<TransientLoopMode Value="2" />
+{t}\t<TransientEnvelope Value="100" />
+{t}\t<ComplexProFormants Value="100" />
+{t}\t<ComplexProEnvelope Value="128" />
+{t}\t<Sync Value="true" />
+{t}\t<HiQ Value="true" />
+{t}\t<Fade Value="false" />
+{t}\t<Fades>
+{t}\t\t<FadeInLength Value="0" />
+{t}\t\t<FadeOutLength Value="0" />
+{t}\t\t<ClipFadesAreInitialized Value="true" />
+{t}\t\t<CrossfadeInState Value="0" />
+{t}\t\t<FadeInCurveSkew Value="0" />
+{t}\t\t<FadeInCurveSlope Value="0" />
+{t}\t\t<FadeOutCurveSkew Value="0" />
+{t}\t\t<FadeOutCurveSlope Value="0" />
+{t}\t\t<IsDefaultFadeIn Value="false" />
+{t}\t\t<IsDefaultFadeOut Value="false" />
+{t}\t</Fades>
+{t}\t<PitchCoarse Value="0" />
+{t}\t<PitchFine Value="0" />
+{t}\t<SampleVolume Value="1" />
+{t}\t<WarpMarkers>
+"""
     for wm in warp_markers:
-        lines.append(f'{t}\t\t<WarpMarker SecTime="{wm.sample_time}" BeatTime="{wm.beat_time}" />\n')
-    lines.append(f'{t}\t</WarpMarkers>\n')
-
-    lines.append(f'{t}\t<SavedWarpMarkersForStretched>\n')
-    for wm in warp_markers:
-        lines.append(f'{t}\t\t<WarpMarker SecTime="{wm.sample_time}" BeatTime="{wm.beat_time}" />\n')
-    lines.append(f'{t}\t</SavedWarpMarkersForStretched>\n')
-
-    lines.append(f'{t}\t<MarkersGenerated Value="false" />\n')
-    lines.append(f'{t}\t<IsSongTempoMaster Value="false" />\n')
-    lines.append(f'{t}</AudioClip>\n')
-
-    return lines
+        xml += f"""{t}\t\t<WarpMarker Id="{_alloc_id()}" SecTime="{wm.sample_time}" BeatTime="{wm.beat_time}" />\n"""
+    xml += f"""{t}\t</WarpMarkers>
+{t}\t<SavedWarpMarkersForStretched />
+{t}\t<MarkersGenerated Value="true" />
+{t}\t<IsSongTempoLeader Value="false" />
+{t}</AudioClip>
+"""
+    return [line + "\r\n" for line in xml.split("\n") if line.strip()]
 
 
 def _insert_audio_clip(lines: list[str], start: int, end: int, clip_lines: list[str]) -> int:
@@ -399,11 +613,13 @@ def _insert_audio_clip(lines: list[str], start: int, end: int, clip_lines: list[
     if events_line is None:
         return 0
 
+    indent = lines[events_line].split("<Events")[0].rstrip("\r\n")
+
     if "<Events />" in lines[events_line]:
         lines[events_line:events_line + 1] = [
-            lines[events_line].replace("<Events />", "<Events>\n"),
+            f"{indent}<Events>\r\n",
             *clip_lines,
-            "\t\t\t\t\t\t</Events>\n",
+            f"{indent}</Events>\r\n",
         ]
         return len(clip_lines) + 1
     elif "<Events>" in lines[events_line]:
@@ -431,11 +647,14 @@ def _insert_automation_envelopes(
     for block in envelope_blocks:
         all_env_lines.extend(block)
 
+    env_indent = lines[env_line].split("<Envelopes")[0]
+    env_indent = env_indent.replace("\r", "").replace("\n", "")
+
     if "<Envelopes />" in lines[env_line]:
         lines[env_line:env_line + 1] = [
-            lines[env_line].replace("<Envelopes />", "<Envelopes>\n"),
+            f"{env_indent}<Envelopes>\r\n",
             *all_env_lines,
-            "\t\t\t\t</Envelopes>\n",
+            f"{env_indent}</Envelopes>\r\n",
         ]
         return len(all_env_lines) + 1
     elif "<Envelopes>" in lines[env_line]:
@@ -461,6 +680,7 @@ def generate_session(
     output_path: Path,
     project_bpm: float = 128.0,
     transition_automation: dict[int, list[tuple[str, list[AutomationPoint]]]] | None = None,
+    tempo_automation: list[AutomationPoint] | None = None,
 ) -> Path:
     """Generate a complete ALS session from template + track patches.
 
@@ -476,10 +696,12 @@ def generate_session(
     available_tracks = track_ranges[1:]
 
     if len(patches) > len(available_tracks):
-        raise ValueError(
-            f"Template has {len(available_tracks)} audio tracks but "
-            f"{len(patches)} patches provided"
+        print(
+            f"WARNING: Template has {len(available_tracks)} audio tracks but "
+            f"{len(patches)} patches provided — using first {len(available_tracks)} tracks. "
+            f"Add more tracks to the template to fit the full mix."
         )
+        patches = patches[: len(available_tracks)]
 
     offset = 0
     for patch in patches:
@@ -494,14 +716,23 @@ def generate_session(
         _set_track_name(lines, start, end, track_name)
 
         if patch.gain_offset_db != 0.0:
-            _set_utility_gain(lines, start, end, patch.gain_offset_db)
+            _set_mixer_volume_level(lines, start, end, patch.gain_offset_db)
 
-        clip_xml = _build_audio_clip_xml(patch)
+        events_line = _find_arranger_events_line(lines, start, end)
+        events_indent = lines[events_line].split("<Events")[0].rstrip("\r\n") if events_line else "\t\t\t\t\t\t\t\t"
+        clip_indent = events_indent + "\t"
+        clip_xml = _build_audio_clip_xml(patch, output_path, indent=clip_indent)
         delta = _insert_audio_clip(lines, start, end, clip_xml)
         offset += delta
         end += delta
 
         if transition_automation and patch.track_index in transition_automation:
+            env_line = _find_track_envelopes_line(lines, start, end)
+            env_indent = "\t\t\t\t\t"
+            if env_line is not None:
+                env_indent = lines[env_line].split("<Envelopes")[0].replace("\r", "").replace("\n", "")
+            content_indent = env_indent + "\t"
+
             envelope_blocks = []
             for param_key, points in transition_automation[patch.track_index]:
                 target_id = None
@@ -509,6 +740,11 @@ def generate_session(
                     target_id = _find_filter_target_id(lines, start, end, "lp")
                 elif param_key == "hp_filter":
                     target_id = _find_filter_target_id(lines, start, end, "hp")
+                elif param_key == "volume":
+                    # Utility plugin Gain — leaves the mixer fader free for manual tweaking
+                    target_id = _find_utility_gain_target_id(lines, start, end)
+                elif param_key == "eq_bass":
+                    target_id = _find_eq_bass_target_id(lines, start, end)
                 else:
                     parts = param_key.split(".", 1)
                     if len(parts) == 2:
@@ -516,13 +752,20 @@ def generate_session(
 
                 if target_id:
                     env_points = [(p.time_beats, p.value) for p in points]
-                    envelope_blocks.append(_build_envelope_xml(target_id, env_points))
+                    envelope_blocks.append(_build_envelope_xml(target_id, env_points, indent=content_indent))
 
             if envelope_blocks:
                 delta2 = _insert_automation_envelopes(lines, start, end, envelope_blocks)
                 offset += delta2
 
     _set_project_bpm(lines, project_bpm)
+    # Master at -6dB by default to prevent clipping when summing mastered tracks.
+    # Sam can still ride the master fader manually since it's not automated.
+    _set_master_volume_level(lines, -6.0)
+
+    if tempo_automation:
+        tempo_points = [(p.time_beats, p.value) for p in tempo_automation]
+        _insert_main_track_tempo_envelope(lines, tempo_points)
 
     return compress_als(lines, output_path)
 

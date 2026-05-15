@@ -1,5 +1,6 @@
 {
-  "crossfade_bars": 32,
+  "crossfade_bars": 48,
+  "nominal_overlap_bars": 16,
   "filter_automation_depth_db": -16,
   "gain_strategy": "match_quietest",
   "max_gain_reduction_db": 12,

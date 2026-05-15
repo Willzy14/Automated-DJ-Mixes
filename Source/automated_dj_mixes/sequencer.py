@@ -45,8 +45,21 @@ def _camelot_distance(num_a: int, num_b: int) -> int:
     return min(diff, 12 - diff)
 
 
+def _is_camelot_code(key: str) -> bool:
+    """Check if a string is already a valid Camelot code (e.g. '8A', '12B')."""
+    if len(key) < 2 or key[-1] not in ("A", "B"):
+        return False
+    try:
+        n = int(key[:-1])
+        return 1 <= n <= 12
+    except ValueError:
+        return False
+
+
 def key_to_camelot(key: str) -> str | None:
-    """Convert a musical key string to its Camelot code. Handles common aliases."""
+    """Convert a musical key string to its Camelot code. Handles common aliases and raw Camelot codes."""
+    if _is_camelot_code(key):
+        return key
     result = CAMELOT_WHEEL.get(key)
     if result:
         return result

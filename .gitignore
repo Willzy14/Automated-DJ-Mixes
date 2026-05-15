@@ -31,3 +31,30 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.claude/
+
+# AIFF (more audio formats)
+*.aif
+
+# Temp files
+*.tmp.*
+
+# Generated output mixes and test data
+Output/
+Test Project/
+Teaching Mixes/
+
+# Diagnostic scripts (analysis utilities not part of the pipeline)
+Source/analyze_batch.py
+Source/analyze_teaching.py
+Source/bass_detection.py
+Source/check_bass.py
+Source/check_returns.py
+Source/check_vlad_automation.py
+Source/diagnose_sections.py
+Source/extract_automation.py
+Source/extract_inline_automation.py
+Source/extract_mix_patterns.py
+Source/extract_mix_patterns_v2.py
+Source/extract_mix_points.py
+Source/find_bass_swaps.py

@@ -68,27 +68,75 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-**All 7 pipeline modules fully implemented.** 50 tests passing across 4 test files.
+**Pipeline fully working end-to-end, iterating on transition quality with Sam.** Has generated 12+ mixes in real Ableton sessions, Sam has reviewed and given track-by-track feedback.
 
-- **analysis.py** — Reads key/BPM from ID3/Vorbis tags (mutagen), detects downbeats (librosa), measures LUFS (pyloudnorm). Falls back to librosa beat detection if BPM tag missing.
-- **sequencer.py** — Full Camelot wheel mapping (24 keys + aliases), compatibility scoring (identical/smooth/relative/power/diagonal/clash), greedy nearest-neighbour harmonic path. 20 tests.
-- **warping.py** — Two-marker warp calculation: first downbeat anchored to beat 0, end marker defines tempo relationship. Ableton interpolates linearly between them. 5 tests.
-- **automation.py** — Transition generation (LP filter sweep, HP filter with midpoint bass drop, volume crossfade). Gain offsets (match to quietest, capped). 11 tests.
-- **als_generator.py** — Full template-based ALS patching: audio clip insertion (AudioClip XML with FileRef, WarpMarkers, Complex Pro warp mode), track naming, utility gain, filter automation envelopes (LP/HP target discovery by frequency value), project BPM. 14 tests.
-- **orchestrator.py** — Wires all modules: analyse → sequence → gain offsets → warp markers → arrangement positions (sequential with crossfade overlap) → transition automation → ALS generation. CLI via argparse.
-- **config.py** — Settings loader with defaults from `Config/settings.json`.
+**Implemented (Phase 1-6):**
+- All 7 core modules functional
+- **Drop-confirmation kick detection** (analysis.py) — finds first kick via rhythmic confirmation + bass power in next 8 beats
+- **Bass section detection** (analysis.py) — off-beat energy sampling distinguishes sustained bass synth from kicks-only intros
+- **Phrase-aware break detection** (analysis.py) — scans at 16-bar grid from bass_start, finds first energy drop (break_start) and recovery (break_end)
+- **Modular skills system** (`skills/`) — `LongFilterBlend`, `QuickEqSwap`, `EnergeticPunchSwap`, `GentleBlend`, `BreakdownBlend`, base classes + `SkillsEngine` decision layer
+- **Three alignment strategies** (orchestrator) — `bass_to_bass`, `tail_into_break`, `end_to_end` fallback
+- **Phrase-grid snap** — all swap points land on 32-bar boundaries (Sam's master rule: music = 16/32 bar phrases)
+- **Master at -6dB** — prevents clipping when summing mastered tracks
+- **Tempo automation** across the mix (each track plays near its native BPM with smooth ramps)
+- **Multi-envelope merge** — middle tracks correctly merge incoming + outgoing automation onto single envelopes per parameter
+- **XML escaping** for `&` and unicode characters in track names
+- **35-track template** in use (`Templates/DJ Mix Template 2026-1 Project/`) — fits 12+ track mixes
 
-**Proven**: ALS roundtrip (decompress→modify→recompress) verified — Ableton loads patched files cleanly.
+**Key technique discoveries:**
+- Volume + bass cut is the dominant transition technique (filter sweeps cause conflicts with bass kills)
+- Volume on Utility plugin Gain (not Mixer fader — keeps fader free for manual tweaking)
+- Mixer fader gets static LUFS-correction value at load (not automated)
+- EQ bass kill uses Ableton's ChannelEQ LowShelfGain (range 0.18 = -15dB to 1.0 = unity)
 
-**Not yet validated with real audio files** — the AudioClip XML structure is built from the Ableton 12 schema but hasn't been tested with actual tracks in Ableton yet. This is the critical next step.
+## Recent Session History
 
-## What's Next
+### 2026-05-15 (Latest Session)
+**Focus**: Base-to-base mixing — phrase-grid alignment, smarter strategies, real-time Sam review
 
-1. **Real audio test** — Drop 3-5 tagged tracks into `Tracks/`, run the pipeline, open result in Ableton. Validate clips load, warping works, automation renders.
-2. **Fix AudioClip schema if needed** — Ableton may reject the generated AudioClip XML. If so, study a real clip (manually drag a file onto Track 2, save, decompress, compare).
-3. **Volume automation** — Add mixer volume crossfade to transitions (currently only filter automation).
-4. **ChannelEQ bass kill** — Wire ChannelEq Low band automation for cleaner bass transitions.
-5. **pyproject.toml** — Proper packaging with editable install.
+**Completed**:
+- Bass detection via off-beat energy sampling (`_detect_bass_section` in analysis.py)
+- Phrase-grid snap (32-bar boundaries) for all swap points (orchestrator)
+- Strategy selector: `bass_to_bass` / `tail_into_break` / `end_to_end` fallback
+- Phrase-aware break detection (`_detect_first_break_phrase_aware`) returning break_start AND break_end
+- Multi-envelope merge per (track, param) — fixed Ableton ignoring 2nd envelope on same target
+- Master volume at -6dB (`_set_master_volume_level` in als_generator.py)
+- Dropped LP/HP filter sweeps from default automation (they conflict with bass cut on lows)
+- Volume automation moved from Mixer Volume → Utility plugin Gain
+- Mixer fader carries static LUFS gain offset (not automated, free to manually adjust)
+- Snap clamp: phrase snap never rounds past outgoing's clip end
+- 35-track template now used automatically (most-recently-modified .als in Templates/)
+- 12 mix versions generated (V1-V12), Sam reviewing transition-by-transition
+
+**Key Learnings**:
+- **Music = 16/32 bar phrases** — every swap MUST land on a phrase boundary or it sounds off-grid
+- **Beat-to-beat alignment is BORING** — listener loses interest after 32+ bars of just beats. Either bass-to-bass swap OR tail-into-break (outro plays into incoming's break, then incoming's bass drops back in)
+- **Bass cut + volume fade are independent** — bass swap is often a hard step at one beat; volume is a smooth curve over the full transition. Both run together
+- **The mix point IS the bass swap** — outgoing's bass cuts when incoming's bass enters (earlier of the two, not when outgoing's bass naturally ends)
+- **Filter sweeps fight bass cuts** — both try to manage lows. Drop filters from default. Filter blend stays as opt-in skill
+- **Multi-envelope per target = broken automation** — Ableton uses first envelope, ignores others. Must merge into single envelope per (track, param)
+- **Auto-filter HP on incoming was redundant** with EQ bass kill — same job, conflict
+
+**Known Issues (entering next session)**:
+- Sapian transition in V12 is "fucked up" (Sam's words) — Sapian has no bass detection, the tail_into_break strategy picked up but result is wrong
+- 0.5-1 beat drift when incoming's bass_start is at non-bar-aligned beat (e.g. 64.48 beats); needs warp anchor snap
+- Bass detection threshold needs tuning — fails on tracks with very even bass energy (Sapian, Detlef, Harry Romero)
+- Phrase-aware break detection is new in V12 — not yet validated against ground truth
+
+### 2026-05-14 (Previous Session)
+**Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation
+
+**Completed**: Full pipeline implementation, drop-confirmation kick detection, 5-skill engine, tempo automation, base-to-base alignment first attempt (V1-V8)
+
+## What's Next (tomorrow)
+
+1. **Fix Sapian-like cases** — when bass detection fails AND incoming has no clear break, find a better strategy than naive end_to_end. Maybe detect outgoing's natural outro point and align there
+2. **Warp anchor snap** — round bass_start_sec / first_break_start_sec to nearest 4-beat multiple in clip time via warp markers; eliminates 0.5-beat drift
+3. **Validate break detection on real tracks** — run the phrase-aware break detector against Sam's actual mix points from teaching mixes
+4. **Loop intro/outro** when alignment math leaves a gap (Sam's manual technique — extend either side to hit a phrase boundary)
+5. **Clip fragmentation** (V2 signature, deferred) — chop outgoing's last drum section into 2-4 beat fragments for percussion-loop outros (76% of clips in Sam's teaching mixes are <16 beats)
+6. **Smoother tempo automation** — Sam wants "1 BPM rise over 2 tracks" instead of jumping at every transition
 
 ## Key Decisions
 
@@ -102,6 +150,13 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - **ALS direct generation, not Max for Live bridge** — Generate the file before opening Ableton, not manipulate clips during a session. Simpler, fewer moving parts. (Car conversation, 2026-05-14)
 - **ALS XML patching proven** — Decompress gzip, modify XML values (line-level text replacement, not XML rewriter), recompress. Ableton loads it clean. XmlWriter reformats the document and corrupts it — must use raw text ops. (Validated 2026-05-14)
 - **Camelot rules for harmonic sequencing** — +-1 number = smooth transition, +-2 = power mix, A<->B = key change. Script builds optimal path, Sam adjusts by ear after loading. (Car conversation, 2026-05-14)
+- **Phrase grid (16/32 bars) is the master timing rule** — Every major change (bass swap, volume fade endpoint, transition boundary) MUST land on a 16 or 32 bar phrase boundary. Music is built on phrases; off-grid transitions sound wrong regardless of beat counts. Snap to nearest 32-bar mark, clamp to within outgoing's clip. (Sam, 2026-05-15)
+- **Two valid transition types** — (1) bass-to-bass: outgoing's bass_end aligns with incoming's bass_start, kicks overlap, EQ swap manages lows. (2) tail-into-break: outgoing's outro plays into incoming's break, then incoming's bass drops in at break_end. Pure end-to-end (beats-into-beats) is BORING and only a last resort. (Sam, 2026-05-15)
+- **Volume + bass cut > filter sweeps** — Filter sweeps (HP on incoming, LP on outgoing) conflict with EQ bass kill on the same low frequencies. Default to volume + bass cut only; filter sweeps stay as opt-in skill. (Sam, 2026-05-15)
+- **Volume on Utility plugin, not mixer fader** — Volume automation lives on the Utility Gain parameter at the top of each track's device chain. The mixer fader on the right gets the static LUFS gain offset, not automation — keeps it free for manual tweaking during playback. (Sam, 2026-05-15)
+- **Bass swap = single hard step at one beat; volume = smooth curve over full window** — They're independent automation layers in the same transition. Bass cuts surgically; volume blends gradually. (Sam, 2026-05-15)
+- **Mode-based project tempo, not average** — Project BPM = most common rounded BPM across tracks (if 8 tracks at 130 and 4 at 124, use 130). Tempo automation across the mix makes each track play at its native BPM via gradual ramps. (Sam, 2026-05-15)
+- **Master at -6dB by default** — All tracks are mastered, so summing risks clipping. Pre-attenuate master by 6dB. Mastering integration is a future enhancement. (Sam, 2026-05-15)
 
 ## Connections
 
