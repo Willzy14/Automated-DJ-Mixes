@@ -14,8 +14,9 @@ from automated_dj_mixes.als_generator import TrackPatch, generate_session
 from automated_dj_mixes.transition import plan_transition
 from automated_dj_mixes.phrase_viz import build_intervals, segments_from_intervals
 from automated_dj_mixes.features import extract_track_features
-from automated_dj_mixes.cue_candidates import find_cue_candidates
-from automated_dj_mixes.report import write_track_csv
+from automated_dj_mixes.cue_candidates import find_cue_candidates, first_credible
+from automated_dj_mixes.report import write_track_csv, write_transition_report
+from automated_dj_mixes.validation import validate_mix
 
 
 def _find_template(project_root: Path) -> Path:
@@ -242,14 +243,37 @@ def run_pipeline(
         print(f"Done: {result}")
         return result
 
-    # Plan transitions using bass-to-bass alignment. Each call to
-    # plan_transition() determines positioning, automation, and looping
-    # for one track pair. The first track starts at beat 0.
+    # Extract per-track features + ranked cue candidates (Step 7 wiring).
+    # plan_transition() will prefer candidates over RB-phrase fallbacks.
+    print("Extracting per-track features + cue candidates...")
+    track_candidates: dict[str, list] = {}
+    for analysis in ordered_analyses:
+        rb_match = rb_matches.get(str(analysis.path))
+        if not rb_match:
+            track_candidates[analysis.path.name] = []
+            continue
+        ext_path = Path(rb_match.ext_path) if rb_match.ext_path else None
+        try:
+            features = extract_track_features(
+                audio_path=analysis.path,
+                bpm=rb_match.bpm or analysis.bpm,
+                beat_times_ms=rb_match.beat_times_ms,
+                first_downbeat_offset=getattr(rb_match, "first_downbeat_offset", 0),
+                ext_path=ext_path,
+            )
+            intervals = build_intervals(rb_match, features)
+            candidates = find_cue_candidates(intervals, features)
+            track_candidates[analysis.path.name] = candidates
+        except Exception as e:
+            print(f"  WARNING: feature/candidate extraction failed for {analysis.path.name}: {e}")
+            track_candidates[analysis.path.name] = []
+
+    # Plan transitions using ranked candidates (with RB fallbacks).
     arrangement_positions = [0]
     transition_specs = []  # one per pair (len = tracks - 1)
     loop_specs: list = [None]  # per-track LoopSpec | None (first track never loops)
 
-    print("Planning transitions (bass-to-bass)...")
+    print("Planning transitions (candidate-driven)...")
     for i in range(1, len(ordered_analyses)):
         outgoing = ordered_analyses[i - 1]
         incoming = ordered_analyses[i]
@@ -265,6 +289,8 @@ def run_pipeline(
             project_bpm=project_bpm,
             outgoing_rb=rb_matches.get(str(outgoing.path)),
             incoming_rb=rb_matches.get(str(incoming.path)),
+            outgoing_candidates=track_candidates.get(outgoing.path.name, []),
+            incoming_candidates=track_candidates.get(incoming.path.name, []),
         )
 
         arrangement_positions.append(int(spec.incoming_arrangement_start))
@@ -398,6 +424,48 @@ def run_pipeline(
         tempo_automation=tempo_points,
     )
     print(f"Done: {result}")
+
+    # Objective validation + transition rationale report (Step 8)
+    track_total_beats = [
+        warp_markers_all[i][-1].beat_time if warp_markers_all[i] else 0.0
+        for i in range(len(ordered_analyses))
+    ]
+    report = validate_mix(
+        mix_version=version,
+        transition_specs=transition_specs,
+        track_total_beats=track_total_beats,
+        arrangement_positions=arrangement_positions,
+    )
+    print()
+    print(report.summary())
+
+    # Build transition rationale pairs for the markdown report
+    reports_dir = output_dir / "Reports"
+    pairs = []
+    for i, spec in enumerate(transition_specs):
+        out_name = ordered_analyses[i].path.stem
+        in_name = ordered_analyses[i + 1].path.stem
+        out_cands = track_candidates.get(ordered_analyses[i].path.name, []) if "track_candidates" in dir() else []
+        in_cands = track_candidates.get(ordered_analyses[i + 1].path.name, []) if "track_candidates" in dir() else []
+        bass_swap_cand = first_credible(in_cands, "bass_entry", 0.5)
+        chop_cand = first_credible(out_cands, "chop_point", 0.5) or first_credible(out_cands, "outro_start", 0.5)
+        overlap_bars = (spec.transition_end - spec.transition_start) / 4
+        loops = spec.outgoing_loop.num_extra_copies if spec.outgoing_loop else 0
+        pairs.append({
+            "outgoing_name": out_name,
+            "incoming_name": in_name,
+            "bass_swap_beat": spec.bass_swap,
+            "bass_swap_candidate": bass_swap_cand,
+            "chop_beat": spec.outgoing_loop.chop_at_beats if spec.outgoing_loop else 0.0,
+            "chop_candidate": chop_cand,
+            "transition_start_beat": spec.transition_start,
+            "transition_end_beat": spec.transition_end,
+            "overlap_bars": f"{overlap_bars:.1f}",
+            "looped_iterations": loops,
+        })
+    md_path = write_transition_report(version, pairs, reports_dir)
+    print(f"Transition report: {md_path}")
+
     return result
 
 

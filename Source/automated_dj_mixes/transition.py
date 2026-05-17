@@ -17,10 +17,12 @@ from dataclasses import dataclass, field
 
 from automated_dj_mixes.analysis import TrackAnalysis
 from automated_dj_mixes.automation import AutomationPoint
+from automated_dj_mixes.cue_candidates import CueCandidate, first_credible
 
 LOOP_BEATS = 8           # 2 bars — subtle continuity, hats/perc
 MAX_OVERLAP_BEATS = 48 * 4
 MIN_OVERLAP_BEATS = 4 * 4
+MIN_CANDIDATE_CONFIDENCE = 0.5
 
 
 @dataclass
@@ -119,20 +121,50 @@ def plan_transition(
     project_bpm: float,
     outgoing_rb=None,
     incoming_rb=None,
+    outgoing_candidates: list[CueCandidate] | None = None,
+    incoming_candidates: list[CueCandidate] | None = None,
 ) -> TransitionSpec:
     log: list[str] = []
 
-    # Musical anchors — Rekordbox phrases only (no librosa fallbacks).
-    outgoing_bass_end, _ = _find_outgoing_bass_end(outgoing_rb, outgoing_total_beats)
-    chop_at, chop_src = _find_outgoing_chop_point(
-        outgoing_rb, outgoing_total_beats, outgoing_bass_end,
-    )
-    incoming_bass_start, in_bs_src = _find_incoming_bass_start(
-        incoming_rb, incoming_total_beats,
-    )
-    incoming_first_break, in_fb_src = _find_incoming_first_break(
-        incoming_rb, incoming_bass_start, incoming_total_beats,
-    )
+    # Prefer ranked cue candidates (Step 7). Fall back to RB phrase logic
+    # when candidates are missing or below the confidence floor.
+    chop_cand = first_credible(outgoing_candidates or [], "chop_point", MIN_CANDIDATE_CONFIDENCE) \
+        or first_credible(outgoing_candidates or [], "outro_start", MIN_CANDIDATE_CONFIDENCE)
+    bass_entry_cand = first_credible(incoming_candidates or [], "bass_entry", MIN_CANDIDATE_CONFIDENCE)
+    incoming_break_cand = first_credible(incoming_candidates or [], "break_start", MIN_CANDIDATE_CONFIDENCE)
+
+    # --- Chop point (where outgoing audio is cut) ---
+    if chop_cand:
+        chop_at = float(chop_cand.beat)
+        chop_src = f"candidate:{chop_cand.cue_type}(conf={chop_cand.confidence:.2f})"
+        log.append(f"chop sources: {', '.join(chop_cand.sources)}")
+    else:
+        outgoing_bass_end, _ = _find_outgoing_bass_end(outgoing_rb, outgoing_total_beats)
+        chop_at, chop_src = _find_outgoing_chop_point(
+            outgoing_rb, outgoing_total_beats, outgoing_bass_end,
+        )
+        chop_src = f"rb_fallback:{chop_src}"
+
+    # --- Incoming bass entry (where the drop drops) ---
+    if bass_entry_cand:
+        incoming_bass_start = float(bass_entry_cand.beat)
+        in_bs_src = f"candidate:bass_entry(conf={bass_entry_cand.confidence:.2f})"
+        log.append(f"bass_entry sources: {', '.join(bass_entry_cand.sources)}")
+    else:
+        incoming_bass_start, in_bs_src = _find_incoming_bass_start(
+            incoming_rb, incoming_total_beats,
+        )
+        in_bs_src = f"rb_fallback:{in_bs_src}"
+
+    # --- Incoming first break (transition end target) ---
+    if incoming_break_cand:
+        incoming_first_break = float(incoming_break_cand.beat)
+        in_fb_src = f"candidate:break_start(conf={incoming_break_cand.confidence:.2f})"
+    else:
+        incoming_first_break, in_fb_src = _find_incoming_first_break(
+            incoming_rb, incoming_bass_start, incoming_total_beats,
+        )
+        in_fb_src = f"rb_fallback:{in_fb_src}"
 
     # Position incoming so its first chorus drop coincides with the chop point.
     # This makes bass_swap = chop_arrangement = a single, natural musical cue.
