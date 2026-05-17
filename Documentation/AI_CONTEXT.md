@@ -9,11 +9,13 @@ Born from the realisation that the grunt work of DJ mixing (key analysis, Camelo
 ## Tech Stack
 
 - **Python 3.x** — main orchestrator and all pipeline modules
-- **Librosa** — transient/downbeat detection, energy analysis
+- **Librosa** — transient/downbeat detection, energy analysis (fallback when Rekordbox unavailable)
 - **pyloudnorm** — LUFS measurement for gain staging
 - **mutagen** — reading key/BPM from ID3/Vorbis tags (written by Mixed In Key)
+- **pyrekordbox** — reading Rekordbox ANLZ files (beat grids, phrase analysis)
 - **Ableton Live 12** — target DAW, ALS file format (gzip-compressed XML)
 - **Mixed In Key** — key + BPM analysis (run separately, writes to file tags)
+- **Rekordbox 7** — phrase analysis (Intro/Up/Down/Chorus/Outro), beat grids, key data
 
 Not in V1: Max for Live (future enhancement for real-time automation), pyproject.toml packaging.
 
@@ -22,16 +24,25 @@ Not in V1: Max for Live (future enhancement for real-time automation), pyproject
 ```
 Source/automated_dj_mixes/
 ├── __init__.py
-├── orchestrator.py      — Main pipeline controller
-├── analysis.py          — Tag reading, transient detection, LUFS
+├── orchestrator.py      — Main pipeline controller + strategy selector
+├── analysis.py          — Tag reading, transient detection, LUFS, Rekordbox enrichment
 ├── sequencer.py         — Camelot wheel logic, harmonic path
-├── warping.py           — Warp marker calculation
+├── warping.py           — Warp marker calculation (2-marker + Rekordbox beat grid)
 ├── automation.py        — Filter curves, crossfades, gain offsets
 ├── als_generator.py     — Template-based ALS XML patching
-└── config.py            — Settings loader
+├── rekordbox_reader.py  — Rekordbox ANLZ parser (phrases, beat grid, key)
+├── config.py            — Settings loader
+└── skills/
+    ├── __init__.py      — SkillsEngine decision layer
+    ├── base.py          — TransitionContext, TransitionPlan, TransitionSkill
+    ├── long_filter_blend.py
+    ├── quick_eq_swap.py
+    ├── energetic_punch_swap.py
+    ├── gentle_blend.py
+    └── breakdown_blend.py
 ```
 
-Pipeline: analysis → sequencing → warping → automation → ALS generation.
+Pipeline: analysis → Rekordbox enrichment → sequencing → warping → strategy selection → skill-based automation → ALS generation.
 
 ALS generation is **template-based** — a real Ableton Live 12 session is decompressed, studied, and used as the base. The script patches in tracks, clips, warp markers, automation lanes, and gain offsets. Never builds XML from scratch.
 
@@ -68,19 +79,22 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-**Pipeline fully working end-to-end, iterating on transition quality with Sam.** Has generated 12+ mixes in real Ableton sessions, Sam has reviewed and given track-by-track feedback.
+**Pipeline fully working end-to-end with Rekordbox integration, iterating on transition quality with Sam.** Has generated 20+ mixes in real Ableton sessions (V1-V12 with librosa, V7-V10 with Rekordbox), Sam reviewing track-by-track.
 
-**Implemented (Phase 1-6):**
-- All 7 core modules functional
+**Implemented (Phase 1-8):**
+- All 7 core modules + rekordbox_reader + skills system functional
+- **Rekordbox phrase analysis** (rekordbox_reader.py) — manual PSSI binary parser reads Intro/Up/Down/Chorus/Outro with beat-accurate boundaries from Rekordbox 7 ANLZ files
+- **Rekordbox beat grid warp markers** (warping.py) — one marker per downbeat from Rekordbox's per-beat grid (165-252 markers per track vs old 2-marker linear interpolation). Eliminates up to 13-beat drift on tracks with micro-tempo variation
+- **Phrase-aware strategy selector** (orchestrator.py) — uses full Rekordbox phrase map: `breakdown_blend` (outgoing's breakdown overlaps incoming's build), `outro_into_intro` (natural zone blend), `bass_to_bass`, `tail_into_break`, `end_to_end` fallback
+- **Phrase boundary snap** — swap points snap to actual Rekordbox phrase starts instead of arbitrary 32-bar grid
+- **Automation clamping** — unity (1.0) anchor points at clip boundaries ensure NO automation outside overlap zones. Ableton shows 1.0 everywhere except actual transitions
 - **Drop-confirmation kick detection** (analysis.py) — finds first kick via rhythmic confirmation + bass power in next 8 beats
 - **Bass section detection** (analysis.py) — off-beat energy sampling distinguishes sustained bass synth from kicks-only intros
-- **Phrase-aware break detection** (analysis.py) — scans at 16-bar grid from bass_start, finds first energy drop (break_start) and recovery (break_end)
 - **Modular skills system** (`skills/`) — `LongFilterBlend`, `QuickEqSwap`, `EnergeticPunchSwap`, `GentleBlend`, `BreakdownBlend`, base classes + `SkillsEngine` decision layer
-- **Three alignment strategies** (orchestrator) — `bass_to_bass`, `tail_into_break`, `end_to_end` fallback
-- **Phrase-grid snap** — all swap points land on 32-bar boundaries (Sam's master rule: music = 16/32 bar phrases)
 - **Master at -6dB** — prevents clipping when summing mastered tracks
 - **Tempo automation** across the mix (each track plays near its native BPM with smooth ramps)
 - **Multi-envelope merge** — middle tracks correctly merge incoming + outgoing automation onto single envelopes per parameter
+- **Max overlap capped at 48 bars** (was 96) — matches Sam's mixing style (teaching mix median: 25 bars)
 - **XML escaping** for `&` and unicode characters in track names
 - **35-track template** in use (`Templates/DJ Mix Template 2026-1 Project/`) — fits 12+ track mixes
 
@@ -89,54 +103,47 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - Volume on Utility plugin Gain (not Mixer fader — keeps fader free for manual tweaking)
 - Mixer fader gets static LUFS-correction value at load (not automated)
 - EQ bass kill uses Ableton's ChannelEQ LowShelfGain (range 0.18 = -15dB to 1.0 = unity)
+- Rekordbox phrase start_beat values are 1-based; must subtract 1 for 0-based warp marker coordinates
+- Ableton extends first/last automation breakpoint values to entire timeline — must clamp with unity anchors
 
 ## Recent Session History
 
-### 2026-05-15 (Latest Session)
-**Focus**: Base-to-base mixing — phrase-grid alignment, smarter strategies, real-time Sam review
+### 2026-05-16 (Latest Session)
+**Focus**: Rekordbox integration — phrase analysis + beat grids replace librosa section detection
 
 **Completed**:
-- Bass detection via off-beat energy sampling (`_detect_bass_section` in analysis.py)
-- Phrase-grid snap (32-bar boundaries) for all swap points (orchestrator)
-- Strategy selector: `bass_to_bass` / `tail_into_break` / `end_to_end` fallback
-- Phrase-aware break detection (`_detect_first_break_phrase_aware`) returning break_start AND break_end
-- Multi-envelope merge per (track, param) — fixed Ableton ignoring 2nd envelope on same target
-- Master volume at -6dB (`_set_master_volume_level` in als_generator.py)
-- Dropped LP/HP filter sweeps from default automation (they conflict with bass cut on lows)
-- Volume automation moved from Mixer Volume → Utility plugin Gain
-- Mixer fader carries static LUFS gain offset (not automated, free to manually adjust)
-- Snap clamp: phrase snap never rounds past outgoing's clip end
-- 35-track template now used automatically (most-recently-modified .als in Templates/)
-- 12 mix versions generated (V1-V12), Sam reviewing transition-by-transition
+- Rekordbox reader (rekordbox_reader.py) — PSSI binary parser, beat grid, phrase mapping. All 17 tracks matched
+- Per-beat warp markers via `calculate_warp_markers_from_beat_grid()` — 165-252 markers per track vs old 2-marker
+- Phrase-aware strategy selector using Rekordbox phrase map (breakdown_blend → outro_into_intro → bass_to_bass → tail_into_break → end_to_end)
+- Automation clamping with unity anchors at clip boundaries — no automation outside overlap zones
+- Max overlap reduced to 48 bars (from 96), breakdown_blend guarded to >50% track position
+- Phrase boundary snap to actual Rekordbox phrase starts
+- Diagnostic scripts: diagnose_rekordbox.py, analyze_phrase_patterns.py
+- Mix V7-V10 generated with iterative Sam feedback on transition quality
 
 **Key Learnings**:
-- **Music = 16/32 bar phrases** — every swap MUST land on a phrase boundary or it sounds off-grid
-- **Beat-to-beat alignment is BORING** — listener loses interest after 32+ bars of just beats. Either bass-to-bass swap OR tail-into-break (outro plays into incoming's break, then incoming's bass drops back in)
-- **Bass cut + volume fade are independent** — bass swap is often a hard step at one beat; volume is a smooth curve over the full transition. Both run together
-- **The mix point IS the bass swap** — outgoing's bass cuts when incoming's bass enters (earlier of the two, not when outgoing's bass naturally ends)
-- **Filter sweeps fight bass cuts** — both try to manage lows. Drop filters from default. Filter blend stays as opt-in skill
-- **Multi-envelope per target = broken automation** — Ableton uses first envelope, ignores others. Must merge into single envelope per (track, param)
-- **Auto-filter HP on incoming was redundant** with EQ bass kill — same job, conflict
+- Rekordbox phrase analysis far more reliable than librosa for structural detection
+- Ableton extends first/last automation breakpoint values across entire timeline — must clamp with unity anchors
+- When outro_into_intro was prioritized first, ALL transitions used it (every track has both). Must guard generic strategies
+- Coast to Coast tail naturally looped — Sam loves this, wants intentional loop extension as a feature
 
-**Known Issues (entering next session)**:
-- Sapian transition in V12 is "fucked up" (Sam's words) — Sapian has no bass detection, the tail_into_break strategy picked up but result is wrong
-- 0.5-1 beat drift when incoming's bass_start is at non-bar-aligned beat (e.g. 64.48 beats); needs warp anchor snap
-- Bass detection threshold needs tuning — fails on tracks with very even bass energy (Sapian, Detlef, Harry Romero)
-- Phrase-aware break detection is new in V12 — not yet validated against ground truth
+### 2026-05-15 (Previous Session)
+**Focus**: Base-to-base mixing — phrase-grid alignment, smarter strategies, real-time Sam review
 
-### 2026-05-14 (Previous Session)
+**Completed**: Bass detection, phrase-grid snap, strategy selector (bass_to_bass / tail_into_break / end_to_end), multi-envelope merge, master at -6dB, volume on Utility Gain, 12 mix versions (V1-V12)
+
+### 2026-05-14 (First Session)
 **Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation
 
 **Completed**: Full pipeline implementation, drop-confirmation kick detection, 5-skill engine, tempo automation, base-to-base alignment first attempt (V1-V8)
 
-## What's Next (tomorrow)
+## What's Next
 
-1. **Fix Sapian-like cases** — when bass detection fails AND incoming has no clear break, find a better strategy than naive end_to_end. Maybe detect outgoing's natural outro point and align there
-2. **Warp anchor snap** — round bass_start_sec / first_break_start_sec to nearest 4-beat multiple in clip time via warp markers; eliminates 0.5-beat drift
-3. **Validate break detection on real tracks** — run the phrase-aware break detector against Sam's actual mix points from teaching mixes
-4. **Loop intro/outro** when alignment math leaves a gap (Sam's manual technique — extend either side to hit a phrase boundary)
-5. **Clip fragmentation** (V2 signature, deferred) — chop outgoing's last drum section into 2-4 beat fragments for percussion-loop outros (76% of clips in Sam's teaching mixes are <16 beats)
-6. **Smoother tempo automation** — Sam wants "1 BPM rise over 2 tracks" instead of jumping at every transition
+1. **Sam testing V10** — review all 11 transitions in Ableton, feedback on transition quality with Rekordbox data
+2. **Intentional loop extension** — Sam loved Coast to Coast tail looping. Build a feature to intentionally enable LoopOn when alignment math leaves a gap (Sam's manual technique)
+3. **Clip fragmentation** (V2 signature, deferred) — chop outgoing's last drum section into 2-4 beat fragments for percussion-loop outros (76% of clips in Sam's teaching mixes are <16 beats)
+4. **Smoother tempo automation** — "1 BPM rise over 2 tracks" instead of jumping at every transition
+5. **Expand template** — current template fits 11 tracks, need 12+ support
 
 ## Key Decisions
 
@@ -157,6 +164,10 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - **Bass swap = single hard step at one beat; volume = smooth curve over full window** — They're independent automation layers in the same transition. Bass cuts surgically; volume blends gradually. (Sam, 2026-05-15)
 - **Mode-based project tempo, not average** — Project BPM = most common rounded BPM across tracks (if 8 tracks at 130 and 4 at 124, use 130). Tempo automation across the mix makes each track play at its native BPM via gradual ramps. (Sam, 2026-05-15)
 - **Master at -6dB by default** — All tracks are mastered, so summing risks clipping. Pre-attenuate master by 6dB. Mastering integration is a future enhancement. (Sam, 2026-05-15)
+- **Rekordbox as primary structural data source** — Rekordbox's phrase analysis (Intro/Up/Down/Chorus/Outro) and beat grids replace fragile librosa-based section detection. Librosa kept as fallback. Rekordbox PSSI start_beat values are 1-based. (2026-05-16)
+- **Automation ONLY in overlap zones** — No automation curves where tracks aren't overlapping. Unity (1.0) anchor points at clip boundaries ensure Ableton shows no processing outside transitions. Root cause of stray points: Ableton extends first/last breakpoint to entire timeline. (Sam, 2026-05-16)
+- **Max overlap 48 bars, not 96** — Sam's teaching mixes median at 25 bars. 96 was too long and created unwieldy transitions like Sentin remix at 93 bars. 48 is the upper bound. (Sam, 2026-05-16)
+- **Per-beat warp markers from Rekordbox grid** — One marker per downbeat (every 4th beat) from Rekordbox's exact ms timestamps. Eliminates up to 13-beat drift vs 2-marker linear interpolation. (2026-05-16)
 
 ## Connections
 

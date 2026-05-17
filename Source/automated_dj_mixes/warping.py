@@ -53,3 +53,39 @@ def calculate_warp_markers(
     markers.append(WarpMarker(beat_time=beats_in_track, sample_time=duration_sec))
 
     return markers
+
+
+def calculate_warp_markers_from_beat_grid(
+    beat_times_ms: list[int],
+    bpm: float,
+    duration_sec: float,
+    first_downbeat_offset: int = 0,
+) -> list[WarpMarker]:
+    """Build PER-BEAT warp markers from Rekordbox's beat grid.
+
+    One marker per BEAT (not per downbeat). The previous per-downbeat
+    setup left 4 beats between markers, and Ableton's linear interpolation
+    over that span slid inner beats off the grid on tracks with any
+    micro-tempo drift. Per-beat markers eliminate the drift entirely.
+
+    Pre-downbeat audio (PQTZ entries before the first beat_of_bar=1) is
+    emitted as warp markers with NEGATIVE beat_time, so the very first
+    audio beat is preserved and Ableton doesn't extrapolate backwards.
+
+    first_downbeat_offset is the index of the first beat_of_bar=1 entry.
+    Rekordbox grids can start on beat 2, 3, or 4 — warp beat 0 is the
+    first true downbeat, earlier entries map to beats -1, -2, -3.
+
+    Falls back to 2-marker calculation if the beat grid is too short.
+    """
+    if len(beat_times_ms) < 8:
+        first_downbeat = beat_times_ms[0] / 1000.0 if beat_times_ms else 0.0
+        return calculate_warp_markers(bpm, first_downbeat, duration_sec)
+
+    markers: list[WarpMarker] = []
+    for i in range(len(beat_times_ms)):
+        beat_time = float(i - first_downbeat_offset)
+        sample_time = beat_times_ms[i] / 1000.0
+        markers.append(WarpMarker(beat_time=beat_time, sample_time=sample_time))
+
+    return markers

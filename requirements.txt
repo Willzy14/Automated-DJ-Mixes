@@ -2,3 +2,4 @@ librosa>=0.10.0
 pyloudnorm>=0.1.0
 mutagen>=1.47.0
 ffmpeg-python>=0.2.0
+pyrekordbox>=0.4.0

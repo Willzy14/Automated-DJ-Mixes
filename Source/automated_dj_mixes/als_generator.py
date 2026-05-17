@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from automated_dj_mixes.analysis import TrackAnalysis
 from automated_dj_mixes.warping import WarpMarker
 from automated_dj_mixes.automation import AutomationPoint
+from automated_dj_mixes.transition import LoopSpec
+from automated_dj_mixes.phrase_viz import PhraseSegment
 
 _NEXT_ID = 50000
 
@@ -37,6 +39,8 @@ class TrackPatch:
     gain_offset_db: float = 0.0
     arrangement_start_beats: float = 0.0
     warp_mode: int = 4  # 4 = Complex Pro, 6 = Repitch
+    loop_spec: LoopSpec | None = None
+    phrase_segments: list[PhraseSegment] | None = None  # visualization mode
 
 
 def decompress_als(als_path: Path) -> list[str]:
@@ -448,18 +452,94 @@ def _build_audio_clip_xml(
     output_path: Path,
     indent: str = "\t\t\t\t\t\t\t\t\t",
 ) -> list[str]:
-    """Build AudioClip XML using Ableton Live 12.3's proven reference format."""
+    """Build AudioClip XML lines for a track.
+
+    Emits the original clip in full (no clip-level looping). If a loop_spec
+    is present, additionally emits `num_extra_copies` duplicate clips on the
+    timeline after the natural end — each playing the same source range. This
+    is the "chop and duplicate" pattern, NOT Ableton's clip loop feature.
+    """
+    warp_markers = patch.warp_markers
+    arr_start = patch.arrangement_start_beats
+    duration_beats = (
+        warp_markers[-1].beat_time if warp_markers else (patch.analysis.duration_sec or 0.0)
+    )
+
+    # Phrase visualization mode: emit one colored clip per phrase segment.
+    # Normalize so the FIRST segment lands at arr_start (handles tracks where
+    # the intro starts at a negative source beat due to first_downbeat_offset).
+    if patch.phrase_segments:
+        lines = []
+        first_source = patch.phrase_segments[0].source_start_beats
+        for seg in patch.phrase_segments:
+            clip_time = arr_start + (seg.source_start_beats - first_source)
+            lines.extend(_build_single_clip_xml(
+                patch, output_path, indent,
+                clip_time=clip_time,
+                source_start=seg.source_start_beats,
+                source_end=seg.source_end_beats,
+                color=seg.color,
+                name_override=seg.name,
+            ))
+        return lines
+
+    # If a loop_spec is present, chop the original clip at chop_at_beats
+    # (skipping any tail). Then emit num_extra_copies duplicate clips of the
+    # loop region after the chop.
+    ls = patch.loop_spec
+    original_end = ls.chop_at_beats if ls else duration_beats
+
+    lines = _build_single_clip_xml(
+        patch, output_path, indent,
+        clip_time=arr_start,
+        source_start=0.0,
+        source_end=original_end,
+    )
+
+    if ls and ls.num_extra_copies > 0:
+        loop_len = ls.loop_source_end - ls.loop_source_start
+        for i in range(ls.num_extra_copies):
+            extra_time = arr_start + original_end + i * loop_len
+            lines.extend(_build_single_clip_xml(
+                patch, output_path, indent,
+                clip_time=extra_time,
+                source_start=ls.loop_source_start,
+                source_end=ls.loop_source_end,
+            ))
+
+    return lines
+
+
+def _build_single_clip_xml(
+    patch: TrackPatch,
+    output_path: Path,
+    indent: str,
+    clip_time: float,
+    source_start: float,
+    source_end: float,
+    color: int = 37,
+    name_override: str | None = None,
+) -> list[str]:
+    """Build XML for one AudioClip element.
+
+    clip_time: arrangement beat where the clip starts
+    source_start, source_end: source-beat range to play (post-warp)
+    color: Ableton color index (37 = default)
+    name_override: clip name to show in arrangement (default = file stem)
+    """
     clip_id = _alloc_id()
     take_id = _alloc_id()
     a = patch.analysis
-    name = _xml_escape(a.path.stem)
+    name = _xml_escape(name_override) if name_override else _xml_escape(a.path.stem)
     warp_markers = patch.warp_markers
-    arr_start = patch.arrangement_start_beats
 
     duration_sec = a.duration_sec or 0.0
-    duration_beats = warp_markers[-1].beat_time if warp_markers else duration_sec
+    full_duration_beats = warp_markers[-1].beat_time if warp_markers else duration_sec
     sample_count = int(duration_sec * (a.sample_rate or 44100))
     sr = a.sample_rate or 44100
+
+    clip_duration = source_end - source_start
+    clip_end = clip_time + clip_duration
 
     abs_path = _xml_escape(str(a.path.resolve()).replace("\\", "/"))
     try:
@@ -469,23 +549,23 @@ def _build_audio_clip_xml(
     file_size = a.path.stat().st_size if a.path.exists() else 0
 
     t = indent
-    xml = f"""{t}<AudioClip Id="{clip_id}" Time="{arr_start}">
+    xml = f"""{t}<AudioClip Id="{clip_id}" Time="{clip_time}">
 {t}\t<LomId Value="0" />
 {t}\t<LomIdView Value="0" />
-{t}\t<CurrentStart Value="{arr_start}" />
-{t}\t<CurrentEnd Value="{arr_start + duration_beats}" />
+{t}\t<CurrentStart Value="{clip_time}" />
+{t}\t<CurrentEnd Value="{clip_end}" />
 {t}\t<Loop>
-{t}\t\t<LoopStart Value="0" />
-{t}\t\t<LoopEnd Value="{duration_beats}" />
+{t}\t\t<LoopStart Value="{source_start}" />
+{t}\t\t<LoopEnd Value="{source_end}" />
 {t}\t\t<StartRelative Value="0" />
 {t}\t\t<LoopOn Value="false" />
-{t}\t\t<OutMarker Value="{duration_beats}" />
-{t}\t\t<HiddenLoopStart Value="0" />
-{t}\t\t<HiddenLoopEnd Value="{duration_beats}" />
+{t}\t\t<OutMarker Value="{source_end}" />
+{t}\t\t<HiddenLoopStart Value="{source_start}" />
+{t}\t\t<HiddenLoopEnd Value="{source_end}" />
 {t}\t</Loop>
 {t}\t<Name Value="{name}" />
 {t}\t<Annotation Value="" />
-{t}\t<Color Value="37" />
+{t}\t<Color Value="{color}" />
 {t}\t<LaunchMode Value="0" />
 {t}\t<LaunchQuantisation Value="0" />
 {t}\t<TimeSignature>
@@ -502,7 +582,7 @@ def _build_audio_clip_xml(
 {t}\t</Envelopes>
 {t}\t<ScrollerTimePreserver>
 {t}\t\t<LeftTime Value="0" />
-{t}\t\t<RightTime Value="{duration_beats}" />
+{t}\t\t<RightTime Value="{full_duration_beats}" />
 {t}\t</ScrollerTimePreserver>
 {t}\t<TimeSelection>
 {t}\t\t<AnchorTime Value="0" />

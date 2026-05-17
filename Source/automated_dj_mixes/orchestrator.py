@@ -1,4 +1,4 @@
-"""Main pipeline controller — wires analysis, sequencing, warping, skills engine, and ALS generation."""
+"""Main pipeline controller — wires analysis, sequencing, warping, transition planning, and ALS generation."""
 
 from __future__ import annotations
 
@@ -6,16 +6,13 @@ import argparse
 from pathlib import Path
 
 from automated_dj_mixes.config import load_config
-from automated_dj_mixes.analysis import analyse_folder
+from automated_dj_mixes.analysis import analyse_folder, enrich_from_rekordbox
 from automated_dj_mixes.sequencer import build_harmonic_path
-from automated_dj_mixes.warping import calculate_warp_markers, choose_warp_mode
+from automated_dj_mixes.warping import calculate_warp_markers, calculate_warp_markers_from_beat_grid, choose_warp_mode
 from automated_dj_mixes.automation import calculate_gain_offsets, AutomationPoint
 from automated_dj_mixes.als_generator import TrackPatch, generate_session
-from automated_dj_mixes.skills import (
-    DEFAULT_SKILLS,
-    SkillsEngine,
-    TransitionContext,
-)
+from automated_dj_mixes.transition import plan_transition
+from automated_dj_mixes.phrase_viz import group_phrases_into_sections, compute_interval_energy
 
 
 def _find_template(project_root: Path) -> Path:
@@ -44,6 +41,7 @@ def run_pipeline(
     output_dir: Path,
     project_root: Path | None = None,
     config_path: Path | None = None,
+    visualize: bool = False,
 ) -> Path:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
@@ -56,8 +54,26 @@ def run_pipeline(
         raise ValueError(f"No audio files found in {input_dir}")
     print(f"  Found {len(analyses)} tracks")
 
+    # Enrich with Rekordbox phrase analysis (if available)
+    rb_count = 0
+    rb_matches: dict[str, object] = {}  # track path → RekordboxAnalysis (for beat grid warp)
+    try:
+        from automated_dj_mixes.rekordbox_reader import read_rekordbox_library, find_rekordbox_match
+        print("Reading Rekordbox library...")
+        rb_library = read_rekordbox_library()
+        for a in analyses:
+            rb_match = find_rekordbox_match(a.path.name, rb_library)
+            if rb_match and rb_match.phrases:
+                enrich_from_rekordbox(a, rb_match)
+                rb_matches[str(a.path)] = rb_match
+                rb_count += 1
+        print(f"  Rekordbox: {rb_count}/{len(analyses)} tracks enriched with phrase data")
+    except Exception as e:
+        print(f"  Rekordbox unavailable ({e}), using librosa analysis only")
+
     for a in analyses:
-        print(f"  {a.path.name}: {a.camelot or '?'} | {a.bpm:.1f} BPM | {a.lufs:.1f} LUFS")
+        src = f"[{a.analysis_source}]" if a.analysis_source != "librosa" else ""
+        print(f"  {a.path.name}: {a.camelot or '?'} | {a.bpm:.1f} BPM | {a.lufs:.1f} LUFS {src}")
         for w in a.warnings:
             print(f"    WARNING: {w}")
 
@@ -93,111 +109,163 @@ def run_pipeline(
     # Warp markers + warp mode per track
     warp_markers_all = []
     warp_modes = []
+    rb_warp_count = 0
     for a in ordered_analyses:
-        markers = calculate_warp_markers(
-            bpm=a.bpm,
-            first_downbeat_sec=a.first_downbeat_sec,
-            duration_sec=a.duration_sec,
-            project_bpm=project_bpm,
-        )
+        rb_match = rb_matches.get(str(a.path))
+        if rb_match and hasattr(rb_match, "beat_times_ms") and len(rb_match.beat_times_ms) >= 8:
+            markers = calculate_warp_markers_from_beat_grid(
+                beat_times_ms=rb_match.beat_times_ms,
+                bpm=a.bpm,
+                duration_sec=a.duration_sec,
+                first_downbeat_offset=getattr(rb_match, "first_downbeat_offset", 0),
+            )
+            rb_warp_count += 1
+        else:
+            markers = calculate_warp_markers(
+                bpm=a.bpm,
+                first_downbeat_sec=a.first_downbeat_sec,
+                duration_sec=a.duration_sec,
+                project_bpm=project_bpm,
+            )
         warp_markers_all.append(markers)
-        # With tempo automation matching each track's BPM, every track can use Repitch
-        # (no time-stretch, no pitch artifacts). choose_warp_mode is now a fallback.
-        mode = choose_warp_mode(a.bpm, a.bpm)  # always matches → Repitch
+        mode = choose_warp_mode(a.bpm, project_bpm)
         warp_modes.append(mode)
         mode_name = "Repitch" if mode == 6 else "Complex Pro"
-        print(f"  {a.path.name}: {mode_name}")
+        warp_src = f"RB grid ({len(markers)} markers)" if rb_match and hasattr(rb_match, "beat_times_ms") and len(rb_match.beat_times_ms) >= 8 else "2-marker linear"
+        print(f"  {a.path.name}: {mode_name}, {warp_src}")
+    if rb_warp_count:
+        print(f"  Beat grid warp: {rb_warp_count}/{len(ordered_analyses)} tracks using Rekordbox grid")
 
-    # Arrangement positions — base-to-base alignment with phrase-grid snap:
-    # Outgoing's bass_end aligns with incoming's bass_start AT a 32-bar phrase
-    # boundary. Music is built on phrases (8/16/32 bars) — changes must land
-    # on those marks or it sounds off-grid.
-    PHRASE_BEATS = 32 * 4  # 128 beats = 32 bars
+    # === VISUALIZATION MODE ===
+    # Each track starts at arrangement beat 0 (stacked on separate Ableton
+    # tracks, no sequencing). Three-signal classification per 8-bar interval:
+    # Rekordbox phrase majority + librosa RMS + librosa bass-band RMS.
+    if visualize:
+        print("VISUALIZATION MODE — 3-signal classifier (RB + RMS + bass)")
+        INTERVAL_BARS = 8
+        INTERVAL_BEATS = INTERVAL_BARS * 4
+        patches = []
+        for i, (analysis, markers, mode) in enumerate(
+            zip(ordered_analyses, warp_markers_all, warp_modes)
+        ):
+            total_beats = markers[-1].beat_time if markers else 0
+            rb_match = rb_matches.get(str(analysis.path))
+            offset = getattr(rb_match, "first_downbeat_offset", 0) if rb_match else 0
 
-    def _sec_to_beats(seconds: float | None, bpm: float, fallback_beats: float) -> float:
-        if seconds is None:
-            return fallback_beats
-        return seconds * bpm / 60.0
+            # Compute per-8-bar energy from the audio
+            rms_norm = None
+            bass_norm = None
+            if rb_match and rb_match.beat_times_ms:
+                first_downbeat_sec = rb_match.beat_times_ms[offset] / 1000.0 if offset < len(rb_match.beat_times_ms) else 0.0
+                num_intervals = max(1, int(total_beats // INTERVAL_BEATS) + 1)
+                try:
+                    rms_norm, bass_norm = compute_interval_energy(
+                        analysis.path,
+                        bpm=rb_match.bpm or analysis.bpm,
+                        first_downbeat_sec=first_downbeat_sec,
+                        interval_beats=INTERVAL_BEATS,
+                        num_intervals=num_intervals,
+                    )
+                except Exception as e:
+                    print(f"  WARNING: energy analysis failed for {analysis.path.name}: {e}")
 
+            segments = group_phrases_into_sections(
+                rb_match, total_beats, offset,
+                interval_bars=INTERVAL_BARS,
+                rms_norm=rms_norm,
+                bass_norm=bass_norm,
+            )
+
+            label_counts: dict[str, int] = {}
+            for s in segments:
+                label_counts[s.label] = label_counts.get(s.label, 0) + 1
+            counts_str = " ".join(f"{k}:{v}" for k, v in label_counts.items())
+            print(f"  {analysis.path.name[:60]} (offset={offset}): {counts_str}")
+            # Energy summary at change boundaries
+            if rms_norm and bass_norm:
+                changes = []
+                for k in range(1, len(rms_norm)):
+                    bass_ratio = (bass_norm[k] + 0.01) / (bass_norm[k - 1] + 0.01)
+                    if bass_ratio > 1.5 or bass_ratio < 0.67:
+                        bar_pos = k * INTERVAL_BARS
+                        changes.append(f"bar{bar_pos}(bass {bass_norm[k-1]:.2f}->{bass_norm[k]:.2f})")
+                if changes:
+                    print(f"     energy changes @ {', '.join(changes)}")
+            for s in segments:
+                length = s.source_end_beats - s.source_start_beats
+                print(
+                    f"     {s.label:6s} src[{s.source_start_beats:>7.1f} .. "
+                    f"{s.source_end_beats:>7.1f}] = {length:>4.0f}b ({length/4:>4.1f} bars)"
+                )
+
+            patches.append(TrackPatch(
+                analysis=analysis,
+                track_index=i,
+                warp_markers=markers,
+                gain_offset_db=0.0,
+                arrangement_start_beats=0,
+                warp_mode=mode,
+                phrase_segments=segments,
+            ))
+
+        # Single tempo point at the project BPM — no per-track tempo automation
+        tempo_points = [AutomationPoint(time_beats=0, value=project_bpm)]
+
+        template_path = _find_template(project_root)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        existing_viz = list(output_dir.glob("Phrase Viz V*.als"))
+        version = len(existing_viz) + 1
+        output_name = f"Phrase Viz V{version}.als"
+        output_path = output_dir / output_name
+        print(f"Generating {output_path}...")
+        result = generate_session(
+            template_path=template_path,
+            patches=patches,
+            output_path=output_path,
+            project_bpm=project_bpm,
+            transition_automation=None,
+            tempo_automation=tempo_points,
+        )
+        print(f"Done: {result}")
+        return result
+
+    # Plan transitions using bass-to-bass alignment. Each call to
+    # plan_transition() determines positioning, automation, and looping
+    # for one track pair. The first track starts at beat 0.
     arrangement_positions = [0]
-    alignment_strategies: list[str] = ["start"]
-    bass_swap_beats: list[float | None] = [None]
+    transition_specs = []  # one per pair (len = tracks - 1)
+    loop_specs: list = [None]  # per-track LoopSpec | None (first track never loops)
+
+    print("Planning transitions (bass-to-bass)...")
     for i in range(1, len(ordered_analyses)):
         outgoing = ordered_analyses[i - 1]
         incoming = ordered_analyses[i]
-        outgoing_pos = arrangement_positions[i - 1]
-        outgoing_total_beats = warp_markers_all[i - 1][-1].beat_time if warp_markers_all[i - 1] else 0
+        outgoing_total = warp_markers_all[i - 1][-1].beat_time if warp_markers_all[i - 1] else 0
+        incoming_total = warp_markers_all[i][-1].beat_time if warp_markers_all[i] else 0
 
-        # Strategy selection (in order of preference):
-        # A) bass_to_bass: outgoing.bass_end -> incoming.bass_start (energetic swap)
-        # B) tail_into_break: outgoing's audible end -> incoming.first_break_start
-        #    Then bass restores on incoming at break_end (the drop)
-        # C) end_to_end: last resort (boring beats-into-beats)
-        if outgoing.bass_end_sec is not None and incoming.bass_start_sec is not None:
-            strategy = "bass_to_bass"
-            outgoing_anchor_beats = _sec_to_beats(outgoing.bass_end_sec, outgoing.bpm, outgoing_total_beats)
-            incoming_anchor_beats = _sec_to_beats(incoming.bass_start_sec, incoming.bpm, 0.0)
-            # Bass swap = incoming.bass_start lands at the alignment beat
-            # No secondary swap point needed
-            secondary_swap_beats = None
-        elif incoming.first_break_start_sec is not None and incoming.first_break_end_sec is not None:
-            # Outgoing's audible end aligns with incoming.first_break_start.
-            # Bass restores on incoming at first_break_end (the drop after the break).
-            strategy = "tail_into_break"
-            # Outgoing's anchor for alignment is its clip end (its tail finishes here)
-            outgoing_anchor_beats = outgoing_total_beats
-            incoming_anchor_beats = _sec_to_beats(incoming.first_break_start_sec, incoming.bpm, 0.0)
-            # Secondary swap point for bass restore (on incoming) = break_end in arrangement
-            secondary_swap_beats = _sec_to_beats(incoming.first_break_end_sec, incoming.bpm, 0.0)
-        else:
-            strategy = "end_to_end"
-            outgoing_anchor_beats = _sec_to_beats(outgoing.last_kick_sec, outgoing.bpm, outgoing_total_beats)
-            incoming_anchor_beats = _sec_to_beats(incoming.first_downbeat_sec, incoming.bpm, 0.0)
-            secondary_swap_beats = None
-
-        # Natural alignment point in arrangement time
-        natural_swap_beat = outgoing_pos + outgoing_anchor_beats
-
-        # PHRASE SNAP: round to nearest 32-bar boundary (Sam's master rule).
-        # Clamp to within outgoing's clip duration so the swap actually fires.
-        outgoing_clip_end_beat = outgoing_pos + outgoing_total_beats
-        snapped_swap_beat = round(natural_swap_beat / PHRASE_BEATS) * PHRASE_BEATS
-        if snapped_swap_beat >= outgoing_clip_end_beat:
-            snapped_swap_beat = (int(outgoing_clip_end_beat // PHRASE_BEATS)) * PHRASE_BEATS
-
-        # Position incoming so its anchor lands on the snapped phrase boundary
-        natural_incoming_pos = snapped_swap_beat - incoming_anchor_beats
-
-        # Bound overlap to 4-96 bars
-        max_overlap_beats = 96 * 4
-        min_overlap_beats = 4 * 4
-        earliest_incoming = outgoing_pos + outgoing_total_beats - max_overlap_beats
-        latest_incoming = outgoing_pos + outgoing_total_beats - min_overlap_beats
-        clamped = max(earliest_incoming, min(natural_incoming_pos, latest_incoming))
-        snapped_incoming = round(clamped / 4) * 4
-        arrangement_positions.append(int(snapped_incoming))
-        alignment_strategies.append(strategy)
-
-        # Bass swap point:
-        # - For bass_to_bass: incoming's bass_start lands at the alignment beat
-        # - For tail_into_break: the BASS swap is at break_end (when incoming's bass returns)
-        # - For end_to_end: at the alignment beat (which is last_kick = first_kick)
-        if strategy == "tail_into_break" and secondary_swap_beats is not None:
-            bass_swap_beats.append(float(snapped_incoming) + secondary_swap_beats)
-        else:
-            bass_swap_beats.append(float(snapped_incoming) + incoming_anchor_beats)
-
-    print("Arrangement positions (base-to-base, phrase-grid snap):")
-    for i, (a, pos, strat) in enumerate(zip(ordered_analyses, arrangement_positions, alignment_strategies)):
-        bass_str = (
-            f"bass={a.bass_start_sec:.1f}-{a.bass_end_sec:.1f}s"
-            if (a.bass_start_sec is not None and a.bass_end_sec is not None)
-            else "bass=N/A"
+        spec = plan_transition(
+            outgoing=outgoing,
+            incoming=incoming,
+            outgoing_arrangement_start=arrangement_positions[i - 1],
+            outgoing_total_beats=outgoing_total,
+            incoming_total_beats=incoming_total,
+            project_bpm=project_bpm,
+            outgoing_rb=rb_matches.get(str(outgoing.path)),
+            incoming_rb=rb_matches.get(str(incoming.path)),
         )
-        swap_str = ""
-        if i > 0 and bass_swap_beats[i] is not None:
-            swap_str = f"  swap@beat{bass_swap_beats[i]:.0f}(bar{bass_swap_beats[i]/4:.0f})"
-        print(f"  {a.path.name[:50]}: beat {pos}  [{strat}]  {bass_str}{swap_str}")
+
+        arrangement_positions.append(int(spec.incoming_arrangement_start))
+        transition_specs.append(spec)
+
+        # Outgoing loop from this transition overwrites what we stored for track i-1
+        # (only if we haven't already set one from a previous transition)
+        if spec.outgoing_loop and loop_specs[i - 1] is None:
+            loop_specs[i - 1] = spec.outgoing_loop
+        loop_specs.append(spec.incoming_loop)
+
+        overlap = spec.transition_end - spec.transition_start
+        log_str = " | ".join(spec.decision_log)
+        print(f"  {outgoing.path.name[:35]} -> {incoming.path.name[:35]}: {overlap/4:.0f}bars swap@{spec.bass_swap:.0f} [{log_str}]")
 
     # Tempo automation: each track plays at its native BPM in its "solo" region,
     # ramping smoothly into the next track's BPM during the transition zone.
@@ -207,12 +275,10 @@ def run_pipeline(
         if i == 0:
             tempo_points.append(AutomationPoint(time_beats=0, value=track_bpm))
         else:
-            # End of previous track's solo = start of this transition
             prev_end = arrangement_positions[i - 1] + (warp_markers_all[i - 1][-1].beat_time if warp_markers_all[i - 1] else 0)
             transition_start = pos
             transition_end = prev_end
             prev_bpm = round(ordered_analyses[i - 1].bpm)
-            # Outgoing BPM held until transition starts, then ramp to incoming BPM
             tempo_points.append(AutomationPoint(time_beats=transition_start, value=prev_bpm))
             tempo_points.append(AutomationPoint(time_beats=transition_end, value=track_bpm))
         if i == len(ordered_analyses) - 1:
@@ -235,53 +301,19 @@ def run_pipeline(
             gain_offset_db=gain_db,
             arrangement_start_beats=arrangement_positions[i],
             warp_mode=mode,
+            loop_spec=loop_specs[i],
         ))
 
-    # Skills engine — plan transitions
-    engine = SkillsEngine(DEFAULT_SKILLS)
+    # Collect automation from transition specs
     transition_auto: dict[int, list[tuple[str, list[AutomationPoint]]]] = {}
-
-    print("Planning transitions...")
-    for i in range(len(ordered_analyses) - 1):
-        outgoing = ordered_analyses[i]
-        incoming = ordered_analyses[i + 1]
-
-        outgoing_end = arrangement_positions[i] + (
-            warp_markers_all[i][-1].beat_time if warp_markers_all[i] else 0
-        )
-        incoming_start = arrangement_positions[i + 1]
-        overlap = max(0, outgoing_end - incoming_start)
-
-        # The bass swap point for transition i (between track i and i+1) lives
-        # at bass_swap_beats[i+1] — we computed it during arrangement positioning.
-        swap_beat = bass_swap_beats[i + 1] if (i + 1) < len(bass_swap_beats) else None
-
-        ctx = TransitionContext(
-            outgoing=outgoing,
-            incoming=incoming,
-            outgoing_arrangement_start_beats=arrangement_positions[i],
-            outgoing_arrangement_end_beats=outgoing_end,
-            incoming_arrangement_start_beats=incoming_start,
-            available_overlap_beats=overlap,
-            project_bpm=project_bpm,
-            bass_swap_beat=swap_beat,
-        )
-
-        skill = engine.pick_skill(ctx)
-        plan = skill.generate(ctx)
-        bars = plan.transition_length_beats / 4
-        print(f"  {outgoing.path.name[:40]} -> {incoming.path.name[:40]}: {plan.skill_name} ({bars:.0f} bars)")
-
-        # Default: volume + bass cut only. Filter sweeps (lp/hp) are intentionally
-        # OMITTED — Sam's mixes use them rarely and they conflict with the bass cut
-        # when both try to manage the lows. Re-enable for opt-in filter-heavy skills.
+    for i, spec in enumerate(transition_specs):
         transition_auto.setdefault(i, []).extend([
-            ("volume", plan.outgoing_volume),
-            ("eq_bass", plan.outgoing_eq_bass),
+            ("volume", spec.outgoing_volume),
+            ("eq_bass", spec.outgoing_eq_bass),
         ])
         transition_auto.setdefault(i + 1, []).extend([
-            ("volume", plan.incoming_volume),
-            ("eq_bass", plan.incoming_eq_bass),
+            ("volume", spec.incoming_volume),
+            ("eq_bass", spec.incoming_eq_bass),
         ])
 
     # MERGE multi-envelope automation per (track, param). When a track is the
@@ -295,6 +327,45 @@ def run_pipeline(
         for param_key in merged:
             merged[param_key].sort(key=lambda p: p.time_beats)
         transition_auto[track_idx] = [(k, v) for k, v in merged.items()]
+
+    # CLAMP automation to the active clip region. The clip region extends from
+    # arrangement_start to either the natural track end, OR (if there's a loop
+    # spec) to the chop point plus N duplicate clips.
+    #
+    # Anchors use the FIRST/LAST automation value, not unity. For an outgoing
+    # fade ending at 0.0, the right anchor stays at 0.0 (silent), not 1.0 —
+    # otherwise the track jumps back to full volume after the fade.
+    for track_idx in transition_auto:
+        clip_start = arrangement_positions[track_idx]
+        total_beats = warp_markers_all[track_idx][-1].beat_time if warp_markers_all[track_idx] else 0
+        ls = loop_specs[track_idx]
+        if ls:
+            loop_len = ls.loop_source_end - ls.loop_source_start
+            clip_end_beat = clip_start + ls.chop_at_beats + ls.num_extra_copies * loop_len
+        else:
+            clip_end_beat = clip_start + total_beats
+
+        clamped: list[tuple[str, list[AutomationPoint]]] = []
+        for param_key, points in transition_auto[track_idx]:
+            if not points:
+                continue
+            filtered = [p for p in points if clip_start <= p.time_beats <= clip_end_beat]
+            if not filtered:
+                continue
+            first_time = filtered[0].time_beats
+            last_time = filtered[-1].time_beats
+            left_value = filtered[0].value
+            right_value = filtered[-1].value
+            anchored: list[AutomationPoint] = []
+            if first_time > clip_start:
+                anchored.append(AutomationPoint(time_beats=clip_start, value=left_value))
+                anchored.append(AutomationPoint(time_beats=first_time - 0.01, value=left_value))
+            anchored.extend(filtered)
+            if last_time < clip_end_beat:
+                anchored.append(AutomationPoint(time_beats=last_time + 0.01, value=right_value))
+                anchored.append(AutomationPoint(time_beats=clip_end_beat, value=right_value))
+            clamped.append((param_key, anchored))
+        transition_auto[track_idx] = clamped
 
     # Generate ALS
     template_path = _find_template(project_root)
@@ -322,12 +393,15 @@ def main():
     parser.add_argument("--input", required=True, help="Folder containing audio tracks")
     parser.add_argument("--output", required=True, help="Folder for generated ALS output")
     parser.add_argument("--config", help="Path to settings.json")
+    parser.add_argument("--visualize", action="store_true",
+                        help="Phrase visualization mode — chop tracks by Rekordbox phrases, color-code")
     args = parser.parse_args()
 
     als_path = run_pipeline(
         Path(args.input),
         Path(args.output),
         config_path=Path(args.config) if args.config else None,
+        visualize=args.visualize,
     )
     print(f"Generated: {als_path}")
 
