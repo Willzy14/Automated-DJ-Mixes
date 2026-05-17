@@ -1,47 +1,119 @@
 {
   "project": "Automated DJ Mixes",
-  "description": "Automated DJ mix pipeline — template-based ALS generation with harmonic sequencing, beatgrid placement, gain offsets, transition automation for dance tracks",
-  "tech_stack": ["Python", "Librosa", "pyloudnorm", "mutagen", "Ableton Live 12"],
+  "description": "Automated DJ mix pipeline — template-based ALS generation with multi-signal cue candidate detection (Rekordbox phrases + librosa energy + PWV5 waveform) feeding bass-to-bass transition planning",
+  "tech_stack": ["Python 3.x", "Librosa", "pyloudnorm", "mutagen", "pyrekordbox", "numpy", "matplotlib", "Ableton Live 12"],
+  "analysis_model_version": "cue-candidates-v1",
   "modules": {
     "orchestrator": {
       "path": "Source/automated_dj_mixes/orchestrator.py",
-      "purpose": "Main pipeline controller",
-      "status": "scaffold"
+      "purpose": "Main pipeline controller. --visualize mode for phrase verification",
+      "status": "working"
     },
     "analysis": {
       "path": "Source/automated_dj_mixes/analysis.py",
-      "purpose": "Tag reading, transient detection, LUFS measurement",
-      "status": "scaffold"
+      "purpose": "Tag reading, transient detection, LUFS",
+      "status": "working"
     },
     "sequencer": {
       "path": "Source/automated_dj_mixes/sequencer.py",
-      "purpose": "Camelot wheel logic, harmonic path optimisation",
-      "status": "scaffold"
+      "purpose": "Camelot wheel logic, harmonic path",
+      "status": "working"
     },
     "warping": {
       "path": "Source/automated_dj_mixes/warping.py",
-      "purpose": "Warp marker calculation from BPM + downbeat",
-      "status": "scaffold"
+      "purpose": "Per-beat warp markers from Rekordbox grid",
+      "status": "working"
     },
     "automation": {
       "path": "Source/automated_dj_mixes/automation.py",
-      "purpose": "Filter curves, crossfades, gain offsets",
-      "status": "scaffold"
+      "purpose": "AutomationPoint + gain offset calc",
+      "status": "working"
     },
     "als_generator": {
       "path": "Source/automated_dj_mixes/als_generator.py",
-      "purpose": "Template-based ALS XML patching",
-      "status": "scaffold"
+      "purpose": "Template-based ALS patching, multi-clip per track for loops + viz",
+      "status": "working"
+    },
+    "rekordbox_reader": {
+      "path": "Source/automated_dj_mixes/rekordbox_reader.py",
+      "purpose": "Manual PSSI binary parser for Rekordbox 7 phrase data + PQTZ beat grid",
+      "status": "working"
+    },
+    "rekordbox_waveform": {
+      "path": "Source/automated_dj_mixes/rekordbox_waveform.py",
+      "purpose": "PWV5/PWV4 parser — 3-bit RGB + 5-bit height per pixel (LSB-first 16-bit words)",
+      "status": "working",
+      "added": "2026-05-17"
+    },
+    "features": {
+      "path": "Source/automated_dj_mixes/features.py",
+      "purpose": "Per-beat librosa RMS + bass + PWV5 with disk cache (path/mtime/version keyed)",
+      "status": "working",
+      "added": "2026-05-17"
+    },
+    "phrase_viz": {
+      "path": "Source/automated_dj_mixes/phrase_viz.py",
+      "purpose": "Factual Interval records + viz-only colour segment collapse",
+      "status": "working (refactored 2026-05-17)"
+    },
+    "cue_candidates": {
+      "path": "Source/automated_dj_mixes/cue_candidates.py",
+      "purpose": "Ranked CueCandidate API with confidence + sources + reasons. 5 cue types.",
+      "status": "working",
+      "added": "2026-05-17"
+    },
+    "transition": {
+      "path": "Source/automated_dj_mixes/transition.py",
+      "purpose": "Bass-to-bass transition planning; consumes ranked CueCandidate lists with RB-phrase fallback",
+      "status": "working (candidate API added 2026-05-17)"
+    },
+    "report": {
+      "path": "Source/automated_dj_mixes/report.py",
+      "purpose": "Per-track CSV + per-mix Markdown rationale reports",
+      "status": "working",
+      "added": "2026-05-17"
+    },
+    "validation": {
+      "path": "Source/automated_dj_mixes/validation.py",
+      "purpose": "5 objective pass/fail checks on planned mix (NOT by reparsing ALS)",
+      "status": "working",
+      "added": "2026-05-17"
     },
     "config": {
       "path": "Source/automated_dj_mixes/config.py",
       "purpose": "Settings loader",
-      "status": "scaffold"
+      "status": "working"
     }
   },
   "config_path": "Config/settings.json",
   "template_path": "Templates/",
+  "cache_path": "Test Project/May 2026 Mix/Analysis Cache/",
+  "reports_path": "Test Project/May 2026 Mix/Reports/",
+  "ground_truth_path": "Data/Ground Truth/Sam Cue Points.yaml",
   "test_fixtures": "Tests/Fixtures/",
-  "v1_constraints": ["electronic/dance only", "constant BPM", "4/4 time", "first-kick downbeat detection"],
-  "connections": ["Social Media Content Engine", "samwillsmixing.com"]
+  "v1_constraints": ["electronic/dance only", "constant BPM", "4/4 time", "Rekordbox-analyzed library"],
+  "connections": ["Social Media Content Engine", "samwillsmixing.com"],
+  "sessions": [
+    {
+      "date": "2026-05-17",
+      "focus": "Multi-signal cue candidate architecture (Codex-reviewed plan)",
+      "outputs": ["Mix V16", "Phrase Viz V8", "PWV5 validation PNGs", "per-track CSV reports", "Transition - Mix V16.md"],
+      "branches": ["analysis-v7-preserve (origin)", "analysis-v8-build (merged into main)"],
+      "commits": ["efadeb0", "f9bdb52", "93028bb"],
+      "validation": "4/5 checks pass on Mix V16; bass-swap grid alignment fails on some transitions"
+    },
+    {
+      "date": "2026-05-16",
+      "focus": "Rekordbox phrase analysis + per-beat warp markers",
+      "outputs": ["Mix V7-V10"]
+    },
+    {
+      "date": "2026-05-15",
+      "focus": "Base-to-base mixing + strategy selector + V1-V12"
+    },
+    {
+      "date": "2026-05-14",
+      "focus": "Bootstrap + full pipeline + skills system + V1-V8"
+    }
+  ]
 }

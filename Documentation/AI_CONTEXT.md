@@ -24,25 +24,24 @@ Not in V1: Max for Live (future enhancement for real-time automation), pyproject
 ```
 Source/automated_dj_mixes/
 ├── __init__.py
-├── orchestrator.py      — Main pipeline controller + strategy selector
-├── analysis.py          — Tag reading, transient detection, LUFS, Rekordbox enrichment
-├── sequencer.py         — Camelot wheel logic, harmonic path
-├── warping.py           — Warp marker calculation (2-marker + Rekordbox beat grid)
-├── automation.py        — Filter curves, crossfades, gain offsets
-├── als_generator.py     — Template-based ALS XML patching
-├── rekordbox_reader.py  — Rekordbox ANLZ parser (phrases, beat grid, key)
-├── config.py            — Settings loader
-└── skills/
-    ├── __init__.py      — SkillsEngine decision layer
-    ├── base.py          — TransitionContext, TransitionPlan, TransitionSkill
-    ├── long_filter_blend.py
-    ├── quick_eq_swap.py
-    ├── energetic_punch_swap.py
-    ├── gentle_blend.py
-    └── breakdown_blend.py
+├── orchestrator.py        — Main pipeline controller, --visualize mode
+├── analysis.py            — Tag reading, transient detection, LUFS
+├── sequencer.py           — Camelot wheel logic, harmonic path
+├── warping.py             — Per-beat warp markers from Rekordbox grid
+├── automation.py          — AutomationPoint + gain offset calc
+├── als_generator.py       — Template-based ALS XML patching (multi-clip per track)
+├── rekordbox_reader.py    — Rekordbox ANLZ parser (PSSI phrases, PQTZ beat grid)
+├── rekordbox_waveform.py  — PWV5/PWV4 colour waveform parser (4th analysis signal)
+├── features.py            — Per-beat features (RMS + bass + PWV5) with disk cache
+├── phrase_viz.py          — Factual Interval records + viz colour collapse
+├── cue_candidates.py      — Ranked CueCandidate API (5 cue types + confidence)
+├── transition.py          — Bass-to-bass transition planning, candidate-driven
+├── report.py              — Per-track CSV + per-mix Markdown reports
+├── validation.py          — Objective pass/fail checks on planned mix
+└── config.py              — Settings loader
 ```
 
-Pipeline: analysis → Rekordbox enrichment → sequencing → warping → strategy selection → skill-based automation → ALS generation.
+Pipeline: analysis → Rekordbox enrichment → sequencing → warping → per-beat features (cached) → factual intervals → ranked cue candidates → candidate-driven transition planning → ALS generation → objective validation.
 
 ALS generation is **template-based** — a real Ableton Live 12 session is decompressed, studied, and used as the base. The script patches in tracks, clips, warp markers, automation lanes, and gain offsets. Never builds XML from scratch.
 
@@ -79,7 +78,7 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-**Pipeline fully working end-to-end with Rekordbox integration, iterating on transition quality with Sam.** Has generated 20+ mixes in real Ableton sessions (V1-V12 with librosa, V7-V10 with Rekordbox), Sam reviewing track-by-track.
+**Multi-signal cue candidate architecture landed (V8 viz / V16 mix). Pipeline now emits ranked CueCandidate objects with confidence + sources + reasons, consumed by transition planning. Per-track CSVs and per-mix Markdown reports auto-generated. Disk cache for per-beat features. PWV5 parsing added as 4th analysis signal.** Sam reviewing V16 + Viz V8.
 
 **Implemented (Phase 1-8):**
 - All 7 core modules + rekordbox_reader + skills system functional
@@ -108,24 +107,42 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-05-16 (Latest Session)
-**Focus**: Rekordbox integration — phrase analysis + beat grids replace librosa section detection
+### 2026-05-17 (Latest Session)
+**Focus**: Multi-signal cue candidate architecture (Codex-reviewed plan, executed end-to-end)
 
 **Completed**:
-- Rekordbox reader (rekordbox_reader.py) — PSSI binary parser, beat grid, phrase mapping. All 17 tracks matched
-- Per-beat warp markers via `calculate_warp_markers_from_beat_grid()` — 165-252 markers per track vs old 2-marker
-- Phrase-aware strategy selector using Rekordbox phrase map (breakdown_blend → outro_into_intro → bass_to_bass → tail_into_break → end_to_end)
-- Automation clamping with unity anchors at clip boundaries — no automation outside overlap zones
-- Max overlap reduced to 48 bars (from 96), breakdown_blend guarded to >50% track position
-- Phrase boundary snap to actual Rekordbox phrase starts
-- Diagnostic scripts: diagnose_rekordbox.py, analyze_phrase_patterns.py
-- Mix V7-V10 generated with iterative Sam feedback on transition quality
+- Preserved V7 work as `analysis-v7-preserve` branch on origin (safety net)
+- Merged V7 worktree → main (commit `efadeb0`), pushed
+- `rekordbox_waveform.py`: PWV5/PWV4 parser — 3-bit RGB + 5-bit height packed in 16-bit LSB-first words. Generates neutral colour/height per pixel; bit-layout confirmed by inspecting real .EXT data on Coast 2 Coast / VLAD / Ease My Mind. 3 PNG validation renders in `Test Project/May 2026 Mix/Reports/`
+- `features.py`: per-beat librosa RMS + bass-band RMS + PWV5 height/RGB, with disk cache keyed on path/mtime/size/analysis_version. Track-local p30/p50/p70 percentiles for relative banding
+- `phrase_viz.py` REFACTORED: `Interval` is now factual-only (no cue flags, no labels). `segments_from_intervals()` is the viz-only colour collapse.
+- `cue_candidates.py`: ranked `CueCandidate` API. 5 cue types (bass_entry, break_start, break_end, chop_point, outro_start) with confidence (multi-signal agreement) + sources list + human-readable reasons. Pre-chorus candidates penalized 15% but never hidden (Harry Romero fix)
+- `report.py`: per-track CSV (`Analysis - {track}.csv`) + per-mix Markdown (`Transition - Mix V{N}.md`)
+- `validation.py`: 5 objective pass/fail checks on the planned mix (NOT by reparsing ALS — uses internal MixPlan state)
+- `transition.py`: now accepts ranked `CueCandidate` lists, prefers them over RB-phrase fallbacks. Sources logged in decision_log
+- `orchestrator.py`: full wire-up — features extracted before transition planning, candidates threaded into `plan_transition()`, validation + transition report at the end
+- `Data/Ground Truth/Sam Cue Points.yaml`: stub for 5 problem tracks × 4 cues (Sam to populate)
+- Generated **Phrase Viz V8** (using new candidate detection in viz mode) and **Mix V16** (candidate-driven transitions). 4/5 validation checks pass; bass-swap grid alignment fails on some transitions (off-bar)
+- `ANALYSIS_MODEL_VERSION = "cue-candidates-v1"` propagated through cache keys + all reports
+- Merged `analysis-v8-build` → main, pushed to origin
+
+**Key Learnings**:
+- PWV5 entry layout is 16-bit big-endian word, LSB-first packing: R=bits0-2, G=bits3-5, B=bits6-8, height=bits9-13, padding=bits14-15. Confirmed by decoding real data and seeing musically-sensible patterns (low-energy intros, peaks at drops)
+- pyrekordbox can't parse Rekordbox 7 .EXT files (construct.ConstError), but the PWV5/PSSI tag structures are simple enough to scan/parse manually using the same binary-scan pattern as PSSI
+- Multi-signal agreement = confidence: Coast 2 Coast + Sapian both hit 0.85 on bass_entry when RB chorus phrase + librosa bass rise + PWV5 height rise all align in one 8-bar window
+- Codex's "interpretation lives separately from observations" pattern made the codebase dramatically more honest — Interval stores facts, CueCandidate stores interpretations, transition planner consumes ranked candidates
+- Disk cache for features.py is essential — without it every iteration was waiting on librosa
+- The 48-bar max-overlap clamp can push bass_swap off-grid in arrangement; validation flagged this, needs `_snap_to_phrase()` on the final swap position in transition.py
+
+### 2026-05-16 (Previous Session)
+**Focus**: Rekordbox integration — phrase analysis + beat grids replace librosa section detection
+
+**Completed**: PSSI binary parser, per-beat warp markers, phrase-aware strategy selector, automation clamping with unity anchors, max overlap to 48 bars, Mix V7-V10
 
 **Key Learnings**:
 - Rekordbox phrase analysis far more reliable than librosa for structural detection
 - Ableton extends first/last automation breakpoint values across entire timeline — must clamp with unity anchors
-- When outro_into_intro was prioritized first, ALL transitions used it (every track has both). Must guard generic strategies
-- Coast to Coast tail naturally looped — Sam loves this, wants intentional loop extension as a feature
+- Coast to Coast tail naturally looped — Sam loves this, wants intentional loop extension
 
 ### 2026-05-15 (Previous Session)
 **Focus**: Base-to-base mixing — phrase-grid alignment, smarter strategies, real-time Sam review
@@ -139,11 +156,12 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## What's Next
 
-1. **Sam testing V10** — review all 11 transitions in Ableton, feedback on transition quality with Rekordbox data
-2. **Intentional loop extension** — Sam loved Coast to Coast tail looping. Build a feature to intentionally enable LoopOn when alignment math leaves a gap (Sam's manual technique)
-3. **Clip fragmentation** (V2 signature, deferred) — chop outgoing's last drum section into 2-4 beat fragments for percussion-loop outros (76% of clips in Sam's teaching mixes are <16 beats)
-4. **Smoother tempo automation** — "1 BPM rise over 2 tracks" instead of jumping at every transition
+1. **Sam reviews V16 + Phrase Viz V8** — listen, mark hits/misses, populate `Data/Ground Truth/Sam Cue Points.yaml`
+2. **Fix bass-swap grid alignment** — validation FAILed on this. Snap `bass_swap` to nearest 8-bar boundary in `transition.py` while preserving chop/incoming alignment
+3. **PWV5 visual confirmation** — Sam compares the 3 PNGs in `Reports/` to Rekordbox UI to confirm colour→frequency mapping before relying on it for chop detection
+4. **Tune candidate thresholds** with the ground-truth file — if our top bass_entry candidate matches Sam's marked beat for 5/5 tracks, ship; if not, adjust BASS_DELTA_RISE / BASS_DELTA_DROP
 5. **Expand template** — current template fits 11 tracks, need 12+ support
+6. **Long intros**: Capriati 40 bars, Fanciulli 40 bars — internal structure (build/teaser-drop) currently hidden inside the "intro" region; might need sub-classification
 
 ## Key Decisions
 
@@ -168,6 +186,14 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - **Automation ONLY in overlap zones** — No automation curves where tracks aren't overlapping. Unity (1.0) anchor points at clip boundaries ensure Ableton shows no processing outside transitions. Root cause of stray points: Ableton extends first/last breakpoint to entire timeline. (Sam, 2026-05-16)
 - **Max overlap 48 bars, not 96** — Sam's teaching mixes median at 25 bars. 96 was too long and created unwieldy transitions like Sentin remix at 93 bars. 48 is the upper bound. (Sam, 2026-05-16)
 - **Per-beat warp markers from Rekordbox grid** — One marker per downbeat (every 4th beat) from Rekordbox's exact ms timestamps. Eliminates up to 13-beat drift vs 2-marker linear interpolation. (2026-05-16)
+- **Multi-signal cue candidates, not single labels** — Each 8-bar interval stores facts (RB phrase + RMS + bass + PWV5 height). Interpretation is a separate ranked `CueCandidate` layer with confidence + sources + reasons. Transition planning consumes ranked candidates with RB-phrase fallback. (Codex review + Sam, 2026-05-17)
+- **PWV5 = Rekordbox's visual waveform bytes, not AI vision** — Pioneer's purpose-built waveform display data is already in the .EXT file as colour+height per pixel. Better first signal than rendering+OCR. Channel mapping (R=highs/G=mids/B=lows) is the Rekordbox UI convention but treated as visual data first, frequency-correlated second. (Sam + Codex, 2026-05-17)
+- **Interval is facts only; CueCandidate is interpretation** — Removing cue flags from Interval and putting interpretation in `cue_candidates.py` made the codebase honest. (Codex, 2026-05-17)
+- **Pre-chorus candidates penalized but never hidden** — Bass entries inside RB's "intro" region get a 15% confidence penalty + `region` tag, but stay visible. (Harry Romero fix; Codex, 2026-05-17)
+- **Percentile-based thresholds, not absolute** — p30/p70 per track for low/high banding; mastered tracks vary wildly so absolutes fail. (Codex, 2026-05-17)
+- **Disk cache for per-beat features** — Path/mtime/size + analysis_version cache key. Without it every viz iteration was librosa-bound. (2026-05-17)
+- **Validate from the MixPlan, not from the generated ALS** — Reparsing the ALS XML is fragile and unnecessary; the internal plan state is the source of truth for what we INTENDED. (Codex, 2026-05-17)
+- **ANALYSIS_MODEL_VERSION constant** — Propagated through cache keys, CSVs, MD reports, and YAML headers. Bumping invalidates old caches and lets old reports stay identifiable when thresholds change. (Codex, 2026-05-17)
 
 ## Connections
 
