@@ -62,6 +62,7 @@ class RekordboxAnalysis:
     phrases: list[PhraseEntry]
     beat_times_ms: list[int]            # millisecond timestamp per beat (index 0 = beat 1)
     first_downbeat_offset: int = 0      # index of first beat_of_bar=1 in beat_times_ms
+    ext_path: str = ""                  # absolute path to .EXT (for PWV5 parsing)
 
     def beat_to_sec(self, beat: int) -> float:
         """Convert a 1-based beat number to seconds using the beat grid."""
@@ -234,6 +235,7 @@ def read_rekordbox_library() -> dict[str, RekordboxAnalysis]:
             phrases=phrases,
             beat_times_ms=beat_times,
             first_downbeat_offset=db_offset,
+            ext_path=str(ext_path) if ext_path.exists() else "",
         )
         results[filename] = ra
 

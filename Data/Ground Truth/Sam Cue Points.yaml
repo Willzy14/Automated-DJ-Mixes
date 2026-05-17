@@ -1,0 +1,60 @@
+# Sam-validated cue points for the 5 problem-track set.
+# Used to:
+#   - Tune cue-detection thresholds without guessing
+#   - Regression-test changes (this beat WAS detected, now it isn't)
+#   - Score Mix V16+ against known-good cue positions
+#
+# All beats are SOURCE BEATS (warp-beat coordinate) — same as the `beat` field
+# on a CueCandidate. Use beat 0 = first downbeat (PSSI beat 1 + offset).
+#
+# For each track, mark only the four cues that matter:
+#   bass_entry_beat        — first real drop / where bass first establishes
+#   first_break_start_beat — first energy drop after the first drop
+#   first_break_end_beat   — where energy returns (= second drop)
+#   chop_point_beat        — last useful percussion beat (where outgoing
+#                            should be chopped before any tail/decay)
+#
+# Fill these in by hand. Leave as null if unsure.
+
+analysis_model_version: "cue-candidates-v1"
+
+tracks:
+  "Coast 2 Coast SW V1":
+    bpm: 128
+    bass_entry_beat: 176        # confirmed by Sam earlier (first chorus phrase)
+    first_break_start_beat: 449  # from librosa, needs Sam verification
+    first_break_end_beat: null
+    chop_point_beat: null
+
+  "VLAD - Interlude (Extended Mix) SW V2":
+    bpm: 133.33
+    # Sam's manual layout placed VLAD at arrangement bar 493:
+    #   intro 493-501 (8 bars) → drop 501-525 (24 bars) → break 525-541 (16 bars)
+    # Source beats (0-based, first downbeat = 0):
+    bass_entry_beat: 32          # = bar 9 = end of 8-bar intro
+    first_break_start_beat: 128  # = bar 33 = where drop 1 ends
+    first_break_end_beat: 192    # = bar 49 = where drop 2 starts
+    chop_point_beat: null         # needs Sam to mark
+
+  "Renegades SW V1":
+    bpm: 128
+    bass_entry_beat: null
+    first_break_start_beat: null
+    first_break_end_beat: null
+    chop_point_beat: null
+
+  # Long-intro track to test that intros are surfaced properly
+  "Saudade 24 Bit MASTER":
+    bpm: 129
+    bass_entry_beat: null         # Sam confirmed long intro ~40 bars
+    first_break_start_beat: null
+    first_break_end_beat: null
+    chop_point_beat: null
+
+  # Easy/normal track for baseline
+  "Slippin SW V5":
+    bpm: 130
+    bass_entry_beat: null
+    first_break_start_beat: null
+    first_break_end_beat: null
+    chop_point_beat: null

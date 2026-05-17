@@ -12,7 +12,10 @@ from automated_dj_mixes.warping import calculate_warp_markers, calculate_warp_ma
 from automated_dj_mixes.automation import calculate_gain_offsets, AutomationPoint
 from automated_dj_mixes.als_generator import TrackPatch, generate_session
 from automated_dj_mixes.transition import plan_transition
-from automated_dj_mixes.phrase_viz import group_phrases_into_sections, compute_interval_energy
+from automated_dj_mixes.phrase_viz import build_intervals, segments_from_intervals
+from automated_dj_mixes.features import extract_track_features
+from automated_dj_mixes.cue_candidates import find_cue_candidates
+from automated_dj_mixes.report import write_track_csv
 
 
 def _find_template(project_root: Path) -> Path:
@@ -141,62 +144,72 @@ def run_pipeline(
     # tracks, no sequencing). Three-signal classification per 8-bar interval:
     # Rekordbox phrase majority + librosa RMS + librosa bass-band RMS.
     if visualize:
-        print("VISUALIZATION MODE — 3-signal classifier (RB + RMS + bass)")
+        print("VISUALIZATION MODE — multi-signal cue candidates (RB + librosa + PWV5)")
         INTERVAL_BARS = 8
-        INTERVAL_BEATS = INTERVAL_BARS * 4
+        reports_dir = output_dir / "Reports"
         patches = []
+        all_track_features = {}
+        all_intervals = {}
+        all_candidates = {}
         for i, (analysis, markers, mode) in enumerate(
             zip(ordered_analyses, warp_markers_all, warp_modes)
         ):
             total_beats = markers[-1].beat_time if markers else 0
             rb_match = rb_matches.get(str(analysis.path))
-            offset = getattr(rb_match, "first_downbeat_offset", 0) if rb_match else 0
+            if not rb_match:
+                print(f"  WARNING: no Rekordbox data for {analysis.path.name}")
+                continue
+            offset = getattr(rb_match, "first_downbeat_offset", 0)
+            ext_path = Path(rb_match.ext_path) if rb_match.ext_path else None
 
-            # Compute per-8-bar energy from the audio
-            rms_norm = None
-            bass_norm = None
-            if rb_match and rb_match.beat_times_ms:
-                first_downbeat_sec = rb_match.beat_times_ms[offset] / 1000.0 if offset < len(rb_match.beat_times_ms) else 0.0
-                num_intervals = max(1, int(total_beats // INTERVAL_BEATS) + 1)
-                try:
-                    rms_norm, bass_norm = compute_interval_energy(
-                        analysis.path,
-                        bpm=rb_match.bpm or analysis.bpm,
-                        first_downbeat_sec=first_downbeat_sec,
-                        interval_beats=INTERVAL_BEATS,
-                        num_intervals=num_intervals,
-                    )
-                except Exception as e:
-                    print(f"  WARNING: energy analysis failed for {analysis.path.name}: {e}")
+            # Per-beat features with cache (Step 2)
+            try:
+                features = extract_track_features(
+                    audio_path=analysis.path,
+                    bpm=rb_match.bpm or analysis.bpm,
+                    beat_times_ms=rb_match.beat_times_ms,
+                    first_downbeat_offset=offset,
+                    ext_path=ext_path,
+                )
+            except Exception as e:
+                print(f"  WARNING: feature extraction failed for {analysis.path.name}: {e}")
+                continue
 
-            segments = group_phrases_into_sections(
-                rb_match, total_beats, offset,
-                interval_bars=INTERVAL_BARS,
-                rms_norm=rms_norm,
-                bass_norm=bass_norm,
-            )
+            # Factual interval records (Step 3)
+            intervals = build_intervals(rb_match, features, interval_bars=INTERVAL_BARS)
+            segments = segments_from_intervals(intervals)
+
+            # Ranked cue candidates (Step 4)
+            candidates = find_cue_candidates(intervals, features)
+
+            # Per-track CSV report (Step 5)
+            write_track_csv(analysis.path.stem, intervals, candidates, reports_dir)
+
+            # Cache for later (transition planning, viz markers, etc.)
+            all_track_features[analysis.path.name] = features
+            all_intervals[analysis.path.name] = intervals
+            all_candidates[analysis.path.name] = candidates
 
             label_counts: dict[str, int] = {}
             for s in segments:
                 label_counts[s.label] = label_counts.get(s.label, 0) + 1
             counts_str = " ".join(f"{k}:{v}" for k, v in label_counts.items())
-            print(f"  {analysis.path.name[:60]} (offset={offset}): {counts_str}")
-            # Energy summary at change boundaries
-            if rms_norm and bass_norm:
-                changes = []
-                for k in range(1, len(rms_norm)):
-                    bass_ratio = (bass_norm[k] + 0.01) / (bass_norm[k - 1] + 0.01)
-                    if bass_ratio > 1.5 or bass_ratio < 0.67:
-                        bar_pos = k * INTERVAL_BARS
-                        changes.append(f"bar{bar_pos}(bass {bass_norm[k-1]:.2f}->{bass_norm[k]:.2f})")
-                if changes:
-                    print(f"     energy changes @ {', '.join(changes)}")
-            for s in segments:
-                length = s.source_end_beats - s.source_start_beats
-                print(
-                    f"     {s.label:6s} src[{s.source_start_beats:>7.1f} .. "
-                    f"{s.source_end_beats:>7.1f}] = {length:>4.0f}b ({length/4:>4.1f} bars)"
-                )
+            cand_summary: dict[str, int] = {}
+            for c in candidates:
+                cand_summary[c.cue_type] = cand_summary.get(c.cue_type, 0) + 1
+            cand_str = " ".join(f"{t}:{n}" for t, n in cand_summary.items())
+            print(
+                f"  {analysis.path.name[:60]} (offset={offset}, "
+                f"wf={features.waveform_source}): sections [{counts_str}] cues [{cand_str}]"
+            )
+            # Top candidate per type for quick scan
+            for cue_type in ("bass_entry", "break_start", "break_end", "chop_point", "outro_start"):
+                top = next((c for c in candidates if c.cue_type == cue_type), None)
+                if top:
+                    print(
+                        f"     {cue_type:13s} top: beat {top.beat:>5.0f} @ {top.sec:>6.1f}s  "
+                        f"conf {top.confidence:.2f}  ({', '.join(top.sources)})"
+                    )
 
             patches.append(TrackPatch(
                 analysis=analysis,
