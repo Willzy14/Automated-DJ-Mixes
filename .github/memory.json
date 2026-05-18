@@ -64,8 +64,8 @@
     },
     "transition": {
       "path": "Source/automated_dj_mixes/transition.py",
-      "purpose": "Bass-to-bass transition planning; consumes ranked CueCandidate lists with RB-phrase fallback",
-      "status": "working (candidate API added 2026-05-17)"
+      "purpose": "Two-phase transition planning + per-track PhraseGrid snap + clamp sync + chop-leave-outro-room + dead-air loop refinement",
+      "status": "working (per-track phrase grid added 2026-05-18)"
     },
     "report": {
       "path": "Source/automated_dj_mixes/report.py",
@@ -75,9 +75,38 @@
     },
     "validation": {
       "path": "Source/automated_dj_mixes/validation.py",
-      "purpose": "5 objective pass/fail checks on planned mix (NOT by reparsing ALS)",
+      "purpose": "Per-track bar/phrase alignment HARD check + overlap range + fade endpoint + dead-air checks",
+      "status": "working (per-track checks added 2026-05-18)"
+    },
+    "mik_reader": {
+      "path": "Source/automated_dj_mixes/mik_reader.py",
+      "purpose": "Mixed In Key 11 GEOB tag + SQLite (MIKStore.db) reader — cues, beat grid, energy segments. Tag-only fallback if DB fails",
       "status": "working",
-      "added": "2026-05-17"
+      "added": "2026-05-18"
+    },
+    "amplitude_analysis": {
+      "path": "Source/automated_dj_mixes/amplitude_analysis.py",
+      "purpose": "1-second RMS envelope analysis: first_drop / first_break / outro_start / clean-loop-window detector + snap_to_mik_or_beat helper",
+      "status": "working",
+      "added": "2026-05-18"
+    },
+    "transition_viz": {
+      "path": "Source/automated_dj_mixes/transition_viz.py",
+      "purpose": "Per-transition PNG: both tracks aligned, automation overlay, loop region hatched, tiered phrase grid with bar labels",
+      "status": "working",
+      "added": "2026-05-18"
+    },
+    "track_viz": {
+      "path": "Source/automated_dj_mixes/track_viz.py",
+      "purpose": "Per-track PNG: full timeline + RB phrases + MIK cues + energy strip + picked candidates + automation lanes + tiered phrase grid",
+      "status": "working",
+      "added": "2026-05-18"
+    },
+    "waveform_preview": {
+      "path": "Source/automated_dj_mixes/waveform_preview.py",
+      "purpose": "Blank-canvas preview PNG for visual-hint authoring (no picks shown)",
+      "status": "working",
+      "added": "2026-05-18"
     },
     "config": {
       "path": "Source/automated_dj_mixes/config.py",
@@ -94,6 +123,16 @@
   "v1_constraints": ["electronic/dance only", "constant BPM", "4/4 time", "Rekordbox-analyzed library"],
   "connections": ["Social Media Content Engine", "samwillsmixing.com"],
   "sessions": [
+    {
+      "date": "2026-05-18",
+      "focus": "Visual hints workflow + per-track phrase-grid enforcement + MIK + amplitude analysis + visual review gate",
+      "outputs": ["Mix V17 through V46 iteratively", "Hints/track_hints.json (12 tracks)", "Documentation/CODEX_REVIEW.md", "REVIEW_VNN.md template auto-generated per mix"],
+      "modules_added": ["mik_reader", "amplitude_analysis", "transition_viz", "track_viz", "waveform_preview"],
+      "modules_modified": ["cue_candidates (hints + amplitude + MIK + first_drop_candidate)", "transition (PhraseGrid per-track, clamp sync, chop-reserve, dead-air refinement)", "validation (per-track alignment)", "orchestrator (full wiring)"],
+      "key_fixes": ["clamp sync (24-beat gap)", "first_downbeat_offset positioning (off-by-one)", "loop tail-skip dead-air", "chop-leave-outro-room", "hint precedence over algorithms", "per-track phrase grid alignment"],
+      "validation": "ALL PASS on V46 — including new per-track bar alignment HARD check (was 3/11 in V42, now 11/11)",
+      "open_items": ["Sapian (T5) bass placement at 45s may need hint adjustment", "off-by-one beat verification in Ableton", "per-genre prefer_grid parameterisation", "hint cache by audio hash"]
+    },
     {
       "date": "2026-05-17",
       "focus": "Multi-signal cue candidate architecture (Codex-reviewed plan)",

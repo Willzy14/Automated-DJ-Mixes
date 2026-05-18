@@ -14,9 +14,20 @@ from automated_dj_mixes.als_generator import TrackPatch, generate_session
 from automated_dj_mixes.transition import plan_transition
 from automated_dj_mixes.phrase_viz import build_intervals, segments_from_intervals
 from automated_dj_mixes.features import extract_track_features
-from automated_dj_mixes.cue_candidates import find_cue_candidates, first_credible
+from automated_dj_mixes.cue_candidates import (
+    find_cue_candidates,
+    first_credible,
+    mik_to_candidates,
+    amplitude_to_candidates,
+    hint_to_candidates,
+    load_hints_file,
+)
+from automated_dj_mixes.mik_reader import enrich_from_mik
 from automated_dj_mixes.report import write_track_csv, write_transition_report
+from automated_dj_mixes.track_viz import TrackVizContext, render_track
+from automated_dj_mixes.transition_viz import VizContext, render_transition
 from automated_dj_mixes.validation import validate_mix
+from automated_dj_mixes.waveform_preview import PreviewContext, render_preview
 
 
 def _find_template(project_root: Path) -> Path:
@@ -74,6 +85,32 @@ def run_pipeline(
         print(f"  Rekordbox: {rb_count}/{len(analyses)} tracks enriched with phrase data")
     except Exception as e:
         print(f"  Rekordbox unavailable ({e}), using librosa analysis only")
+
+    # Enrich with Mixed In Key 11 cue points (highest-confidence structural
+    # signal). Falls back silently if MIK hasn't been run on a track.
+    mik_data: dict[str, object] = {}   # track path → MikTrackData
+    mik_count = 0
+    print("Reading Mixed In Key 11 cue points...")
+    for a in analyses:
+        try:
+            mik = enrich_from_mik(a.path)
+            if mik.cues:
+                mik_data[str(a.path)] = mik
+                mik_count += 1
+        except Exception:
+            pass
+    print(f"  Mixed In Key: {mik_count}/{len(analyses)} tracks have auto-cue points")
+
+    # Visual hints — human (or Claude) broad-strokes reading of each track's
+    # waveform. Highest-confidence cue source: when a track has a hint, the
+    # hint wins over MIK/RB/amplitude algorithms.
+    hints_dir = input_dir.parent / "Hints"
+    hints_path = hints_dir / "track_hints.json"
+    track_hints_data = load_hints_file(hints_path)
+    if track_hints_data:
+        print(f"Visual hints: loaded {len(track_hints_data)} hinted tracks from {hints_path.name}")
+    else:
+        print(f"Visual hints: none found (looked at {hints_path})")
 
     for a in analyses:
         src = f"[{a.analysis_source}]" if a.analysis_source != "librosa" else ""
@@ -180,8 +217,10 @@ def run_pipeline(
             intervals = build_intervals(rb_match, features, interval_bars=INTERVAL_BARS)
             segments = segments_from_intervals(intervals)
 
-            # Ranked cue candidates (Step 4)
-            candidates = find_cue_candidates(intervals, features)
+            # Ranked cue candidates (Step 4) — pass MIK cues if available
+            mik = mik_data.get(str(analysis.path))
+            mik_cues_sec = [c.time_sec for c in mik.cues] if mik else None
+            candidates = find_cue_candidates(intervals, features, mik_cues_sec)
 
             # Per-track CSV report (Step 5)
             write_track_csv(analysis.path.stem, intervals, candidates, reports_dir)
@@ -245,28 +284,107 @@ def run_pipeline(
 
     # Extract per-track features + ranked cue candidates (Step 7 wiring).
     # plan_transition() will prefer candidates over RB-phrase fallbacks.
+    # Intervals are kept so the transition planner can pick a stripped-down
+    # loop region from the outgoing track.
     print("Extracting per-track features + cue candidates...")
     track_candidates: dict[str, list] = {}
-    for analysis in ordered_analyses:
+    track_intervals: dict[str, list] = {}
+    mik_only_count = 0
+    for analysis, markers in zip(ordered_analyses, warp_markers_all):
         rb_match = rb_matches.get(str(analysis.path))
-        if not rb_match:
-            track_candidates[analysis.path.name] = []
-            continue
-        ext_path = Path(rb_match.ext_path) if rb_match.ext_path else None
-        try:
-            features = extract_track_features(
-                audio_path=analysis.path,
-                bpm=rb_match.bpm or analysis.bpm,
-                beat_times_ms=rb_match.beat_times_ms,
-                first_downbeat_offset=getattr(rb_match, "first_downbeat_offset", 0),
-                ext_path=ext_path,
+        mik = mik_data.get(str(analysis.path))
+        total_beats = markers[-1].beat_time if markers else 0.0
+
+        if rb_match:
+            ext_path = Path(rb_match.ext_path) if rb_match.ext_path else None
+            try:
+                features = extract_track_features(
+                    audio_path=analysis.path,
+                    bpm=rb_match.bpm or analysis.bpm,
+                    beat_times_ms=rb_match.beat_times_ms,
+                    first_downbeat_offset=getattr(rb_match, "first_downbeat_offset", 0),
+                    ext_path=ext_path,
+                )
+                intervals = build_intervals(rb_match, features)
+                mik_cues_sec = [c.time_sec for c in mik.cues] if mik else None
+                candidates = find_cue_candidates(intervals, features, mik_cues_sec)
+                track_candidates[analysis.path.name] = candidates
+                track_intervals[analysis.path.name] = intervals
+                continue
+            except Exception as e:
+                print(f"  WARNING: feature/candidate extraction failed for {analysis.path.name}: {e}")
+
+        # No Rekordbox — fall back to MIK-only candidates if available.
+        if mik and mik.cues:
+            candidates = mik_to_candidates(
+                cue_times_sec=[c.time_sec for c in mik.cues],
+                first_downbeat_sec=analysis.first_downbeat_sec or 0.0,
+                bpm=analysis.bpm or 128.0,
+                total_beats=total_beats,
+                mik_energy_segments=mik.energy_segments,
             )
-            intervals = build_intervals(rb_match, features)
-            candidates = find_cue_candidates(intervals, features)
             track_candidates[analysis.path.name] = candidates
-        except Exception as e:
-            print(f"  WARNING: feature/candidate extraction failed for {analysis.path.name}: {e}")
+            track_intervals[analysis.path.name] = []
+            if candidates:
+                mik_only_count += 1
+        else:
             track_candidates[analysis.path.name] = []
+            track_intervals[analysis.path.name] = []
+
+    if mik_only_count:
+        print(f"  MIK-only candidates: {mik_only_count} tracks (no Rekordbox phrase data)")
+
+    # Amplitude-envelope structural detection — runs for EVERY track, not
+    # just MIK-only. This is the "look at the picture" signal that catches
+    # what MIK/RB miss (e.g. drops at silent-intro boundaries that MIK
+    # doesn't cue). Candidates merge with existing ones; first_drop_candidate
+    # picks the earliest credible bass_entry across all sources.
+    amp_added = 0
+    for analysis in ordered_analyses:
+        mik = mik_data.get(str(analysis.path))
+        mik_cues_sec = [c.time_sec for c in mik.cues] if mik else None
+        try:
+            amp_cands = amplitude_to_candidates(
+                audio_path=analysis.path,
+                bpm=analysis.bpm or 128.0,
+                first_downbeat_sec=analysis.first_downbeat_sec or 0.0,
+                duration_sec=analysis.duration_sec or 0.0,
+                mik_cues_sec=mik_cues_sec,
+            )
+        except Exception as e:
+            print(f"  WARNING: amplitude analysis failed for {analysis.path.name}: {e}")
+            amp_cands = []
+        if amp_cands:
+            track_candidates.setdefault(analysis.path.name, []).extend(amp_cands)
+            amp_added += 1
+    if amp_added:
+        print(f"  Amplitude candidates: added to {amp_added}/{len(ordered_analyses)} tracks")
+
+    # Visual hints — added LAST so they override (highest confidence).
+    # A hinted bass_entry will win first_drop_candidate over any algorithmic
+    # pick because hint_confidence (0.95) > algorithmic confidences.
+    hint_added = 0
+    for analysis in ordered_analyses:
+        hint = track_hints_data.get(analysis.path.name)
+        if not hint:
+            continue
+        mik = mik_data.get(str(analysis.path))
+        mik_cues_sec = [c.time_sec for c in mik.cues] if mik else None
+        hint_cands = hint_to_candidates(
+            track_hint=hint,
+            bpm=analysis.bpm or 128.0,
+            first_downbeat_sec=analysis.first_downbeat_sec or 0.0,
+            mik_cues_sec=mik_cues_sec,
+        )
+        if hint_cands:
+            track_candidates.setdefault(analysis.path.name, []).extend(hint_cands)
+            hint_added += 1
+    if hint_added:
+        print(f"  Visual hints applied: {hint_added}/{len(ordered_analyses)} tracks")
+    unhinted = [a.path.name for a in ordered_analyses if a.path.name not in track_hints_data]
+    if unhinted:
+        print(f"  {len(unhinted)} tracks have NO visual hints — algorithmic picks only. "
+              f"Review Output/Visualisations/Previews to add hints.")
 
     # Plan transitions using ranked candidates (with RB fallbacks).
     arrangement_positions = [0]
@@ -280,6 +398,7 @@ def run_pipeline(
         outgoing_total = warp_markers_all[i - 1][-1].beat_time if warp_markers_all[i - 1] else 0
         incoming_total = warp_markers_all[i][-1].beat_time if warp_markers_all[i] else 0
 
+        outgoing_mik = mik_data.get(str(outgoing.path))
         spec = plan_transition(
             outgoing=outgoing,
             incoming=incoming,
@@ -291,6 +410,8 @@ def run_pipeline(
             incoming_rb=rb_matches.get(str(incoming.path)),
             outgoing_candidates=track_candidates.get(outgoing.path.name, []),
             incoming_candidates=track_candidates.get(incoming.path.name, []),
+            outgoing_intervals=track_intervals.get(outgoing.path.name, []),
+            outgoing_mik_energy_segments=outgoing_mik.energy_segments if outgoing_mik else None,
         )
 
         arrangement_positions.append(int(spec.incoming_arrangement_start))
@@ -308,20 +429,21 @@ def run_pipeline(
 
     # Tempo automation: each track plays at its native BPM in its "solo" region,
     # ramping smoothly into the next track's BPM during the transition zone.
+    # All breakpoints snap to whole beats (Sam's grid rule).
     tempo_points: list[AutomationPoint] = []
     for i, (a, pos, markers) in enumerate(zip(ordered_analyses, arrangement_positions, warp_markers_all)):
         track_bpm = round(a.bpm)
         if i == 0:
             tempo_points.append(AutomationPoint(time_beats=0, value=track_bpm))
         else:
-            prev_end = arrangement_positions[i - 1] + (warp_markers_all[i - 1][-1].beat_time if warp_markers_all[i - 1] else 0)
-            transition_start = pos
+            prev_end = round(arrangement_positions[i - 1] + (warp_markers_all[i - 1][-1].beat_time if warp_markers_all[i - 1] else 0))
+            transition_start = round(pos)
             transition_end = prev_end
             prev_bpm = round(ordered_analyses[i - 1].bpm)
             tempo_points.append(AutomationPoint(time_beats=transition_start, value=prev_bpm))
             tempo_points.append(AutomationPoint(time_beats=transition_end, value=track_bpm))
         if i == len(ordered_analyses) - 1:
-            track_end = pos + (markers[-1].beat_time if markers else 0)
+            track_end = round(pos + (markers[-1].beat_time if markers else 0))
             tempo_points.append(AutomationPoint(time_beats=track_end, value=track_bpm))
 
     print("Tempo automation:")
@@ -374,21 +496,30 @@ def run_pipeline(
     # Anchors use the FIRST/LAST automation value, not unity. For an outgoing
     # fade ending at 0.0, the right anchor stays at 0.0 (silent), not 1.0 —
     # otherwise the track jumps back to full volume after the fade.
+    #
+    # All breakpoints snap to whole Ableton beats (Sam's hard rule, 2026-05).
+    def _snap_beat(b: float) -> float:
+        return float(round(b))
+
     for track_idx in transition_auto:
-        clip_start = arrangement_positions[track_idx]
+        clip_start = _snap_beat(arrangement_positions[track_idx])
         total_beats = warp_markers_all[track_idx][-1].beat_time if warp_markers_all[track_idx] else 0
         ls = loop_specs[track_idx]
         if ls:
             loop_len = ls.loop_source_end - ls.loop_source_start
-            clip_end_beat = clip_start + ls.chop_at_beats + ls.num_extra_copies * loop_len
+            clip_end_beat = _snap_beat(clip_start + ls.chop_at_beats + ls.num_extra_copies * loop_len)
         else:
-            clip_end_beat = clip_start + total_beats
+            clip_end_beat = _snap_beat(clip_start + total_beats)
 
         clamped: list[tuple[str, list[AutomationPoint]]] = []
         for param_key, points in transition_auto[track_idx]:
             if not points:
                 continue
-            filtered = [p for p in points if clip_start <= p.time_beats <= clip_end_beat]
+            snapped = [
+                AutomationPoint(time_beats=_snap_beat(p.time_beats), value=p.value)
+                for p in points
+            ]
+            filtered = [p for p in snapped if clip_start <= p.time_beats <= clip_end_beat]
             if not filtered:
                 continue
             first_time = filtered[0].time_beats
@@ -398,12 +529,17 @@ def run_pipeline(
             anchored: list[AutomationPoint] = []
             if first_time > clip_start:
                 anchored.append(AutomationPoint(time_beats=clip_start, value=left_value))
-                anchored.append(AutomationPoint(time_beats=first_time - 0.01, value=left_value))
             anchored.extend(filtered)
             if last_time < clip_end_beat:
-                anchored.append(AutomationPoint(time_beats=last_time + 0.01, value=right_value))
                 anchored.append(AutomationPoint(time_beats=clip_end_beat, value=right_value))
-            clamped.append((param_key, anchored))
+            # Dedupe consecutive points at the same beat (keep the last value).
+            deduped: list[AutomationPoint] = []
+            for p in anchored:
+                if deduped and deduped[-1].time_beats == p.time_beats:
+                    deduped[-1] = p
+                else:
+                    deduped.append(p)
+            clamped.append((param_key, deduped))
         transition_auto[track_idx] = clamped
 
     # Generate ALS
@@ -465,6 +601,180 @@ def run_pipeline(
         })
     md_path = write_transition_report(version, pairs, reports_dir)
     print(f"Transition report: {md_path}")
+
+    # Per-transition PNG visualisations. Lets Claude read what Sam sees in
+    # Ableton (waveforms + automation + colour-coded phrases) and self-correct
+    # before mix-listening time. Best-effort — render failures don't block.
+    viz_dir = output_dir / "Visualisations" / f"Mix V{version}"
+    rendered = 0
+    failed = 0
+    for i, spec in enumerate(transition_specs):
+        outgoing = ordered_analyses[i]
+        incoming = ordered_analyses[i + 1]
+        out_mik = mik_data.get(str(outgoing.path))
+        in_mik = mik_data.get(str(incoming.path))
+        out_rb = rb_matches.get(str(outgoing.path))
+        in_rb = rb_matches.get(str(incoming.path))
+        try:
+            ctx = VizContext(
+                transition_index=i + 1,
+                outgoing=outgoing,
+                incoming=incoming,
+                spec=spec,
+                outgoing_total_beats=track_total_beats[i],
+                incoming_total_beats=track_total_beats[i + 1],
+                outgoing_arrangement_start=arrangement_positions[i],
+                project_bpm=project_bpm,
+                outgoing_mik_cues_sec=[c.time_sec for c in out_mik.cues] if out_mik else [],
+                incoming_mik_cues_sec=[c.time_sec for c in in_mik.cues] if in_mik else [],
+                outgoing_candidates=track_candidates.get(outgoing.path.name, []),
+                incoming_candidates=track_candidates.get(incoming.path.name, []),
+                outgoing_rb_phrases=getattr(out_rb, "phrases", None) if out_rb else None,
+                incoming_rb_phrases=getattr(in_rb, "phrases", None) if in_rb else None,
+            )
+            render_transition(ctx, viz_dir)
+            rendered += 1
+        except Exception as e:
+            failed += 1
+            print(f"  WARNING: viz render failed for transition {i + 1}: {e}")
+    if rendered:
+        print(f"Transition visualisations: {rendered}/{len(transition_specs)} → {viz_dir}")
+    if failed:
+        print(f"  ({failed} render failures — see warnings above)")
+
+    # Per-track PNGs — the FULL timeline of each source track with every
+    # MIK cue, RB phrase, MIK energy segment, picked candidate, and loop
+    # region in one image. Lets Claude verify the cue picks per-track,
+    # which catches "wrong drop selected" bugs that per-transition viz
+    # can't show (it only shows ±32 bars around the swap).
+    track_rendered = 0
+    track_failed = 0
+    for i, analysis in enumerate(ordered_analyses):
+        mik = mik_data.get(str(analysis.path))
+        rb_match = rb_matches.get(str(analysis.path))
+        # Extract this track's automation envelopes from transition_auto.
+        vol_pts = None
+        eq_pts = None
+        for param_key, points in transition_auto.get(i, []):
+            if param_key == "volume":
+                vol_pts = points
+            elif param_key == "eq_bass":
+                eq_pts = points
+        try:
+            ctx = TrackVizContext(
+                track_index=i + 1,
+                analysis=analysis,
+                candidates=track_candidates.get(analysis.path.name, []),
+                mik_cues_sec=[c.time_sec for c in mik.cues] if mik else [],
+                mik_energy_segments=mik.energy_segments if mik else [],
+                rb_phrases=getattr(rb_match, "phrases", None) if rb_match else None,
+                project_bpm=project_bpm,
+                arrangement_start_beats=arrangement_positions[i],
+                loop_spec=loop_specs[i],
+                volume_points=vol_pts,
+                eq_bass_points=eq_pts,
+            )
+            render_track(ctx, viz_dir)
+            track_rendered += 1
+        except Exception as e:
+            track_failed += 1
+            print(f"  WARNING: track viz render failed for track {i + 1}: {e}")
+    if track_rendered:
+        print(f"Track visualisations: {track_rendered}/{len(ordered_analyses)} → {viz_dir}")
+    if track_failed:
+        print(f"  ({track_failed} track-render failures)")
+
+    # Blank-canvas previews — one per track, NO candidates, NO automation.
+    # These are the images to review BEFORE making hint decisions. Saved
+    # to a shared Previews folder so hints carry across mixes.
+    preview_dir = output_dir / "Visualisations" / "Previews"
+    preview_rendered = 0
+    for i, analysis in enumerate(ordered_analyses):
+        mik = mik_data.get(str(analysis.path))
+        rb_match = rb_matches.get(str(analysis.path))
+        try:
+            ctx = PreviewContext(
+                track_index=i + 1,
+                analysis=analysis,
+                mik_cues_sec=[c.time_sec for c in mik.cues] if mik else [],
+                mik_energy_segments=mik.energy_segments if mik else [],
+                rb_phrases=getattr(rb_match, "phrases", None) if rb_match else None,
+                project_bpm=project_bpm,
+            )
+            render_preview(ctx, preview_dir)
+            preview_rendered += 1
+        except Exception as e:
+            print(f"  WARNING: preview render failed for track {i + 1}: {e}")
+    if preview_rendered:
+        print(f"Track previews (for hint authoring): {preview_rendered}/{len(ordered_analyses)} → {preview_dir}")
+
+    # ============================================================
+    # VISUAL REVIEW GATE — the mix isn't validated by numbers alone.
+    # ============================================================
+    # The pipeline writes a REVIEW_VNN.md template that Claude (or Sam)
+    # must fill in by reading every per-track and per-transition image.
+    # Without this, "ALL PASS" is numerical only — the actual mix may
+    # still have alignment bugs, loop content issues, or misplaced cues
+    # that only become obvious when you look at the picture.
+    review_path = output_dir / "Visualisations" / f"REVIEW_V{version}.md"
+    track_images = sorted((output_dir / "Visualisations" / f"Mix V{version}").glob("Track_*.png"))
+    trans_images = sorted((output_dir / "Visualisations" / f"Mix V{version}").glob("Transition_*.png"))
+    if not review_path.exists():
+        lines = [
+            f"# Visual review — Mix V{version}",
+            "",
+            "**This file MUST be filled in before the mix is considered validated.**",
+            "Numerical validation passed, but that only checks data shapes — not",
+            "whether the picks land on the right amplitude points, whether the",
+            "loop region is in clean stripped percussion, or whether the bass swap",
+            "is visually aligned with the incoming drop.",
+            "",
+            "For each image below, look at it and write a short verdict:",
+            "  - ✓  picks landed correctly, loop content is clean",
+            "  - ✗  describe what's wrong (off-by-N beats, loop contains silent gap,",
+            "         bass entry at wrong drop, etc.)",
+            "",
+            "## Per-track images",
+            "",
+        ]
+        for p in track_images:
+            lines.append(f"- [ ] `{p.name}` — VERDICT: ")
+        lines.extend(["", "## Per-transition images", ""])
+        for p in trans_images:
+            lines.append(f"- [ ] `{p.name}` — VERDICT: ")
+        lines.extend([
+            "",
+            "## Overall verdict",
+            "",
+            "_Summarise: is this mix ready, or which fixes are needed?_",
+            "",
+        ])
+        review_path.write_text("\n".join(lines), encoding="utf-8")
+
+    print()
+    print("=" * 66)
+    print(f"VISUAL REVIEW REQUIRED — Mix V{version} is NOT complete.")
+    print("=" * 66)
+    print(f"Per-track images ({len(track_images)}):")
+    for p in track_images[:3]:
+        print(f"  {p}")
+    if len(track_images) > 3:
+        print(f"  ... and {len(track_images) - 3} more")
+    print(f"Per-transition images ({len(trans_images)}):")
+    for p in trans_images[:3]:
+        print(f"  {p}")
+    if len(trans_images) > 3:
+        print(f"  ... and {len(trans_images) - 3} more")
+    print()
+    print("Required actions BEFORE reporting Mix V{} complete:".format(version))
+    print(f"  1. Read every image listed above.")
+    print(f"  2. Write per-image verdicts to: {review_path}")
+    print(f"  3. State 'Visual review complete: <summary>' in your response.")
+    print()
+    print("The ALL PASS above is numerical only. The mix is NOT validated")
+    print("until the visual review is done. (See Documentation/AI_CONTEXT.md")
+    print("for the standing rule.)")
+    print("=" * 66)
 
     return result
 

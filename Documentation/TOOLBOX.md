@@ -48,8 +48,45 @@ Key functions: `build_intervals()`, `segments_from_intervals()`.
 ### `Source/automated_dj_mixes/cue_candidates.py`
 Interpretation layer. Reads `Interval` lists and emits ranked `CueCandidate` records with confidence (0-1) + sources list + human-readable reasons. Five cue types: `bass_entry`, `break_start`, `break_end`, `chop_point`, `outro_start`. Pre-chorus candidates penalized 15% but never hidden (Harry Romero fix).
 
+Five candidate sources (selection precedence highest first):
+1. **`hint_to_candidates`** (conf 0.95) — from `Hints/track_hints.json`, the visual-hint workflow. Wins over all other sources via `_is_visual_hint` check in selectors.
+2. **`find_cue_candidates`** (conf 0.55–1.00) — RB+librosa+PWV5 path; +0.25 MIK corroboration when a MIK cue is within the same 8-bar interval.
+3. **`mik_to_candidates`** (conf 0.65–0.85) — synthesises bass_entry/outro_start/chop_point from MIK cues directly (used for tracks without RB phrase data).
+4. **`amplitude_to_candidates`** (conf 0.70–0.85) — librosa amplitude envelope; produces bass_entry/break_start/outro_start when other signals miss.
+5. Position fallback in mik_to_candidates if no signals corroborate.
+
 Key types: `CueCandidate` (beat, sec, cue_type, confidence, sources, reasons, interval_index, region, penalty).
-Key functions: `find_cue_candidates()`, `candidates_for()` (ranked list), `first_credible()` (top match with min_confidence floor).
+Key functions: `find_cue_candidates()`, `mik_to_candidates()`, `amplitude_to_candidates()`, `hint_to_candidates()`, `load_hints_file()`, `candidates_for()`, `first_credible()` (visual_hint wins), `first_drop_candidate()` (earliest credible bass_entry — dance-music structural prior).
+
+### `Source/automated_dj_mixes/mik_reader.py`
+Reads Mixed In Key 11 data — GEOB ID3 tags (cue points, beat grid, energy, key — base64-encoded JSON) plus optional SQLite enrichment (`MIKStore.db` for LUFS, key confidence, per-segment energy timeline). Resilient: DB read failures don't lose tag-derived cues (Codex P2 fix).
+
+Key types: `MikCue`, `MikBeatGrid`, `MikEnergySegment`, `MikTrackData`.
+Key functions: `read_mik_from_tags()`, `read_mik_db_track()`, `read_mik_energy_segments()`, `enrich_from_mik()` (combined tag + DB read).
+
+### `Source/automated_dj_mixes/amplitude_analysis.py`
+Pure-librosa structural detection from a 1-second RMS envelope. Used as a CANDIDATE SOURCE (not for snap-to-beat). Sam's "look at the picture broadly" rule, baked into numbers: detect the largest amplitude rise in the first 90s (bass_entry), the first significant drop after that (break_start), and the first big drop in the final 90s minus tail (outro_start). Plus a dead-air-free window finder for clean loop content.
+
+Constants: `DROP_SEARCH_START_SEC=8` (skip "music starts" jump), `DROP_MIN_RISE=0.25`, `DROP_MIN_LEVEL_AFTER=0.65`, `OUTRO_TAIL_EXCLUDE_SEC=20` (skip fadeout), `MIK_SNAP_TOLERANCE_SEC=4`.
+Key functions: `compute_envelope()`, `find_first_drop()`, `find_first_break()`, `find_outro_start()`, `find_clean_loop_window()`, `snap_to_mik_or_beat()`.
+
+### `Source/automated_dj_mixes/transition_viz.py`
+Per-transition PNG render. Shows last 32 bars of outgoing + first 32 bars of incoming, time-aligned. Overlays: volume + EQ-bass curves for both tracks, dashed bass_swap line spanning all panels, green hatched loop region on outgoing, MIK cues (pink dotted), picked candidates (bold colour-coded). Tiered phrase grid with bar labels (Sam's rule, 2026-05).
+
+Key types: `VizContext`.
+Key functions: `render_transition()`, `_draw_grid_ticks()` (tiered styling: 1-bar / 2-bar / 4-bar / 16-bar weighted alphas + labels).
+
+### `Source/automated_dj_mixes/track_viz.py`
+Per-track PNG render. Full timeline of one source. Overlays: RB phrase strip at top, waveform, MIK cues, MIK energy strip (colour heatmap 1-10), picked candidates (uses `first_drop_candidate` + `first_credible` so the viz matches what `plan_transition` actually used), loop region green hatched, volume + EQ automation lanes.
+
+Key types: `TrackVizContext`.
+Key functions: `render_track()`, `_draw_phrase_grid()`, `_draw_phrase_bands()`, `_draw_energy_strip()`, `_draw_candidates()`.
+
+### `Source/automated_dj_mixes/waveform_preview.py`
+Blank-canvas PNG render for the visual-hint authoring workflow. ZERO candidate picks — just waveform + RB phrases + MIK cues (numbered) + MIK energy strip + tiered phrase grid. The image to look at BEFORE writing hints to `track_hints.json`.
+
+Key types: `PreviewContext`.
+Key functions: `render_preview()`.
 
 ### `Source/automated_dj_mixes/report.py`
 Debug reports. Per-track CSV (`Analysis - {track}.csv`) lists every interval's facts + candidate annotations. Per-mix Markdown (`Transition - Mix V{N}.md`) gives a "why this transition" rationale with selected cue, confidence, and reasons.
@@ -58,13 +95,21 @@ Key functions: `write_track_csv()`, `write_transition_report()`.
 Output dir: `Test Project/May 2026 Mix/Reports/` and `{output_dir}/Reports/`.
 
 ### `Source/automated_dj_mixes/transition.py`
-Bass-to-bass transition planner. Accepts ranked `CueCandidate` lists and prefers them over RB-phrase fallbacks (chop_point > outro_start for outgoing; bass_entry for incoming bass swap; break_start for transition end). Chop-and-duplicate loop generation. Volume holds at 1.0 until bass_swap then fades to 0 by transition_end. EQ bass hard-swap at bass_swap (0.18 ≈ -15dB, 1.0 = unity).
+Two-phase transition planner with per-track phrase-grid snapping. Phase 1 (transition_start → bass_swap): incoming volume ramps from 0.2 → 1.0, outgoing holds at unity. Phase 2 (bass_swap → transition_end): hard EQ bass swap (0.18 ≈ -15dB / 1.0 = unity), outgoing fades to 0 by transition_end (lands on incoming's first break). Chop-and-duplicate loop fills the post-chop gap; loop sources from outgoing's outro (past chop) or intro (fallback) via `find_loop_region`. Loop selection has dead-air refinement (`amplitude_analysis.find_clean_loop_window`).
 
-Key types: `LoopSpec`, `TransitionSpec`.
-Key functions: `plan_transition()` (main entry), fallback finders for outgoing_bass_end / chop_point / incoming_bass_start / incoming_first_break.
+Key types: `LoopSpec`, `TransitionSpec`, `PhraseGrid` (origin-aware tiered 16/8/4 snap).
+Key functions: `plan_transition()` (main entry), `snap()` (whole-beat), `find_loop_region()` (intro/outro priority with `role` parameter), fallback finders for outgoing_bass_end / chop_point / incoming_bass_start / incoming_first_break.
+
+Hard invariant: `outgoing_arrangement_start % 4 == 0` (raises if violated — chop_at would misalign on source). Per-track grids enforce that each track's phrase boundaries are respected: incoming snaps to outgoing's grid; bass_swap snaps to incoming's grid.
 
 ### `Source/automated_dj_mixes/validation.py`
-Objective pass/fail checks on the planned mix. Validates from the internal `TransitionSpec` list — NOT by reparsing the generated ALS. Five checks: overlap range (16-48 bars), bass-swap grid alignment (8/16-bar boundary), outgoing faded out, no dead air before incoming, EQ envelopes present.
+Objective pass/fail checks on the planned mix. Validates from the internal `TransitionSpec` list — NOT by reparsing the generated ALS. Checks:
+1. Overlap range (16-48 bars, 1.5-bar tolerance for phrase-snap drift).
+2. **Per-track bar alignment (HARD)**: bass_swap on incoming's bar grid, transition_start on outgoing's bar grid, transition_end on incoming's bar grid. Off-bar fails the run.
+3. Per-track 4-bar phrase alignment (warning only — informational).
+4. Outgoing faded to 0 by transition_end.
+5. No dead air before incoming.
+6. EQ envelopes present.
 
 Key types: `ValidationCheck`, `ValidationReport`.
 Key functions: `validate_mix()`.

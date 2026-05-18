@@ -34,10 +34,15 @@ Source/automated_dj_mixes/
 ├── rekordbox_waveform.py  — PWV5/PWV4 colour waveform parser (4th analysis signal)
 ├── features.py            — Per-beat features (RMS + bass + PWV5) with disk cache
 ├── phrase_viz.py          — Factual Interval records + viz colour collapse
-├── cue_candidates.py      — Ranked CueCandidate API (5 cue types + confidence)
-├── transition.py          — Bass-to-bass transition planning, candidate-driven
+├── cue_candidates.py      — Ranked CueCandidate API (5 cue types + confidence + visual_hint + amplitude + MIK paths)
+├── mik_reader.py          — Mixed In Key 11 GEOB tag + SQLite reader (cues, beat grid, energy)
+├── amplitude_analysis.py  — 1s RMS envelope analysis (first_drop, first_break, outro_start, clean-loop-window detector)
+├── transition.py          — Transition planning with PhraseGrid (per-track 16/8/4 snap)
 ├── report.py              — Per-track CSV + per-mix Markdown reports
-├── validation.py          — Objective pass/fail checks on planned mix
+├── validation.py          — Objective checks: overlap, per-track bar/phrase alignment, fade endpoints
+├── transition_viz.py      — Per-transition PNG (both tracks aligned, automation overlay, tiered phrase grid)
+├── track_viz.py           — Per-track PNG (full timeline, candidates, loop region, tiered phrase grid)
+├── waveform_preview.py    — Blank-canvas preview PNG (for writing visual hints before pipeline run)
 └── config.py              — Settings loader
 ```
 
@@ -78,7 +83,7 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-**Multi-signal cue candidate architecture landed (V8 viz / V16 mix). Pipeline now emits ranked CueCandidate objects with confidence + sources + reasons, consumed by transition planning. Per-track CSVs and per-mix Markdown reports auto-generated. Disk cache for per-beat features. PWV5 parsing added as 4th analysis signal.** Sam reviewing V16 + Viz V8.
+**Mix V46 — per-track phrase-grid alignment enforced. 100% bar alignment, ~85% 4-bar phrase alignment per-track.** Pipeline now has a full visual-hint workflow: each track gets a blank-canvas preview PNG; Sam (or Claude) reads the picture, writes timestamps to `Test Project/.../Hints/track_hints.json`; hints emit highest-confidence CueCandidates (0.95) that win over algorithmic picks. Visual review gate at end of every pipeline run prints `VISUAL REVIEW REQUIRED` block + auto-generates `REVIEW_VNN.md` template that must be filled before the mix is "complete."
 
 **Implemented (Phase 1-8):**
 - All 7 core modules + rekordbox_reader + skills system functional
@@ -107,7 +112,59 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-05-17 (Latest Session)
+### 2026-05-18 (Latest Session)
+**Focus**: Long iteration session — V17→V46 — wiring MIK, building visual-hint workflow, phrase-grid enforcement (per-track), and forcing Claude to actually use the visual review
+
+**Completed (new modules)**:
+- `mik_reader.py` — Mixed In Key 11 GEOB ID3 tag reader + SQLite (MIKStore.db) reader for cues, beat grid, energy segments, key. Resilient to DB failures (tags-only fallback).
+- `amplitude_analysis.py` — librosa 1-second RMS envelope. `find_first_drop` (largest rise in 8-90s), `find_first_break` (first drop after first_drop), `find_outro_start` (first drop in last 90s, excluding final 20s fadeout), `find_clean_loop_window` (dead-air-free 8-bar window). `snap_to_mik_or_beat` helper.
+- `transition_viz.py` — per-transition PNG (last 32 bars of outgoing + first 32 bars of incoming, aligned; volume + EQ overlays; bass_swap dashed line; loop region hatched; tiered phrase grid with bar labels).
+- `track_viz.py` — per-track PNG (full timeline + MIK cues + RB phrases + energy strip + picked candidates + automation lanes + tiered phrase grid).
+- `waveform_preview.py` — blank-canvas PNG (waveform + MIK cues + energy strip + RB phrases ONLY — no picks). For visual-hint authoring before pipeline runs.
+
+**Completed (cue_candidates.py additions)**:
+- `mik_to_candidates` — synthesises bass_entry + outro_start + chop_point from MIK cues when Rekordbox phrase data absent (10/12 tracks in test mix). chop_point = end of last MIK energy segment ≥ 4, or outro_start + 16 bars.
+- `amplitude_to_candidates` — emits cues from amplitude envelope (used when MIK is sparse).
+- `hint_to_candidates` + `load_hints_file` — reads `Hints/track_hints.json`, emits bass_entry/break_start/outro_start at confidence 0.95.
+- `_is_visual_hint` + hint precedence in `first_credible` and `first_drop_candidate` — visual hints override algorithmic picks.
+- `first_drop_candidate` — picks EARLIEST credible bass_entry (dance-music structural prior: first drop = the one DJs care about).
+
+**Completed (transition.py refactors)**:
+- `PhraseGrid` dataclass with tiered snap (16/8/4 beat fallback per Sam's chosen tolerance).
+- **Per-track phrase grids**: each transition uses `outgoing_grid` (origin=outgoing_arrangement_start) to snap incoming start, then `incoming_grid` (origin=incoming_arrangement_start) to snap bass_swap. Cascade preserves alignment across the whole mix.
+- Clamp branches also use per-track grid snap (V42 bug: clamps were re-snapping with plain `snap()` and undoing phrase alignment).
+- `first_downbeat_offset` correction in incoming_arrangement_start — fixes off-by-one beat caused by clip-start vs first-downbeat misalignment.
+- Loop dead-air refinement (`refine_for_clean_audio` calls `find_clean_loop_window`).
+- Chop-leave-outro-room: chop pulled back if natural chop would leave < 24 beats of outro audio for the loop.
+- Clamp sync: when overlap clamps shift incoming_start, chop_arrangement follows bass_swap (V42 had 24-beat gap between loop start and bass switch).
+
+**Completed (visual review enforcement — the meta-fix)**:
+- `Documentation/AI_CONTEXT.md` REQUIRED section at the top: visual review must be done after every pipeline run.
+- Orchestrator prints `VISUAL REVIEW REQUIRED` block + auto-generates `Output/Visualisations/REVIEW_VNN.md` template with per-image checkboxes.
+- Tiered phrase grid lines in all viz: bar (4-beat) faint → 2-bar (8-beat) medium → 4-bar phrase (16-beat) dark+labelled → 16-bar section (64-beat) bold+labelled. Makes off-phrase automation visible at a glance.
+
+**Completed (validation.py)**:
+- Per-track alignment check: `(bass_swap - incoming_arrangement_start) mod 4` (HARD), `mod 16` (warn). Same for transition_start (vs outgoing) and transition_end (vs incoming).
+- Overlap tolerance widened to 1.5 bars to absorb phrase-snap drift.
+
+**Completed (orchestrator wiring)**:
+- MIK enrichment for all tracks (12/12 in test mix have auto-cues).
+- pyrekordbox + sqlcipher3-wheels installed (Rekordbox 7 master.db decryptable; only 2/12 tracks matched in test mix — RB filename matcher is fuzzy).
+- Hints loaded from `Test Project/.../Hints/track_hints.json` (currently 12 tracks hinted, all with first_drop/break/outro).
+
+**Completed (Codex review doc)**:
+- `Documentation/CODEX_REVIEW.md` — comprehensive architecture + rules-matrix + open questions + visualisation strategy. Sent to Codex; their P1/P2/P3 findings implemented.
+
+**Key Learnings**:
+- **Visual-pass-first beats numerical guess**: Sam's "look at the picture first, then dial in with data" framing fundamentally changed how the pipeline works. Hints from a human eye on the rendered waveform produce dramatically better picks than any algorithmic combination.
+- **Numerical validation is not enough**: V42 passed all `validate_mix` checks but 0/11 bass swaps were on phrase boundaries — proves "ALL PASS" is necessary but not sufficient. Visual review gate now blocks declaring a mix complete.
+- **Claude's visual capability needs to be FORCED into the workflow**: I built the per-track PNGs early but didn't open them until Sam pointed out I was bypassing my own tool. The `VISUAL REVIEW REQUIRED` block + `REVIEW_VNN.md` template + AI_CONTEXT.md rule makes it structural, not optional.
+- **Per-track phrase grid ≠ global phrase grid**: snapping to multiples of 16 from arrangement beat 0 doesn't equal snapping to multiples of 16 from each track's beat 1. When tier-fallback kicks in for incoming_start, the two interpretations diverge. Per-track is the right semantic (matches what the listener perceives).
+- **Dance music structural priors save the pipeline**: "first drop is at ~60s", "outro begins ~60s before track end", "MIK doesn't always cue the drop" — these are domain truths the algorithm should bake in, not discover.
+- **Hints win, always**: even when MIK + amplitude + librosa all agree on beat 35, if the visual hint says beat 60, beat 60 wins. Human eye on the rendered waveform > algorithm.
+- **Loop content should source from AFTER the chop**: my "outro_start = post_break_body" was wrong terminology. The real outro (Sam's term) is at chop_point onwards. Loops should come from past the chop, not before it.
+
+### 2026-05-17 (Previous Session)
 **Focus**: Multi-signal cue candidate architecture (Codex-reviewed plan, executed end-to-end)
 
 **Completed**:
@@ -156,12 +213,13 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## What's Next
 
-1. **Sam reviews V16 + Phrase Viz V8** — listen, mark hits/misses, populate `Data/Ground Truth/Sam Cue Points.yaml`
-2. **Fix bass-swap grid alignment** — validation FAILed on this. Snap `bass_swap` to nearest 8-bar boundary in `transition.py` while preserving chop/incoming alignment
-3. **PWV5 visual confirmation** — Sam compares the 3 PNGs in `Reports/` to Rekordbox UI to confirm colour→frequency mapping before relying on it for chop detection
-4. **Tune candidate thresholds** with the ground-truth file — if our top bass_entry candidate matches Sam's marked beat for 5/5 tracks, ship; if not, adjust BASS_DELTA_RISE / BASS_DELTA_DROP
-5. **Expand template** — current template fits 11 tracks, need 12+ support
-6. **Long intros**: Capriati 40 bars, Fanciulli 40 bars — internal structure (build/teaser-drop) currently hidden inside the "intro" region; might need sub-classification
+1. **Sam to listen to V46 in Ableton** — verify (a) off-by-one beat issue resolved by `first_downbeat_offset` fix, (b) Sapian (T5) bass placement at 45s OK or needs hint adjustment, (c) per-track phrase alignment feels right musically.
+2. **Refine hints from listening pass** — any track where Sam disagrees with the picked bass_entry/break/outro, edit `Test Project/.../Hints/track_hints.json` and re-run. Hints persist across mixes.
+3. **Expand template** — current template fits 11 tracks, need 12+ support (still pending from 2026-05-17).
+4. **Consider per-genre `prefer_grid`** in `PhraseGrid` — house/techno @ 16-beat preferred (current default works), DnB @ 8, trance @ 32. Could derive from BPM heuristic or RB metadata.
+5. **Hint cache by audio hash** — once a track is hinted, the hint should persist across mixes regardless of project. Currently keyed by filename in track_hints.json — works but fragile if filenames change.
+6. **Codex `CODEX_REVIEW.md` follow-up** — Codex's response landed; most P1/P2/P3 items implemented this session. Remaining: tempo ramp ending location (Sam said skip), per-genre phrase length parameterisation.
+7. **Long intros**: Capriati 40 bars, Fanciulli 40 bars — internal structure (build/teaser-drop) currently hidden inside the "intro" region; might need sub-classification (still pending).
 
 ## Key Decisions
 
@@ -194,6 +252,17 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - **Disk cache for per-beat features** — Path/mtime/size + analysis_version cache key. Without it every viz iteration was librosa-bound. (2026-05-17)
 - **Validate from the MixPlan, not from the generated ALS** — Reparsing the ALS XML is fragile and unnecessary; the internal plan state is the source of truth for what we INTENDED. (Codex, 2026-05-17)
 - **ANALYSIS_MODEL_VERSION constant** — Propagated through cache keys, CSVs, MD reports, and YAML headers. Bumping invalidates old caches and lets old reports stay identifiable when thresholds change. (Codex, 2026-05-17)
+- **Mixed In Key auto-cues are the most trusted ALGORITHMIC signal** — MIK has refined its auto-cue model for years on dance music. MIK cue alignment within an interval adds +0.25 confidence (largest single boost). (Sam, 2026-05-18)
+- **Visual hints override everything** — When Sam (or Claude) writes a `Hints/track_hints.json` entry for a track, that beat wins over MIK, Rekordbox, librosa, amplitude — regardless of position. Human eye on the rendered waveform > algorithm. Confidence 0.95. (Sam, 2026-05-18)
+- **Visual pass before pipeline + visual review after** — Pre-pipeline: render blank-canvas preview, eyeball broad strokes, write hints. Post-pipeline: render per-track + per-transition viz with picks overlaid, verify alignment matches hints. `VISUAL REVIEW REQUIRED` block + `REVIEW_VNN.md` template enforce this. (Sam, 2026-05-18)
+- **Phrase grid is PER TRACK, not global** — Each track has its own phrase grid starting at THAT track's beat 1, not at arrangement beat 0. bass_swap snaps to incoming's grid; chop_arrangement (= bass_swap) lands on outgoing's grid because incoming_arrangement_start was snapped to outgoing's grid in the first step. Cascade preserves alignment. (Sam, 2026-05-18)
+- **Tiered snap fallback: 16 → 8 → 4** — Try 4-bar phrase first; fall back to 2-bar if natural drift > 4 beats; fall back to 1-bar only if drift > 8 beats. Hard floor: bar boundary (validator hard-fails off-bar). (Sam choice via AskUserQuestion, 2026-05-18)
+- **First drop = earliest credible bass_entry, not highest confidence** — Dance music structural prior: the FIRST drop is what DJs care about for the bass swap. A later cue with bigger energy rise is usually a second drop after a break. `first_drop_candidate` returns the earliest credible, not the highest confidence. (Sam, 2026-05-18)
+- **Outro = at/past the chop, not before it** — Sam's terminology: "outro" is the stripped percussion region. The earlier `outro_start` was actually the post-break body. The real outro starts at `chop_point` and continues. Loops source from AT chop (first 8 beats of real outro), not from before chop. (Sam, 2026-05-18)
+- **Chop must leave outro room** — If natural chop is within 24 beats of track end, the outro loop has nowhere to live and falls back to intro. Solution: pull chop back to leave 16-bar reserve. (Sam, 2026-05-18)
+- **Looping rule: outgoing → outro, incoming → intro** — Where possible, loop the OUTGOING's outro and the INCOMING's intro. Use whichever has cleaner content if only one end is stripped. `find_loop_region` has a `role` parameter for this. (Sam, 2026-05-18)
+- **Tiered phrase grid in viz with bar labels** — Bar lines weighted by phrase importance: bar (4-beat) faint, 2-bar medium, 4-bar phrase dark+labelled, 16-bar section bold+labelled. Off-phrase automation should be visually obvious. (Sam-prompted, 2026-05-18: "how did you not spot these in the visual?")
+- **Numerical validation is necessary but NOT sufficient** — `validate_mix` ALL-PASS doesn't mean the mix is right. The visual review gate is the only thing that verifies picks land on the right musical moments. AI_CONTEXT.md REQUIRED section + orchestrator's `VISUAL REVIEW REQUIRED` block + per-mix `REVIEW_VNN.md` template enforce this. (Sam, 2026-05-18)
 
 ## Connections
 

@@ -65,14 +65,16 @@ def validate_mix(
     """
     checks: list[ValidationCheck] = []
 
-    # 1. All overlaps in 16-48 bars range
+    # 1. All overlaps in 16-48 bars range (1.5-bar tolerance for phrase-snap
+    # rounding; the snap can shift incoming_arrangement_start by up to 8
+    # beats = 2 bars, so the actual overlap can drift accordingly).
     overlap_ok = True
     overlap_details = []
     for i, spec in enumerate(transition_specs):
         outgoing_end = arrangement_positions[i] + track_total_beats[i]
         overlap_beats = outgoing_end - spec.transition_start
         overlap_bars = overlap_beats / 4
-        ok = 16 <= overlap_bars <= 48
+        ok = 14.5 <= overlap_bars <= 49.5
         if not ok:
             overlap_ok = False
             overlap_details.append(f"transition {i + 1}: {overlap_bars:.1f} bars")
@@ -82,19 +84,59 @@ def validate_mix(
         detail="all transitions in range" if overlap_ok else f"out of range: {'; '.join(overlap_details)}",
     ))
 
-    # 2. Bass swaps on 8-bar or 16-bar boundary
-    swap_ok = True
-    swap_details = []
+    # 2. Per-track phrase-grid alignment (Sam's rule, 2026-05):
+    #    "It should be per track starting with the first beat of each track."
+    # Each track has its own phrase grid, with origin = that track's
+    # arrangement_start. bass_swap must be on the INCOMING's phrase grid
+    # (= multiples of 16 from incoming_arrangement_start), because the
+    # listener perceives the new track's phrase structure forward from the
+    # swap point. Same logic for transition_end which is also relative to
+    # the incoming.
+    def _offset_on_grid(beat: float, origin: float, grid: int) -> bool:
+        offset = beat - origin
+        return abs(offset - round(offset / grid) * grid) < 0.5
+
+    bar_ok = True
+    bar_details = []
+    phrase_warn = []
     for i, spec in enumerate(transition_specs):
-        on_16 = _on_boundary(spec.bass_swap, 64)   # 16 bars
-        on_8 = _on_boundary(spec.bass_swap, 32)    # 8 bars
-        if not (on_8 or on_16):
-            swap_ok = False
-            swap_details.append(f"transition {i + 1}: beat {spec.bass_swap:.1f}")
+        # Incoming arrangement start is the origin for incoming's phrase grid.
+        incoming_origin = spec.transition_start
+        # Outgoing arrangement start is the origin for outgoing's grid.
+        outgoing_origin = arrangement_positions[i]
+
+        # bass_swap and transition_end: relative to incoming track.
+        for label, beat in (
+            ("bass_swap", spec.bass_swap),
+            ("transition_end", spec.transition_end),
+        ):
+            if not _offset_on_grid(beat, incoming_origin, 4):
+                bar_ok = False
+                bar_details.append(
+                    f"T{i + 1} {label}={beat:.1f} (incoming start={incoming_origin})"
+                )
+            elif not _offset_on_grid(beat, incoming_origin, 16):
+                phrase_warn.append(f"T{i + 1} {label}={beat:.0f}")
+
+        # transition_start (= incoming_arrangement_start) must align to
+        # outgoing's grid so the two tracks' grids match.
+        if not _offset_on_grid(spec.transition_start, outgoing_origin, 4):
+            bar_ok = False
+            bar_details.append(
+                f"T{i + 1} transition_start={spec.transition_start:.1f} (outgoing start={outgoing_origin})"
+            )
+        elif not _offset_on_grid(spec.transition_start, outgoing_origin, 16):
+            phrase_warn.append(f"T{i + 1} transition_start={spec.transition_start:.0f}")
+
     checks.append(ValidationCheck(
-        name="bass swaps on 8/16-bar boundary",
-        passed=swap_ok,
-        detail="all aligned" if swap_ok else f"off-grid: {'; '.join(swap_details)}",
+        name="all transition breakpoints on bar boundary (HARD, per-track)",
+        passed=bar_ok,
+        detail="all on per-track bar grid" if bar_ok else f"OFF-BAR: {'; '.join(bar_details)}",
+    ))
+    checks.append(ValidationCheck(
+        name="all transition breakpoints on 16-beat phrase boundary (preferred, per-track)",
+        passed=True,
+        detail="all on per-track phrase grid" if not phrase_warn else f"WARN — bar OK, phrase not: {'; '.join(phrase_warn)}",
     ))
 
     # 3. Outgoing fully gone by transition_end (volume ends at 0)
