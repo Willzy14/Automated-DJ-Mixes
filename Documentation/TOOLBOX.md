@@ -135,8 +135,18 @@ Key functions: `generate_session()`, `decompress_als()`, `compress_als()`, `_bui
 ### `Source/automated_dj_mixes/config.py`
 Loads settings from `Config/settings.json` with sensible defaults (crossfade_bars=48, max_gain_reduction_db=12, default_project_tempo=128, versioning_prefix="V").
 
-### Diagnostic Scripts
+### `Source/automated_dj_mixes/desktop_analyzer.py`
+**Added 2026-05-19.** Drives Mixed In Key 11 and Rekordbox 7 desktop UIs to analyse tracks without manual clicks. Uses `pywinauto` for message-based control where possible (cursor doesn't move) and `pyautogui` for the one custom WPF control (MIK Add tracks button — image template match in `templates/`). All clicks save+restore cursor position so Sam can keep working in Ableton. MIK detection via `MIKStore.db` SQLite (`Song` table). RB detection via `pyrekordbox`. Requires Rekordbox Library Protection OFF.
 
+Key functions: `analyze_folder_with_mik(folder)`, `analyze_folder_with_rekordbox(folder)`, `is_mik_analyzed(path)`, `is_rekordbox_analyzed(path)`, `_force_focus(window)` (AttachThreadInput), `_select_folder_in_browse_dialog(folder)`.
+
+Wired into orchestrator pre-analysis (before `analyse_folder`).
+
+### Diagnostic / Research Scripts
+
+- `Source/analyze_real_mix.py` — Decompresses a real Sam DJ mix `.als` and lists tracks/clips. Used 2026-05-19 to learn transition patterns from Bargrooves Summer 2015 Mix 1.
+- `Source/inspect_transition.py` — Renders ONE transition as a clip-position timeline image. CLI: `python inspect_transition.py <out_substr> <in_substr> <label>`.
+- `Source/test_mik_driver.py` / `Source/test_rb_driver.py` — Smoke tests for `desktop_analyzer.py`.
 - `Source/automated_dj_mixes/diag_vlad.py` — Prints VLAD's full Rekordbox phrase + fill data
 - `Source/validate_pwv5.py` — Renders PWV5 waveform PNGs side-by-side to compare against Rekordbox UI
 - `Source/test_features.py` — Smoke test for `extract_track_features()` on one track
@@ -158,3 +168,6 @@ Loads settings from `Config/settings.json` with sensible defaults (crossfade_bar
 | matplotlib | PWV5 visual validation renders |
 | numpy | Percentile stats + smoothing in `features.py` |
 | ffmpeg-python | Audio format handling |
+| pywinauto | Desktop UI automation (MIK + RB) via Windows messages |
+| pyautogui | Mouse/keyboard fallback for non-message-responsive controls |
+| pyperclip | Clipboard support for `desktop_analyzer.py` path pasting |

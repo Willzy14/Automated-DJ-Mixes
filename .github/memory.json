@@ -108,6 +108,12 @@
       "status": "working",
       "added": "2026-05-18"
     },
+    "desktop_analyzer": {
+      "path": "Source/automated_dj_mixes/desktop_analyzer.py",
+      "purpose": "Drives MIK + Rekordbox UIs via pywinauto/pyautogui to analyze tracks without manual clicks. Cursor save+restore so Sam can keep working. MIKStore.db + pyrekordbox for completion polling. Requires RB Library Protection OFF.",
+      "status": "working",
+      "added": "2026-05-19"
+    },
     "config": {
       "path": "Source/automated_dj_mixes/config.py",
       "purpose": "Settings loader",
@@ -123,6 +129,28 @@
   "v1_constraints": ["electronic/dance only", "constant BPM", "4/4 time", "Rekordbox-analyzed library"],
   "connections": ["Social Media Content Engine", "samwillsmixing.com"],
   "sessions": [
+    {
+      "date": "2026-05-19 (later)",
+      "focus": "/mix skill + last_bass_drop alignment + desktop automation for MIK+RB",
+      "outputs": [
+        "Mix V13 (via /mix workflow with last_bass_drop)",
+        "~/.claude/commands/mix.md (+ Codex + Antigravity mirrors)",
+        "Documentation/ABLETON_INTERACTION.md (17-section portable reference)",
+        "Test Project/Black Book x Defected V2/Hints/track_hints.json (10 tracks × 4 fields)"
+      ],
+      "modules_added": ["desktop_analyzer (drives MIK + RB UIs)", "templates/ (mik_add_tracks_button.png)", "analyze_real_mix + inspect_transition (research scripts)"],
+      "modules_modified": ["orchestrator (--previews-only, --no-hints-required, hint gate, early preview render)", "transition (last_bass_drop branch, skip clamp when anchored)", "validation (HARD 16-beat phrase, 16-80 bar overlap range)", "cue_candidates (HINT_TO_CUE_TYPE last_bass_drop)"],
+      "key_fixes": ["mouse-stealing → message-based pywinauto", "Library Protection silent no-op (Sam toggled padlock)", "JUCE AttachThreadInput for focus (not Alt trick)", "MIK MIKStore.db SQLite read for WAV (no GEOB)", "constant-tempo grid drift exposed bad auto_analyze approach"],
+      "reverted": ["auto_analyze.py programmatic key+grid+phrase (reverted via git checkout HEAD — unlistenable warp drift)"],
+      "validation": "ALL PASS on V13 — 16-beat HARD phrase + 16-80 bar overlap. bass_swap lands within 1-2 bars of last_bass_drop on every transition.",
+      "open_items": [
+        "Sam to listen to V13 in Ableton, refine hint timestamps (current values are visual estimates from preview PNGs)",
+        "T1 Adam Ten → Savana — Sam's manual mix at last_bass_drop differs from my hint at 240s; refine",
+        "Test desktop_analyzer on a fresh project with NO prior MIK/RB analysis (end-to-end UI driving)",
+        "Wren mirror of /mix skill skipped — ~/.hermes/reference/ not on this machine",
+        "Bargrooves T2 'edited incoming intro' technique not implemented (deferred per Sam)"
+      ]
+    },
     {
       "date": "2026-05-19",
       "focus": "Housekeeping — merged V46 worktree branch into main",

@@ -51,17 +51,94 @@ def _next_version(output_dir: Path, prefix: str = "V") -> int:
     return max(versions, default=0) + 1
 
 
+HINT_REQUIRED_FIELDS = (
+    "first_drop_sec",       # incoming role: where the bass first enters
+    "first_break_sec",      # informational: first energy drop after first_drop
+    "outro_start_sec",      # outgoing role: where the outro begins (loop region anchor)
+    "last_bass_drop_sec",   # outgoing role: the natural bass-drop / fill near the end
+                            #   where the music itself swaps bass. This is the bass_swap
+                            #   anchor for the NEXT transition. Sam's rule (2026-05-19):
+                            #   align incoming.first_drop_sec to outgoing.last_bass_drop_sec
+                            #   so the EQ swap reinforces the natural musical swap.
+)
+
+
+def _validate_hints(audio_dir: Path, hints: dict) -> list[str]:
+    """Return error strings for any .wav in audio_dir missing a complete hint
+    entry. Exact filename match (including extension). All three required
+    fields must be present and positive numeric.
+
+    Production gate (Sam, 2026-05-19). Use `--no-hints-required` to bypass
+    during debugging.
+    """
+    errors: list[str] = []
+    for audio_path in sorted(audio_dir.glob("*.wav")):
+        filename = audio_path.name
+        entry = hints.get(filename)
+        if entry is None:
+            errors.append(f"{filename}: no hint entry")
+            continue
+        for field in HINT_REQUIRED_FIELDS:
+            value = entry.get(field)
+            if value is None:
+                errors.append(f"{filename}: missing field '{field}'")
+            elif not isinstance(value, (int, float)) or value <= 0:
+                errors.append(f"{filename}: field '{field}' must be positive number, got {value!r}")
+    return errors
+
+
+def _render_previews(ordered_analyses, mik_data, rb_matches, project_bpm, preview_dir: Path) -> int:
+    """Render blank-canvas preview PNGs for hint authoring. Returns count rendered."""
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    rendered = 0
+    for i, analysis in enumerate(ordered_analyses):
+        mik = mik_data.get(str(analysis.path))
+        rb_match = rb_matches.get(str(analysis.path))
+        try:
+            ctx = PreviewContext(
+                track_index=i + 1,
+                analysis=analysis,
+                mik_cues_sec=[c.time_sec for c in mik.cues] if mik else [],
+                mik_energy_segments=mik.energy_segments if mik else [],
+                rb_phrases=getattr(rb_match, "phrases", None) if rb_match else None,
+                project_bpm=project_bpm,
+            )
+            render_preview(ctx, preview_dir)
+            rendered += 1
+        except Exception as e:
+            print(f"  WARNING: preview render failed for track {i + 1}: {e}")
+    return rendered
+
+
 def run_pipeline(
     input_dir: Path,
     output_dir: Path,
     project_root: Path | None = None,
     config_path: Path | None = None,
     visualize: bool = False,
-) -> Path:
+    skip_desktop_analyze: bool = False,
+    previews_only: bool = False,
+    no_hints_required: bool = False,
+) -> Path | None:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
 
     config = load_config(config_path or project_root / "Config" / "settings.json")
+
+    # Drive MIK + Rekordbox desktop apps to analyze any tracks they haven't
+    # seen yet. Skips quickly when everything is already analyzed.
+    if not skip_desktop_analyze:
+        print("Desktop analysis (MIK + Rekordbox)...")
+        try:
+            from automated_dj_mixes.desktop_analyzer import (
+                analyze_folder_with_mik, analyze_folder_with_rekordbox,
+            )
+            audio_paths = sorted(input_dir.glob("*.wav"))
+            if audio_paths:
+                analyze_folder_with_mik(input_dir, expected_tracks=audio_paths)
+                analyze_folder_with_rekordbox(input_dir, expected_tracks=audio_paths)
+        except Exception as e:
+            print(f"  Desktop analysis failed (continuing): {e}")
 
     print(f"Analysing tracks in {input_dir}...")
     analyses = analyse_folder(input_dir)
@@ -140,6 +217,39 @@ def run_pipeline(
 
     for i, a in enumerate(ordered_analyses):
         print(f"  {i+1}. {a.path.name} ({a.camelot})")
+
+    # Render blank-canvas previews early — these are how visual hints get
+    # authored. The --previews-only flag exits here, before transition
+    # planning. Production gate below also runs after this point.
+    preview_dir = output_dir / "Visualisations" / "Previews"
+    preview_count = _render_previews(ordered_analyses, mik_data, rb_matches, project_bpm, preview_dir)
+    if preview_count:
+        print(f"Track previews (for hint authoring): {preview_count}/{len(ordered_analyses)} → {preview_dir}")
+
+    if previews_only:
+        print("--previews-only: stopping before transition planning.")
+        print(f"Author hints at: {input_dir.parent / 'Hints' / 'track_hints.json'}")
+        print(f"Required per track: {', '.join(HINT_REQUIRED_FIELDS)}")
+        return None
+
+    # Production gate — refuse to plan transitions if hints are missing or
+    # incomplete. Bypass with --no-hints-required. The /mix skill is the
+    # canonical production path that authors hints before reaching this gate.
+    if not no_hints_required:
+        hint_errors = _validate_hints(input_dir, track_hints_data)
+        if hint_errors:
+            err_block = "\n".join(f"  - {e}" for e in hint_errors)
+            raise RuntimeError(
+                f"\nCannot run mix pipeline — visual hints missing or incomplete.\n"
+                f"{len(hint_errors)} problem(s):\n{err_block}\n\n"
+                f"To author hints, run the /mix skill, or generate previews and edit hints manually:\n"
+                f"  1. python -m automated_dj_mixes.orchestrator --input <audio> --output <output> --previews-only\n"
+                f"  2. Read each PNG in {preview_dir}\n"
+                f"  3. Write {input_dir.parent / 'Hints' / 'track_hints.json'} with one entry per track\n"
+                f"     containing all of: {', '.join(HINT_REQUIRED_FIELDS)}\n"
+                f"  4. Re-run without --previews-only.\n\n"
+                f"To bypass for debugging: add --no-hints-required.\n"
+            )
 
     # Gain offsets
     lufs_values = [a.lufs for a in ordered_analyses]
@@ -684,29 +794,8 @@ def run_pipeline(
     if track_failed:
         print(f"  ({track_failed} track-render failures)")
 
-    # Blank-canvas previews — one per track, NO candidates, NO automation.
-    # These are the images to review BEFORE making hint decisions. Saved
-    # to a shared Previews folder so hints carry across mixes.
-    preview_dir = output_dir / "Visualisations" / "Previews"
-    preview_rendered = 0
-    for i, analysis in enumerate(ordered_analyses):
-        mik = mik_data.get(str(analysis.path))
-        rb_match = rb_matches.get(str(analysis.path))
-        try:
-            ctx = PreviewContext(
-                track_index=i + 1,
-                analysis=analysis,
-                mik_cues_sec=[c.time_sec for c in mik.cues] if mik else [],
-                mik_energy_segments=mik.energy_segments if mik else [],
-                rb_phrases=getattr(rb_match, "phrases", None) if rb_match else None,
-                project_bpm=project_bpm,
-            )
-            render_preview(ctx, preview_dir)
-            preview_rendered += 1
-        except Exception as e:
-            print(f"  WARNING: preview render failed for track {i + 1}: {e}")
-    if preview_rendered:
-        print(f"Track previews (for hint authoring): {preview_rendered}/{len(ordered_analyses)} → {preview_dir}")
+    # (Previews were already rendered early in run_pipeline — they're how
+    # visual hints get authored and live in Output/Visualisations/Previews.)
 
     # ============================================================
     # VISUAL REVIEW GATE — the mix isn't validated by numbers alone.
@@ -786,6 +875,16 @@ def main():
     parser.add_argument("--config", help="Path to settings.json")
     parser.add_argument("--visualize", action="store_true",
                         help="Phrase visualization mode — chop tracks by Rekordbox phrases, color-code")
+    parser.add_argument("--skip-desktop-analyze", action="store_true",
+                        help="Skip driving MIK and Rekordbox UI (use only existing analysis data)")
+    parser.add_argument("--previews-only", action="store_true",
+                        help="Render blank-canvas preview PNGs and exit before transition "
+                             "planning. Used by the /mix skill so Claude can read previews "
+                             "and author Hints/track_hints.json. Bypasses the hint gate.")
+    parser.add_argument("--no-hints-required", action="store_true",
+                        help="Allow the pipeline to run without complete visual hints. "
+                             "Production runs require hints (gated by /mix skill); use this "
+                             "flag for debugging only.")
     args = parser.parse_args()
 
     als_path = run_pipeline(
@@ -793,8 +892,12 @@ def main():
         Path(args.output),
         config_path=Path(args.config) if args.config else None,
         visualize=args.visualize,
+        skip_desktop_analyze=args.skip_desktop_analyze,
+        previews_only=args.previews_only,
+        no_hints_required=args.no_hints_required,
     )
-    print(f"Generated: {als_path}")
+    if als_path is not None:
+        print(f"Generated: {als_path}")
 
 
 if __name__ == "__main__":

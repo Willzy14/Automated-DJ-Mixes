@@ -61,45 +61,30 @@ def snap(beat: float) -> float:
 class PhraseGrid:
     """Snap arrangement beats to dance-music phrase boundaries.
 
-    Sam's rule (2026-05): "automation should obviously be hitting on bars,
-    but then it needs to be within the musical theory element of it all".
-    Dance music phrases are 16 beats (4 bars). Sections are 32 or 64 beats.
-    Automation that lands mid-phrase sounds wrong even when on a beat.
+    Sam's rule (2026-05-19): HARD 16-beat phrase alignment. Every transition
+    breakpoint MUST land on a multiple of 16 beats from the per-track origin.
+    No tiered fallback to 8-beat or 4-beat — those produce mid-phrase swaps
+    that sound wrong even when on a beat.
 
-    Tiered snap behaviour (Sam's chosen mode):
-      1. Try the preferred grid (default 16-beat / 4-bar phrase).
-         Accept if natural drift ≤ max_shift_prefer (default 4 beats).
-      2. Fall back to first secondary grid (default 8-beat / 2-bar).
-         Accept if drift ≤ max_shift_secondary (default 4 beats).
-      3. Fall back to next secondary (default 4-beat / bar) — HARD FLOOR.
+    32-beat boundaries are automatically covered: every 32-beat point is
+    also a 16-beat point.
 
-    The bar boundary (4-beat) is the absolute floor — anything off-bar is
-    musically broken and the validator hard-fails it.
+    Each track has its own grid (origin = arrangement beat where that
+    track's beat 1 lands), so the cascade preserves alignment across the
+    whole mix.
     """
     origin: float = 0.0
     prefer: int = 16
-    fallbacks: tuple = (8, 4)
-    max_shift_prefer: int = 4
-    max_shift_secondary: int = 4
 
     def snap(self, beat: float, log: list[str] | None = None) -> float:
-        """Snap to the largest acceptable phrase boundary."""
-        for grid in (self.prefer, *self.fallbacks):
-            limit = self.max_shift_prefer if grid == self.prefer else self.max_shift_secondary
-            snapped = self.origin + round((beat - self.origin) / grid) * grid
-            if abs(snapped - beat) <= limit:
-                if log is not None and grid != self.prefer:
-                    log.append(
-                        f"[phrase-snap fallback] beat {beat:.1f} → {snapped:.0f} "
-                        f"(grid={grid}, would shift {snapped - beat:+.1f})"
-                    )
-                return float(snapped)
-        # Last resort: bar-align (4-beat) even if it shifts more than the limit.
-        snapped = self.origin + round((beat - self.origin) / 4) * 4
-        if log is not None:
+        """Snap to the nearest 16-beat phrase boundary from origin."""
+        grid = self.prefer
+        snapped = self.origin + round((beat - self.origin) / grid) * grid
+        shift = snapped - beat
+        if log is not None and abs(shift) > 0.5:
             log.append(
-                f"[phrase-snap FLOOR] beat {beat:.1f} → {snapped:.0f} "
-                f"(grid=4, forced; natural drift exceeded all phrase tolerances)"
+                f"[phrase-snap HARD-16] beat {beat:.1f} → {snapped:.0f} "
+                f"(shift {shift:+.1f})"
             )
         return float(snapped)
 
@@ -435,6 +420,16 @@ def plan_transition(
     # phrase boundary, which is what the listener perceives.
     outgoing_grid = PhraseGrid(origin=outgoing_arrangement_start)
 
+    # Sam's rule (2026-05-19): when the OUTGOING track has a `last_bass_drop`
+    # visual hint, that's the bass_swap anchor — the natural fill near the
+    # end where the music itself drops bass. The EQ swap reinforces this.
+    # In that case the outgoing track plays through to its natural end (no
+    # early chop), and the loop region only extends if the overlap needs
+    # more time than the natural tail provides.
+    last_bass_drop_cand = first_credible(
+        outgoing_candidates or [], "last_bass_drop", MIN_CANDIDATE_CONFIDENCE
+    )
+
     # Prefer ranked cue candidates (Step 7). Fall back to RB phrase logic
     # when candidates are missing or below the confidence floor.
     chop_cand = first_credible(outgoing_candidates or [], "chop_point", MIN_CANDIDATE_CONFIDENCE) \
@@ -453,7 +448,18 @@ def plan_transition(
     # --- Chop point (where outgoing audio is cut) ---
     # All beat coordinates are snapped to whole Ableton beats per Sam's
     # hard rule (2026-05). MIK/RB suggestions are pulled to the nearest beat.
-    if chop_cand:
+    if last_bass_drop_cand:
+        # Sam's new model (2026-05-19): outgoing plays to its natural end.
+        # `chop_at` is set to outgoing_total_beats minus a small reserve so
+        # the loop region (if needed) has clean tail audio to source from.
+        # bass_swap is anchored to `last_bass_drop` further below, NOT to chop_at.
+        chop_at = snap(outgoing_total_beats - LOOP_BEATS)
+        chop_src = f"natural_end (last_bass_drop hint present)"
+        log.append(
+            f"chop sources: natural_end (outgoing plays through; "
+            f"bass_swap anchored to last_bass_drop@{last_bass_drop_cand.beat:.0f})"
+        )
+    elif chop_cand:
         chop_at = snap(chop_cand.beat)
         chop_src = f"candidate:{chop_cand.cue_type}(conf={chop_cand.confidence:.2f})"
         log.append(f"chop sources: {', '.join(chop_cand.sources)}")
@@ -519,7 +525,17 @@ def plan_transition(
     #    This makes the two tracks' phrase grids align with each other.
     # 2. Snap bass_swap to the INCOMING's phrase grid (which, because of
     #    step 1, also lands on outgoing's grid at the chosen tier).
-    natural_swap = outgoing_arrangement_start + chop_at
+    #
+    # Sam's 2026-05-19 update: if outgoing has a `last_bass_drop` hint, that
+    # anchors the SWAP (the musical bass-drop moment). Otherwise we fall
+    # back to the legacy "swap = chop arrangement" model.
+    if last_bass_drop_cand:
+        natural_swap = outgoing_arrangement_start + last_bass_drop_cand.beat
+        chop_arrangement = outgoing_arrangement_start + chop_at  # outgoing plays past swap
+    else:
+        natural_swap = outgoing_arrangement_start + chop_at
+        chop_arrangement = None  # will be set to bass_swap below for legacy model
+
     natural_incoming_start = (
         natural_swap - incoming_bass_start - incoming_downbeat_offset_beats
     )
@@ -530,7 +546,8 @@ def plan_transition(
         incoming_arrangement_start + incoming_bass_start + incoming_downbeat_offset_beats
     )
     bass_swap = incoming_grid.snap(natural_swap_v2, log)
-    chop_arrangement = bass_swap
+    if chop_arrangement is None:
+        chop_arrangement = bass_swap  # legacy: chop and swap coincide
 
     # Bound overlap — if the natural alignment requires too much overlap, we
     # clamp incoming's start. When this happens we ALSO move chop_arrangement
@@ -547,7 +564,14 @@ def plan_transition(
     natural_start = incoming_arrangement_start
     pre_clamp_swap = bass_swap
     natural_chop_at = chop_at
-    if incoming_arrangement_start < earliest_start:
+
+    # Sam's rule (2026-05-19): when last_bass_drop anchors the swap, the
+    # musical alignment overrides the overlap cap. The track's own
+    # structure determines how long the overlap needs to be (Bargrooves T1
+    # was 56 bars, T2 was 41). Skip the clamp entirely for this case.
+    skip_clamp = last_bass_drop_cand is not None
+
+    if not skip_clamp and incoming_arrangement_start < earliest_start:
         incoming_arrangement_start = earliest_start
         # Recreate incoming_grid for the new incoming_start and re-snap.
         incoming_grid = PhraseGrid(origin=incoming_arrangement_start)
@@ -562,7 +586,7 @@ def plan_transition(
             f"swap moved {bass_swap - pre_clamp_swap:+.0f} beats (overlap exceeded {MAX_OVERLAP_BEATS // 4} bars); "
             f"chop_at synced {natural_chop_at:.0f} → {chop_at:.0f}"
         )
-    elif incoming_arrangement_start > latest_start:
+    elif not skip_clamp and incoming_arrangement_start > latest_start:
         incoming_arrangement_start = latest_start
         incoming_grid = PhraseGrid(origin=incoming_arrangement_start)
         bass_swap = incoming_grid.snap(

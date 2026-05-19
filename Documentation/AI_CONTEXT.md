@@ -112,12 +112,56 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-05-19 (Latest Session)
-**Focus**: Housekeeping — merge V46 worktree branch into main
+### 2026-05-19 (Latest Session) — `/mix` skill + `last_bass_drop` + desktop automation
 
-**Completed**:
-- Merged `claude/zen-franklin-6d2371` (V46) into `main` via fast-forward (commit `d7ab342`)
-- Stashed stale local AI_CONTEXT.md edits (branch version is newer and authoritative)
+**Focus**: Three major architectural changes, plus an attempted refactor that was reverted.
+
+**Attempted then reverted: programmatic auto-analysis refactor.**
+Built `auto_analyze.py` (Krumhansl-Kessler key detection + constant-tempo beat grid + phrase labeling) to replace MIK and Rekordbox desktop apps. Generated Mix V1 — warping was unlistenable because constant-tempo grid can't match per-beat reality without precise BPM. Sam's catch: "you take control of the PC for Blender — why not for MIK and Rekordbox?" — desktop automation gives back the per-beat RB grid without losing the zero-touch goal. Whole refactor reverted via `git checkout HEAD` (no commits had been made). Memory saved: `feedback_consider_desktop_automation_first.md`.
+
+**Completed: desktop automation for MIK + Rekordbox.**
+- `Source/automated_dj_mixes/desktop_analyzer.py` (~440 lines) — drives both apps via `pywinauto` + `pyautogui` with cursor save/restore so Sam can keep working in Ableton alongside.
+- MIK driver: launches MIK, dismisses startup dialogs, clicks "My Collection" tab via UIA invoke, clicks "Add tracks" sidebar button via PNG template match (`templates/mik_add_tracks_button.png` — the button is a WPF custom control that UIA doesn't expose), clicks "Add folder" in modal, drives the "Browse For Folder" #32770 dialog via SendMessage. Polls `MIKStore.db` `Song` table for `IsAnalyzed=1` to detect completion.
+- RB driver: brings rekordbox to foreground via `AttachThreadInput` (not the Alt-key trick which opens menu mode), clicks File → Import → Import Folder with cursor restored after each click. Polls via `pyrekordbox`.
+- Wired into orchestrator: runs before `analyse_folder` so tracks are MIK+RB analyzed before the rest of the pipeline. Requires Library Protection OFF in Rekordbox.
+- All 10 V2 project tracks now analyzed via the driver. Memory saved: `feedback_scope_ui_searches_to_target_window.md` (don't search globally — Ableton has a "File" menu too).
+- pywinauto + pyautogui + pyperclip added to `requirements.txt`.
+
+**Completed: `Documentation/ABLETON_INTERACTION.md` reference doc.**
+17-section portable reference for any agent that needs to read/write `.als` files. Covers gzip format, the cardinal rule (line-level text patching, never `ElementTree`), AudioClip structure, warp markers, automation envelopes with the `Time="-63072000"` and unity-anchor gotchas, dB↔linear conversion, version notes. Written so it's NOT coupled to DJ-mix logic — Sam's planning to use it for a new Ableton-based project. Lives in this repo for now.
+
+**Completed: `/mix` skill — canonical production path with hint enforcement.**
+- `~/.claude/commands/mix.md` (symlinked to `Claude Code Brain/commands/mix.md`), mirrored to `Codex Brain/commands/mix.md` and `Antigravity Brain/commands/mix.md`.
+- 7-step workflow: validate inputs → desktop analysis → previews-only render → **visual pass (read every PNG, identify 4 hint fields)** → write `Hints/track_hints.json` → full pipeline → visual review.
+- `orchestrator.py`: added `--previews-only` flag (renders previews and exits before transition planning; bypasses hint gate so previews remain authorable), `--no-hints-required` (debug-only override), `_validate_hints()` helper, `_render_previews()` extracted to run early.
+- **Production gate**: orchestrator refuses to plan transitions if any track is missing a complete hint. Exact filename keys including extension. All required fields must be present and positive numeric. Clear error message lists each missing field per track.
+
+**Completed: `last_bass_drop_sec` — Sam's natural-fill alignment principle.**
+- Added 4th required hint field to `HINT_REQUIRED_FIELDS` (`orchestrator.py`) and `HINT_TO_CUE_TYPE` (`cue_candidates.py`).
+- New transition strategy in `plan_transition()` (`transition.py`): when outgoing has a `last_bass_drop` candidate, that's the bass_swap anchor — the natural fill near the end where bass drops out before final kicks return. Incoming positions so its `first_drop_sec` lands on the same arrangement beat. The EQ bass-cut still fires at that beat (hard step, two-phase volume envelope unchanged) — it reinforces what the music is already doing.
+- Outgoing plays through to natural end (no early chop). Loop region only extends what's needed past natural end.
+- Clamp skipped when `last_bass_drop` is the anchor — the music's natural overlap wins over the 48-bar cap.
+- Validator overlap range bumped 16-48 → 16-80 bars (Sam's real Bargrooves mixes are 28-56 bars).
+
+**Completed: 16-beat HARD phrase snap.**
+- `PhraseGrid.snap()` (`transition.py`) replaced the tiered 16→8→4 fallback with HARD 16-beat-only snapping. Every transition breakpoint MUST land on a multiple of 16 beats from per-track origin.
+- Validator: phrase-boundary check is now HARD (was WARN). Fails the mix if any breakpoint is off-phrase.
+
+**Completed: Bargrooves Summer 2015 Mix 1 analysis** (`Source/analyze_real_mix.py`, `inspect_transition.py`).
+Opened Sam's real DJ mix from `G:/Mix CD' Projects/2015 -/`, extracted clip positions per track. Found 4 distinct transition styles in 4 consecutive transitions: T1 = 1-bar Amen-style hammer (40 reps) + simplicity-bridge 16-bar chop, T2 = 1-bar hammer + edited incoming intro (skips 30+ source bars), T3 = outgoing surgery (3 chops with source-skips, no hammer), T4 = both natural (simple long crossfade). Sam's clarification: the core principle is "lock outgoing's last_bass_drop to incoming's first_drop" — the four styles are emergent from how that constraint resolves given track structures. Hence `last_bass_drop_sec` as the new central hint.
+
+**Completed: V2 project test mix end-to-end via `/mix` workflow.**
+Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 fields for all 10 tracks. Generated Mix V8 (first `/mix`-driven mix). Iterated to Mix V13 after `last_bass_drop` anchoring rule. Sam reviewed T1 in Ableton, identified that algorithmic chop was wrong, manual mix using natural fill alignment was much cleaner — confirmed the design direction.
+
+**Key Learnings**:
+- **Desktop automation > programmatic reimplementation when the desktop apps work well.** Sam's Blender remark cracked open the right pattern: don't reimplement MIK's auto-cue model (10+ years of refinement) when you can drive it with 200 lines of Python. Same for Rekordbox per-beat grids.
+- **Mouse-stealing is real.** First desktop automation pass used `pyautogui.click` everywhere — kept hijacking Sam's cursor while he was working in Ableton. Refactored to use `pywinauto.click()` (BM_CLICK messages) and `set_edit_text()` (WM_SETTEXT) wherever possible; only the MIK Add tracks WPF button needs the actual cursor.
+- **JUCE apps require AttachThreadInput for focus.** `SetForegroundWindow` is blocked by Windows focus-stealing prevention; Alt-key trick triggers menu activation as a side effect. AttachThreadInput is the clean answer.
+- **Library Protection in Rekordbox silently no-ops the Import menu.** Spent 30 minutes debugging "Import Folder did nothing" before Sam toggled the padlock off. Document this in the `/mix` skill.
+- **MIK 11 writes analysis to MIKStore.db SQLite (Song table) for WAV files — not to ID3 GEOB tags.** Old `mik_reader.py` only checked GEOB. Updated `is_mik_analyzed()` to check the DB first, fall back to GEOB for MP3s.
+- **Aggregate stats hide DJ technique.** Earlier `MIXING_PATTERNS.md` extracted "median transition is 25 bars" from 184 transitions — useless. Looking at 4 transitions BY EYE revealed 4 distinct techniques. Visual analysis of real mixes is the right onboarding pattern.
+- **`/mix` skill as forcing function works.** Before this session Claude kept "forgetting" the visual-pass-first rule even though it was documented. Codifying it as a skill + an orchestrator gate that physically refuses to run without complete hints makes the rule structural, not memory-dependent.
+- **Constant-tempo grid drift > BPM-detection error.** With librosa's BPM detection (often off by 0.1-0.5 BPM), a constant-tempo grid drifts ~1 second per minute of audio — by the end of a 5-minute track, beat markers are 5+ seconds off the actual kicks. Per-beat detected timestamps (what Rekordbox produces) eliminate this. Reason to keep MIK+RB in the loop rather than reimplementing.
 
 ### 2026-05-18 (Previous Session)
 **Focus**: Long iteration session — V17→V46 — wiring MIK, building visual-hint workflow, phrase-grid enforcement (per-track), and forcing Claude to actually use the visual review
@@ -266,6 +310,7 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - **Looping rule: outgoing → outro, incoming → intro** — Where possible, loop the OUTGOING's outro and the INCOMING's intro. Use whichever has cleaner content if only one end is stripped. `find_loop_region` has a `role` parameter for this. (Sam, 2026-05-18)
 - **Tiered phrase grid in viz with bar labels** — Bar lines weighted by phrase importance: bar (4-beat) faint, 2-bar medium, 4-bar phrase dark+labelled, 16-bar section bold+labelled. Off-phrase automation should be visually obvious. (Sam-prompted, 2026-05-18: "how did you not spot these in the visual?")
 - **Numerical validation is necessary but NOT sufficient** — `validate_mix` ALL-PASS doesn't mean the mix is right. The visual review gate is the only thing that verifies picks land on the right musical moments. AI_CONTEXT.md REQUIRED section + orchestrator's `VISUAL REVIEW REQUIRED` block + per-mix `REVIEW_VNN.md` template enforce this. (Sam, 2026-05-18)
+- **`/mix` skill is the canonical production path** — never invoke the orchestrator directly for new mixes. The skill (in `~/.claude/commands/mix.md` and the Codex/Antigravity Brain mirrors) walks Claude through validate → desktop analysis → previews-only → **visual pass + write hints** → full pipeline → visual review. The orchestrator enforces a hint gate: it refuses to plan transitions if any track is missing a complete entry in `Hints/track_hints.json` (every track needs `first_drop_sec`, `first_break_sec`, `outro_start_sec` with exact filename keys including extension). `--previews-only` bypasses the gate (previews are how hints get authored). `--no-hints-required` bypasses the gate for development/debugging only. This was added 2026-05-19 because Claude kept forgetting the visual-pass-first rule even though it was documented above. The gate makes it structural rather than memory-dependent. (Sam, 2026-05-19)
 
 ## Connections
 

@@ -350,31 +350,55 @@ def first_credible(
     return ranked[0]
 
 
+FIRST_DROP_WINDOW_SEC = (30.0, 75.0)
+"""Dance music structural prior (Sam's rule, 2026-05-19): the FIRST drop
+typically lands 30-75s into the track. A bass_entry past 75s is usually a
+SECOND chorus (post-break) and would force the listener to hear 1-2 minutes
+of the incoming track before the swap — too long for a bass-to-bass mix.
+Anything before 30s is usually a teaser/first-kick, not yet a real chorus.
+"""
+
+
 def first_drop_candidate(
     candidates: Iterable[CueCandidate],
     min_confidence: float = 0.5,
 ) -> CueCandidate | None:
-    """Pick the EARLIEST credible bass_entry — the FIRST drop in the track.
+    """Pick the best bass_entry for a bass-to-bass mix.
 
-    Dance music structural prior (Sam's rule, 2026-05): the first drop
-    typically lands 30-120s into the track, not 3+ minutes in. A later cue
-    with a bigger energy rise is usually a SECOND drop after a break, not
-    the first drop. For DJ transitions, the bass_swap needs to land on the
-    first drop — anything else means the listener hears 2-3 minutes of the
-    incoming track before the swap, which is wrong.
-
-    Hint precedence rule (2026-05): if ANY visual_hint bass_entry candidate
-    exists, it wins — Sam's eye on the picture overrides the algorithm,
-    regardless of position. Within hints (rare), pick the earliest. Without
-    hints, pick the earliest credible algorithmic candidate.
+    Precedence (Sam's rule, 2026-05-19):
+      1. Visual hint wins — Sam's eye on the picture overrides everything.
+      2. Earliest rb_chorus_start within the first-drop window (30-120s).
+         Rekordbox marks chorus phrases — we want the FIRST one (sustained
+         main groove, not a teaser drop), but not so late that we'd be
+         dropping the incoming 2+ minutes in.
+      3. Earliest credible bass_entry within the first-drop window.
+      4. Fallback: earliest credible bass_entry anywhere (only if nothing
+         in the window — e.g. a short track with no clear first-drop signal).
     """
     pool = [c for c in candidates
             if c.cue_type == "bass_entry" and c.confidence >= min_confidence]
     if not pool:
         return None
+
+    # 1. Visual hints win
     hinted = [c for c in pool if _is_visual_hint(c)]
     if hinted:
         return min(hinted, key=lambda c: c.beat)
+
+    # Filter to candidates within the first-drop window
+    lo, hi = FIRST_DROP_WINDOW_SEC
+    in_window = [c for c in pool if lo <= c.sec <= hi]
+
+    # 2. Prefer rb_chorus_start within the window (the sustained chorus)
+    chorus_in_window = [c for c in in_window if "rb_chorus_start" in c.sources]
+    if chorus_in_window:
+        return min(chorus_in_window, key=lambda c: c.beat)
+
+    # 3. Earliest credible bass_entry within the window
+    if in_window:
+        return min(in_window, key=lambda c: c.beat)
+
+    # 4. Last resort: earliest credible anywhere (short tracks, edge cases)
     return min(pool, key=lambda c: c.beat)
 
 
@@ -658,9 +682,14 @@ def mik_to_candidates(
 HINT_CONFIDENCE = 0.95
 
 HINT_TO_CUE_TYPE = {
-    "first_drop_sec":  "bass_entry",
-    "first_break_sec": "break_start",
-    "outro_start_sec": "outro_start",
+    "first_drop_sec":     "bass_entry",
+    "first_break_sec":    "break_start",
+    "outro_start_sec":    "outro_start",
+    "last_bass_drop_sec": "last_bass_drop",  # NEW (2026-05-19): outgoing-role anchor
+                                              # for bass_swap. The musical fill near the
+                                              # end of the track where bass naturally
+                                              # drops out before final kicks return.
+                                              # Aligns to incoming.first_drop_sec.
 }
 
 

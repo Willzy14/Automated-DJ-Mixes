@@ -65,7 +65,10 @@ def validate_mix(
     """
     checks: list[ValidationCheck] = []
 
-    # 1. All overlaps in 16-48 bars range (1.5-bar tolerance for phrase-snap
+    # 1. All overlaps in 16-80 bars range (Sam's actual mixes 28-56 bars per
+    #    Bargrooves analysis 2026-05-19; previous 48 cap was too tight).
+    #    1.5-bar tolerance for phrase-snap drift.
+    #    (Comment originally said "16-48 bars" — updated 2026-05-19)
     # rounding; the snap can shift incoming_arrangement_start by up to 8
     # beats = 2 bars, so the actual overlap can drift accordingly).
     overlap_ok = True
@@ -74,12 +77,12 @@ def validate_mix(
         outgoing_end = arrangement_positions[i] + track_total_beats[i]
         overlap_beats = outgoing_end - spec.transition_start
         overlap_bars = overlap_beats / 4
-        ok = 14.5 <= overlap_bars <= 49.5
+        ok = 14.5 <= overlap_bars <= 80.5
         if not ok:
             overlap_ok = False
             overlap_details.append(f"transition {i + 1}: {overlap_bars:.1f} bars")
     checks.append(ValidationCheck(
-        name="overlap in 16-48 bars",
+        name="overlap in 16-80 bars",
         passed=overlap_ok,
         detail="all transitions in range" if overlap_ok else f"out of range: {'; '.join(overlap_details)}",
     ))
@@ -98,7 +101,8 @@ def validate_mix(
 
     bar_ok = True
     bar_details = []
-    phrase_warn = []
+    phrase_details = []
+    phrase_ok = True
     for i, spec in enumerate(transition_specs):
         # Incoming arrangement start is the origin for incoming's phrase grid.
         incoming_origin = spec.transition_start
@@ -116,7 +120,8 @@ def validate_mix(
                     f"T{i + 1} {label}={beat:.1f} (incoming start={incoming_origin})"
                 )
             elif not _offset_on_grid(beat, incoming_origin, 16):
-                phrase_warn.append(f"T{i + 1} {label}={beat:.0f}")
+                phrase_ok = False
+                phrase_details.append(f"T{i + 1} {label}={beat:.0f}")
 
         # transition_start (= incoming_arrangement_start) must align to
         # outgoing's grid so the two tracks' grids match.
@@ -126,7 +131,8 @@ def validate_mix(
                 f"T{i + 1} transition_start={spec.transition_start:.1f} (outgoing start={outgoing_origin})"
             )
         elif not _offset_on_grid(spec.transition_start, outgoing_origin, 16):
-            phrase_warn.append(f"T{i + 1} transition_start={spec.transition_start:.0f}")
+            phrase_ok = False
+            phrase_details.append(f"T{i + 1} transition_start={spec.transition_start:.0f}")
 
     checks.append(ValidationCheck(
         name="all transition breakpoints on bar boundary (HARD, per-track)",
@@ -134,9 +140,9 @@ def validate_mix(
         detail="all on per-track bar grid" if bar_ok else f"OFF-BAR: {'; '.join(bar_details)}",
     ))
     checks.append(ValidationCheck(
-        name="all transition breakpoints on 16-beat phrase boundary (preferred, per-track)",
-        passed=True,
-        detail="all on per-track phrase grid" if not phrase_warn else f"WARN — bar OK, phrase not: {'; '.join(phrase_warn)}",
+        name="all transition breakpoints on 16-beat phrase boundary (HARD, per-track)",
+        passed=phrase_ok,
+        detail="all on per-track phrase grid" if phrase_ok else f"OFF-PHRASE: {'; '.join(phrase_details)}",
     ))
 
     # 3. Outgoing fully gone by transition_end (volume ends at 0)

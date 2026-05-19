@@ -3,7 +3,7 @@
 ## Project Overview
 Automated DJ mix pipeline for Wired Masters showreels. Takes pre-tagged dance tracks and produces a ready-to-review Ableton Live 12 session via template-based ALS XML patching. Multi-signal cue candidate detection feeds bass-to-bass transition planning.
 
-## Current Project Status (2026-05-18)
+## Current Project Status (2026-05-19)
 
 | Component | Status |
 |---|---|
@@ -12,24 +12,28 @@ Automated DJ mix pipeline for Wired Masters showreels. Takes pre-tagged dance tr
 | LUFS-based gain offsets | ✅ |
 | Rekordbox PSSI phrase parsing (RB7 manual binary) | ✅ |
 | Rekordbox PWV5 waveform parsing | ✅ |
-| Mixed In Key 11 reader (GEOB + SQLite) | ✅ (2026-05-18) |
-| Amplitude-envelope analysis (1s RMS) | ✅ (2026-05-18) |
-| Visual hints workflow (`Hints/track_hints.json` → CueCandidate conf 0.95) | ✅ (2026-05-18) |
-| Per-track PhraseGrid snap (16/8/4 tiered) | ✅ (2026-05-18) |
-| Per-track + per-transition viz PNGs with tiered phrase grid | ✅ (2026-05-18) |
-| Blank-canvas preview PNGs (for hint authoring) | ✅ (2026-05-18) |
-| Visual review gate (VISUAL REVIEW REQUIRED + REVIEW_VNN.md) | ✅ (2026-05-18) |
-| Per-track bar alignment HARD validation | ✅ (2026-05-18) — 11/11 in V46 |
-| Clamp sync (chop_arrangement follows bass_swap) | ✅ (2026-05-18) |
-| first_downbeat_offset positioning fix | ✅ (2026-05-18) |
-| Dead-air loop refinement | ✅ (2026-05-18) |
-| Chop-leave-outro-room (16-bar reserve) | ✅ (2026-05-18) |
+| Mixed In Key 11 reader (GEOB + SQLite) | ✅ |
+| Amplitude-envelope analysis (1s RMS) | ✅ |
+| Visual hints workflow (4-field schema, hint gate enforced) | ✅ (2026-05-19) |
+| `last_bass_drop_sec` natural-fill alignment | ✅ (2026-05-19) |
+| 16-beat HARD phrase snap (no tiered fallback) | ✅ (2026-05-19) |
+| Per-track + per-transition viz PNGs with tiered phrase grid | ✅ |
+| Blank-canvas preview PNGs (for hint authoring) | ✅ |
+| Visual review gate (VISUAL REVIEW REQUIRED + REVIEW_VNN.md) | ✅ |
+| Per-track bar alignment HARD validation | ✅ |
+| Phrase boundary HARD validation (16-beat) | ✅ (2026-05-19) |
+| Overlap range 16-80 bars | ✅ (2026-05-19, was 16-48) |
 | ALS generation (template-based, multi-clip) | ✅ |
-| Sapian (T5) bass placement | ⚠️ may need hint adjustment |
-| Off-by-one beat verification in Ableton | ⚠️ pending Sam's listen |
+| `/mix` skill (canonical production path) | ✅ (2026-05-19) |
+| Hint gate in orchestrator (refuses run without complete hints) | ✅ (2026-05-19) |
+| `desktop_analyzer.py` (drives MIK + RB UIs) | ✅ (2026-05-19) |
+| `ABLETON_INTERACTION.md` portable reference doc | ✅ (2026-05-19) |
+| Sapian (T5) bass placement | ⚠️ may need hint adjustment after listen |
+| Off-by-one beat verification in Ableton | ⚠️ pending Sam's listen on V13 |
 
-**Latest outputs**: Mix V46 (ALL PASS, awaiting Sam's Ableton listen)
+**Latest outputs**: Mix V13 (via `/mix` workflow with `last_bass_drop` anchoring; ALL PASS)
 **Analysis model version**: `cue-candidates-v1`
+**Production entry point**: `/mix <project-path>` — never `python -m automated_dj_mixes.orchestrator` for new mixes
 
 ## What NOT to rebuild
 - **rekordbox_waveform.py PWV5 parser** — bit layout figured out (LSB-first: R bits0-2, G bits3-5, B bits6-8, height bits9-13). Don't re-derive.
@@ -42,11 +46,15 @@ Automated DJ mix pipeline for Wired Masters showreels. Takes pre-tagged dance tr
 - **Visual hint precedence** — `_is_visual_hint` check in `first_credible` and `first_drop_candidate` ensures hints win over MIK/RB/amplitude. Don't add other ranking that could override.
 - **PhraseGrid two-grid pattern (per-track)** — outgoing_grid snaps incoming_start; incoming_grid snaps bass_swap. The cascade preserves alignment across the whole mix. Don't snap to global beat 0 — Sam explicitly clarified per-track.
 - **Visual review gate** — pipeline MUST print VISUAL REVIEW REQUIRED block + write REVIEW_VNN.md template at end. AI_CONTEXT.md REQUIRED section enforces this; don't remove without Sam's call.
+- **`/mix` is the canonical production path** (2026-05-19) — never invoke `orchestrator.py` directly for new mixes. Use `/mix <project>` which forces the visual-pass-first workflow. Orchestrator now gates on a complete `Hints/track_hints.json` (every track needs `first_drop_sec`, `first_break_sec`, `outro_start_sec` with exact filename keys); only `--previews-only` (bypasses for preview generation) and `--no-hints-required` (debug only) skip the gate. Mirrors exist in Codex Brain / Antigravity Brain command folders.
 
 ## Next Priority
-1. Sam to listen to V46 in Ableton — verify off-by-one fix + Sapian alignment.
-2. Refine hints from listening pass (edit `Test Project/.../Hints/track_hints.json`, re-run).
-3. Expand template to 12+ tracks (still pending from 2026-05-17).
+1. Sam to listen to **Mix V13** (Black Book x Defected V2) in Ableton — verify `last_bass_drop` anchoring gives clean musical swaps. T1 (Adam Ten → Chris Lake Savana) is the canary; Sam's manual mix at the natural fill was much cleaner than earlier algorithm picks.
+2. Refine `last_bass_drop_sec` and `first_drop_sec` per track from listening — current values are coarse visual estimates from preview PNGs. Edit `Test Project/Black Book x Defected V2/Hints/track_hints.json` and re-run via `/mix`.
+3. End-to-end test of `desktop_analyzer.py` on a fresh project with NO prior MIK/RB analysis (current V2 was already analyzed; full UI driving path hasn't been validated end-to-end).
+4. Mirror `/mix` skill to Wren protocols (`~/.hermes/reference/ai_brain_protocols.md`) — skipped this session because the path doesn't exist on this machine.
+5. Bargrooves T2 "edited incoming intro" technique (deferred): some tracks need their buildup compressed to fit shorter overlaps. Not implemented yet.
+6. Expand template to 12+ tracks (still pending from 2026-05-17).
 
 ## Architecture
 - Source code: `Source/automated_dj_mixes/` Python package (15 modules; see TOOLBOX.md)

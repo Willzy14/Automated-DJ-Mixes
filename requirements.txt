@@ -3,3 +3,7 @@ pyloudnorm>=0.1.0
 mutagen>=1.47.0
 ffmpeg-python>=0.2.0
 pyrekordbox>=0.4.0
+# Desktop automation (driving MIK + Rekordbox UIs from desktop_analyzer.py)
+pywinauto>=0.6.9
+pyautogui>=0.9.54
+pyperclip>=1.11.0
