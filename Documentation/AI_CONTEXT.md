@@ -112,7 +112,14 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-05-18 (Latest Session)
+### 2026-05-19 (Latest Session)
+**Focus**: Housekeeping — merge V46 worktree branch into main
+
+**Completed**:
+- Merged `claude/zen-franklin-6d2371` (V46) into `main` via fast-forward (commit `d7ab342`)
+- Stashed stale local AI_CONTEXT.md edits (branch version is newer and authoritative)
+
+### 2026-05-18 (Previous Session)
 **Focus**: Long iteration session — V17→V46 — wiring MIK, building visual-hint workflow, phrase-grid enforcement (per-track), and forcing Claude to actually use the visual review
 
 **Completed (new modules)**:
@@ -201,15 +208,11 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - Ableton extends first/last automation breakpoint values across entire timeline — must clamp with unity anchors
 - Coast to Coast tail naturally looped — Sam loves this, wants intentional loop extension
 
-### 2026-05-15 (Previous Session)
-**Focus**: Base-to-base mixing — phrase-grid alignment, smarter strategies, real-time Sam review
+### 2026-05-15
+**Focus**: Base-to-base mixing — phrase-grid alignment, smarter strategies, real-time Sam review. V1-V12.
 
-**Completed**: Bass detection, phrase-grid snap, strategy selector (bass_to_bass / tail_into_break / end_to_end), multi-envelope merge, master at -6dB, volume on Utility Gain, 12 mix versions (V1-V12)
-
-### 2026-05-14 (First Session)
-**Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation
-
-**Completed**: Full pipeline implementation, drop-confirmation kick detection, 5-skill engine, tempo automation, base-to-base alignment first attempt (V1-V8)
+### 2026-05-14
+**Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation. V1-V8.
 
 ## What's Next
 
