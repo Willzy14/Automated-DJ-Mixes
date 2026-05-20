@@ -83,7 +83,9 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-**Mix V46 — per-track phrase-grid alignment enforced. 100% bar alignment, ~85% 4-bar phrase alignment per-track.** Pipeline now has a full visual-hint workflow: each track gets a blank-canvas preview PNG; Sam (or Claude) reads the picture, writes timestamps to `Test Project/.../Hints/track_hints.json`; hints emit highest-confidence CueCandidates (0.95) that win over algorithmic picks. Visual review gate at end of every pipeline run prints `VISUAL REVIEW REQUIRED` block + auto-generates `REVIEW_VNN.md` template that must be filled before the mix is "complete."
+**Sections V19 — chopping pipeline LOCKED IN.** End-to-end validated on Black Book x Defected V2: algorithm pass (V13) → Fix G iteration (V16) → 3 manual chop corrections via `apply_section_corrections.py` (V17) → Sam's manual edits (V18) → arrangement repositioning via `arrange_sections.py` (V19). The `/section-detection` skill encodes the workflow with un-skippable blind validation (8 PNGs per track, per-chop verdict table, hard chop-count = row-count check). Arrangement uses natural-fill alignment (incoming.drop_1 aligned to outgoing's last fill/break before outro). **Next phase: arrangement refinement** — Sam to evaluate V19 overlap lengths (longest 100 + 104 bars on Savana→Capriati and Route 94→EMM) and propose per-pair alignment rules.
+
+**Mix V46 (previous milestone) — per-track phrase-grid alignment enforced. 100% bar alignment, ~85% 4-bar phrase alignment per-track.** Pipeline has a full visual-hint workflow: each track gets a blank-canvas preview PNG; Sam (or Claude) reads the picture, writes timestamps to `Test Project/.../Hints/track_hints.json`; hints emit highest-confidence CueCandidates (0.95) that win over algorithmic picks. Visual review gate at end of every pipeline run prints `VISUAL REVIEW REQUIRED` block + auto-generates `REVIEW_VNN.md` template that must be filled before the mix is "complete."
 
 **Implemented (Phase 1-8):**
 - All 7 core modules + rekordbox_reader + skills system functional
@@ -112,7 +114,56 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-05-19 (Latest Session) — `/mix` skill + `last_bass_drop` + desktop automation
+### 2026-05-20 (Latest Session) — Section-detection pipeline LOCKED IN + arrangement principle learned (V13→V20)
+
+**Focus**: Lock in the section-detection pipeline. Then learn arrangement principles from Sam's V20 example. Plan `/arrange-mix` skill + Mix Patterns Library for tomorrow.
+
+**Completed: `/section-detection` skill + corrective workflow.**
+- `~/.claude/commands/section-detection.md` (+ Codex Brain / Antigravity Brain mirrors) — full workflow with un-skippable blind validation. Auto-fires on triggers (section detection, Sections V<N>, phrase_viz.py, etc.). Brain-level auto-fire instructions added to CLAUDE.md / AGENTS.md / GEMINI.md.
+- Workflow: orchestrator `--sections-layout` → `extract_sections_als.py` → `sections_blind_viz.py` (**8 quarter PNGs** per track, not 4 — 4 missed 1-2 bar fills) → Claude reads every PNG and fills `BLIND_VALIDATION_V<N>.md` table (HARD self-check: chop count must equal row count) → for `⚠ off N` errors, edit `apply_section_corrections.py` CORRECTIONS list and patch .als directly.
+- Anti-patterns documented and rejected: "X/Y near perfect" without evidence, "matches V7 within N bars" (V7 is not truth, waveform is), reading some PNGs and extrapolating, running `sections_compare_viz.py` (V7-diff trap — FORBIDDEN by skill).
+
+**Completed: corrective workflow proven end-to-end on Black Book x Defected V2 (V13 → V19).**
+- V13: algorithm pass, BLIND_VALIDATION found 4 real `⚠ off N` errors.
+- V14: tried tuning `OUTRO_REFINE_BASS_RATIO` 0.7→0.85 → no change (Fix C aborted on Marco's 1-bar drop_4; threshold not enough for EMM).
+- V15: tried `mean()` instead of `all()` + walk-back logic → REGRESSION (pulled back Savana + Sapian which were correct). Reverted.
+- V16: added **Fix G — `_absorb_short_segments_before_outro`** (catches Marco's spurious fill+1-bar-drop+outro pattern, consolidates into outro starting at the amplitude collapse). Marco outro fixed (112 → 107). No regressions.
+- V17: applied 3 manual `apply_section_corrections.py` patches — Adam Ten bar 72 → 74 (drop_3/break_1), Adam Ten bar 112 → 108 (break_1/drop_4), EMM bar 240 → 236 (drop_4/outro). All 24 attribute changes (8 per correction × 3) successful.
+- V18: Sam-edited truth file (Sam added intro→Break/Build splits on 4 tracks, moved Marco drop_1 from 40 → 36, kept Savana / Renegades / Sapian identical to V17).
+- V19: arrangement via new `arrange_sections.py` — recomputed natural-fill positions using V18 chops, shifted Marco/Crusy/Sapian +16 beats to track Marco's drop_1 move. Tracks 1-7 unchanged.
+
+**Completed: pipeline LOCK-IN across 5 surfaces.**
+1. `~/.claude/commands/section-detection.md` — added "Status — LOCKED IN (2026-05-20)" header, 8-PNG default explicit, `arrange_sections.py` added to tools table.
+2. Codex Brain mirror.
+3. Antigravity Brain mirror.
+4. `Documentation/AI_CONTEXT.md` — Current State leads with "Sections V19 — chopping pipeline LOCKED IN", new Key Decision documenting 5 canonical script steps.
+5. `.github/copilot-instructions.md` — replaced V13-era blurb with full LOCKED IN workflow.
+
+**Completed: Sam's V20 reveals arrangement principle.**
+V20 (Sam-built) introduces basic mixes with loops but no automation. Reduced overlaps from 44-104 bars (V19) to 15-47 bars. Added looping clips (Adam Ten 16→29 clips, Capriati 12→13, Renegades 11→13, Route 94 6→10, EMM 10→13). Sam's correction of my framing: "the chops are the lineup points." Each transition has 2-3 alignment moments: **entry** (incoming intro START at outgoing chop), **bass swap** (chop coincidence on both tracks — natural swap without automation), **exit** (outgoing end at incoming chop). **Loops are mechanical glue** to fill gaps when a section's native length is shorter than the moment-to-moment span.
+
+V20 transitions analysed: Adam Ten → Savana (2-chop, looped Adam Ten kick stinger), Crusy → Sapian (3-chop including natural bass swap, no loops), Capriati intro restarted to extend 24→36 bars, Renegades intro looped 4-bar × 3, Route 94 skips source bar 0 starts at bar 4 then loops 4-bar × 4, EMM heavy multi-loop 16→40 bars, Sapian dropped outro.
+
+**Planned: `/arrange-mix` skill + Mix Patterns Library — full plan in `Documentation/TODO_ARRANGE_MIX.md`.**
+Cross-project learning library at `Documentation/Mix Patterns Library/` (in this repo). Similarity matching by BPM + section structure shape. Learns from rejections (records both Claude's pick AND Sam's correction). Auto-detects Sam edits on every invocation. V20's 9 transitions to be extracted as initial training data tomorrow.
+
+**Key Learnings**:
+- The algorithm has a ceiling. Visual validation by Claude IS the deliverable, not algorithm refinement. After 4 iterations (V13→V16) only 1 of 4 errors was fixed by algorithm tuning. The other 3 fixed by direct `apply_section_corrections.py` patching in seconds.
+- V14/V15 failures proved that "raise the threshold" approach is non-convex — fixing one track breaks another. Targeted new fixes (Fix G) beat generic threshold tuning.
+- **The chops are the lineup points** — Sam's framing. Bars/beats are the wrong unit; chop-to-chop alignment is the right unit. Loops aren't a creative choice, they're consequences of which chops you pick to align.
+- The 8-PNG zoom (vs 4-PNG default) reliably catches 1-2 bar fills the 4-PNG zoom missed. Don't reduce zoom back to 4 without revalidating.
+- "Matches V7" is V7-diffing dressed as validation — `sections_compare_viz.py` is now explicitly forbidden by the skill.
+
+**Files changed**:
+- Source/ (new): `apply_section_corrections.py`, `arrange_sections.py`, `extract_sections_als.py`, `diff_sections.py`, `sections_blind_viz.py`, `sections_compare_viz.py`
+- Source/automated_dj_mixes/ (modified): `orchestrator.py` (version counter fix, --sections-layout already existed), `phrase_viz.py` (added Fix G `_absorb_short_segments_before_outro`)
+- Documentation/ (modified): `AI_CONTEXT.md` (locked-in note, current state, what's next), (new): `TODO_ARRANGE_MIX.md` (tomorrow's plan)
+- ~/.claude/commands/ (new): `section-detection.md`. (Modified): `mix.md` (un-skippable validation note added earlier in session)
+- Codex Brain / Antigravity Brain: `commands/section-detection.md` (new mirrors), `AGENTS.md` / `GEMINI.md` (auto-fire trigger sections + Available Skills row added)
+- Claude Code Brain `CLAUDE.md` (auto-fire section added)
+- `.github/copilot-instructions.md` (locked-in `/section-detection` + skill trigger)
+
+### 2026-05-19 — `/mix` skill + `last_bass_drop` + desktop automation
 
 **Focus**: Three major architectural changes, plus an attempted refactor that was reverted.
 
@@ -260,8 +311,9 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
-1. **Sam to listen to V46 in Ableton** — verify (a) off-by-one beat issue resolved by `first_downbeat_offset` fix, (b) Sapian (T5) bass placement at 45s OK or needs hint adjustment, (c) per-track phrase alignment feels right musically.
-2. **Refine hints from listening pass** — any track where Sam disagrees with the picked bass_entry/break/outro, edit `Test Project/.../Hints/track_hints.json` and re-run. Hints persist across mixes.
+1. **`/arrange-mix` skill + Mix Patterns Library (PRIORITY, start tomorrow 2026-05-21)** — full plan in `Documentation/TODO_ARRANGE_MIX.md`. Sam taught the principle via V20: chops are lineup points; each transition has 2-3 alignment moments (entry, optional bass-swap, exit); loops fill gaps. Library lives at `Documentation/Mix Patterns Library/` (in this repo, cross-project). Similarity matching by BPM + section structure shape. Learns from rejections (record Claude's pick AND Sam's correction). Auto-detects edits on every invocation. Initial training data: V20's 9 transitions extracted as `source: sam_v20_initial` baseline.
+2. **Sam to listen to V46 in Ableton** — verify (a) off-by-one beat issue resolved by `first_downbeat_offset` fix, (b) Sapian (T5) bass placement at 45s OK or needs hint adjustment, (c) per-track phrase alignment feels right musically.
+3. **Refine hints from listening pass** — any track where Sam disagrees with the picked bass_entry/break/outro, edit `Test Project/.../Hints/track_hints.json` and re-run. Hints persist across mixes.
 3. **Expand template** — current template fits 11 tracks, need 12+ support (still pending from 2026-05-17).
 4. **Consider per-genre `prefer_grid`** in `PhraseGrid` — house/techno @ 16-beat preferred (current default works), DnB @ 8, trance @ 32. Could derive from BPM heuristic or RB metadata.
 5. **Hint cache by audio hash** — once a track is hinted, the hint should persist across mixes regardless of project. Currently keyed by filename in track_hints.json — works but fragile if filenames change.
@@ -311,6 +363,7 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 - **Tiered phrase grid in viz with bar labels** — Bar lines weighted by phrase importance: bar (4-beat) faint, 2-bar medium, 4-bar phrase dark+labelled, 16-bar section bold+labelled. Off-phrase automation should be visually obvious. (Sam-prompted, 2026-05-18: "how did you not spot these in the visual?")
 - **Numerical validation is necessary but NOT sufficient** — `validate_mix` ALL-PASS doesn't mean the mix is right. The visual review gate is the only thing that verifies picks land on the right musical moments. AI_CONTEXT.md REQUIRED section + orchestrator's `VISUAL REVIEW REQUIRED` block + per-mix `REVIEW_VNN.md` template enforce this. (Sam, 2026-05-18)
 - **`/mix` skill is the canonical production path** — never invoke the orchestrator directly for new mixes. The skill (in `~/.claude/commands/mix.md` and the Codex/Antigravity Brain mirrors) walks Claude through validate → desktop analysis → previews-only → **visual pass + write hints** → full pipeline → visual review. The orchestrator enforces a hint gate: it refuses to plan transitions if any track is missing a complete entry in `Hints/track_hints.json` (every track needs `first_drop_sec`, `first_break_sec`, `outro_start_sec` with exact filename keys including extension). `--previews-only` bypasses the gate (previews are how hints get authored). `--no-hints-required` bypasses the gate for development/debugging only. This was added 2026-05-19 because Claude kept forgetting the visual-pass-first rule even though it was documented above. The gate makes it structural rather than memory-dependent. (Sam, 2026-05-19)
+- **`/section-detection` pipeline LOCKED IN — algorithm + Claude corrections = finished sections .als (2026-05-20)** — validated end-to-end on Black Book x Defected V2 (V13 → V19). The canonical chopping pipeline is now: (1) `orchestrator.py --sections-layout` for the programmatic pass, (2) `extract_sections_als.py` → JSON, (3) `sections_blind_viz.py` to render **8 quarter PNGs per track** (NOT 4 — 4 missed 1-2 bar fills), (4) Claude reads every PNG and fills `BLIND_VALIDATION_V<N>.md` per-chop table (hard self-check: chop count must equal row count), (5) for `⚠ off N` errors, edit `apply_section_corrections.py` CORRECTIONS list and patch the .als directly. Algorithm tuning is limited to ONE round per project — beyond that, accept and correct manually. `sections_compare_viz.py` exists in the codebase but is FORBIDDEN by the skill (V7-diff trap). Arrangement positioning (`arrange_sections.py`) is the next step AFTER chops are locked, using natural-fill alignment (incoming.drop_1 aligned to outgoing's last fill/break before outro). Skill auto-fires on triggers like "section detection", "Sections V<N>", `phrase_viz.py`, paths under `Sections Review/` etc. — Sam shouldn't have to type the slash command. (Sam, 2026-05-20)
 
 ## Connections
 

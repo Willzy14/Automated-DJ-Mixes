@@ -130,6 +130,55 @@
   "connections": ["Social Media Content Engine", "samwillsmixing.com"],
   "sessions": [
     {
+      "date": "2026-05-20",
+      "focus": "Section-detection pipeline LOCKED IN (V13→V19) + arrangement principle from Sam's V20 + /arrange-mix planned",
+      "outputs": [
+        "Sections V13.als through V19.als (Black Book V2 — locked-in chops + first arrangement pass)",
+        "BLIND_VALIDATION_V13.md (107-row per-chop verdict table)",
+        "TUNING_NOTES_V14.md, TUNING_NOTES_V16.md (algorithm tuning round documentation)",
+        "VISUAL_PASS_V12_VERDICT.md + VISUAL_PASS_V12_BLIND.md (initial visual-pass diff vs blind)",
+        "~/.claude/commands/section-detection.md (+ Codex + Antigravity mirrors)",
+        "Documentation/TODO_ARRANGE_MIX.md (tomorrow's pickup plan)"
+      ],
+      "modules_added": [
+        "Source/extract_sections_als.py (parse .als clip boundaries to JSON)",
+        "Source/diff_sections.py (JSON diff between section versions)",
+        "Source/sections_blind_viz.py (8-quarter blind PNG renderer, default 8 since 4 missed 1-bar fills)",
+        "Source/sections_compare_viz.py (V<N> vs V7 comparison — FORBIDDEN by skill but kept for ad-hoc diagnostic)",
+        "Source/apply_section_corrections.py (patches .als chop boundaries via XML — 8 attributes per correction)",
+        "Source/arrange_sections.py (repositions tracks by shifting all clips; natural-fill alignment computed from sections)"
+      ],
+      "modules_modified": [
+        "Source/automated_dj_mixes/orchestrator.py (version counter fix for V<N>.als matching; --sections-layout already existed)",
+        "Source/automated_dj_mixes/phrase_viz.py (added Fix G `_absorb_short_segments_before_outro` — catches Marco-style spurious fill+drop+outro chains)"
+      ],
+      "key_fixes": [
+        "Fix G works on STRUCTURE not bass thresholds (V14/V15 thresholds proved non-convex — fixing one track broke another)",
+        "8-PNG zoom default catches 1-2 bar fills 4-PNG missed",
+        "Direct .als XML patching for chop corrections faster than algorithm tuning (V17 fixed 3 errors in seconds, V14/V15 failed to fix any)",
+        "Pipeline LOCKED IN across 5 surfaces: skill (+2 mirrors) + AI_CONTEXT + copilot-instructions"
+      ],
+      "reverted": [
+        "V15 attempt — `mean()` instead of `all()` in Fix C plus walk-back logic — regressed Savana and Sapian outros. Reverted all changes back to V13 baseline + Fix G."
+      ],
+      "validation": "V19 = V18 chops (Sam's truth) + recomputed natural-fill arrangement. Last 3 tracks (Marco, Crusy, Sapian) shifted +16 beats to track Sam's Marco drop_1 edit (bar 40→36 in V18). All other tracks unchanged from V18 positions. V20 (Sam-built basic mix with loops) introduces the next-phase arrangement principle.",
+      "key_learnings": [
+        "Algorithm has a ceiling — visual validation by Claude IS the deliverable, not algorithm refinement",
+        "The chops are the lineup points (Sam's framing) — 2-3 alignment moments per transition (entry / optional bass-swap / exit); loops are mechanical glue, not creative choices",
+        "Anti-patterns explicitly documented and forbidden: matches-V7 framing, X/Y near perfect without evidence, reading some PNGs and extrapolating",
+        "sections_compare_viz.py FORBIDDEN by skill (V7-diff trap) — exists in codebase for ad-hoc diagnostic only"
+      ],
+      "open_items": [
+        "Tomorrow: extract V20's 9 transitions as initial Mix Patterns Library training data",
+        "Tomorrow: build /arrange-mix skill (PROPOSE + auto-detect LEARN modes) + arrange-mix code (apply_loops.py, match_patterns.py, propose_arrangement.py, learn_from_correction.py)",
+        "Library location: Documentation/Mix Patterns Library/ (in this repo, cross-project)",
+        "Similarity matching: BPM + section structure shape (Sam's choice)",
+        "Learn from rejections: yes (record Claude's pick AND Sam's correction)",
+        "Auto-detect Sam edits on every invocation: yes",
+        "Test by re-running on Black Book V18 → see how close my V20-pattern-driven proposal gets"
+      ]
+    },
+    {
       "date": "2026-05-19 (later)",
       "focus": "/mix skill + last_bass_drop alignment + desktop automation for MIK+RB",
       "outputs": [

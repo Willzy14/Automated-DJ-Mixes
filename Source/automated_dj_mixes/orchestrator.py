@@ -119,6 +119,7 @@ def run_pipeline(
     skip_desktop_analyze: bool = False,
     previews_only: bool = False,
     no_hints_required: bool = False,
+    sections_layout: bool = False,
 ) -> Path | None:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
@@ -233,9 +234,11 @@ def run_pipeline(
         return None
 
     # Production gate — refuse to plan transitions if hints are missing or
-    # incomplete. Bypass with --no-hints-required. The /mix skill is the
-    # canonical production path that authors hints before reaching this gate.
-    if not no_hints_required:
+    # incomplete. Bypass with --no-hints-required, --previews-only, or
+    # --sections-layout (the last two don't plan transitions at all). The
+    # /mix skill is the canonical production path that authors hints before
+    # reaching this gate.
+    if not no_hints_required and not sections_layout:
         hint_errors = _validate_hints(input_dir, track_hints_data)
         if hint_errors:
             err_block = "\n".join(f"  - {e}" for e in hint_errors)
@@ -286,6 +289,135 @@ def run_pipeline(
         print(f"  {a.path.name}: {mode_name}, {warp_src}")
     if rb_warp_count:
         print(f"  Beat grid warp: {rb_warp_count}/{len(ordered_analyses)} tracks using Rekordbox grid")
+
+    # === SECTIONS LAYOUT MODE ===
+    # Sam's 2026-05-19 request: lay tracks in mix order with colour-coded
+    # sections so the mix structure is visible at a glance. No automation.
+    #   intro → green   build → cyan   break → blue   drop → yellow
+    #   fill (short low-energy / middle-8s) → orange   outro → red
+    #
+    # 2026-05-19 update — V2 layout: position each incoming so its first
+    # `drop` segment aligns with the outgoing's last `fill`/`break` before
+    # outro (the natural bass-drop moment). Section cuts should visually
+    # line up across the seam.
+    if sections_layout:
+        print("SECTIONS LAYOUT MODE — natural-fill aligned, section colour-code, no automation")
+        INTERVAL_BARS = 8
+        patches = []
+        # Per-track: (analysis, markers, mode, segments, total_beats)
+        track_data = []
+        for i, (analysis, markers, mode) in enumerate(
+            zip(ordered_analyses, warp_markers_all, warp_modes)
+        ):
+            total_beats = markers[-1].beat_time if markers else 0.0
+            rb_match = rb_matches.get(str(analysis.path))
+            segments = None
+            features = None
+            if rb_match:
+                offset = getattr(rb_match, "first_downbeat_offset", 0)
+                ext_path = Path(rb_match.ext_path) if rb_match.ext_path else None
+                try:
+                    features = extract_track_features(
+                        audio_path=analysis.path,
+                        bpm=rb_match.bpm or analysis.bpm,
+                        beat_times_ms=rb_match.beat_times_ms,
+                        first_downbeat_offset=offset,
+                        ext_path=ext_path,
+                    )
+                    intervals = build_intervals(rb_match, features, interval_bars=INTERVAL_BARS)
+                    segments = segments_from_intervals(intervals)
+                    # 2026-05-19: refine with per-beat data — split intro
+                    # build-zones, find 1-4 bar fills inside drops.
+                    from automated_dj_mixes.phrase_viz import refine_segments, validate_bar_math
+                    segments = refine_segments(segments, features)
+                    # Bar-math validation — print warnings for any chop whose
+                    # delta from previous chop isn't on a 4-bar grid (Sam's
+                    # rule: every event should land at 4/8/12/16/24/32/...).
+                    for w in validate_bar_math(segments, analysis.path.stem[:40]):
+                        print(f"  BAR-MATH: {w}")
+                except Exception as e:
+                    print(f"  WARNING: section analysis failed for {analysis.path.name}: {e}")
+            else:
+                print(f"  WARNING: no Rekordbox data for {analysis.path.name} — single uncoloured clip")
+            track_data.append((analysis, markers, mode, segments, total_beats))
+
+        # Compute arrangement positions using natural-fill alignment.
+        def first_drop_source(segs):
+            return next((s.source_start_beats for s in segs if s.label == "drop"), 0.0)
+
+        def last_natural_swap_source(segs, total_beats):
+            """Outgoing's natural bass-drop point: the LAST fill or break
+            before the outro. Falls back to outro start, then 75% of total."""
+            outro_idx = next((i for i, s in enumerate(segs) if s.label == "outro"), len(segs))
+            for s in reversed(segs[:outro_idx]):
+                if s.label in ("fill", "break"):
+                    return s.source_start_beats
+            if outro_idx < len(segs):
+                return segs[outro_idx].source_start_beats
+            return total_beats * 0.75
+
+        cumulative_arr = 0.0
+        for i, (analysis, markers, mode, segments, total_beats) in enumerate(track_data):
+            if i == 0:
+                arr_start = 0.0
+            else:
+                prev_analysis, prev_markers, prev_mode, prev_segs, prev_total = track_data[i - 1]
+                prev_arr_start = patches[-1].arrangement_start_beats
+                if prev_segs and segments:
+                    swap_src = last_natural_swap_source(prev_segs, prev_total)
+                    drop_src = first_drop_source(segments)
+                    arr_start = prev_arr_start + swap_src - drop_src
+                else:
+                    arr_start = prev_arr_start + prev_total
+                # Clamp to ≥ prev_arr_start (no negative overlap with rewinding)
+                arr_start = max(arr_start, prev_arr_start)
+
+            if segments:
+                label_counts: dict[str, int] = {}
+                for s in segments:
+                    label_counts[s.label] = label_counts.get(s.label, 0) + 1
+                counts_str = " ".join(f"{k}:{v}" for k, v in label_counts.items())
+                first_drop = first_drop_source(segments)
+                print(f"  {i+1}. {analysis.path.name[:60]} @ arr-beat {arr_start:.0f}  drop_1@src {first_drop:.0f}  [{counts_str}]")
+            else:
+                print(f"  {i+1}. {analysis.path.name[:60]} @ arr-beat {arr_start:.0f}  [no sections — full clip]")
+
+            patches.append(TrackPatch(
+                analysis=analysis,
+                track_index=i,
+                warp_markers=markers,
+                gain_offset_db=0.0,
+                arrangement_start_beats=arr_start,
+                warp_mode=mode,
+                phrase_segments=segments,
+            ))
+
+        # Single tempo point — sections layout is a visual reference, no per-track ramps.
+        tempo_points = [AutomationPoint(time_beats=0, value=project_bpm)]
+
+        template_path = _find_template(project_root)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        # Find max existing Sections V<N> in both root and *Project subfolders
+        # (Sam saves manual edits as "Sections V<N> ... Project/<name>.als").
+        existing_versions: list[int] = []
+        for p in list(output_dir.glob("Sections V*.als")) + list(output_dir.glob("Sections V* Project/*.als")):
+            for part in p.stem.split():
+                if part.startswith("V") and part[1:].isdigit():
+                    existing_versions.append(int(part[1:]))
+                    break
+        version = max(existing_versions, default=0) + 1
+        output_path = output_dir / f"Sections V{version}.als"
+        print(f"Generating {output_path}...")
+        result = generate_session(
+            template_path=template_path,
+            patches=patches,
+            output_path=output_path,
+            project_bpm=project_bpm,
+            transition_automation=None,
+            tempo_automation=tempo_points,
+        )
+        print(f"Done: {result}")
+        return result
 
     # === VISUALIZATION MODE ===
     # Each track starts at arrangement beat 0 (stacked on separate Ableton
@@ -885,6 +1017,11 @@ def main():
                         help="Allow the pipeline to run without complete visual hints. "
                              "Production runs require hints (gated by /mix skill); use this "
                              "flag for debugging only.")
+    parser.add_argument("--sections-layout", action="store_true",
+                        help="Sections-layout mode: lay tracks SEQUENTIALLY in mix order, "
+                             "colour-code each section by type (intro=green, break=blue, "
+                             "drop=yellow, outro=red, fill=orange). No transitions, no "
+                             "automation, no hints required. Output is 'Sections V<N>.als'.")
     args = parser.parse_args()
 
     als_path = run_pipeline(
@@ -895,6 +1032,7 @@ def main():
         skip_desktop_analyze=args.skip_desktop_analyze,
         previews_only=args.previews_only,
         no_hints_required=args.no_hints_required,
+        sections_layout=args.sections_layout,
     )
     if als_path is not None:
         print(f"Generated: {als_path}")

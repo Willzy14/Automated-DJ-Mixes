@@ -3,7 +3,7 @@
 ## Project Overview
 Automated DJ mix pipeline for Wired Masters showreels. Takes pre-tagged dance tracks and produces a ready-to-review Ableton Live 12 session via template-based ALS XML patching. Multi-signal cue candidate detection feeds bass-to-bass transition planning.
 
-## Current Project Status (2026-05-19)
+## Current Project Status (2026-05-20)
 
 | Component | Status |
 |---|---|
@@ -30,8 +30,13 @@ Automated DJ mix pipeline for Wired Masters showreels. Takes pre-tagged dance tr
 | `ABLETON_INTERACTION.md` portable reference doc | ✅ (2026-05-19) |
 | Sapian (T5) bass placement | ⚠️ may need hint adjustment after listen |
 | Off-by-one beat verification in Ableton | ⚠️ pending Sam's listen on V13 |
+| `/section-detection` skill — algorithm + Claude corrections = finished sections .als | ✅ LOCKED IN (2026-05-20) |
+| `apply_section_corrections.py` — patch chop boundaries directly via XML | ✅ (2026-05-20) |
+| `arrange_sections.py` — reposition tracks via natural-fill alignment | ✅ (2026-05-20) |
+| 8-quarter blind PNG renderer (`sections_blind_viz.py`) | ✅ (2026-05-20) |
+| `/arrange-mix` skill + Mix Patterns Library | ⏳ planned next session (see `Documentation/TODO_ARRANGE_MIX.md`) |
 
-**Latest outputs**: Mix V13 (via `/mix` workflow with `last_bass_drop` anchoring; ALL PASS)
+**Latest outputs**: Sections V19 (section-detection LOCKED IN + arrangement); Sam-built V20 (basic mixes with loops, no automation) is the next-phase teaching example for /arrange-mix.
 **Analysis model version**: `cue-candidates-v1`
 **Production entry point**: `/mix <project-path>` — never `python -m automated_dj_mixes.orchestrator` for new mixes
 
@@ -47,9 +52,11 @@ Automated DJ mix pipeline for Wired Masters showreels. Takes pre-tagged dance tr
 - **PhraseGrid two-grid pattern (per-track)** — outgoing_grid snaps incoming_start; incoming_grid snaps bass_swap. The cascade preserves alignment across the whole mix. Don't snap to global beat 0 — Sam explicitly clarified per-track.
 - **Visual review gate** — pipeline MUST print VISUAL REVIEW REQUIRED block + write REVIEW_VNN.md template at end. AI_CONTEXT.md REQUIRED section enforces this; don't remove without Sam's call.
 - **`/mix` is the canonical production path** (2026-05-19) — never invoke `orchestrator.py` directly for new mixes. Use `/mix <project>` which forces the visual-pass-first workflow. Orchestrator now gates on a complete `Hints/track_hints.json` (every track needs `first_drop_sec`, `first_break_sec`, `outro_start_sec` with exact filename keys); only `--previews-only` (bypasses for preview generation) and `--no-hints-required` (debug only) skip the gate. Mirrors exist in Codex Brain / Antigravity Brain command folders.
+- **`/section-detection` pipeline LOCKED IN — algorithm + Claude corrections = finished sections .als** (2026-05-20) — auto-fires when user mentions section detection, Sections V<N>, `phrase_viz.py`, `refine_segments`, paths under `Sections Review/`, etc. Canonical chopping pipeline validated on Black Book x Defected V2 (V13 → V19). Order: (1) `orchestrator.py --sections-layout` for algorithm pass, (2) `extract_sections_als.py` → JSON, (3) `sections_blind_viz.py` renders **8 quarter PNGs per track** (NOT 4 — 4 missed 1-2 bar fills), (4) Claude reads every PNG and fills `BLIND_VALIDATION_V<N>.md` table with PNG inspected / energy-step-seen-at-bar / match verdict / specific observation (HARD self-check: chop count must equal row count), (5) for `⚠ off N` errors, edit `apply_section_corrections.py` CORRECTIONS list and patch the .als directly. Algorithm tuning capped at ONE round per project; beyond that, manual correction only. `sections_compare_viz.py` FORBIDDEN (V7-diff trap). Stop condition: zero `⚠ off N` entries remain. Arrangement step (`arrange_sections.py`) is SEPARATE and runs AFTER chops are locked, using natural-fill alignment. Skill lives at `~/.claude/commands/section-detection.md` mirrored to Codex Brain / Antigravity Brain. Brain-level auto-fire instruction in each brain's CLAUDE.md / AGENTS.md / GEMINI.md.
 
 ## Next Priority
-1. Sam to listen to **Mix V13** (Black Book x Defected V2) in Ableton — verify `last_bass_drop` anchoring gives clean musical swaps. T1 (Adam Ten → Chris Lake Savana) is the canary; Sam's manual mix at the natural fill was much cleaner than earlier algorithm picks.
+1. **`/arrange-mix` skill + Mix Patterns Library (PRIORITY, start next session)** — full plan in `Documentation/TODO_ARRANGE_MIX.md`. Library lives at `Documentation/Mix Patterns Library/` (in this repo, cross-project). Similarity matching by BPM + section structure shape. Learns from rejections. Auto-detects Sam edits. V20's 9 transitions are the initial training data. Don't touch the locked-in section-detection pipeline.
+2. Sam to listen to **Mix V13** (Black Book x Defected V2) in Ableton — verify `last_bass_drop` anchoring gives clean musical swaps. T1 (Adam Ten → Chris Lake Savana) is the canary; Sam's manual mix at the natural fill was much cleaner than earlier algorithm picks.
 2. Refine `last_bass_drop_sec` and `first_drop_sec` per track from listening — current values are coarse visual estimates from preview PNGs. Edit `Test Project/Black Book x Defected V2/Hints/track_hints.json` and re-run via `/mix`.
 3. End-to-end test of `desktop_analyzer.py` on a fresh project with NO prior MIK/RB analysis (current V2 was already analyzed; full UI driving path hasn't been validated end-to-end).
 4. Mirror `/mix` skill to Wren protocols (`~/.hermes/reference/ai_brain_protocols.md`) — skipped this session because the path doesn't exist on this machine.
