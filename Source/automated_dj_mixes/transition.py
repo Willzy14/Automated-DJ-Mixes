@@ -118,6 +118,9 @@ def _score_loop_interval(iv: Interval) -> float:
       - low waveform_height (Rekordbox PWV5 — quieter, simpler content)
       - low bass_librosa (drums-only sections often have transient bass only)
       - rb_label is outro or down (stripped phrases), not chorus
+
+    Score < MIN_LOOP_QUALITY means content is too sparse to loop
+    (e.g. a dissipating hi-hat in the last few seconds of a track).
     """
     height = iv.energy.waveform_height if iv.energy.waveform_height is not None else 0.5
     bass = iv.energy.bass_librosa
@@ -133,6 +136,9 @@ def _score_loop_interval(iv: Interval) -> float:
     return score
 
 
+MIN_LOOP_QUALITY = 0.20
+
+
 def find_loop_region(
     chop_at_beats: float,
     total_beats: float,
@@ -144,6 +150,7 @@ def find_loop_region(
     first_downbeat_sec: float = 0.0,
     role: str = "outgoing",
     audio_path=None,
+    hint_loop_source_beat: float | None = None,
 ) -> tuple[float, float, str]:
     """Find a stripped-percussion loop region from the front (intro) or
     back (outro) of the track — never from the middle.
@@ -232,7 +239,10 @@ def find_loop_region(
                 best = min(pool, key=_score_loop_interval)
                 start, end = clamp(float(best.source_start_beats))
                 score = _score_loop_interval(best)
-                return start, end, f"rb_outro_interval_idx={best.index}_score={score:.2f}"
+                if score < MIN_LOOP_QUALITY:
+                    print(f"    Loop outro rejected (score {score:.2f} < {MIN_LOOP_QUALITY}) — falling back to intro")
+                else:
+                    return start, end, f"rb_outro_interval_idx={best.index}_score={score:.2f}"
 
         # Path B: MIK lowest-energy segment AT or after the chop position.
         # This is the stripped percussion region — past where we'd normally
@@ -294,10 +304,26 @@ def find_loop_region(
 
         return None
 
+    def try_hinted() -> tuple[float, float, str] | None:
+        if hint_loop_source_beat is None:
+            return None
+        start = float(round(hint_loop_source_beat / 4) * 4)
+        start, end = clamp(start)
+        if intervals:
+            matching = [iv for iv in intervals
+                        if iv.source_start_beats <= start < iv.source_end_beats]
+            if matching:
+                score = _score_loop_interval(matching[0])
+                if score < MIN_LOOP_QUALITY:
+                    print(f"    Hinted loop at beat {start:.0f} rejected (score {score:.2f} < {MIN_LOOP_QUALITY})")
+                    return None
+                return start, end, f"hint_loop@{start:.0f}_score={score:.2f}"
+        return start, end, f"hint_loop@{start:.0f}"
+
     if role == "incoming":
-        result = try_intro() or try_outro()
+        result = try_hinted() or try_intro() or try_outro()
     else:
-        result = try_outro() or try_intro()
+        result = try_hinted() or try_outro() or try_intro()
 
     if result is not None:
         # Dead-air refinement: shift the chosen region to a clean groove
@@ -397,6 +423,7 @@ def plan_transition(
     incoming_candidates: list[CueCandidate] | None = None,
     outgoing_intervals: list[Interval] | None = None,
     outgoing_mik_energy_segments: list | None = None,
+    outgoing_hint_loop_source_beat: float | None = None,
 ) -> TransitionSpec:
     log: list[str] = []
 
@@ -631,6 +658,7 @@ def plan_transition(
         bpm=outgoing.bpm,
         first_downbeat_sec=outgoing.first_downbeat_sec or 0.0,
         audio_path=outgoing.path,
+        hint_loop_source_beat=outgoing_hint_loop_source_beat,
     )
     loop_source_start = snap(raw_loop_start)
     loop_source_end = snap(raw_loop_end)

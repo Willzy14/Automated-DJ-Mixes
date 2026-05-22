@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 from automated_dj_mixes.config import load_config
 from automated_dj_mixes.analysis import analyse_folder, enrich_from_rekordbox
-from automated_dj_mixes.sequencer import build_harmonic_path
+from automated_dj_mixes.sequencer import build_harmonic_path, key_to_camelot, apply_energy_arc
 from automated_dj_mixes.warping import calculate_warp_markers, calculate_warp_markers_from_beat_grid, choose_warp_mode
 from automated_dj_mixes.automation import calculate_gain_offsets, AutomationPoint
 from automated_dj_mixes.als_generator import TrackPatch, generate_session
@@ -30,13 +31,32 @@ from automated_dj_mixes.validation import validate_mix
 from automated_dj_mixes.waveform_preview import PreviewContext, render_preview
 
 
-def _find_template(project_root: Path) -> Path:
-    """Find the most recently modified ALS template (searches subfolders too)."""
+def _count_audio_tracks(als_path: Path) -> int:
+    """Count <AudioTrack elements in a gzipped ALS file."""
+    import gzip
+    try:
+        data = gzip.open(str(als_path)).read().decode("utf-8", errors="replace")
+        return data.count("<AudioTrack ")
+    except Exception:
+        return 0
+
+
+def _find_template(project_root: Path, min_tracks: int = 0) -> Path:
+    """Find the best ALS template. Prefers the template with the most audio
+    tracks (so a 35-track template beats a 12-track one regardless of
+    modification date). Falls back to most-recently-modified if track counts
+    are equal.
+    """
     templates_dir = project_root / "Templates"
     als_files = list(templates_dir.rglob("*.als"))
     if not als_files:
         raise FileNotFoundError(f"No .als template found in {templates_dir}")
-    return max(als_files, key=lambda p: p.stat().st_mtime)
+    scored = [(p, _count_audio_tracks(p)) for p in als_files]
+    scored.sort(key=lambda x: (x[1], x[0].stat().st_mtime), reverse=True)
+    chosen, count = scored[0]
+    if min_tracks and count < min_tracks:
+        print(f"  WARNING: template {chosen.name} has {count} audio tracks but mix needs {min_tracks}")
+    return chosen
 
 
 def _next_version(output_dir: Path, prefix: str = "V") -> int:
@@ -126,6 +146,30 @@ def run_pipeline(
 
     config = load_config(config_path or project_root / "Config" / "settings.json")
 
+    # ------------------------------------------------------------------
+    # Master-file gate — refuse to feed stems, freezes, or raw audio into
+    # the pipeline.  Only mastered WAVs belong here:
+    #   • "24 Bit MASTER" (with optional AMENDED / AMENDED V2 etc.)
+    #   • "SW V1", "SW V2", … (Sam Wills stem-master renders)
+    # Anything else (stems, freezes, pre-masters, bounces) is rejected
+    # hard so MIK / Rekordbox never see them.
+    # ------------------------------------------------------------------
+    _MASTER_PATTERN = re.compile(
+        r"(24\s*Bit\s*MASTER|SW\s+V\d+)",
+        re.IGNORECASE,
+    )
+    audio_wavs = sorted(input_dir.glob("*.wav"))
+    non_masters = [p.name for p in audio_wavs if not _MASTER_PATTERN.search(p.stem)]
+    if non_masters:
+        raise ValueError(
+            f"\nAudio folder contains {len(non_masters)} non-master file(s):\n"
+            + "\n".join(f"  - {n}" for n in non_masters) + "\n\n"
+            "Only mastered WAVs are allowed (filename must contain '24 Bit MASTER' or 'SW V<N>').\n"
+            "Remove stems, freezes, and pre-masters from Audio/ before running the pipeline."
+        )
+    if audio_wavs:
+        print(f"Master-file gate: {len(audio_wavs)} WAVs, all verified as masters OK")
+
     # Drive MIK + Rekordbox desktop apps to analyze any tracks they haven't
     # seen yet. Skips quickly when everything is already analyzed.
     if not skip_desktop_analyze:
@@ -164,20 +208,33 @@ def run_pipeline(
     except Exception as e:
         print(f"  Rekordbox unavailable ({e}), using librosa analysis only")
 
-    # Enrich with Mixed In Key 11 cue points (highest-confidence structural
-    # signal). Falls back silently if MIK hasn't been run on a track.
+    # Enrich with Mixed In Key 11 data — cue points (highest-confidence
+    # structural signal) AND key/BPM from the MIK SQLite DB (critical for
+    # WAV files that have no ID3 tags). Falls back silently if MIK hasn't
+    # been run on a track.
     mik_data: dict[str, object] = {}   # track path → MikTrackData
     mik_count = 0
-    print("Reading Mixed In Key 11 cue points...")
+    mik_key_count = 0
+    print("Reading Mixed In Key 11 data (cues + key/BPM from DB)...")
     for a in analyses:
         try:
             mik = enrich_from_mik(a.path)
             if mik.cues:
                 mik_data[str(a.path)] = mik
                 mik_count += 1
+            elif mik.key or mik.bpm:
+                mik_data[str(a.path)] = mik
+            if mik.key and not a.key:
+                a.key = mik.key
+                a.camelot = key_to_camelot(mik.key)
+                mik_key_count += 1
+            if mik.bpm and not a.bpm:
+                a.bpm = mik.bpm
         except Exception:
             pass
     print(f"  Mixed In Key: {mik_count}/{len(analyses)} tracks have auto-cue points")
+    if mik_key_count:
+        print(f"  Mixed In Key: {mik_key_count}/{len(analyses)} tracks got key from MIK DB (WAV enrichment)")
 
     # Visual hints — human (or Claude) broad-strokes reading of each track's
     # waveform. Highest-confidence cue source: when a track has a hint, the
@@ -211,13 +268,21 @@ def run_pipeline(
         project_bpm = sorted_bpms[len(sorted_bpms) // 2]
         print(f"Project BPM (median, no mode): {project_bpm}")
 
-    print("Sequencing by Camelot wheel...")
-    track_dicts = [{"camelot": a.camelot or "1A", "analysis": a} for a in analyses]
+    print("Sequencing by Camelot wheel + BPM proximity...")
+    track_dicts = [{"camelot": a.camelot or "1A", "bpm": a.bpm, "analysis": a} for a in analyses]
     sequenced = build_harmonic_path(track_dicts)
+
+    # Energy arc post-pass: reorder within build/peak/cooldown thirds
+    for td in sequenced:
+        mik = mik_data.get(str(td["analysis"].path))
+        td["energy"] = mik.energy if mik else None
+    sequenced = apply_energy_arc(sequenced)
     ordered_analyses = [t["analysis"] for t in sequenced]
 
     for i, a in enumerate(ordered_analyses):
-        print(f"  {i+1}. {a.path.name} ({a.camelot})")
+        mik = mik_data.get(str(a.path))
+        energy_str = f" E{mik.energy}" if mik and mik.energy is not None else ""
+        print(f"  {i+1}. {a.path.name} ({a.camelot or '?'} | {a.bpm:.0f}BPM{energy_str})")
 
     # Render blank-canvas previews early — these are how visual hints get
     # authored. The --previews-only flag exits here, before transition
@@ -225,7 +290,7 @@ def run_pipeline(
     preview_dir = output_dir / "Visualisations" / "Previews"
     preview_count = _render_previews(ordered_analyses, mik_data, rb_matches, project_bpm, preview_dir)
     if preview_count:
-        print(f"Track previews (for hint authoring): {preview_count}/{len(ordered_analyses)} → {preview_dir}")
+        print(f"Track previews (for hint authoring): {preview_count}/{len(ordered_analyses)} -> {preview_dir}")
 
     if previews_only:
         print("--previews-only: stopping before transition planning.")
@@ -641,6 +706,12 @@ def run_pipeline(
         incoming_total = warp_markers_all[i][-1].beat_time if warp_markers_all[i] else 0
 
         outgoing_mik = mik_data.get(str(outgoing.path))
+        outgoing_hint = track_hints_data.get(outgoing.path.name, {})
+        out_loop_hint_beat = None
+        loop_src_sec = outgoing_hint.get("loop_source_sec")
+        if loop_src_sec and outgoing.bpm:
+            fds = outgoing.first_downbeat_sec or 0.0
+            out_loop_hint_beat = (loop_src_sec - fds) * outgoing.bpm / 60.0
         spec = plan_transition(
             outgoing=outgoing,
             incoming=incoming,
@@ -654,6 +725,7 @@ def run_pipeline(
             incoming_candidates=track_candidates.get(incoming.path.name, []),
             outgoing_intervals=track_intervals.get(outgoing.path.name, []),
             outgoing_mik_energy_segments=outgoing_mik.energy_segments if outgoing_mik else None,
+            outgoing_hint_loop_source_beat=out_loop_hint_beat,
         )
 
         arrangement_positions.append(int(spec.incoming_arrangement_start))

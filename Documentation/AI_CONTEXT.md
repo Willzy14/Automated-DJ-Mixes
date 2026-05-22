@@ -43,10 +43,11 @@ Source/automated_dj_mixes/
 ├── transition_viz.py      — Per-transition PNG (both tracks aligned, automation overlay, tiered phrase grid)
 ├── track_viz.py           — Per-track PNG (full timeline, candidates, loop region, tiered phrase grid)
 ├── waveform_preview.py    — Blank-canvas preview PNG (for writing visual hints before pipeline run)
+├── desktop_analyzer.py    — MIK + Rekordbox desktop UI automation (staging folder, dialog detection)
 └── config.py              — Settings loader
 ```
 
-Pipeline: analysis → Rekordbox enrichment → sequencing → warping → per-beat features (cached) → factual intervals → ranked cue candidates → candidate-driven transition planning → ALS generation → objective validation.
+Pipeline: desktop analysis (MIK + RB) → analysis → Rekordbox enrichment → sequencing → warping → per-beat features (cached) → factual intervals → ranked cue candidates → candidate-driven transition planning → ALS generation → objective validation.
 
 ALS generation is **template-based** — a real Ableton Live 12 session is decompressed, studied, and used as the base. The script patches in tracks, clips, warp markers, automation lanes, and gain offsets. Never builds XML from scratch.
 
@@ -83,7 +84,17 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-**Sections V19 — chopping pipeline LOCKED IN.** End-to-end validated on Black Book x Defected V2: algorithm pass (V13) → Fix G iteration (V16) → 3 manual chop corrections via `apply_section_corrections.py` (V17) → Sam's manual edits (V18) → arrangement repositioning via `arrange_sections.py` (V19). The `/section-detection` skill encodes the workflow with un-skippable blind validation (8 PNGs per track, per-chop verdict table, hard chop-count = row-count check). Arrangement uses natural-fill alignment (incoming.drop_1 aligned to outgoing's last fill/break before outro). **Next phase: arrangement refinement** — Sam to evaluate V19 overlap lengths (longest 100 + 104 bars on Savana→Capriati and Route 94→EMM) and propose per-pair alignment rules.
+**Four-phase mix pipeline now operational: desktop analysis → sections → arrangement → automation. With 11 enforcement layers + Validation Discipline meta-rule baked into the brain.**
+
+**As of 2026-05-22**: 22.05.26 Mix produced V4.als end-to-end. 7 robustness gaps closed, plus 4 more bug classes surfaced during real-world run and fixed live. `/validate` auto-fires before every "done" claim. `validate_als.py` has 4 layers covering the failure modes shipped to date. Sam is rendering V4 to listen on holiday — next session picks up with his listen notes.
+
+0. **Desktop analysis** — WORKING. `desktop_analyzer.py` drives MIK + Rekordbox via Win32 API with auto-detecting folder dialog handlers. Staging folder pattern bridges both dialog types. 10/10 tracks analyzed end-to-end on 2026-05-21.
+
+1. **Section detection** — LOCKED IN. `/section-detection` skill with blind validation. No changes.
+2. **Arrangement** — NEW. `/arrange-mix` skill built this session. `propose_arrangement.py` computes natural-fill alignment with overlap capping (~128 beats target). `apply_loops.py` handles mechanical clip cloning for loop extensions. Tested on V18→V25: all 9 tracks positioned with 124-132 beat overlaps (31-33 bars). Positions within 32-168 beats of Sam's V20 (gap largely from V20's loop extensions not yet added).
+3. **Automation** — V24 analysis complete. `apply_automation.py` has 6 learned rules with two critical bug fixes (priority 2 boundary check + Rule 2 boundary guard). Accuracy: V21 5/9 → V23 ~7/9 → V24-effective ~8/9.
+
+**Sections pipeline LOCKED IN (unchanged).** `/section-detection` skill with un-skippable blind validation.
 
 **Mix V46 (previous milestone) — per-track phrase-grid alignment enforced. 100% bar alignment, ~85% 4-bar phrase alignment per-track.** Pipeline has a full visual-hint workflow: each track gets a blank-canvas preview PNG; Sam (or Claude) reads the picture, writes timestamps to `Test Project/.../Hints/track_hints.json`; hints emit highest-confidence CueCandidates (0.95) that win over algorithmic picks. Visual review gate at end of every pipeline run prints `VISUAL REVIEW REQUIRED` block + auto-generates `REVIEW_VNN.md` template that must be filled before the mix is "complete."
 
@@ -114,7 +125,140 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-05-20 (Latest Session) — Section-detection pipeline LOCKED IN + arrangement principle learned (V13→V20)
+### 2026-05-22 (Latest Session) — Robustness gauntlet + Validation Discipline meta-rule + 22.05.26 Mix V4
+
+**Focus**: After the V11/Latest Releases Mix listen revealed alignment + automation gaps, do a deep robustness pass on the whole pipeline. Then run end-to-end on a new 22.05.26 Mix and surface every bug class the gates didn't yet catch.
+
+**Phase 1 — Lessons from /mix V11 (visual review):**
+- Built 3-band envelopes (low <250 Hz / mid 250-2500 / high >2500) into `sections_blind_viz.py` — the missing layer that distinguished "bass-only DJ outro" (correct) from "outro labelled mid-drop" (wrong).
+- Added overview PNG per track + per-section stats JSON + auto-flag heuristics + `NOTES.md` scratchpad template.
+- Built `transition_review_viz.py` with both `_ZOOM` (overlap close-up) and `_FULL` (Ableton arrangement view — both full tracks at arrangement positions) outputs.
+- Caught 3 real V12 chop errors (Lifeline outro, Slippin break_3, Tumblr Girls outro) the algorithm missed.
+
+**Phase 2 — Pipeline audit (Documentation/PIPELINE_AUDIT.md):**
+Identified 7 robustness gaps and closed them all:
+1. `validate_sections_review.py` — hard gate after Phase 1d. Parses `BLIND_VALIDATION_V<N>.md` and fails if any row is missing band stats, verdict, or ✗-without-correction. Tracks attempts in `validation_state.json`; escalates after 2 same-error attempts with `ESCALATE.md`.
+2. `validate_hints_vs_sections.py` — hard gate after Phase 1f. Compares `track_hints.json` timestamps to section boundaries via BPM; fails if >8 bars off. Found 12 silent disagreements in existing Latest Releases Mix hints.
+3. Auto-propose corrections — `sections_blind_viz.py` now emits `PROPOSED_CORRECTIONS_V<N>.json` with `(track_substr, from_clip, to_clip, old_bar, new_bar_or_DELETE, arr_offset)`. `apply_section_corrections.py` accepts `--corrections-json` + `"DELETE"` sentinel + cascading-DELETE chain handling.
+4. `loop_review_viz.py` — per-loop PNG (waveform + 3-band envelopes + quality score + rep count). Phase 4b.5.
+5. Attempt counter (folded into validator) — escalates on persistent same-error.
+6. `regress_section_detection.py` + `Documentation/Golden Sections/` — pre-commit test against blessed section JSONs from past projects.
+7. TL;DR template baked into Phase 4c REVIEW format.
+
+**Phase 3 — `/validate` meta-skill + Validation Discipline rule:**
+- Created `/validate` skill — auto-detects target type (skill .md / .py / .als / pipeline output) and runs the appropriate validator.
+- Added **Validation Discipline** meta-rule to all 3 brains (`Claude Code Brain/CLAUDE.md`, `Codex Brain/AGENTS.md`, `Antigravity Brain/GEMINI.md`): "No work is complete until validated by an artifact you didn't write yourself."
+- `/validate` is in the **Auto-Fire Skills** section — silently runs before any "done" report. Triggers: edited `.md` in `commands/`, edited `.py` in `Source/`, produced a pipeline output, user asks "are you sure" or "did that actually work."
+
+**Phase 4 — 22.05.26 Mix end-to-end (22 tracks):**
+Real-world run surfaced 4 more bug classes the gates didn't catch, all fixed live:
+- **XML entity collision** — `&apos;` / `&amp;` in section JSON keys broke BPM lookup, validator heading matching, and `find_track_block` in 3 sites. All fixed (entity-tolerant matching).
+- **V4 ScaleInformation corruption** — `apply_loops.py` overwrote integer `<Name>` inside `<ScaleInformation>` with the clip name string. Ableton rejected the file with "Unexpected value for int node." Fixed with an `in_scale_info` flag in the clone loop.
+- **Built `validate_als.py`** — gzip+XML parse, integer type checks on known fields, **clip sanity** (no zero/negative-length clips), and **track ordering** (AudioTrack file order must match arrangement time order). Four layers, run after every .als-producing phase. Catches synthetic injection of all known corruptions.
+- **Auto-propose bounds** — `sections_blind_viz.py` now clamps proposed bars to leave ≥4 bars of section length on both sides. Without this, the band-derivative search returned a bar AT or PAST the to_clip's end, producing zero/negative-length outros in 7 of 22 tracks. 9 clamps fired on real data.
+- **Tail loop placement** — loops were being inserted AFTER the outro (drop_7 → outro_1 → drop_7_tai), producing musically backwards energy. Now inserted BEFORE the outro with `shifts_before_insert` pushing the outro later in `apply_loops.py`. Sequence is now drop_7 → tail_loops → outro_1 → end.
+- **`_match_track` collision bug** — `nn[:20]` loose-prefix match was matching "Mike Richters - Your Love" to "Mike Richters - Your Love (Instrumental Mix)" via shared 20-char prefix. Both Your Love shifts hit the Instrumental track; the regular Your Love never shifted. Fixed in BOTH copies of `_match_track` (apply_loops.py and the duplicate in propose_arrangement.py), then consolidated by deleting the duplicate and importing the canonical version.
+
+**Final V4 output**: 22 tracks in clean monotonic order, 0 collapsed clips, 6 loops correctly placed, all 4 als gates pass. Sam rendered for car listening.
+
+**Key Learnings**:
+- Three-band envelope (low/mid/high) is the difference between catching real chop errors and being fooled by amplitude-only envelopes. Bass-stripped DJ outros look like full-energy mistakes in amp-only view.
+- Validation gates are only as strong as the layers they explicitly check. Each bug class we ship discovers a layer the gates didn't cover. Add it then; the next bug will find the next gap.
+- Duplicate functions are the most insidious bug — fix one copy and the other lurks. Consolidate ruthlessly.
+- "Validated by an artifact you didn't write yourself" — algorithmic auto-proposals checking algorithmic sections is the SAME source twice. Real validation requires an outside signal (a script running, a diff against a known-good baseline, or a human ear).
+
+**Files changed**:
+- NEW: `Source/validate_als.py`, `Source/validate_sections_review.py`, `Source/validate_hints_vs_sections.py`, `Source/loop_review_viz.py`, `Source/regress_section_detection.py`, `Source/transition_review_viz.py`, `Documentation/Golden Sections/README.md`, `Documentation/PIPELINE_AUDIT.md`
+- EDITED: `Source/sections_blind_viz.py` (un-hardcoded + 3-band + auto-propose + bounds), `Source/apply_section_corrections.py` (--corrections-json + DELETE sentinel + entity-tolerant), `Source/apply_loops.py` (3-band consolidation + ScaleInformation guard + shifts_before_insert + _match_track tightening), `Source/propose_arrangement.py` (best_swap_source + outro shift + _match_track consolidation)
+- SKILLS (all 3 brains synced byte-identical): `commands/mix.md` (Phase 1c/1d.5/1e/1f.5/2/3/4 gates wired in), `commands/validate.md` (NEW), `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` (Validation Discipline + /validate auto-fire)
+
+### 2026-05-21 (Session 7) — All 9 pipeline gaps closed
+
+**Focus**: Implement all 9 pipeline gaps documented in the `/mix` skill, following a methodical 4-stream plan approved by Sam.
+
+**Stream 1 — Data Foundation (Gaps 1, 2, 8, 9):**
+- Fixed `enrich_from_mik()` bug — key/BPM from MIKStore.db now copied back to `MikTrackData`. Orchestrator patches `TrackAnalysis.key`, `.camelot`, `.bpm` after enrichment.
+- Gap 2 (MIK cue reading) confirmed unsolvable — MIKStore.db has no cue table for WAV files.
+- Gap 8 (template capacity) already solved — 35-track template exists, `_find_template()` now selects by audio track count (not modification date).
+- Gap 9: `ARRANGEMENT_REPORT.json` now includes per-track `camelot`, `bpm`, `energy`, `intro_skip_bars` and per-transition `harmonic_score`, `harmonic_type`, `bpm_delta`, `selected_style`, `loop_source`, `overlap_bars`.
+
+**Stream 2 — Smarter Sequencing (Gaps 3, 4):**
+- `build_harmonic_path()` now uses composite score: `(camelot_norm * 0.6) + (bpm_norm * 0.4)`. Both normalized to 0-1 scale.
+- `apply_energy_arc()` post-pass: divides tracks into build/peak/cooldown thirds, sorts by MIK OverallEnergy. BPM-gap guard rejects if reorder creates 15+ BPM gap.
+
+**Stream 3 — Hints Extensions (Gaps 6, 7):**
+- `intro_skip_bars` in hints modifies clip sample start offset (Ableton `CurrentStart`), not timeline position.
+- `loop_source_sec` in hints directs loop search to a specific mid-track region, quality gate still applies.
+
+**Stream 4 — Transition Style Variety (Gap 5):**
+- `TransitionStyle` enum: STANDARD, LONG_BLEND, QUICK_SWAP. Auto-selected by overlap length.
+- Style-specific automation generators: QUICK_SWAP (instant swap, no sneak), LONG_BLEND (linear crossfade, partial EQ, delayed swap), STANDARD (existing two-phase).
+- `learn_from_correction.py` now classifies which TransitionStyle Sam's corrections most closely match, stores in `pair_history.jsonl`.
+
+**Updated `/mix` skill across all 3 brains** (Claude Code, Codex, Antigravity) — pipeline gaps table now shows all 9 closed or documented. Added `--hints` flag, transition styles docs, richer arrangement report review checklist.
+
+**Files changed**: `mik_reader.py`, `orchestrator.py`, `sequencer.py`, `propose_arrangement.py`, `transition.py`, `apply_automation.py`, `learn_from_correction.py`, all 3 brain `mix.md` files, `AI_CONTEXT.md`, `ai-activity-log.md`.
+
+### 2026-05-21 (Session 6) — /mix skill complete rewrite + loop quality gate + pipeline gaps documented
+
+**Focus**: Complete rewrite of the `/mix` skill across all three brains (Claude Code, Codex, Antigravity) to incorporate all learnings from the project.
+
+**Completed: Mix V1 generated via old single-command pipeline (Latest Releases Mix).** 10 tracks, 9 transitions, all pass visual review. But missing section chopping, arrangement optimisation, and learned automation rules.
+
+**Completed: Loop quality gate added to transition.py.** `MIN_LOOP_QUALITY = 0.20` threshold in `_score_loop_interval()`. Eats Everything had a bad loop (score 0.11 — dissipating hi-hat at end of track) that slipped through. Gate now rejects sparse loops and falls back to intro.
+
+**Completed: Full `/mix` skill rewrite.** Replaced the single-command orchestrator workflow with the proven three-phase pipeline: (1) Phase 0: Setup + Desktop Analysis (MIK/RB), (2) Phase 1: Section Detection + 8-quarter blind PNGs + COMBINED visual pass (section validation + hint authoring in one step) + corrections, (3) Phase 2: Arrangement via propose_arrangement.py, (4) Phase 3: Automation via apply_automation.py with learned rules, (5) Phase 4: Final visual review, (6) Phase 5: Report. Key improvements over old skill: 8-quarter PNGs for hint authoring (catches 1-2 bar fills), section chopping as required step, pipeline gaps table (9 known missing features), anti-patterns list.
+
+**Completed: Pipeline gaps documented.** 9 known limitations: MIK key/cue reading from DB, track sequencing/energy arc, BPM proximity sorting, transition style variety, clip trim/skip, mid-track loop source, template capacity, key signature display.
+
+**Files changed**: Claude Code Brain/commands/mix.md, Codex Brain/commands/mix.md, Antigravity Brain/commands/mix.md (all three rewritten), Source/automated_dj_mixes/transition.py (MIN_LOOP_QUALITY gate), Documentation/AI_CONTEXT.md, .github/ai-activity-log.md.
+
+### 2026-05-21 (Session 5) — Desktop automation fix + full MIK/RB pipeline end-to-end
+
+**Focus**: Fix the broken browse dialog handling for both MIK and Rekordbox, clean MIK DB, run full pipeline on Sam's last 10 released tracks.
+
+**Problem**: `_select_folder_in_browse_dialog()` could not reliably navigate either app's folder dialog. Three approaches failed for MIK (Edit text, Enter key, junction). MIK kept importing hundreds of wrong files from Desktop. RB's dialog was misidentified as old-style when it's actually a modern IFileDialog.
+
+**Completed: rewrote `desktop_analyzer.py` with dialog-type detection.**
+- Discovered Windows has TWO fundamentally different folder dialog APIs: MIK uses `SHBrowseForFolder` (TreeView-based, OK follows tree selection), RB uses `IFileDialog` (Vista+, address bar + Folder text field + Select Folder button).
+- `_select_folder_in_browse_dialog()` now auto-detects dialog type via child control signatures (ComboBoxEx32/ToolbarWindow32 = modern, SysTreeView32 = old-style) and delegates to the correct handler.
+- MIK handler: pywinauto `tree.get_item("\\Desktop\\_Pipeline_Import")` selects TreeView node directly → BM_CLICK OK.
+- RB handler: two-step confirmation — (1) set path in "Folder:" Edit + Enter to navigate, (2) `WM_COMMAND IDOK` to confirm. Single-step failed because Enter navigates INTO folder but doesn't select it.
+- Alt-tap focus-stealing bypass (`keybd_event(VK_MENU)` before `SetForegroundWindow`).
+- RB launches via Desktop shortcut (versioned subfolder breaks direct exe paths). Kill+relaunch retry on menu navigation failure.
+- Staging folder (`Desktop/_Pipeline_Import/`) created BEFORE dialog opens (was after — timing bug).
+
+**Completed: cleaned MIK DB (358 junk entries from previous failed imports).**
+Deleted non-master rows + VACUUM. Added `is_mik_analyzed()` filename fallback for staging paths.
+
+**Completed: full pipeline end-to-end on 10 tracks (Latest Releases Mix).**
+MIK 10/10 analyzed, RB 10/10 enriched with phrase data, 10/10 preview PNGs generated. Sam confirmed successful run.
+
+**Known gaps**: MIK cue points (0/10) and key data not showing in previews — MIK stores these in DB for WAV files, not in GEOB ID3 tags. `mik_reader.py` only reads GEOB tags. Low priority.
+
+**Files changed**: `Source/automated_dj_mixes/desktop_analyzer.py` (major rewrite — dialog detection, staging folder, focus bypass, RB shortcut launch, two dialog handlers).
+
+### 2026-05-21 (Sessions 1-4) — Full PROPOSE→LEARN cycle (V21→V24) + `/arrange-mix` skill built
+
+**Session 1: Built apply_automation.py, generated V21.** Sam corrected → V22.
+
+**Session 2: V21→V22 diff → 6 rules. V23 generated with rules baked in.** Effective ~6-7/9.
+
+**Session 3: V23→V24 diff → bug fixes + accuracy to ~8/9.**
+- V24 analysis: 6/9 raw, ~8/9 effective. T4 was only real correction (two bugs: priority 2 boundary check + Rule 2 boundary guard). T8/T9 arrangement noise.
+- Two bug fixes applied to apply_automation.py: (A) _inside_overlap() enforced on priority 2 outro, (B) two-stage bass kill_beat checked against boundary.
+- Accuracy progression: V21 5/9 → V23 ~7/9 → V24-effective ~8/9.
+
+**Session 4 (this session): Built `/arrange-mix` skill.**
+- `Source/apply_loops.py` (~300 lines) — mechanical clip cloning. LoopSpec dataclass, clone_clip with unique ID allocation, handles self-closing Events blocks. Not yet tested with actual loops.
+- `Source/propose_arrangement.py` (~450 lines) — arrangement orchestrator. Natural-fill alignment (incoming.first_drop at outgoing.last_fill/break) + overlap capping (TARGET 128b, cap threshold 144b). Analyses each pair for loop requirements, consults pair_history.jsonl. Generates arranged ALS + JSON report.
+- Tested V18→V25: all 9 positions verified, overlaps 124-132 beats (31-33 bars). Positions within 32-168 beats of V20 (gap from V20's loop extensions).
+- Created `~/.claude/commands/arrange-mix.md` skill file.
+
+**Files added**: Source/propose_arrangement.py, Source/apply_loops.py, ~/.claude/commands/arrange-mix.md.
+**Files output**: Sections V25.als + arrangement report JSON.
+
+### 2026-05-20 — Section-detection pipeline LOCKED IN + arrangement principle learned (V13→V20)
 
 **Focus**: Lock in the section-detection pipeline. Then learn arrangement principles from Sam's V20 example. Plan `/arrange-mix` skill + Mix Patterns Library for tomorrow.
 
@@ -311,14 +455,11 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
-1. **`/arrange-mix` skill + Mix Patterns Library (PRIORITY, start tomorrow 2026-05-21)** — full plan in `Documentation/TODO_ARRANGE_MIX.md`. Sam taught the principle via V20: chops are lineup points; each transition has 2-3 alignment moments (entry, optional bass-swap, exit); loops fill gaps. Library lives at `Documentation/Mix Patterns Library/` (in this repo, cross-project). Similarity matching by BPM + section structure shape. Learns from rejections (record Claude's pick AND Sam's correction). Auto-detects edits on every invocation. Initial training data: V20's 9 transitions extracted as `source: sam_v20_initial` baseline.
-2. **Sam to listen to V46 in Ableton** — verify (a) off-by-one beat issue resolved by `first_downbeat_offset` fix, (b) Sapian (T5) bass placement at 45s OK or needs hint adjustment, (c) per-track phrase alignment feels right musically.
-3. **Refine hints from listening pass** — any track where Sam disagrees with the picked bass_entry/break/outro, edit `Test Project/.../Hints/track_hints.json` and re-run. Hints persist across mixes.
-3. **Expand template** — current template fits 11 tracks, need 12+ support (still pending from 2026-05-17).
-4. **Consider per-genre `prefer_grid`** in `PhraseGrid` — house/techno @ 16-beat preferred (current default works), DnB @ 8, trance @ 32. Could derive from BPM heuristic or RB metadata.
-5. **Hint cache by audio hash** — once a track is hinted, the hint should persist across mixes regardless of project. Currently keyed by filename in track_hints.json — works but fragile if filenames change.
-6. **Codex `CODEX_REVIEW.md` follow-up** — Codex's response landed; most P1/P2/P3 items implemented this session. Remaining: tempo ramp ending location (Sam said skip), per-genre phrase length parameterisation.
-7. **Long intros**: Capriati 40 bars, Fanciulli 40 bars — internal structure (build/teaser-drop) currently hidden inside the "intro" region; might need sub-classification (still pending).
+1. **Run `/mix` three-phase pipeline on Latest Releases Mix** — Mix V1 was generated via the old single-command pipeline (no section chopping, no arrangement optimisation). Need to re-run using the new three-phase `/mix` skill (sections → arrangement → automation) to produce colour-coded section clips, natural-fill alignment, and learned automation. Hints already exist (10/10 tracks hinted). This will be the first test of the newly-closed pipeline gaps (harmonic sequencing, BPM proximity, energy arc, transition styles).
+2. **End-to-end verification of all 9 closed gaps** — Run `--previews-only` to confirm WAV tracks now show Camelot keys + BPM. Run `--dry-run` arrangement to confirm track ordering shows BPM clustering + energy arc shape. Review ARRANGEMENT_REPORT.json for transition style variety.
+3. **Add loop learning** — propose_arrangement.py currently produces uniform ~128b overlaps. V20 varies from 62-190b depending on loops Sam added. Need to analyse V20's loop patterns and feed them back into the proposal logic. apply_loops.py is built but not yet triggered by the proposer.
+4. **Test hint extensions** — Add test `intro_skip_bars` and `loop_source_sec` entries to a project's hints and verify they work end-to-end.
+5. **Expand pair_history.jsonl with style data** — Run `learn_from_correction.py` on existing Claude→Sam correction pairs to populate `classified_style` field. Future transitions with similar characteristics will auto-select the right style.
 
 ## Key Decisions
 
@@ -353,6 +494,9 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 - **ANALYSIS_MODEL_VERSION constant** — Propagated through cache keys, CSVs, MD reports, and YAML headers. Bumping invalidates old caches and lets old reports stay identifiable when thresholds change. (Codex, 2026-05-17)
 - **Mixed In Key auto-cues are the most trusted ALGORITHMIC signal** — MIK has refined its auto-cue model for years on dance music. MIK cue alignment within an interval adds +0.25 confidence (largest single boost). (Sam, 2026-05-18)
 - **Visual hints override everything** — When Sam (or Claude) writes a `Hints/track_hints.json` entry for a track, that beat wins over MIK, Rekordbox, librosa, amplitude — regardless of position. Human eye on the rendered waveform > algorithm. Confidence 0.95. (Sam, 2026-05-18)
+- **EMERGING rules need ≥3 observations before auto-applying broadly** — Rule 3 (two-stage volume) with 1 observation and section_count>=14 trigger caused false positives on 2/9 transitions. Rule 4 (low sneak) with `clips>=3 OR len<=32` caused 7/9 false positives. Conservative triggers or disable until confirmed. (2026-05-21 V23 testing)
+- **V22 arrangement changes make V23↔V22 comparison noisy** — When Sam both corrects automation AND changes arrangement, the diff tool can't reliably separate the two. Clean comparisons require same base arrangement. Future: extract V22's section data separately for a fair comparison. (2026-05-21)
+- **Boundary avoidance is NOT absolute** — T7 (Ease My Mind → Professor X) shows Sam accepted a boundary bass swap (beat 4304 = overlap end). When the overlap end coincides with a natural structural handoff (outro end + incoming drop), boundary swaps can work. Rule 1 needs a structural-handoff exception. (2026-05-21)
 - **Visual pass before pipeline + visual review after** — Pre-pipeline: render blank-canvas preview, eyeball broad strokes, write hints. Post-pipeline: render per-track + per-transition viz with picks overlaid, verify alignment matches hints. `VISUAL REVIEW REQUIRED` block + `REVIEW_VNN.md` template enforce this. (Sam, 2026-05-18)
 - **Phrase grid is PER TRACK, not global** — Each track has its own phrase grid starting at THAT track's beat 1, not at arrangement beat 0. bass_swap snaps to incoming's grid; chop_arrangement (= bass_swap) lands on outgoing's grid because incoming_arrangement_start was snapped to outgoing's grid in the first step. Cascade preserves alignment. (Sam, 2026-05-18)
 - **Tiered snap fallback: 16 → 8 → 4** — Try 4-bar phrase first; fall back to 2-bar if natural drift > 4 beats; fall back to 1-bar only if drift > 8 beats. Hard floor: bar boundary (validator hard-fails off-bar). (Sam choice via AskUserQuestion, 2026-05-18)
@@ -363,6 +507,9 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 - **Tiered phrase grid in viz with bar labels** — Bar lines weighted by phrase importance: bar (4-beat) faint, 2-bar medium, 4-bar phrase dark+labelled, 16-bar section bold+labelled. Off-phrase automation should be visually obvious. (Sam-prompted, 2026-05-18: "how did you not spot these in the visual?")
 - **Numerical validation is necessary but NOT sufficient** — `validate_mix` ALL-PASS doesn't mean the mix is right. The visual review gate is the only thing that verifies picks land on the right musical moments. AI_CONTEXT.md REQUIRED section + orchestrator's `VISUAL REVIEW REQUIRED` block + per-mix `REVIEW_VNN.md` template enforce this. (Sam, 2026-05-18)
 - **`/mix` skill is the canonical production path** — never invoke the orchestrator directly for new mixes. The skill (in `~/.claude/commands/mix.md` and the Codex/Antigravity Brain mirrors) walks Claude through validate → desktop analysis → previews-only → **visual pass + write hints** → full pipeline → visual review. The orchestrator enforces a hint gate: it refuses to plan transitions if any track is missing a complete entry in `Hints/track_hints.json` (every track needs `first_drop_sec`, `first_break_sec`, `outro_start_sec` with exact filename keys including extension). `--previews-only` bypasses the gate (previews are how hints get authored). `--no-hints-required` bypasses the gate for development/debugging only. This was added 2026-05-19 because Claude kept forgetting the visual-pass-first rule even though it was documented above. The gate makes it structural rather than memory-dependent. (Sam, 2026-05-19)
+- **Two Windows folder dialog types require different automation strategies (2026-05-21)** — MIK uses old-style `SHBrowseForFolder` (TreeView-based, OK follows tree selection — Edit text is cosmetic). Rekordbox uses modern `IFileDialog` (Vista+, "Folder:" text field + Select Folder button — TreeView in left panel is Quick Access pins, not shell hierarchy). Auto-detection via child control signatures (ComboBoxEx32 = modern, SysTreeView32 only = old-style). Staging folder (`Desktop/_Pipeline_Import/`) is the bridge — shallow enough for both dialog types to reach. MUST be created before dialog opens (tree populates on open). Three approaches failed for MIK's old-style dialog before TreeView node selection worked: Edit text (ignored by OK button), Enter key, NTFS junction.
+- **PROPOSE→LEARN cycle starts with automation, not arrangement extraction (2026-05-21)** — Sam's pivot: rather than passively extracting V20's patterns, Claude adds automation to V20 and Sam corrects it. The correction diff IS the first training data. This means Claude's proposals improve from real corrections, not from analyzing Sam's finished work. `apply_automation.py` handles the PROPOSE side; `learn_from_correction.py` (to be built) handles the LEARN side.
+- **Automation lives on Utility Gain (volume) + ChannelEQ LowShelfGain (bass) — same as existing pipeline (2026-05-21)** — `apply_automation.py` follows the exact same targets discovered during the May 14-15 sessions. Volume on Utility (not mixer fader), EQ bass kill at 0.18 (~-15dB), two-phase transition model with section-structure-driven bass swap detection. Standalone script, not wired into orchestrator — this is for Sections .als files, not full pipeline mixes.
 - **`/section-detection` pipeline LOCKED IN — algorithm + Claude corrections = finished sections .als (2026-05-20)** — validated end-to-end on Black Book x Defected V2 (V13 → V19). The canonical chopping pipeline is now: (1) `orchestrator.py --sections-layout` for the programmatic pass, (2) `extract_sections_als.py` → JSON, (3) `sections_blind_viz.py` to render **8 quarter PNGs per track** (NOT 4 — 4 missed 1-2 bar fills), (4) Claude reads every PNG and fills `BLIND_VALIDATION_V<N>.md` per-chop table (hard self-check: chop count must equal row count), (5) for `⚠ off N` errors, edit `apply_section_corrections.py` CORRECTIONS list and patch the .als directly. Algorithm tuning is limited to ONE round per project — beyond that, accept and correct manually. `sections_compare_viz.py` exists in the codebase but is FORBIDDEN by the skill (V7-diff trap). Arrangement positioning (`arrange_sections.py`) is the next step AFTER chops are locked, using natural-fill alignment (incoming.drop_1 aligned to outgoing's last fill/break before outro). Skill auto-fires on triggers like "section detection", "Sections V<N>", `phrase_viz.py`, paths under `Sections Review/` etc. — Sam shouldn't have to type the slash command. (Sam, 2026-05-20)
 
 ## Connections

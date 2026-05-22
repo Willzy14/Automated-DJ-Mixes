@@ -16,7 +16,9 @@ Each correction moves a SHARED BOUNDARY between two adjacent clips:
 
 from __future__ import annotations
 
+import argparse
 import gzip
+import json
 import re
 import sys
 from pathlib import Path
@@ -35,14 +37,40 @@ CORRECTIONS = [
 ]
 
 
+def _entity_variants(s: str) -> list[str]:
+    """Return possible entity-encoded variants of a string for XML search."""
+    variants = [s]
+    enc = (s.replace("&", "&amp;").replace("'", "&apos;")
+             .replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;"))
+    if enc != s:
+        variants.append(enc)
+    # Also try just apostrophe encoded (most common case where & is rare)
+    apos_only = s.replace("'", "&apos;")
+    if apos_only != s and apos_only not in variants:
+        variants.append(apos_only)
+    amp_only = s.replace("&", "&amp;")
+    if amp_only != s and amp_only not in variants:
+        variants.append(amp_only)
+    return variants
+
+
 def find_track_block(content: str, track_substr: str) -> tuple[int, int]:
     """Return (start, end) byte offsets of the AudioTrack block whose
-    EffectiveName contains track_substr."""
-    name_match = re.search(
-        rf'<EffectiveName Value="[^"]*{re.escape(track_substr)}[^"]*"', content
-    )
+    EffectiveName contains track_substr. Tolerant of XML entity encoding
+    (the .als stores names with &apos; / &amp; etc., but corrections may
+    be authored with literal apostrophes/ampersands)."""
+    name_match = None
+    last_variant = track_substr
+    for variant in _entity_variants(track_substr):
+        last_variant = variant
+        name_match = re.search(
+            rf'<EffectiveName Value="[^"]*{re.escape(variant)}[^"]*"', content
+        )
+        if name_match:
+            break
     if not name_match:
-        raise ValueError(f"Track containing '{track_substr}' not found")
+        raise ValueError(f"Track containing '{track_substr}' not found "
+                         f"(also tried entity-encoded variants)")
 
     # Track block: walk back from EffectiveName to the nearest <AudioTrack
     track_start = content.rfind("<AudioTrack ", 0, name_match.start())
@@ -83,6 +111,71 @@ def patch_clip_time_attr(clip_xml: str, old_val: float, new_val: float) -> tuple
     pattern = rf'(<AudioClip Id="\d+" Time=")({old_val}|{old_val:.1f})(")'
     new_xml, count = re.subn(pattern, rf'\g<1>{new_val}\g<3>', clip_xml)
     return new_xml, count > 0
+
+
+def read_clip_attr_value(clip_xml: str, attr: str) -> float | None:
+    """Read the numeric Value of <{attr} Value="X" /> in the given clip XML."""
+    m = re.search(rf'<{attr} Value="([\d.\-]+)"', clip_xml)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def delete_clip(content: str, track_substr: str, from_clip: str,
+                to_clip: str, arr_offset_beats: int) -> str:
+    """Merge `to_clip` into `from_clip` and remove the to_clip block.
+
+    Used when the auto-flagger proposes deleting a boundary (e.g. a break
+    that isn't a real break, or two near-identical adjacent sections).
+    """
+    track_start, track_end = find_track_block(content, track_substr)
+    to_start, to_end = find_clip_block(content, track_start, track_end, to_clip)
+    to_xml = content[to_start:to_end]
+
+    # Extract to_clip's right edges so we can extend from_clip to absorb them.
+    new_arr_end = read_clip_attr_value(to_xml, "CurrentEnd")
+    new_src_end = read_clip_attr_value(to_xml, "LoopEnd")
+    if new_arr_end is None or new_src_end is None:
+        raise ValueError(f"Could not read CurrentEnd/LoopEnd from {to_clip}")
+
+    # Read from_clip's CURRENT right edge (so we know what to replace).
+    track_start, track_end = find_track_block(content, track_substr)
+    fr_start, fr_end = find_clip_block(content, track_start, track_end, from_clip)
+    fr_xml = content[fr_start:fr_end]
+    old_arr_end = read_clip_attr_value(fr_xml, "CurrentEnd")
+    old_src_end = read_clip_attr_value(fr_xml, "LoopEnd")
+    if old_arr_end is None or old_src_end is None:
+        raise ValueError(f"Could not read CurrentEnd/LoopEnd from {from_clip}")
+
+    print(f"  DELETE: extend {from_clip} CurrentEnd {old_arr_end}→{new_arr_end}, "
+          f"LoopEnd {old_src_end}→{new_src_end}, then remove {to_clip}")
+
+    # Extend from_clip's right edges.
+    changes = []
+    for attr, old, new in [
+        ("CurrentEnd", old_arr_end, new_arr_end),
+        ("LoopEnd", old_src_end, new_src_end),
+        ("OutMarker", old_src_end, new_src_end),
+        ("HiddenLoopEnd", old_src_end, new_src_end),
+    ]:
+        fr_xml, changed = patch_clip_attr(fr_xml, attr, old, new)
+        changes.append((attr, old, new, changed))
+    print("    " + ", ".join(f"{a}={o}→{n}{'✓' if c else '✗'}"
+                              for a, o, n, c in changes))
+    content = content[:fr_start] + fr_xml + content[fr_end:]
+
+    # Now remove the to_clip block. Re-find positions (content length shifted).
+    track_start, track_end = find_track_block(content, track_substr)
+    to_start, to_end = find_clip_block(content, track_start, track_end, to_clip)
+    # Also swallow any trailing whitespace/newlines after the closing tag so
+    # the XML stays tidy.
+    while to_end < len(content) and content[to_end] in "\r\n\t ":
+        to_end += 1
+    content = content[:to_start] + content[to_end:]
+    return content
 
 
 def apply_correction(content: str, track_substr: str, from_clip: str, to_clip: str,
@@ -143,28 +236,68 @@ def apply_correction(content: str, track_substr: str, from_clip: str, to_clip: s
 
 
 def main():
-    if len(sys.argv) < 3:
-        in_path = Path("Test Project/Black Book x Defected V2/Output/Sections V16.als")
-        out_path = Path("Test Project/Black Book x Defected V2/Output/Sections V17.als")
-    else:
-        in_path = Path(sys.argv[1])
-        out_path = Path(sys.argv[2])
+    parser = argparse.ArgumentParser(
+        description="Apply chop corrections to a Sections .als. Corrections are "
+                    "either the hardcoded CORRECTIONS list at the top of this "
+                    "file OR loaded from a JSON via --corrections-json. JSON "
+                    "format: a list of [track_substr, from_clip, to_clip, "
+                    "old_bar, new_bar_or_\"DELETE\", arr_offset_beats].")
+    parser.add_argument("in_als", type=Path, help="Input Sections .als")
+    parser.add_argument("out_als", type=Path, help="Output Sections .als")
+    parser.add_argument("--corrections-json", type=Path, default=None,
+                        help="Load corrections from JSON instead of using "
+                             "the hardcoded CORRECTIONS list. Use the file "
+                             "auto-generated by sections_blind_viz.py "
+                             "(PROPOSED_CORRECTIONS_V<N>.json).")
+    args = parser.parse_args()
 
-    print(f"Reading {in_path}")
-    with gzip.open(in_path, "rb") as f:
+    if args.corrections_json:
+        if not args.corrections_json.exists():
+            print(f"ERROR: {args.corrections_json} does not exist", file=sys.stderr)
+            return 1
+        corrections = json.loads(args.corrections_json.read_text(encoding="utf-8"))
+        print(f"Loaded {len(corrections)} corrections from {args.corrections_json.name}")
+    else:
+        corrections = CORRECTIONS
+        print(f"Using hardcoded CORRECTIONS list ({len(corrections)} entries)")
+
+    print(f"Reading {args.in_als}")
+    with gzip.open(args.in_als, "rb") as f:
         content = f.read().decode("utf-8")
     print(f"  Loaded {len(content)} chars")
 
-    for correction in CORRECTIONS:
-        track_substr, from_clip, to_clip, old_bar, new_bar, arr_offset = correction
-        print(f"\nCorrection: {track_substr} bar {old_bar} → bar {new_bar} ({from_clip}/{to_clip})")
-        content = apply_correction(content, track_substr, from_clip, to_clip,
-                                    old_bar, new_bar, arr_offset)
+    # Track which clips have been removed by DELETE operations so cascading
+    # deletes can redirect their from_clip to whatever absorbed it.
+    # Keyed by (track_substr, clip_name).
+    absorbed_by: dict[tuple[str, str], str] = {}
 
-    print(f"\nWriting {out_path}")
-    with gzip.open(out_path, "wb") as f:
+    for correction in corrections:
+        track_substr, from_clip, to_clip, old_bar, new_bar, arr_offset = correction
+        # Redirect: if from_clip has been removed by a previous DELETE, walk
+        # forward to whatever absorbed it.
+        original_from = from_clip
+        seen = set()
+        while (track_substr, from_clip) in absorbed_by and from_clip not in seen:
+            seen.add(from_clip)
+            from_clip = absorbed_by[(track_substr, from_clip)]
+        if from_clip != original_from:
+            print(f"  (cascade: '{original_from}' was absorbed → using '{from_clip}')")
+
+        if isinstance(new_bar, str) and new_bar.upper() == "DELETE":
+            print(f"\nDelete boundary: {track_substr} {from_clip} ⇒ {to_clip}")
+            content = delete_clip(content, track_substr, from_clip, to_clip, arr_offset)
+            absorbed_by[(track_substr, to_clip)] = from_clip
+        else:
+            print(f"\nCorrection: {track_substr} bar {old_bar} → bar {new_bar} "
+                  f"({from_clip}/{to_clip})")
+            content = apply_correction(content, track_substr, from_clip, to_clip,
+                                        int(old_bar), int(new_bar), int(arr_offset))
+
+    print(f"\nWriting {args.out_als}")
+    args.out_als.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(args.out_als, "wb") as f:
         f.write(content.encode("utf-8"))
-    print(f"  Done — {out_path.stat().st_size} bytes")
+    print(f"  Done — {args.out_als.stat().st_size} bytes")
 
 
 if __name__ == "__main__":

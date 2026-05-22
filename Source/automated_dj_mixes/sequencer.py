@@ -103,31 +103,107 @@ def is_compatible(camelot_a: str, camelot_b: str) -> tuple[bool, str]:
     return score >= 1, transition_type
 
 
+def apply_energy_arc(tracks: list[dict]) -> list[dict]:
+    """Reorder tracks within build/peak/cooldown thirds for an energy arc.
+
+    Each track dict should have an 'energy' key (MIK OverallEnergy, 0-10).
+    Tracks without energy data keep their position.
+
+    Skips if fewer than 4 tracks or >50% missing energy data. Within each
+    third, only swaps tracks if the swap doesn't create a 15+ BPM gap.
+    """
+    if len(tracks) < 4:
+        return tracks
+
+    energies = [t.get("energy") for t in tracks]
+    known = [e for e in energies if e is not None]
+    if len(known) < len(tracks) * 0.5:
+        return tracks
+
+    n = len(tracks)
+    third = n // 3
+    groups = [
+        list(range(0, third)),
+        list(range(third, 2 * third)),
+        list(range(2 * third, n)),
+    ]
+
+    def _energy_key(idx: int) -> float:
+        e = tracks[idx].get("energy")
+        return e if e is not None else 5.0
+
+    def _bpm_safe(ordering: list[int]) -> bool:
+        for i in range(len(ordering) - 1):
+            a = tracks[ordering[i]].get("bpm")
+            b = tracks[ordering[i + 1]].get("bpm")
+            if a is not None and b is not None and abs(a - b) >= 15:
+                return False
+        return True
+
+    build = sorted(groups[0], key=_energy_key)
+    peak = sorted(groups[1], key=_energy_key, reverse=True)
+    cooldown = sorted(groups[2], key=_energy_key, reverse=True)
+
+    proposed = build + peak + cooldown
+
+    if not _bpm_safe(proposed):
+        return tracks
+
+    return [tracks[i] for i in proposed]
+
+
+def _bpm_proximity(bpm_a: float | None, bpm_b: float | None) -> float:
+    """Score BPM proximity on a 0-1 scale. 0 BPM diff = 1.0, 15+ = 0.0.
+    Unknown BPM returns 0.5 (neutral)."""
+    if bpm_a is None or bpm_b is None:
+        return 0.5
+    return max(0.0, 1.0 - abs(bpm_a - bpm_b) / 15.0)
+
+
 def build_harmonic_path(tracks: list[dict]) -> list[dict]:
-    """Build an optimal harmonic path through all tracks using Camelot rules.
+    """Build an optimal path through all tracks using Camelot + BPM proximity.
 
-    Each track dict must have a 'camelot' key. Greedy nearest-neighbour:
-    start with the first track, always pick the highest-scoring unused
-    neighbour. Ties broken by order in original list.
+    Each track dict must have a 'camelot' key. Optional 'bpm' key enables
+    BPM proximity scoring.
 
-    Returns the tracks in optimised order.
+    Composite score = (camelot_norm * 0.6) + (bpm_norm * 0.4)
+    where camelot_norm is the raw 0-4 score divided by 4 (→ 0-1 scale).
+
+    Starts from the slowest-BPM track and uses greedy nearest-neighbour,
+    biasing toward ascending BPM (mixes naturally get faster).
     """
     if len(tracks) <= 1:
         return list(tracks)
 
-    remaining = list(range(len(tracks)))
-    current = remaining.pop(0)
+    # Start from the slowest track so the greedy walk naturally ascends
+    start = min(
+        range(len(tracks)),
+        key=lambda i: tracks[i].get("bpm") or 999,
+    )
+    remaining = [i for i in range(len(tracks)) if i != start]
+    current = start
     path = [current]
 
     while remaining:
+        cur_bpm = tracks[current].get("bpm")
         best_idx = None
-        best_score = -1
+        best_composite = -1.0
         for idx in remaining:
-            score, _ = compatibility_score(
+            cam_score, _ = compatibility_score(
                 tracks[current]["camelot"], tracks[idx]["camelot"]
             )
-            if score > best_score:
-                best_score = score
+            cam_norm = cam_score / 4.0
+            bpm_norm = _bpm_proximity(
+                cur_bpm, tracks[idx].get("bpm")
+            )
+            # Small ascending BPM bonus: prefer candidates at same or higher BPM
+            asc_bonus = 0.0
+            cand_bpm = tracks[idx].get("bpm")
+            if cur_bpm and cand_bpm and cand_bpm >= cur_bpm:
+                asc_bonus = 0.05
+            composite = cam_norm * 0.6 + bpm_norm * 0.4 + asc_bonus
+            if composite > best_composite:
+                best_composite = composite
                 best_idx = idx
         remaining.remove(best_idx)
         path.append(best_idx)

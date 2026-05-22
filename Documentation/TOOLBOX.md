@@ -16,9 +16,9 @@ Key types: `TrackAnalysis` (dataclass with path, key, camelot, bpm, lufs, first_
 Key functions: `analyse_track()`, `analyse_folder()`, `enrich_from_rekordbox()`, `_detect_downbeat()`, `_detect_bass_section()`, `_detect_first_break_phrase_aware()`.
 
 ### `Source/automated_dj_mixes/sequencer.py`
-Full Camelot wheel mapping (24 keys + common aliases like "Am", "Bbm", "F#"). Compatibility scoring: 4=identical, 3=smooth/relative, 2=power, 1=diagonal, 0=clash. Greedy nearest-neighbour harmonic path. **20 tests.**
+Full Camelot wheel mapping (24 keys + common aliases like "Am", "Bbm", "F#"). Compatibility scoring: 4=identical, 3=smooth/relative, 2=power, 1=diagonal, 0=clash. Greedy nearest-neighbour harmonic path with **composite scoring**: `(camelot_norm * 0.6) + (bpm_norm * 0.4)`, both normalized to 0-1. **Energy arc post-pass**: `apply_energy_arc()` divides tracks into build/peak/cooldown thirds, sorts by MIK OverallEnergy (0-10), with BPM-gap guard (rejects reorder if 15+ BPM gap). **20 tests.**
 
-Key functions: `key_to_camelot()`, `compatibility_score()`, `is_compatible()`, `build_harmonic_path()`.
+Key functions: `key_to_camelot()`, `compatibility_score()`, `is_compatible()`, `build_harmonic_path()`, `apply_energy_arc()`, `_bpm_proximity()`.
 
 ### `Source/automated_dj_mixes/rekordbox_reader.py`
 Reads Rekordbox 7 ANLZ files (`.DAT`, `.EXT`) for beat grids, phrase analysis, and key data. Manual PSSI binary parser (pyrekordbox doesn't expose phrase data; construct.ConstError on RB7 files). Matches tracks by filename against Rekordbox library.
@@ -59,10 +59,10 @@ Key types: `CueCandidate` (beat, sec, cue_type, confidence, sources, reasons, in
 Key functions: `find_cue_candidates()`, `mik_to_candidates()`, `amplitude_to_candidates()`, `hint_to_candidates()`, `load_hints_file()`, `candidates_for()`, `first_credible()` (visual_hint wins), `first_drop_candidate()` (earliest credible bass_entry — dance-music structural prior).
 
 ### `Source/automated_dj_mixes/mik_reader.py`
-Reads Mixed In Key 11 data — GEOB ID3 tags (cue points, beat grid, energy, key — base64-encoded JSON) plus optional SQLite enrichment (`MIKStore.db` for LUFS, key confidence, per-segment energy timeline). Resilient: DB read failures don't lose tag-derived cues (Codex P2 fix).
+Reads Mixed In Key 11 data — GEOB ID3 tags (cue points, beat grid, energy, key — base64-encoded JSON) plus SQLite enrichment (`MIKStore.db` for key, BPM, LUFS, key confidence, overall energy, per-segment energy timeline). `enrich_from_mik()` now copies key + BPM from DB back to `MikTrackData` (was missing — WAV files showed "?" for key). MIK's `MainKey` is stored in Camelot format (e.g. "8A"). Resilient: DB read failures don't lose tag-derived cues (Codex P2 fix).
 
 Key types: `MikCue`, `MikBeatGrid`, `MikEnergySegment`, `MikTrackData`.
-Key functions: `read_mik_from_tags()`, `read_mik_db_track()`, `read_mik_energy_segments()`, `enrich_from_mik()` (combined tag + DB read).
+Key functions: `read_mik_from_tags()`, `read_mik_db_track()`, `read_mik_energy_segments()`, `enrich_from_mik()` (combined tag + DB read — copies key, bpm, lufs, key_confidence, energy).
 
 ### `Source/automated_dj_mixes/amplitude_analysis.py`
 Pure-librosa structural detection from a 1-second RMS envelope. Used as a CANDIDATE SOURCE (not for snap-to-beat). Sam's "look at the picture broadly" rule, baked into numbers: detect the largest amplitude rise in the first 90s (bass_entry), the first significant drop after that (break_start), and the first big drop in the final 90s minus tail (outro_start). Plus a dead-air-free window finder for clean loop content.
@@ -95,10 +95,10 @@ Key functions: `write_track_csv()`, `write_transition_report()`.
 Output dir: `Test Project/May 2026 Mix/Reports/` and `{output_dir}/Reports/`.
 
 ### `Source/automated_dj_mixes/transition.py`
-Two-phase transition planner with per-track phrase-grid snapping. Phase 1 (transition_start → bass_swap): incoming volume ramps from 0.2 → 1.0, outgoing holds at unity. Phase 2 (bass_swap → transition_end): hard EQ bass swap (0.18 ≈ -15dB / 1.0 = unity), outgoing fades to 0 by transition_end (lands on incoming's first break). Chop-and-duplicate loop fills the post-chop gap; loop sources from outgoing's outro (past chop) or intro (fallback) via `find_loop_region`. Loop selection has dead-air refinement (`amplitude_analysis.find_clean_loop_window`).
+Two-phase transition planner with per-track phrase-grid snapping. Phase 1 (transition_start → bass_swap): incoming volume ramps from 0.2 → 1.0, outgoing holds at unity. Phase 2 (bass_swap → transition_end): hard EQ bass swap (0.18 ≈ -15dB / 1.0 = unity), outgoing fades to 0 by transition_end (lands on incoming's first break). Chop-and-duplicate loop fills the post-chop gap; `find_loop_region()` checks hint-driven `loop_source_sec` FIRST (nearest 4/8-bar aligned region with quality gate), then falls back to outgoing's outro or intro. Loop selection has dead-air refinement (`amplitude_analysis.find_clean_loop_window`).
 
 Key types: `LoopSpec`, `TransitionSpec`, `PhraseGrid` (origin-aware tiered 16/8/4 snap).
-Key functions: `plan_transition()` (main entry), `snap()` (whole-beat), `find_loop_region()` (intro/outro priority with `role` parameter), fallback finders for outgoing_bass_end / chop_point / incoming_bass_start / incoming_first_break.
+Key functions: `plan_transition()` (main entry, accepts `outgoing_hint_loop_source_beat`), `snap()` (whole-beat), `find_loop_region()` (hint → outro → intro priority with `role` parameter, `hint_loop_source_beat` parameter), fallback finders for outgoing_bass_end / chop_point / incoming_bass_start / incoming_first_break.
 
 Hard invariant: `outgoing_arrangement_start % 4 == 0` (raises if violated — chop_at would misalign on source). Per-track grids enforce that each track's phrase boundaries are respected: incoming snaps to outgoing's grid; bass_swap snaps to incoming's grid.
 
@@ -136,11 +136,50 @@ Key functions: `generate_session()`, `decompress_als()`, `compress_als()`, `_bui
 Loads settings from `Config/settings.json` with sensible defaults (crossfade_bars=48, max_gain_reduction_db=12, default_project_tempo=128, versioning_prefix="V").
 
 ### `Source/automated_dj_mixes/desktop_analyzer.py`
-**Added 2026-05-19.** Drives Mixed In Key 11 and Rekordbox 7 desktop UIs to analyse tracks without manual clicks. Uses `pywinauto` for message-based control where possible (cursor doesn't move) and `pyautogui` for the one custom WPF control (MIK Add tracks button — image template match in `templates/`). All clicks save+restore cursor position so Sam can keep working in Ableton. MIK detection via `MIKStore.db` SQLite (`Song` table). RB detection via `pyrekordbox`. Requires Rekordbox Library Protection OFF.
+**Added 2026-05-19, major rewrite 2026-05-21.** Drives Mixed In Key 11 and Rekordbox 7 desktop UIs to analyse tracks without manual clicks via `pywinauto` + Win32 API.
 
-Key functions: `analyze_folder_with_mik(folder)`, `analyze_folder_with_rekordbox(folder)`, `is_mik_analyzed(path)`, `is_rekordbox_analyzed(path)`, `_force_focus(window)` (AttachThreadInput), `_select_folder_in_browse_dialog(folder)`.
+**Architecture — two Windows folder dialog types (auto-detected by `_select_folder_in_browse_dialog`):**
 
-Wired into orchestrator pre-analysis (before `analyse_folder`).
+| Dialog type | Used by | Win32 API | Key child control | Strategy |
+|-------------|---------|-----------|-------------------|----------|
+| Old-style `SHBrowseForFolder` | MIK | `#32770` with `SysTreeView32` | TreeView (OK follows tree selection, ignores Edit text) | `_drive_old_style_browse_dialog()` — pywinauto `tree.get_item("\\Desktop\\_Pipeline_Import")` selects node, then `BM_CLICK` on OK |
+| Modern `IFileDialog` (Vista+) | Rekordbox | `#32770` with `ComboBoxEx32`/`ToolbarWindow32` address bar | "Folder:" Edit field + "Select Folder" button | `_drive_modern_folder_dialog()` — set path in Edit via `SendMessage`, `Enter` to navigate in, `WM_COMMAND IDOK` to confirm |
+
+**Staging folder pattern**: `Desktop/_Pipeline_Import/` — shallow path both dialog types can reach. Created BEFORE dialog opens (tree populates on open). Cleaned up in `finally` block after analysis completes.
+
+**Focus-stealing bypass**: `_force_focus()` uses Alt-tap trick (`keybd_event(VK_MENU)`) before `SetForegroundWindow`. `AttachThreadInput` as belt-and-suspenders.
+
+**RB launch**: Desktop shortcut `rekordbox 7.lnk` via `cmd /c start` (versioned subfolder changes with updates, direct exe path breaks). Retry logic: kill+relaunch on menu navigation failure.
+
+**MIK DB**: `MIKStore.db` at `%LOCALAPPDATA%\Mixed In Key\Mixed In Key\11.0\MIKStore.db`. `is_mik_analyzed()` checks exact path, then filename fallback (`WHERE File LIKE '%filename.wav'`) for staging paths. Master-file gate (`_MASTER_PATTERN`) refuses non-master files.
+
+Key functions: `analyze_folder_with_mik(folder)`, `analyze_folder_with_rekordbox(folder)`, `is_mik_analyzed(path)`, `is_rekordbox_analyzed(path)`, `_force_focus(window)`, `_select_folder_in_browse_dialog(folder)` (auto-detects dialog type → delegates), `_drive_old_style_browse_dialog()` (MIK TreeView), `_drive_modern_folder_dialog()` (RB IFileDialog), `_create_staging_folder()`, `_copy_mik_tags_to_originals()`.
+
+Prerequisites: Rekordbox Library Protection OFF. Mouse clicks required for RB menu navigation — warn user before running.
+
+### `Source/propose_arrangement.py`
+**Added 2026-05-21.** Arrangement orchestrator for the `/arrange-mix` skill (PROPOSE mode). Loads a sections JSON + ALS, computes natural-fill alignment (incoming.first_drop at outgoing.last_fill/break) with overlap-size capping (~128 beats target), analyses each overlap for loop requirements, consults pair_history.jsonl for similar transitions, applies position shifts + loop extensions. Supports `--hints` for `intro_skip_bars` (clip sample start offset) and `loop_source_sec` pass-through. Produces arranged ALS + **comprehensive ARRANGEMENT_REPORT.json** (per-track: camelot, bpm, energy, intro_skip_bars; per-transition: harmonic_score, harmonic_type, bpm_delta, selected_style, loop_source, overlap_bars).
+
+Key types: `TrackInfo` (sections + positions + camelot/bpm/energy/intro_skip_bars), `OverlapAnalysis` (per-pair overlap details + loop specs), `ArrangementPlan` (full plan container).
+Key functions: `propose_arrangement()` (main entry, accepts `hints_path`), `compute_natural_positions()` (alignment + overlap cap), `analyse_overlap()` (loop planning), `find_similar_pairs()` (pair_history BPM+structure matching), `generate_report()` (JSON output with full audit data).
+
+### `Source/apply_loops.py`
+**Added 2026-05-21.** Mechanical clip cloning for loop extensions in ALS files. Takes loop specifications and inserts new AudioClip blocks that repeat existing source regions. Each loop clip is a discrete copy (LoopOn=false) placed back-to-back. Uses line-based text patching (not DOM). Reusable by propose_arrangement.py and apply_automation.py's shift helpers.
+
+Key types: `LoopSpec` (track_name, source_beat_start/end, count, insert_at_beat, clip_name).
+Key functions: `apply_loops()` (main entry), `clone_clip()` (template-based clip creation with ID allocation), `decompress_als()` / `compress_als()` (shared ALS I/O), `find_track_line_ranges()` (track boundary detection), `shift_track_clips()` (position shift helper).
+
+### `Source/apply_automation.py`
+**Added 2026-05-21.** Volume crossfades (Utility Gain) + EQ bass kills (ChannelEQ LowShelfGain) applied to an arranged Sections .als. Three transition styles auto-selected by overlap length: **STANDARD** (24-36 bars, existing two-phase model), **LONG_BLEND** (>36 bars, linear crossfade, partial EQ, delayed bass swap by 32 beats), **QUICK_SWAP** (<24 bars, instant swap, no sneak, full EQ kill). Section-structure-driven bass swap detection with 6 learned rules from Sam's corrections.
+
+Key types: `TransitionStyle` (enum: STANDARD/LONG_BLEND/QUICK_SWAP), `TrackInfo`, `TransitionPlan` (with style, two_stage_bass, low_sneak flags).
+Key functions: `find_bass_swap()` (priority-ordered swap point selection), `plan_transitions()` (style selection + rule application), `build_track_automation()` (style-specific envelope point generation), `insert_envelopes()` (ALS patching).
+
+### `Source/learn_from_correction.py`
+Automated diff tool for PROPOSE-LEARN cycle. Extracts automation envelopes from two ALS files, scopes comparison to each transition's overlap zone, detects bass_swap_moved / two_stage_bass / sneak_changed patterns, **classifies which TransitionStyle Sam's corrections most closely match** (standard/long_blend/quick_swap), appends to pair_history.jsonl with `classified_style` field.
+
+Key types: `TrackAutomation`, `ParamDiff`, `TransitionDiff` (with `classified_style`).
+Key functions: `extract_track_automation()`, `analyse_transitions()`, `_classify_style()` (sneak level + bass kill depth + instant swap detection), `diff_to_jsonl_entry()`, `print_report()`, `main()`.
 
 ### Diagnostic / Research Scripts
 

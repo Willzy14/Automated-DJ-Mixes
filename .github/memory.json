@@ -120,6 +120,50 @@
       "status": "working"
     }
   },
+  "standalone_scripts": {
+    "apply_automation": {
+      "path": "Source/apply_automation.py",
+      "purpose": "Patches volume crossfades (Utility Gain) + EQ bass kills (ChannelEQ LowShelfGain) into a Sections .als. Section-structure-driven bass swap detection (incoming first drop > outgoing outro > outgoing last fill/break > midpoint). Two-phase transition model: incoming ramps up to swap, outgoing fades out after swap. Line-level XML patching, \\r\\n line endings, dynamic AutomationTarget discovery.",
+      "status": "working",
+      "added": "2026-05-21"
+    },
+    "learn_from_correction": {
+      "path": "Source/learn_from_correction.py",
+      "purpose": "Diffs two Sections .als files (Claude proposal vs Sam correction). Extracts automation envelopes per track, scopes to overlap zones, detects correction patterns (bass_swap_moved, two_stage_bass, two_stage_volume, sneak_changed), appends to pair_history.jsonl. Supports --dry-run for preview.",
+      "status": "working",
+      "added": "2026-05-21"
+    },
+    "apply_section_corrections": {
+      "path": "Source/apply_section_corrections.py",
+      "purpose": "Patches .als chop boundaries via XML — 8 attributes per correction",
+      "status": "working",
+      "added": "2026-05-20"
+    },
+    "arrange_sections": {
+      "path": "Source/arrange_sections.py",
+      "purpose": "Repositions tracks by shifting all clips; natural-fill alignment from sections",
+      "status": "working",
+      "added": "2026-05-20"
+    },
+    "extract_sections_als": {
+      "path": "Source/extract_sections_als.py",
+      "purpose": "Parse .als clip boundaries to JSON",
+      "status": "working",
+      "added": "2026-05-20"
+    },
+    "diff_sections": {
+      "path": "Source/diff_sections.py",
+      "purpose": "JSON diff between section versions",
+      "status": "working",
+      "added": "2026-05-20"
+    },
+    "sections_blind_viz": {
+      "path": "Source/sections_blind_viz.py",
+      "purpose": "8-quarter blind PNG renderer for section validation",
+      "status": "working",
+      "added": "2026-05-20"
+    }
+  },
   "config_path": "Config/settings.json",
   "template_path": "Templates/",
   "cache_path": "Test Project/May 2026 Mix/Analysis Cache/",
@@ -129,6 +173,30 @@
   "v1_constraints": ["electronic/dance only", "constant BPM", "4/4 time", "Rekordbox-analyzed library"],
   "connections": ["Social Media Content Engine", "samwillsmixing.com"],
   "sessions": [
+    {
+      "date": "2026-05-21",
+      "focus": "Automation proposal for V20 — Claude adds volume crossfades + EQ bass kills, Sam corrects, diff = first Mix Patterns Library training data",
+      "outputs": [
+        "Sections V21.als (V20 + automation: 20 envelopes, 175 FloatEvents, 9 transitions with section-driven bass swap)",
+        "Source/apply_automation.py (standalone automation patcher for Sections .als files)"
+      ],
+      "modules_added": [
+        "Source/apply_automation.py (volume crossfades via Utility Gain + EQ bass kills via ChannelEQ LowShelfGain, section-structure-driven bass swap detection, two-phase transition model)"
+      ],
+      "modules_modified": [],
+      "key_fixes": [
+        "Bass swap at overlap boundary edge case: min(swap, ov_e-16) floor ensures ≥4 bars fade-out even when incoming drop_1 lands at overlap end",
+        "PowerShell string escaping: chr(34) workaround for nested quotes in Python one-liners"
+      ],
+      "validation": "V21.als: 10 tracks matched, 9 transitions planned, 20 envelopes inserted, 175 FloatEvents, \\r\\n line endings verified. Awaiting Sam's manual correction in Ableton.",
+      "open_items": [
+        "Sam to open V21.als in Ableton, review/correct automation, save as V22",
+        "After V22: diff V21 vs V22 to extract first 9 paired training entries for Mix Patterns Library",
+        "Build Mix Patterns Library skeleton (Documentation/Mix Patterns Library/)",
+        "Build learn_from_correction.py (diff two .als automation envelopes, extract correction pairs)",
+        "Build /arrange-mix skill with PROPOSE + auto-detect LEARN modes"
+      ]
+    },
     {
       "date": "2026-05-20",
       "focus": "Section-detection pipeline LOCKED IN (V13→V19) + arrangement principle from Sam's V20 + /arrange-mix planned",

@@ -221,6 +221,10 @@ def enrich_from_mik(audio_path: Path, db_path: Path | None = None) -> MikTrackDa
     except Exception:
         db_data = None
     if db_data:
+        if not tag_data.key and db_data.key:
+            tag_data.key = db_data.key
+        if not tag_data.bpm and db_data.bpm:
+            tag_data.bpm = db_data.bpm
         tag_data.lufs = db_data.lufs
         tag_data.key_confidence = db_data.key_confidence
         if not tag_data.energy and db_data.energy:
