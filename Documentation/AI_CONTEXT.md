@@ -37,11 +37,7 @@ Source/automated_dj_mixes/
 ├── cue_candidates.py      — Ranked CueCandidate API (5 cue types + confidence + visual_hint + amplitude + MIK paths)
 ├── mik_reader.py          — Mixed In Key 11 GEOB tag + SQLite reader (cues, beat grid, energy)
 ├── amplitude_analysis.py  — 1s RMS envelope analysis (first_drop, first_break, outro_start, clean-loop-window detector)
-├── transition.py          — Transition planning with PhraseGrid (per-track 16/8/4 snap)
 ├── report.py              — Per-track CSV + per-mix Markdown reports
-├── validation.py          — Objective checks: overlap, per-track bar/phrase alignment, fade endpoints
-├── transition_viz.py      — Per-transition PNG (both tracks aligned, automation overlay, tiered phrase grid)
-├── track_viz.py           — Per-track PNG (full timeline, candidates, loop region, tiered phrase grid)
 ├── waveform_preview.py    — Blank-canvas preview PNG (for writing visual hints before pipeline run)
 ├── desktop_analyzer.py    — MIK + Rekordbox desktop UI automation (staging folder, dialog detection)
 └── config.py              — Settings loader
@@ -86,6 +82,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 **Four-phase mix pipeline now operational: desktop analysis → sections → arrangement → automation. With 11 enforcement layers + Validation Discipline meta-rule baked into the brain.**
 
+**As of 2026-06-01 (Opus 4.8 audit + fix campaign):** consolidated the track matcher (killed the resurrected "Your Love" 20-char prefix bug still live in `apply_automation` + `learn_from_correction`), fixed the backwards energy-arc cooldown, **auto-wired `validate_als` into every `.als` write** (was an orphan run only by hand), right-sized template selection, guarded zero-length clips, and ported the stranded loop-quality / `loop_source_sec` / `intro_skip_bars` features into the three-phase production path. Full test suite 45/45 green. **Awaiting Sam's render of one test mix to confirm the Wave-2 behaviour changes by ear.** Also this session: **collapsed to ONE production pipeline** — retired the old single-command "Path A" engine (deleted `transition.py` / `transition_viz.py` / `track_viz.py` / `validation.py` / `skills/`, stripped the orchestrator full-mix back-half + `--visualize`, ~2,000 lines), leaving **`--sections-layout` → `propose_arrangement` → `apply_automation`** as the sole path; the bare full-mix mode now raises a "retired" error. Full breakdown in the 2026-06-01 session entry below.
+
 **As of 2026-05-22**: 22.05.26 Mix produced V4.als end-to-end. 7 robustness gaps closed, plus 4 more bug classes surfaced during real-world run and fixed live. `/validate` auto-fires before every "done" claim. `validate_als.py` has 4 layers covering the failure modes shipped to date. Sam is rendering V4 to listen on holiday — next session picks up with his listen notes.
 
 0. **Desktop analysis** — WORKING. `desktop_analyzer.py` drives MIK + Rekordbox via Win32 API with auto-detecting folder dialog handlers. Staging folder pattern bridges both dialog types. 10/10 tracks analyzed end-to-end on 2026-05-21.
@@ -124,6 +122,29 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - Ableton extends first/last automation breakpoint values to entire timeline — must clamp with unity anchors
 
 ## Recent Session History
+
+### 2026-06-01 (Latest Session) — Opus 4.8 audit + two-wave bug-fix campaign
+
+**Focus**: Sam (back from a week away, now on Opus 4.8) asked for a fresh audit of the whole pipeline for holes the previous model missed + easy wins. Ran a 4-agent parallel code audit, verified every finding by hand, then fixed everything across two waves. Sam chose "do it all, render once."
+
+**The two-path discovery (root of half the doc drift):** there are effectively TWO mix paths sharing a front half (analyse → harmonic sequence + energy arc). Path A = the old single-command `run_pipeline()` (forbidden for real mixes). Path B = the three-phase `/mix` (sections → `propose_arrangement` → `apply_automation`). The previous model rewrote Path B's stages 2-3 from scratch but left several features stranded in Path A's `transition.py` — so the skill documented loop-quality / `loop_source_sec` / `intro_skip_bars` as working when they only ran on the path you're told never to use.
+
+**Wave 1 — confirmed bugs + safety net (validated by code tests):**
+- **Track matcher**: the 20-char prefix bug (the "Your Love"/"Your Love (Instrumental Mix)" collision thought killed in May) was STILL live in `apply_automation.match_tracks_to_als` and `learn_from_correction._match_name`. `apply_automation` now routes through the canonical `apply_loops._match_track` (exact-first, then substring, NO prefix); `learn_from_correction` dropped its prefix clauses; removed a dead duplicate `return None`.
+- **Energy arc**: `sequencer.apply_energy_arc` cooldown re-spiked to its loudest track right after the peak (peak sorted descending). Peak now ASCENDING — energy crests at the 2/3 mark then falls to a quiet finish.
+- **`validate_als` auto-wired**: was an orphan (manual-only). Added `report_als()` and called it at the tail of all three `compress_als()` copies (als_generator, apply_automation, apply_loops) — every emitted .als now self-validates with an `[OK]/[FAIL]` banner. This safety net then backstopped the Wave-2 clip surgery.
+- **`clone_clip`** raises on zero/negative-length clips (was silent corruption); **`_find_template`** picks the smallest template that fits (was always the 35-track one); **`enrich_from_mik`** no longer overwrites a good LUFS with `None` and now logs swallowed DB errors; first-drop window: verified `(30,75)` is Sam's deliberate rule, fixed the stale "30-120s" docstring.
+
+**Wave 2 — ported stranded features into Path B (need a render to confirm musically):**
+- **`loop_source_sec`** hint now honoured by `propose_arrangement._plan_loop_extensions` (directs the outgoing tail-loop source).
+- **Loop-quality gate**: tail loops run through `amplitude_analysis.find_clean_loop_window` to avoid dead-air/dissipating regions (reuses the tuned detector; falls back to the section default on error). Replaces the never-reached `transition.py` `MIN_LOOP_QUALITY` gate.
+- **`intro_skip_bars`** now actually removes the skipped sections' clips from the .als (new `apply_loops.remove_named_clips`) — previously only dropped from alignment maths so the intro still played. Removal validated on a real .als.
+- **Multi-loop fix**: `apply_loops` re-finds each track's range per spec instead of one cumulative offset — a middle track with BOTH an intro loop and a tail loop used to push the second insertion past the track. Validated by inserting 2 specs into the same track on Sections V18.als (clips +4, validate_als clean).
+- **`apply_automation` phrase-snap (audit item)** — verified NON-issue: its swaps return section `arr_time` = chops, which ARE the phrase lineup points by construction. A global snap would have regressed it. No change made.
+
+**Validation**: full suite 45/45 (fixed a pre-existing stale `test_automation.py` that imported the removed `generate_transition`); behavioural asserts for matcher exact-first / energy-arc shape / clip guard / validate_als catching bad XML; multi-loop + clip-removal tested on real Sections V18.als; a full `propose_arrangement` run on V18 produced a valid .als (`[OK]`). **Next: Sam renders one test mix to confirm the Wave-2 behaviour changes by ear.**
+
+**Recommended follow-ups (not done):** archive ~20 dead research scripts in `Source/` root; populate `Documentation/Golden Sections/` baselines (regression gate is currently a no-op); sync the `/mix` skill gap-table across the 3 brains to mark loop-quality/intro_skip/loop_source as now-working.
 
 ### 2026-05-22 (Latest Session) — Robustness gauntlet + Validation Discipline meta-rule + 22.05.26 Mix V4
 
@@ -455,7 +476,9 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
-1. **Run `/mix` three-phase pipeline on Latest Releases Mix** — Mix V1 was generated via the old single-command pipeline (no section chopping, no arrangement optimisation). Need to re-run using the new three-phase `/mix` skill (sections → arrangement → automation) to produce colour-coded section clips, natural-fill alignment, and learned automation. Hints already exist (10/10 tracks hinted). This will be the first test of the newly-closed pipeline gaps (harmonic sequencing, BPM proximity, energy arc, transition styles).
+1. **Render a test mix to validate the 2026-06-01 Wave-2 changes** — the loop-quality gate, `loop_source_sec`, `intro_skip_bars` trimming, and the multi-loop fix all change how a mix sounds. Run `/mix` on a project, render, and listen. This is the validation the code tests can't provide.
+2. **Housekeeping from the audit** — archive ~20 dead research scripts in `Source/` root; populate `Documentation/Golden Sections/` with blessed baselines (the regression gate is currently a no-op without them); sync the `/mix` skill gap-table across the 3 brains to mark loop-quality/intro_skip/loop_source as now-working.
+3. **Run `/mix` three-phase pipeline on Latest Releases Mix** — Mix V1 was generated via the old single-command pipeline (no section chopping, no arrangement optimisation). Need to re-run using the new three-phase `/mix` skill (sections → arrangement → automation) to produce colour-coded section clips, natural-fill alignment, and learned automation. Hints already exist (10/10 tracks hinted). This will be the first test of the newly-closed pipeline gaps (harmonic sequencing, BPM proximity, energy arc, transition styles).
 2. **End-to-end verification of all 9 closed gaps** — Run `--previews-only` to confirm WAV tracks now show Camelot keys + BPM. Run `--dry-run` arrangement to confirm track ordering shows BPM clustering + energy arc shape. Review ARRANGEMENT_REPORT.json for transition style variety.
 3. **Add loop learning** — propose_arrangement.py currently produces uniform ~128b overlaps. V20 varies from 62-190b depending on loops Sam added. Need to analyse V20's loop patterns and feed them back into the proposal logic. apply_loops.py is built but not yet triggered by the proposer.
 4. **Test hint extensions** — Add test `intro_skip_bars` and `loop_source_sec` entries to a project's hints and verify they work end-to-end.

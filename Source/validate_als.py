@@ -63,6 +63,28 @@ def _is_float(s: str) -> bool:
         return False
 
 
+def report_als(path) -> list[str]:
+    """Validate `path`, print a one-line OK/FAIL banner, return the errors.
+
+    Hook wired into every compress_als() so the corruption gate runs
+    automatically on every emitted .als — not only when a human runs the
+    CLI. Non-fatal: prints loudly but does not raise, so a false positive
+    can't block a real mix.
+    """
+    p = Path(path)
+    errs = validate_als(p)
+    if errs:
+        print(f"  [FAIL] ALS validation: {len(errs)} issue(s) in {p.name} "
+              f"- do NOT load in Ableton:")
+        for e in errs[:10]:
+            print(f"      - {e}")
+        if len(errs) > 10:
+            print(f"      ... +{len(errs) - 10} more")
+    else:
+        print(f"  [OK] ALS validation passed: {p.name}")
+    return errs
+
+
 def validate_als(path: Path) -> list[str]:
     """Return a list of error messages. Empty list = file is clean."""
     errors: list[str] = []

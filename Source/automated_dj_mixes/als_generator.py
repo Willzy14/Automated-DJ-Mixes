@@ -18,8 +18,19 @@ from dataclasses import dataclass
 from automated_dj_mixes.analysis import TrackAnalysis
 from automated_dj_mixes.warping import WarpMarker
 from automated_dj_mixes.automation import AutomationPoint
-from automated_dj_mixes.transition import LoopSpec
 from automated_dj_mixes.phrase_viz import PhraseSegment
+
+
+@dataclass
+class LoopSpec:
+    """Loop spec for the chop-and-duplicate clip emitter. Inlined when the old
+    transition.py was retired; this path only fired in the removed full-mix
+    mode, but the als_generator unit test still exercises it."""
+    chop_at_beats: float
+    num_extra_copies: int
+    loop_source_start: float
+    loop_source_end: float
+
 
 _NEXT_ID = 50000
 
@@ -56,6 +67,11 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
     raw_bytes = content.encode("utf-8")
     with gzip.open(output_path, "wb") as f:
         f.write(raw_bytes)
+    try:
+        from validate_als import report_als
+        report_als(output_path)
+    except Exception as _ve:
+        print(f"  [skip] ALS self-validation unavailable: {_ve}")
     return output_path
 
 

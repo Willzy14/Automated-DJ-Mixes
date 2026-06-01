@@ -1,7 +1,16 @@
 {
   "project": "Automated DJ Mixes",
   "description": "Automated DJ mix pipeline — template-based ALS generation with multi-signal cue candidate detection (Rekordbox phrases + librosa energy + PWV5 waveform) feeding bass-to-bass transition planning",
-  "tech_stack": ["Python 3.x", "Librosa", "pyloudnorm", "mutagen", "pyrekordbox", "numpy", "matplotlib", "Ableton Live 12"],
+  "tech_stack": [
+    "Python 3.x",
+    "Librosa",
+    "pyloudnorm",
+    "mutagen",
+    "pyrekordbox",
+    "numpy",
+    "matplotlib",
+    "Ableton Live 12"
+  ],
   "analysis_model_version": "cue-candidates-v1",
   "modules": {
     "orchestrator": {
@@ -62,21 +71,11 @@
       "status": "working",
       "added": "2026-05-17"
     },
-    "transition": {
-      "path": "Source/automated_dj_mixes/transition.py",
-      "purpose": "Two-phase transition planning + per-track PhraseGrid snap + clamp sync + chop-leave-outro-room + dead-air loop refinement",
-      "status": "working (per-track phrase grid added 2026-05-18)"
-    },
     "report": {
       "path": "Source/automated_dj_mixes/report.py",
       "purpose": "Per-track CSV + per-mix Markdown rationale reports",
       "status": "working",
       "added": "2026-05-17"
-    },
-    "validation": {
-      "path": "Source/automated_dj_mixes/validation.py",
-      "purpose": "Per-track bar/phrase alignment HARD check + overlap range + fade endpoint + dead-air checks",
-      "status": "working (per-track checks added 2026-05-18)"
     },
     "mik_reader": {
       "path": "Source/automated_dj_mixes/mik_reader.py",
@@ -87,18 +86,6 @@
     "amplitude_analysis": {
       "path": "Source/automated_dj_mixes/amplitude_analysis.py",
       "purpose": "1-second RMS envelope analysis: first_drop / first_break / outro_start / clean-loop-window detector + snap_to_mik_or_beat helper",
-      "status": "working",
-      "added": "2026-05-18"
-    },
-    "transition_viz": {
-      "path": "Source/automated_dj_mixes/transition_viz.py",
-      "purpose": "Per-transition PNG: both tracks aligned, automation overlay, loop region hatched, tiered phrase grid with bar labels",
-      "status": "working",
-      "added": "2026-05-18"
-    },
-    "track_viz": {
-      "path": "Source/automated_dj_mixes/track_viz.py",
-      "purpose": "Per-track PNG: full timeline + RB phrases + MIK cues + energy strip + picked candidates + automation lanes + tiered phrase grid",
       "status": "working",
       "added": "2026-05-18"
     },
@@ -170,9 +157,32 @@
   "reports_path": "Test Project/May 2026 Mix/Reports/",
   "ground_truth_path": "Data/Ground Truth/Sam Cue Points.yaml",
   "test_fixtures": "Tests/Fixtures/",
-  "v1_constraints": ["electronic/dance only", "constant BPM", "4/4 time", "Rekordbox-analyzed library"],
-  "connections": ["Social Media Content Engine", "samwillsmixing.com"],
+  "v1_constraints": [
+    "electronic/dance only",
+    "constant BPM",
+    "4/4 time",
+    "Rekordbox-analyzed library"
+  ],
+  "connections": [
+    "Social Media Content Engine",
+    "samwillsmixing.com"
+  ],
   "sessions": [
+    {
+      "date": "2026-06-01",
+      "focus": "Opus 4.8 audit + 12 bug-fixes + housekeeping + collapsed to one pipeline (retired Path A)",
+      "key_changes": [
+        "Consolidated track matcher (killed resurrected 20-char prefix bug in apply_automation + learn_from_correction)",
+        "Fixed energy-arc cooldown; auto-wired validate_als into every compress_als via report_als",
+        "Ported loop_source_sec / loop-quality (find_clean_loop_window) / intro_skip clip-removal / multi-loop fix into propose_arrangement + apply_loops",
+        "Retired Path A: deleted transition.py, transition_viz.py, track_viz.py, validation.py, skills/; stripped orchestrator full-mix back-half + --visualize (~2000 lines). One path: --sections-layout -> propose_arrangement -> apply_automation"
+      ],
+      "validation": "45/45 tests, real --sections-layout run produced valid Sections V1.als ([OK]), zero dangling refs",
+      "open_items": [
+        "Sam to render a Wave-2 test mix to confirm by ear",
+        "#3 validate-the-sound (render transition zones; beat-align/clip/LUFS checks) + transition-energy-compensation (equal-power crossfade + pre-swap bass dip)"
+      ]
+    },
     {
       "date": "2026-05-21",
       "focus": "Automation proposal for V20 — Claude adds volume crossfades + EQ bass kills, Sam corrects, diff = first Mix Patterns Library training data",
@@ -255,10 +265,27 @@
         "Documentation/ABLETON_INTERACTION.md (17-section portable reference)",
         "Test Project/Black Book x Defected V2/Hints/track_hints.json (10 tracks × 4 fields)"
       ],
-      "modules_added": ["desktop_analyzer (drives MIK + RB UIs)", "templates/ (mik_add_tracks_button.png)", "analyze_real_mix + inspect_transition (research scripts)"],
-      "modules_modified": ["orchestrator (--previews-only, --no-hints-required, hint gate, early preview render)", "transition (last_bass_drop branch, skip clamp when anchored)", "validation (HARD 16-beat phrase, 16-80 bar overlap range)", "cue_candidates (HINT_TO_CUE_TYPE last_bass_drop)"],
-      "key_fixes": ["mouse-stealing → message-based pywinauto", "Library Protection silent no-op (Sam toggled padlock)", "JUCE AttachThreadInput for focus (not Alt trick)", "MIK MIKStore.db SQLite read for WAV (no GEOB)", "constant-tempo grid drift exposed bad auto_analyze approach"],
-      "reverted": ["auto_analyze.py programmatic key+grid+phrase (reverted via git checkout HEAD — unlistenable warp drift)"],
+      "modules_added": [
+        "desktop_analyzer (drives MIK + RB UIs)",
+        "templates/ (mik_add_tracks_button.png)",
+        "analyze_real_mix + inspect_transition (research scripts)"
+      ],
+      "modules_modified": [
+        "orchestrator (--previews-only, --no-hints-required, hint gate, early preview render)",
+        "transition (last_bass_drop branch, skip clamp when anchored)",
+        "validation (HARD 16-beat phrase, 16-80 bar overlap range)",
+        "cue_candidates (HINT_TO_CUE_TYPE last_bass_drop)"
+      ],
+      "key_fixes": [
+        "mouse-stealing → message-based pywinauto",
+        "Library Protection silent no-op (Sam toggled padlock)",
+        "JUCE AttachThreadInput for focus (not Alt trick)",
+        "MIK MIKStore.db SQLite read for WAV (no GEOB)",
+        "constant-tempo grid drift exposed bad auto_analyze approach"
+      ],
+      "reverted": [
+        "auto_analyze.py programmatic key+grid+phrase (reverted via git checkout HEAD — unlistenable warp drift)"
+      ],
       "validation": "ALL PASS on V13 — 16-beat HARD phrase + 16-80 bar overlap. bass_swap lands within 1-2 bars of last_bass_drop on every transition.",
       "open_items": [
         "Sam to listen to V13 in Ableton, refine hint timestamps (current values are visual estimates from preview PNGs)",
@@ -271,30 +298,75 @@
     {
       "date": "2026-05-19",
       "focus": "Housekeeping — merged V46 worktree branch into main",
-      "commits": ["d7ab342"]
+      "commits": [
+        "d7ab342"
+      ]
     },
     {
       "date": "2026-05-18",
       "focus": "Visual hints workflow + per-track phrase-grid enforcement + MIK + amplitude analysis + visual review gate",
-      "outputs": ["Mix V17 through V46 iteratively", "Hints/track_hints.json (12 tracks)", "Documentation/CODEX_REVIEW.md", "REVIEW_VNN.md template auto-generated per mix"],
-      "modules_added": ["mik_reader", "amplitude_analysis", "transition_viz", "track_viz", "waveform_preview"],
-      "modules_modified": ["cue_candidates (hints + amplitude + MIK + first_drop_candidate)", "transition (PhraseGrid per-track, clamp sync, chop-reserve, dead-air refinement)", "validation (per-track alignment)", "orchestrator (full wiring)"],
-      "key_fixes": ["clamp sync (24-beat gap)", "first_downbeat_offset positioning (off-by-one)", "loop tail-skip dead-air", "chop-leave-outro-room", "hint precedence over algorithms", "per-track phrase grid alignment"],
+      "outputs": [
+        "Mix V17 through V46 iteratively",
+        "Hints/track_hints.json (12 tracks)",
+        "Documentation/CODEX_REVIEW.md",
+        "REVIEW_VNN.md template auto-generated per mix"
+      ],
+      "modules_added": [
+        "mik_reader",
+        "amplitude_analysis",
+        "transition_viz",
+        "track_viz",
+        "waveform_preview"
+      ],
+      "modules_modified": [
+        "cue_candidates (hints + amplitude + MIK + first_drop_candidate)",
+        "transition (PhraseGrid per-track, clamp sync, chop-reserve, dead-air refinement)",
+        "validation (per-track alignment)",
+        "orchestrator (full wiring)"
+      ],
+      "key_fixes": [
+        "clamp sync (24-beat gap)",
+        "first_downbeat_offset positioning (off-by-one)",
+        "loop tail-skip dead-air",
+        "chop-leave-outro-room",
+        "hint precedence over algorithms",
+        "per-track phrase grid alignment"
+      ],
       "validation": "ALL PASS on V46 — including new per-track bar alignment HARD check (was 3/11 in V42, now 11/11)",
-      "open_items": ["Sapian (T5) bass placement at 45s may need hint adjustment", "off-by-one beat verification in Ableton", "per-genre prefer_grid parameterisation", "hint cache by audio hash"]
+      "open_items": [
+        "Sapian (T5) bass placement at 45s may need hint adjustment",
+        "off-by-one beat verification in Ableton",
+        "per-genre prefer_grid parameterisation",
+        "hint cache by audio hash"
+      ]
     },
     {
       "date": "2026-05-17",
       "focus": "Multi-signal cue candidate architecture (Codex-reviewed plan)",
-      "outputs": ["Mix V16", "Phrase Viz V8", "PWV5 validation PNGs", "per-track CSV reports", "Transition - Mix V16.md"],
-      "branches": ["analysis-v7-preserve (origin)", "analysis-v8-build (merged into main)"],
-      "commits": ["efadeb0", "f9bdb52", "93028bb"],
+      "outputs": [
+        "Mix V16",
+        "Phrase Viz V8",
+        "PWV5 validation PNGs",
+        "per-track CSV reports",
+        "Transition - Mix V16.md"
+      ],
+      "branches": [
+        "analysis-v7-preserve (origin)",
+        "analysis-v8-build (merged into main)"
+      ],
+      "commits": [
+        "efadeb0",
+        "f9bdb52",
+        "93028bb"
+      ],
       "validation": "4/5 checks pass on Mix V16; bass-swap grid alignment fails on some transitions"
     },
     {
       "date": "2026-05-16",
       "focus": "Rekordbox phrase analysis + per-beat warp markers",
-      "outputs": ["Mix V7-V10"]
+      "outputs": [
+        "Mix V7-V10"
+      ]
     },
     {
       "date": "2026-05-15",

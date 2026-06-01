@@ -178,15 +178,15 @@ def main() -> int:
             continue
 
         # Run regeneration in a temp workspace so we don't disturb the
-        # project's own Output folder.
+        # project's own Output folder. regenerate_sections reads
+        # project_dir/Audio directly and writes to work_dir/Output — no
+        # symlink needed (the old code symlinked Audio then passed work_dir
+        # as project_dir, so Audio was never found, and symlink_to fails on
+        # Windows without developer mode).
         with tempfile.TemporaryDirectory() as td:
             work_dir = Path(td)
-            # Copy/symlink Audio into work_dir so orchestrator can find it
-            (work_dir / "Audio").symlink_to(project_dir / "Audio",
-                                            target_is_directory=True) \
-                if hasattr(Path, "symlink_to") else None
             try:
-                current_secs = regenerate_sections(work_dir, work_dir)
+                current_secs = regenerate_sections(project_dir, work_dir)
             except Exception as e:
                 print(f"  ERROR regenerating: {e}")
                 overall_ok = False

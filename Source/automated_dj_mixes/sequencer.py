@@ -140,8 +140,13 @@ def apply_energy_arc(tracks: list[dict]) -> list[dict]:
                 return False
         return True
 
+    # Single-humped arc: ramp up through build, crest at the 2/3 mark, fall
+    # to a quiet finish. Peak sorts ASCENDING so the loudest track lands at
+    # the crest; cooldown sorts descending so energy falls to the close.
+    # (Peak was descending, which made cooldown re-spike to its loudest
+    # track right after the peak wound down — a sawtooth, not an arc.)
     build = sorted(groups[0], key=_energy_key)
-    peak = sorted(groups[1], key=_energy_key, reverse=True)
+    peak = sorted(groups[1], key=_energy_key)
     cooldown = sorted(groups[2], key=_energy_key, reverse=True)
 
     proposed = build + peak + cooldown

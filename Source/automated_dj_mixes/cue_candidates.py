@@ -367,7 +367,7 @@ def first_drop_candidate(
 
     Precedence (Sam's rule, 2026-05-19):
       1. Visual hint wins — Sam's eye on the picture overrides everything.
-      2. Earliest rb_chorus_start within the first-drop window (30-120s).
+      2. Earliest rb_chorus_start within the first-drop window (30-75s).
          Rekordbox marks chorus phrases — we want the FIRST one (sustained
          main groove, not a teaser drop), but not so late that we'd be
          dropping the incoming 2+ minutes in.

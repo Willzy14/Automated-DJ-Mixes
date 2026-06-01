@@ -75,6 +75,11 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
     content = "".join(lines)
     with gzip.open(output_path, "wb") as f:
         f.write(content.encode("utf-8"))
+    try:
+        from validate_als import report_als
+        report_als(output_path)
+    except Exception as _ve:
+        print(f"  [skip] ALS self-validation unavailable: {_ve}")
     return output_path
 
 
@@ -710,25 +715,21 @@ def _normalise(s: str) -> str:
 def match_tracks_to_als(tracks: list[TrackInfo],
                         als_tracks: list[tuple[int, int, str]]) -> None:
     """Populate each TrackInfo's als_* fields by matching names."""
+    from apply_loops import _match_track
     for track in tracks:
-        tn = _normalise(track.name)
-        for idx, (s, e, als_name) in enumerate(als_tracks):
-            an = _normalise(als_name)
-            if tn == an or tn in an or an in tn:
-                track.als_index = idx
-                track.als_start = s
-                track.als_end = e
-                break
-        if track.als_index < 0:
-            # fuzzy: compare first 20 chars of title portion
-            for idx, (s, e, als_name) in enumerate(als_tracks):
-                an = _normalise(als_name)
-                if len(tn) > 5 and len(an) > 5:
-                    if tn[:20] in an or an[:20] in tn:
-                        track.als_index = idx
-                        track.als_start = s
-                        track.als_end = e
-                        break
+        m = _match_track(track.name, als_tracks)
+        if m is None:
+            continue
+        s, e, tname = m
+        track.als_start = s
+        track.als_end = e
+        track.als_index = next(
+            i for i, (ss, ee, nn) in enumerate(als_tracks)
+            if (ss, ee, nn) == (s, e, tname)
+        )
+        # Exact/substring match only — no prefix fuzz. The old 20-char
+        # prefix fallback mis-matched tracks sharing a long name prefix
+        # (e.g. "Your Love" vs "Your Love (Instrumental Mix)").
 
 
 # ── Display helpers ───────────────────────────────────────────────────────────

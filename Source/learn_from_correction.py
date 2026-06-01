@@ -177,7 +177,9 @@ def _normalise(s: str) -> str:
 
 def _match_name(a: str, b: str) -> bool:
     na, nb = _normalise(a), _normalise(b)
-    return na == nb or na in nb or nb in na or na[:20] in nb or nb[:20] in na
+    # Exact/substring only — no 20-char prefix match (it collided
+    # "Your Love" with "Your Love (Instrumental Mix)").
+    return na == nb or na in nb or nb in na
 
 
 def _short(name: str) -> str:

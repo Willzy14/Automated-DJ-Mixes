@@ -218,21 +218,27 @@ def enrich_from_mik(audio_path: Path, db_path: Path | None = None) -> MikTrackDa
 
     try:
         db_data = read_mik_db_track(audio_path, db_path)
-    except Exception:
+    except Exception as exc:
+        print(f"  [mik] DB read failed for {audio_path.name}: {exc}")
         db_data = None
     if db_data:
         if not tag_data.key and db_data.key:
             tag_data.key = db_data.key
         if not tag_data.bpm and db_data.bpm:
             tag_data.bpm = db_data.bpm
-        tag_data.lufs = db_data.lufs
-        tag_data.key_confidence = db_data.key_confidence
+        # Only let DB values win when present — a None here would otherwise
+        # wipe a good tag/librosa value (LUFS feeds gain staging).
+        if db_data.lufs is not None:
+            tag_data.lufs = db_data.lufs
+        if db_data.key_confidence is not None:
+            tag_data.key_confidence = db_data.key_confidence
         if not tag_data.energy and db_data.energy:
             tag_data.energy = db_data.energy
 
     try:
         tag_data.energy_segments = read_mik_energy_segments(audio_path, db_path)
-    except Exception:
+    except Exception as exc:
+        print(f"  [mik] energy-segment read failed for {audio_path.name}: {exc}")
         tag_data.energy_segments = []
 
     return tag_data

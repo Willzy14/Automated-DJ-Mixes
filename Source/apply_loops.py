@@ -46,6 +46,11 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
     content = "".join(lines)
     with gzip.open(output_path, "wb") as f:
         f.write(content.encode("utf-8"))
+    try:
+        from validate_als import report_als
+        report_als(output_path)
+    except Exception as _ve:
+        print(f"  [skip] ALS self-validation unavailable: {_ve}")
     return output_path
 
 
@@ -124,7 +129,6 @@ def _match_track(name: str, als_tracks: list[tuple[int, int, str]]) -> tuple[int
         if tn in nn:
             return start, end, tname
 
-    return None
     return None
 
 
@@ -226,6 +230,12 @@ def clone_clip(template_lines: list[str], spec: LoopSpec,
     src_start = spec.source_beat_start
     src_end = spec.source_beat_end
     src_len = src_end - src_start
+    if src_len <= 0:
+        raise ValueError(
+            f"clone_clip: non-positive loop length ({src_len}) for "
+            f"'{spec.track_name}' (source {src_start}->{src_end}). "
+            f"A zero/negative-length clip corrupts the .als."
+        )
 
     new_lines = list(template_lines)  # shallow copy of strings
 
@@ -421,20 +431,20 @@ def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
     global _NEXT_ID
     _NEXT_ID = find_max_id(lines) + 100  # safe gap above existing IDs
 
-    als_tracks = find_track_line_ranges(lines)
-    offset = 0  # cumulative line-count shift from insertions
-
-    # Group specs by track to handle offset correctly
+    # Re-find each track's line range on the CURRENT lines for every spec.
+    # Two specs can target the SAME track (a middle track gets an intro loop
+    # as the incoming of one transition AND a tail loop as the outgoing of the
+    # next). A single cumulative `offset` over-counted the first insertion and
+    # pushed the second spec's search window past the track. Re-finding per
+    # spec is simpler and always correct.
     for spec in specs:
+        als_tracks = find_track_line_ranges(lines)
         matched = _match_track(spec.track_name, als_tracks)
         if not matched:
             print(f"  WARNING: track '{spec.track_name}' not found, skipping loops")
             continue
 
         track_start, track_end, tname = matched
-        # Apply accumulated offset
-        track_start += offset
-        track_end += offset
 
         # Apply any pre-insertion clip shifts (e.g. push the outro back so the
         # new tail loop clips fit in front of it).
@@ -459,10 +469,10 @@ def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
             lines[events_start] = f"{indent}<Events>\r\n"
             lines.insert(events_start + 1, f"{indent}</Events>\r\n")
             events_end = events_start + 1
-            offset += 1
+            track_end += 1
 
         # Find template clip
-        clip_range = extract_first_clip_lines(lines, events_start, events_end + offset)
+        clip_range = extract_first_clip_lines(lines, events_start, events_end)
         if not clip_range:
             print(f"  WARNING: no AudioClip found in '{tname}', skipping")
             continue
@@ -479,22 +489,75 @@ def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
             cloned = clone_clip(template, spec, arr_beat)
             all_new_lines.extend(cloned)
 
-        # Find insertion point (account for current offset within this track)
-        # Re-find events end since we may have expanded it
-        _, events_end_now = find_clip_events(lines, track_start, track_end + offset)
+        # Insertion point — events on the current lines (post-expansion).
+        _, events_end_now = find_clip_events(lines, track_start, track_end)
         insert_at = find_insertion_point(
             lines, events_start, events_end_now, spec.insert_at_beat)
 
         # Insert
         lines[insert_at:insert_at] = all_new_lines
-        added = len(all_new_lines)
-        offset += added
 
         print(f"  {tname[:40]}: +{spec.count} loop clips "
               f"({loop_len:.0f}b x {spec.count} = {loop_len * spec.count:.0f}b) "
               f"at arr beat {spec.insert_at_beat:.0f}")
 
     return lines
+
+
+# ── Clip removal (used for intro_skip_bars) ──────────────────────────────────
+
+def _find_named_clip_span(lines: list[str], events_start: int, events_end: int,
+                          targets: set[str]) -> tuple[int, int] | None:
+    """Return (open_line, close_line) of the first <AudioClip> block in
+    [events_start, events_end] whose clip <Name Value="..."/> is in `targets`.
+
+    The clip name is a string (e.g. 'intro_1'); the integer <Name> inside
+    <ScaleInformation> can't collide because targets hold clip-name strings,
+    not 0-11 scale indices.
+    """
+    clip_open = None
+    i = events_start
+    while i <= events_end and i < len(lines):
+        s = lines[i]
+        if "<AudioClip " in s:
+            clip_open = i
+        elif clip_open is not None and 'Name Value="' in s:
+            mm = re.search(r'Name Value="([^"]*)"', s)
+            if mm and mm.group(1) in targets:
+                j = clip_open
+                while j < len(lines) and "</AudioClip>" not in lines[j]:
+                    j += 1
+                return clip_open, j
+        if "</AudioClip>" in s:
+            clip_open = None
+        i += 1
+    return None
+
+
+def remove_named_clips(lines: list[str], track_name: str, names) -> int:
+    """Delete whole <AudioClip>...</AudioClip> blocks whose clip name is in
+    `names`, within the track called `track_name`. Re-finds ranges after each
+    removal (line indices shift). Returns the number of clips removed.
+    """
+    targets = {n for n in (names or []) if n}
+    if not targets:
+        return 0
+    removed = 0
+    while True:
+        m = _match_track(track_name, find_track_line_ranges(lines))
+        if not m:
+            break
+        ts, te, _ = m
+        es, ee = find_clip_events(lines, ts, te)
+        if es < 0:
+            break
+        span = _find_named_clip_span(lines, es, ee, targets)
+        if span is None:
+            break
+        a, b = span
+        del lines[a:b + 1]
+        removed += 1
+    return removed
 
 
 # ── Shift helpers (used by propose_arrangement.py) ───────────────────────────

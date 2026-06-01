@@ -45,6 +45,7 @@ from apply_loops import (
     compress_als,
     decompress_als,
     find_track_line_ranges,
+    remove_named_clips,
     shift_track_clips,
 )
 
@@ -400,6 +401,36 @@ def analyse_overlap(out_track: TrackInfo, in_track: TrackInfo,
     return analysis
 
 
+def _clean_tail_loop(wav_path, section: dict, loop_len: int,
+                     bpm: float) -> tuple[float, float] | None:
+    """Pick a dead-air-free `loop_len`-beat window inside `section`.
+
+    Reuses the tuned amplitude_analysis.find_clean_loop_window (walks back
+    from the section end skipping any sub-silence frames) so a tail loop
+    never lands on a dissipating/silent region. Returns (src_start_beat,
+    src_end_beat) in beats, or None to keep the section-default region.
+    """
+    try:
+        from automated_dj_mixes.amplitude_analysis import find_clean_loop_window
+        spb = 60.0 / bpm
+        res = find_clean_loop_window(
+            wav_path,
+            section["source_start_beats"] * spb,
+            section["source_end_beats"] * spb,
+            int(loop_len),
+            bpm,
+        )
+    except Exception as exc:
+        print(f"    [loop] quality check skipped: {exc}")
+        return None
+    if not res:
+        return None
+    clean_start_sec, _ = res
+    start_beat = float(round((clean_start_sec / spb) / LOOP_GRANULARITY)
+                       * LOOP_GRANULARITY)
+    return start_beat, start_beat + loop_len
+
+
 def _plan_loop_extensions(out_track: TrackInfo, in_track: TrackInfo,
                           analysis: OverlapAnalysis) -> None:
     """Determine what loops are needed to bring overlap to target.
@@ -442,9 +473,27 @@ def _plan_loop_extensions(out_track: TrackInfo, in_track: TrackInfo,
         out_reps = max(1, half_deficit // loop_len)
         out_extension = out_reps * loop_len
 
-        # Source region: last loop_len beats of the section
-        src_end = tail["source_end_beats"]
-        src_start = src_end - loop_len
+        # Source region: last loop_len beats of the section, UNLESS the
+        # outgoing track carries a loop_source_sec hint, which directs where
+        # in the source the loop comes from (Sam's eye on the waveform).
+        hint_sec = getattr(out_track, "loop_source_sec", None)
+        if hint_sec and out_track.bpm:
+            hint_beat = hint_sec * out_track.bpm / 60.0
+            src_start = float(round(hint_beat / LOOP_GRANULARITY) * LOOP_GRANULARITY)
+            src_end = src_start + loop_len
+        else:
+            src_end = tail["source_end_beats"]
+            src_start = src_end - loop_len
+            # Quality gate: avoid looping a dissipating/silent tail. Search
+            # the pre-outro section for a dead-air-free window of the same
+            # length; fall back to the default region if none is found.
+            wav = getattr(out_track, "wav_path", None)
+            if wav and out_track.bpm:
+                cleaned = _clean_tail_loop(wav, tail, loop_len, out_track.bpm)
+                if cleaned:
+                    src_start, src_end = cleaned
+                    print("    [loop] clean tail window -> {:.0f}-{:.0f}b".format(
+                        src_start, src_end))
 
         # Insert position: BEFORE the outro starts. This produces the
         # musically-correct sequence:
@@ -667,6 +716,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             wav_name = t.name if t.name.endswith(".wav") else t.name + ".wav"
             wav_path = audio_dir / wav_name
             if wav_path.exists():
+                t.wav_path = wav_path
                 mik = read_mik_db_track(wav_path)
                 if mik:
                     if mik.key:
@@ -681,14 +731,20 @@ def propose_arrangement(als_path: Path, sections_path: Path,
     for t in tracks:
         hint = hints.get(t.name) or hints.get(t.name + ".wav") or {}
         t.intro_skip_bars = hint.get("intro_skip_bars", 0)
+        t.loop_source_sec = hint.get("loop_source_sec")
         if t.intro_skip_bars:
             skip_beats = t.intro_skip_bars * 4
+            # Capture the clip names of the sections we're dropping so their
+            # clips can be removed from the .als (otherwise the trimmed intro
+            # still plays — it's only dropped from the alignment maths here).
+            t.dropped_clip_names = [s.get("name", "") for s in t.sections
+                                    if s["source_end_beats"] <= skip_beats]
             t.sections = [s for s in t.sections
                           if s["source_end_beats"] > skip_beats]
             if t.sections:
                 t.arr_start = t.sections[0]["arr_time"]
-            print("  {} — skipping first {} bars (intro trim)".format(
-                t.name[:40], t.intro_skip_bars))
+            print("  {} — skipping first {} bars (intro trim, {} clip(s))".format(
+                t.name[:40], t.intro_skip_bars, len(t.dropped_clip_names)))
     print("Loaded {} tracks from sections JSON".format(len(tracks)))
     for i, t in enumerate(tracks):
         meta = ""
@@ -783,6 +839,17 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         print("\n--- Applying to ALS ---")
         lines = decompress_als(als_path)
         print("  Read {} lines from {}".format(len(lines), als_path.name))
+
+        # Step 0: Remove clips for intro-skipped sections so the trimmed
+        # intro doesn't play (intro_skip_bars). Done before shifts so only the
+        # remaining clips get repositioned.
+        for track in tracks:
+            dropped = getattr(track, "dropped_clip_names", None)
+            if dropped:
+                n = remove_named_clips(lines, track.name, dropped)
+                if n:
+                    print("  Removed {} intro clip(s) from '{}' (intro skip)".format(
+                        n, track.name[:40]))
 
         # Step 1: Apply position shifts
         if shifts:
