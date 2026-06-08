@@ -348,6 +348,21 @@ def detect(wav: Path, project: Path):
     _assign_labels(sections, kick_on_bar, presence["bass"], mix_norm, outro_start)
     sections = _merge_same_label(sections)
 
+    # A tiny drop fragment (<= one phrase) right before the outro is the last
+    # fill's block, not a real drop — fold it into the preceding drop so it reads
+    # drop -> outro (the fill stays at the drop's tail).
+    if (len(sections) >= 3 and sections[-1]["label"] == "outro"
+            and sections[-2]["label"] == "drop" and sections[-3]["label"] == "drop"
+            and sections[-2]["end_bar"] - sections[-2]["start_bar"] <= PHRASE_GRID):
+        sections[-3]["end_bar"] = sections[-2]["end_bar"]
+        sections[-3]["end_sec"] = sections[-2]["end_sec"]
+        sections[-3]["stems_on"] = sorted(set(sections[-3]["stems_on"]) | set(sections[-2]["stems_on"]))
+        del sections[-2]
+        counts = {}
+        for s in sections:
+            counts[s["label"]] = counts.get(s["label"], 0) + 1
+            s["name"] = f"{s['label']}_{counts[s['label']]}"
+
     def to_sec(regs):
         return [[round(downbeat + a * sec_per_bar, 2), round(downbeat + b * sec_per_bar, 2), a, b]
                 for a, b in regs]
