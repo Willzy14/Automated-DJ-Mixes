@@ -270,13 +270,23 @@ def _merge_same_label(sections):
     return merged
 
 
-def detect(wav: Path, project: Path):
-    stats = _load_stats(next((project / "Sections Review").glob("Blind_V*")), wav.stem)
-    if not stats:
-        print(f"  [skip] no stats (bpm/downbeat) for {wav.stem}")
-        return None
-    bpm = stats["bpm"]
-    downbeat = stats.get("first_downbeat_sec", 0.0)
+def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True):
+    """Detect sections + mix signals for one track.
+
+    bpm/downbeat may be passed in (pipeline use — they come from Rekordbox/analysis);
+    if omitted they're read from the Blind_V stats JSON (standalone CLI). make_viz /
+    write_json let a caller skip the PNG / JSON side-artifacts.
+    """
+    stats = None
+    if bpm is None or downbeat is None:
+        review = project / "Sections Review"
+        blind = next(review.glob("Blind_V*"), None) if review.exists() else None
+        stats = _load_stats(blind, wav.stem) if blind else None
+        if not stats:
+            print(f"  [skip] no stats (bpm/downbeat) for {wav.stem}")
+            return None
+        bpm = stats["bpm"]
+        downbeat = stats.get("first_downbeat_sec", 0.0)
     sec_per_bar = 4 * 60.0 / bpm
 
     envs, hop_t = _separate_envelopes(wav, project / "_Stem Analysis")
@@ -390,14 +400,17 @@ def detect(wav: Path, project: Path):
 
     result = {"track": wav.stem, "bpm": round(bpm, 2), "n_bars": n_bars,
               "sections": sections, "signals": signals}
-    (project / "_Stem Analysis" / f"SECTIONS_STEM_{wav.stem}.json").write_text(
-        json.dumps(result, indent=1), encoding="utf-8")
+    if write_json:
+        (project / "_Stem Analysis").mkdir(parents=True, exist_ok=True)
+        (project / "_Stem Analysis" / f"SECTIONS_STEM_{wav.stem}.json").write_text(
+            json.dumps(result, indent=1), encoding="utf-8")
 
-    _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, sections, signals, kick_ref)
+    if make_viz:
+        _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, sections, signals, kick_ref)
 
-    old_n = len(stats["sections"])
     n_drop = sum(1 for c in kick_cues if c["type"] == "kick_dropout")
-    print(f"  {wav.stem[:46]:46}  old {old_n:2d} -> stem {len(sections):2d} secs | "
+    old_n = f"old {len(stats['sections']):2d} -> " if stats else ""
+    print(f"  {wav.stem[:46]:46}  {old_n}stem {len(sections):2d} secs | "
           f"kick-drops {n_drop} loops {len(signals['loop_windows'])} vocals {len(signals['vocal_regions'])}")
     return result
 

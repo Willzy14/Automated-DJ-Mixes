@@ -187,6 +187,7 @@ def run_pipeline(
     no_hints_required: bool = False,
     sections_layout: bool = False,
     allow_partial_rekordbox: bool = False,
+    stem_sections: bool = False,
 ) -> Path | None:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
@@ -435,7 +436,27 @@ def run_pipeline(
             rb_match = rb_matches.get(str(analysis.path))
             segments = None
             features = None
-            if rb_match:
+            if stem_sections:
+                # Stem-based detector as the section source — needs no RB phrases
+                # (only the audio + bpm + downbeat). The .npz envelope cache makes
+                # re-runs on known tracks instant.
+                try:
+                    from stem_detector import detect as stem_detect
+                    from automated_dj_mixes.phrase_viz import (
+                        segments_from_stem_sections, validate_bar_math,
+                    )
+                    stem_res = stem_detect(
+                        analysis.path, input_dir.parent,
+                        bpm=analysis.bpm, downbeat=analysis.first_downbeat_sec,
+                        make_viz=False,
+                    )
+                    if stem_res:
+                        segments = segments_from_stem_sections(stem_res)
+                        for w in validate_bar_math(segments, analysis.path.stem[:40]):
+                            print(f"  BAR-MATH: {w}")
+                except Exception as e:
+                    print(f"  WARNING: stem section detection failed for {analysis.path.name}: {e}")
+            elif rb_match:
                 offset = getattr(rb_match, "first_downbeat_offset", 0)
                 ext_path = Path(rb_match.ext_path) if rb_match.ext_path else None
                 try:
@@ -574,6 +595,11 @@ def main():
                              "colour-code each section by type (intro=green, break=blue, "
                              "drop=yellow, outro=red, fill=orange). No transitions, no "
                              "automation, no hints required. Output is 'Sections V<N>.als'.")
+    parser.add_argument("--stem-sections", action="store_true",
+                        help="In --sections-layout mode, use the Demucs stem-based detector "
+                             "(Source/stem_detector.py) as the section source instead of "
+                             "Rekordbox phrases. Analysis-only; envelope cache makes re-runs "
+                             "on known tracks instant.")
     args = parser.parse_args()
 
     als_path = run_pipeline(
@@ -585,6 +611,7 @@ def main():
         no_hints_required=args.no_hints_required,
         sections_layout=args.sections_layout,
         allow_partial_rekordbox=args.allow_partial_rekordbox,
+        stem_sections=args.stem_sections,
     )
     if als_path is not None:
         print(f"Generated: {als_path}")

@@ -276,6 +276,31 @@ def segments_from_intervals(intervals: list[Interval]) -> list[PhraseSegment]:
     return segments
 
 
+def segments_from_stem_sections(stem_result: dict) -> list[PhraseSegment]:
+    """Convert a stem_detector.detect() result into PhraseSegment clips.
+
+    The stem detector already labels sections (intro/drop/break/fill/outro) — the
+    same label set this module colour-codes — and reports them in bars from the
+    first downbeat. Bar 0 = the first downbeat = source-beat 0 (matching
+    build_intervals' source-beat convention), so source_beats = bar * 4. This is
+    the bridge that lets the stem detector replace the RB-phrase section source;
+    no refine_segments pass is needed (the stem rules are already final).
+    """
+    segments: list[PhraseSegment] = []
+    counters: dict[str, int] = {}
+    for s in stem_result.get("sections", []):
+        label = s["label"]
+        counters[label] = counters.get(label, 0) + 1
+        segments.append(PhraseSegment(
+            source_start_beats=float(s["start_bar"]) * 4.0,
+            source_end_beats=float(s["end_bar"]) * 4.0,
+            label=label,
+            color=LABEL_TO_COLOR.get(label, COLOR_UNKNOWN),
+            name=f"{label}_{counters[label]}",
+        ))
+    return segments
+
+
 # ---------------------------------------------------------------------------
 # Fine-grained refinement (Sam V2 feedback 2026-05-19)
 #
