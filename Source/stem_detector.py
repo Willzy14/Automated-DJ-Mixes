@@ -58,6 +58,7 @@ DROP_REL = 0.85           # a drop must reach this fraction of the track's FULLE
 OUTRO_LEAD_FRAC = 0.60    # outro starts where the LEAD (vocals+other) drops below this fraction
                           # of its body level near the end (kick+bass can keep running)
 MIN_OUTRO_BARS = 8        # don't push the outro start so late it leaves less than this
+MAX_OUTRO_BARS = 48       # a 'last fill' leaving a longer tail than this isn't an outro transition
 MIN_LOOP_BARS = 4
 MIN_VOCAL_BARS = 2
 
@@ -307,17 +308,23 @@ def detect(wav: Path, project: Path):
              if a["type"] == "kick_dropout" and b["type"] == "kick_return"
              and b["start_sec"] - a["start_sec"] <= max_fill_sec]
 
-    # Outro start: the lead (vocals+other) drop near the end — but as Sam's rule of
-    # thumb, the END OF THE LAST FILL is the outro start. So if the last fill ends at
-    # or after the lead-drop point (and leaves a real outro), the outro begins there;
-    # the final drop runs up to that fill. (VLAD's last fill is BEFORE its lead-drop,
-    # so the lead-drop wins — no change.)
+    # Outro start: the lead (vocals+other) drop near the end. But Sam's rule of
+    # thumb — the END OF THE LAST FILL is the outro start — wins when that fill is a
+    # plausible outro transition: after any lead-drop, OR (no lead-drop at all) just
+    # near the end, leaving a sensible-length tail. The start snaps UP to the phrase
+    # line after the fill, so the fill stays in the preceding section and the outro
+    # begins cleanly after it. (VLAD's last fill precedes its lead-drop, so its
+    # lead-drop still wins.)
     outro_start = _find_outro_start(pb, n_bars)
-    if outro_start is not None and fills:
-        last_fill_end = int(round((fills[-1][1] - downbeat) / sec_per_bar))
-        cand = int(round(last_fill_end / PHRASE_GRID) * PHRASE_GRID)
-        if cand >= outro_start and n_bars - cand >= MIN_OUTRO_BARS:
-            outro_start = cand
+    if fills:
+        lf = int(np.ceil((fills[-1][1] - downbeat) / sec_per_bar / PHRASE_GRID)) * PHRASE_GRID
+        outro_len = n_bars - lf
+        # Use the fill if there's no lead-drop, or the fill is at/after it, or it's
+        # within ~a phrase BEFORE it (same transition, snapping noise apart). A fill
+        # far before the lead-drop is mid-body, so the lead-drop wins (VLAD).
+        if (MIN_OUTRO_BARS <= outro_len <= MAX_OUTRO_BARS
+                and (outro_start is None or lf >= outro_start - 2 * PHRASE_GRID)):
+            outro_start = lf
 
     # Boundaries: a kick drop-out + return marks a new 16-beat section (Sam's
     # rule), plus bass on/off (bass-to-bass) and the outro lead-drop. Snapped to grid.
