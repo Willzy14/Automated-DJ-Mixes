@@ -389,7 +389,17 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
             {"type": "one_min_to_end", "sec": _nearest(dur_real - 60.0), "guide": round(dur_real - 60.0, 2)},
         ]
 
+    # Bass IN / OUT — the single biggest natural mix markers (Sam, 2026-06-08):
+    # bass-to-bass is the best mix point, and bass entry/exit do NOT track the
+    # drop/outro (bass can enter mid-intro, leave mid-outro / on a fill). Read
+    # straight from the bass envelope: first bass-on bar, end of last bass-on bar.
+    bass_on = np.where(presence["bass"])[0]
+    bass_in_sec = round(downbeat + int(bass_on[0]) * sec_per_bar, 2) if len(bass_on) else None
+    bass_out_sec = round(downbeat + (int(bass_on[-1]) + 1) * sec_per_bar, 2) if len(bass_on) else None
+
     signals = {
+        "bass_in": bass_in_sec,
+        "bass_out": bass_out_sec,
         "bass_regions": to_sec(_regions(presence["bass"], 1)),
         "loop_windows": to_sec(_regions(presence["drums"] & ~presence["bass"], MIN_LOOP_BARS)),
         "vocal_regions": to_sec(_regions(presence["vocals"], MIN_VOCAL_BARS)),
@@ -447,6 +457,9 @@ def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, section
             ax.axvline(x, color="#17a2b8", lw=1.0, alpha=0.8, ls=(0, (1, 1)), zorder=3)   # teal = kick IN
         for mc in major:
             ax.axvline(mc["sec"], color="#d6006d", lw=1.7, alpha=0.95, ls="--", zorder=4)
+        for x in (signals.get("bass_in"), signals.get("bass_out")):   # biggest mix markers
+            if x is not None:
+                ax.axvline(x, color="#1f4e9e", lw=2.4, alpha=0.95, zorder=5)
 
     mix = envs["mix"][:L]
     axes[0].fill_between(t, mix / (mix.max() + 1e-9), color="#222", alpha=0.22, zorder=1)
@@ -465,6 +478,10 @@ def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, section
     for mc in major:
         lab = "~1:00 in" if mc["type"] == "one_min_in" else "~1:00 to end"
         axes[0].text(mc["sec"], 1.07, lab, fontsize=7, color="#d6006d", ha="center", va="bottom", fontweight="bold")
+    for key, lab in (("bass_in", "BASS IN"), ("bass_out", "BASS OUT")):
+        x = signals.get(key)
+        if x is not None:
+            axes[0].text(x, 1.13, lab, fontsize=8, color="#1f4e9e", ha="center", va="bottom", fontweight="bold")
     for bar in range(0, n_bars + 1, 16):
         axes[0].text(downbeat + bar * sec_per_bar, 0.07, str(bar), fontsize=9, color="#000",
                      ha="center", va="bottom", zorder=8, fontweight="bold",
