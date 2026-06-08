@@ -141,6 +141,42 @@ def _render_previews(ordered_analyses, mik_data, rb_matches, project_bpm, previe
     return rendered
 
 
+def enforce_rekordbox_coverage(analyses, rb_matches, allow_partial_rekordbox):
+    """Hard gate: stop the pipeline if any track lacks Rekordbox phrase data.
+
+    Phrase grids and per-beat warp markers come from Rekordbox; without them a
+    track falls back to librosa (looser warping, weaker section detection).
+    The old behaviour caught a desktop-analysis failure, printed "continuing",
+    and produced a degraded mix with no warning — the exact failure of
+    2026-06-08. This converts that silent degrade into a loud, decidable stop.
+
+    Returns the list of track names missing RB data (empty == full coverage).
+    Raises RuntimeError when coverage is partial and the caller has not opted
+    into librosa fallback via allow_partial_rekordbox.
+    """
+    missing_rb = [a.path.name for a in analyses if str(a.path) not in rb_matches]
+    if missing_rb and not allow_partial_rekordbox:
+        listing = "\n".join(f"    - {n}" for n in missing_rb)
+        raise RuntimeError(
+            f"\nRekordbox phrase data MISSING for {len(missing_rb)}/{len(analyses)} track(s):\n"
+            f"{listing}\n\n"
+            "Building a mix without RB phrase/beat-grid data degrades section\n"
+            "detection and beat-matching, so the pipeline STOPS here rather than\n"
+            "silently producing a lower-quality mix.\n\n"
+            "FIX (recommended): open rekordbox 7, turn Library Protection OFF,\n"
+            "import these tracks, let analysis finish, then re-run the pipeline.\n"
+            "(If RB already analysed them, re-run with --skip-desktop-analyze.)\n\n"
+            "OR re-run with --allow-partial-rekordbox to knowingly proceed on\n"
+            "librosa fallback for the un-analysed tracks."
+        )
+    if missing_rb and allow_partial_rekordbox:
+        print(f"  WARNING: --allow-partial-rekordbox set — proceeding with "
+              f"{len(missing_rb)}/{len(analyses)} track(s) on librosa fallback:")
+        for n in missing_rb:
+            print(f"    - {n}")
+    return missing_rb
+
+
 def run_pipeline(
     input_dir: Path,
     output_dir: Path,
@@ -150,6 +186,7 @@ def run_pipeline(
     previews_only: bool = False,
     no_hints_required: bool = False,
     sections_layout: bool = False,
+    allow_partial_rekordbox: bool = False,
 ) -> Path | None:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
@@ -193,7 +230,12 @@ def run_pipeline(
                 analyze_folder_with_mik(input_dir, expected_tracks=audio_paths)
                 analyze_folder_with_rekordbox(input_dir, expected_tracks=audio_paths)
         except Exception as e:
-            print(f"  Desktop analysis failed (continuing): {e}")
+            # Don't bury this — the Rekordbox-coverage gate below decides
+            # whether partial analysis is acceptable. Surface the full message
+            # (RekordboxAgentError carries manual-recovery steps).
+            print("  WARNING: desktop analysis did not complete cleanly:")
+            for line in str(e).splitlines():
+                print(f"    {line}")
 
     print(f"Analysing tracks in {input_dir}...")
     analyses = analyse_folder(input_dir)
@@ -217,6 +259,11 @@ def run_pipeline(
         print(f"  Rekordbox: {rb_count}/{len(analyses)} tracks enriched with phrase data")
     except Exception as e:
         print(f"  Rekordbox unavailable ({e}), using librosa analysis only")
+
+    # HARD GATE — never silently build a mix on partial Rekordbox data
+    # (see enforce_rekordbox_coverage). previews_only doesn't need RB.
+    if not previews_only:
+        enforce_rekordbox_coverage(analyses, rb_matches, allow_partial_rekordbox)
 
     # Enrich with Mixed In Key 11 data — cue points (highest-confidence
     # structural signal) AND key/BPM from the MIK SQLite DB (critical for
@@ -511,6 +558,9 @@ def main():
     parser.add_argument("--config", help="Path to settings.json")
     parser.add_argument("--skip-desktop-analyze", action="store_true",
                         help="Skip driving MIK and Rekordbox UI (use only existing analysis data)")
+    parser.add_argument("--allow-partial-rekordbox", action="store_true",
+                        help="Proceed even if some tracks lack Rekordbox phrase data "
+                             "(knowingly degraded — librosa fallback). Default: hard-stop.")
     parser.add_argument("--previews-only", action="store_true",
                         help="Render blank-canvas preview PNGs and exit before transition "
                              "planning. Used by the /mix skill so Claude can read previews "
@@ -534,6 +584,7 @@ def main():
         previews_only=args.previews_only,
         no_hints_required=args.no_hints_required,
         sections_layout=args.sections_layout,
+        allow_partial_rekordbox=args.allow_partial_rekordbox,
     )
     if als_path is not None:
         print(f"Generated: {als_path}")

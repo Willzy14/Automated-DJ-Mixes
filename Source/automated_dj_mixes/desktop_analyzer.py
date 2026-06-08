@@ -22,6 +22,7 @@ Public entry points:
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import subprocess
@@ -49,6 +50,33 @@ MIK_STORE_DB = Path(
 
 RB_EXE = Path("C:/Program Files/rekordbox/rekordbox.exe")  # fallback
 RB_SHORTCUT = Path("C:/Users/Carillon/Desktop/rekordbox 7.lnk")
+RB_INSTALL_BASE = Path("C:/Program Files/rekordbox")
+# The rekordboxAgent persists its launch state here. When it pins to an
+# uninstalled/older rekordbox version it produces "Communication with
+# rekordboxAgent failed" — the most fragile failure mode in the pipeline.
+RB_AGENT_OPTIONS = Path(
+    "C:/Users/Carillon/AppData/Roaming/Pioneer/rekordboxAgent/storage/options.json"
+)
+# rekordbox.exe <-> rekordboxAgent.exe handshake runs over this loopback port.
+RB_AGENT_PORT = 30001
+# Cold first-load of a freshly-(re)installed rekordbox — rebuilding caches and
+# indexing the library — can take well over a minute, far longer than a warm
+# launch. Wait this long for the main window before declaring failure, and do
+# NOT kill the process while it is still loading.
+RB_LOAD_TIMEOUT_SEC = 180
+# Full process family, in the order they must be killed for a clean restart:
+# main app first, then the agent, then the helper servers.
+RB_PROCESS_IMAGES = (
+    "rekordbox.exe",
+    "rekordboxAgent.exe",
+    "rbHttpServer.exe",
+    "edb_streamd.exe",
+)
+
+
+class RekordboxAgentError(RuntimeError):
+    """Raised when rekordbox cannot reach a healthy rekordboxAgent and the
+    automation cannot recover it. Carries copy-pasteable manual instructions."""
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 MIK_ADD_TRACKS_TEMPLATE = TEMPLATES_DIR / "mik_add_tracks_button.png"
@@ -1123,6 +1151,381 @@ def is_rekordbox_analyzed(audio_path: Path) -> bool:
         return False
 
 
+# ---------- Rekordbox health / agent hardening ----------
+#
+# The weakest link in the pipeline is the rekordbox.exe <-> rekordboxAgent.exe
+# handshake (loopback TCP, default port 30001). When multiple rekordbox
+# versions accumulate on a machine, the agent's saved state can pin to an old
+# (or uninstalled) version, and every launch then throws "Communication with
+# rekordboxAgent failed". These helpers detect and auto-recover that class of
+# failure instead of blindly waiting for a main window that will never appear.
+
+
+def _newest_rb_install() -> "tuple[tuple[int, ...], str, Path] | None":
+    """Return (version_tuple, version_str, exe_path) for the highest-versioned
+    installed rekordbox, or None. Launching the newest install (rather than a
+    Desktop shortcut that can drift after updates) avoids app/agent mismatch."""
+    best = None
+    try:
+        for exe in RB_INSTALL_BASE.glob("rekordbox */rekordbox.exe"):
+            m = re.search(r"rekordbox\s+(\d+(?:\.\d+)*)", exe.parent.name)
+            if not m:
+                continue
+            ver = tuple(int(x) for x in m.group(1).split("."))
+            if best is None or ver > best[0]:
+                best = (ver, m.group(1), exe)
+    except Exception:
+        pass
+    return best
+
+
+def _kill_rb_family(wait: float = 2.0):
+    """Kill the whole rekordbox process family in dependency order: main app
+    first, then the agent, then helper servers. taskkill by image name keeps
+    the order exact (a regex 'rekordbox' match would also hit the agent and
+    can't guarantee ordering)."""
+    for img in RB_PROCESS_IMAGES:
+        try:
+            subprocess.run(["taskkill", "/IM", img, "/F"],
+                           capture_output=True, check=False, timeout=10)
+        except Exception:
+            pass
+        time.sleep(0.4)
+    time.sleep(wait)
+
+
+def _read_agent_pin() -> "tuple[str | None, str | None]":
+    """Return (app_ver, lang_path) recorded in the agent's options.json, or
+    (None, None) if absent/unreadable. options.json stores settings as an
+    array of [key, value] pairs under the 'options' key."""
+    try:
+        data = json.loads(RB_AGENT_OPTIONS.read_text(encoding="utf-8"))
+        opts = dict(data.get("options", []))
+        return opts.get("app_ver"), opts.get("lang-path")
+    except FileNotFoundError:
+        return None, None
+    except Exception:
+        return None, None
+
+
+def _agent_state_is_stale(newest_ver_str: "str | None") -> bool:
+    """True if the agent's saved state pins to a version/path that is NOT the
+    newest install. This is the exact root cause of the agent-communication
+    failure after a rekordbox update leaves old versions behind."""
+    app_ver, lang_path = _read_agent_pin()
+    if app_ver is None and lang_path is None:
+        return False  # no state yet (will regenerate clean) — nothing to fix
+    if newest_ver_str and app_ver and app_ver != newest_ver_str:
+        return True
+    if lang_path and not Path(lang_path).exists():
+        return True
+    return False
+
+
+def _reset_agent_state() -> bool:
+    """Back up (not delete) the agent's options.json so it regenerates a clean
+    config against the current install. Fully reversible."""
+    try:
+        if RB_AGENT_OPTIONS.exists():
+            bak = RB_AGENT_OPTIONS.with_name("options.json.stale-bak")
+            try:
+                if bak.exists():
+                    bak.unlink()
+            except Exception:
+                pass
+            RB_AGENT_OPTIONS.rename(bak)
+            print(f"  RB: reset stale agent state (backed up to {bak.name})")
+            return True
+    except Exception as e:
+        print(f"  RB: could not reset agent state: {e}")
+    return False
+
+
+def _port_holder_pid(port: int = RB_AGENT_PORT) -> "int | None":
+    """Return the PID LISTENING on the loopback port, or None. A foreign
+    process (or an orphaned old-version agent) squatting on 30001 blocks the
+    correct agent from binding it."""
+    try:
+        out = subprocess.run(["netstat", "-ano"], capture_output=True,
+                             text=True, timeout=10).stdout
+        for line in out.splitlines():
+            parts = line.split()
+            if (len(parts) >= 5 and parts[0].upper() == "TCP"
+                    and parts[1].endswith(f":{port}")
+                    and parts[3].upper() == "LISTENING"):
+                try:
+                    return int(parts[4])
+                except ValueError:
+                    continue
+    except Exception:
+        pass
+    return None
+
+
+def _rb_process_alive() -> bool:
+    """True if a rekordbox.exe process is currently running. Used to tell a
+    slow-but-loading RB (keep waiting) apart from a crashed one (retry)."""
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq rekordbox.exe", "/NH"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+        return "rekordbox.exe" in out
+    except Exception:
+        return True  # on error, assume alive (don't falsely declare a crash)
+
+
+def _list_rb_windows():
+    """Return [(title, w, h)] for visible rekordbox/Error-titled top-level
+    windows. Diagnostic only — surfaces what's actually on screen during a
+    slow load (splash, first-run dialog, the real window, an error modal)."""
+    found = []
+    try:
+        for w in Desktop(backend="uia").windows():
+            try:
+                t = w.window_text() or ""
+                if re.search(r"rekordbox|error", t, re.IGNORECASE):
+                    r = w.rectangle()
+                    found.append((t, r.width(), r.height()))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return found
+
+
+def _wait_port_free(port: int = RB_AGENT_PORT, timeout: float = 20.0) -> bool:
+    """Block until the loopback port is free, or timeout. After killing the
+    agent its port lingers briefly; relaunching before it frees is exactly what
+    causes the next agent to fail its handshake ('Communication with
+    rekordboxAgent failed'). Manual launches never hit this because they never
+    kill first."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if _port_holder_pid(port) is None:
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def _find_rb_error_window_light():
+    """Detect the agent-error modal by top-level window TITLE only (the dialog
+    is a small window titled 'Error'). Deliberately does NOT scan descendants —
+    descending into rekordbox's UIA tree runs on its UI thread and freezes it
+    during load (the 2026-06-08 'Not Responding' regression)."""
+    try:
+        for w in Desktop(backend="uia").windows():
+            try:
+                if (w.window_text() or "").strip() == "Error":
+                    r = w.rectangle()
+                    if 0 < r.width() < 900 and 0 < r.height() < 600:
+                        return w
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _dismiss_window_light(win) -> bool:
+    """Close a window via WM_CLOSE on its handle — no descend, no mouse."""
+    try:
+        import ctypes
+        ctypes.windll.user32.PostMessageW(win.handle, 0x0010, 0, 0)  # WM_CLOSE
+        return True
+    except Exception:
+        return False
+
+
+def _is_elevated() -> bool:
+    """True if this process is running elevated (admin / High integrity)."""
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _explorer_available() -> bool:
+    """True if an interactive Explorer shell is running to delegate launches to
+    (and thus de-elevate through). False in headless/service contexts."""
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq explorer.exe", "/NH"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+        return "explorer.exe" in out
+    except Exception:
+        return False
+
+
+def _start_rb_like_manual(newest, exe):
+    """Launch rekordbox so it ALWAYS runs at Medium integrity, no matter where
+    the pipeline is booted from (admin VS Code, the Claude Code app, a plain
+    terminal, etc.).
+
+    Why it matters: rekordbox's app<->rekordboxAgent loopback handshake FAILS
+    when rekordbox runs ELEVATED ("Communication with rekordboxAgent failed" /
+    splash hang). A child inherits the launcher's integrity, and the VS Code
+    extension runs as admin (High) — so a naive launch breaks RB. The Claude
+    Code app runs Medium, which is why it worked there.
+
+    Strategy (covers every boot context):
+      - Explorer present  -> hand the path to explorer.exe. The running Explorer
+        (Medium) starts RB in the normal user context. This DE-ELEVATES from
+        High and is identical to a double-click from Medium — universal.
+      - No Explorer, not elevated -> a direct shell `start` runs RB at Medium
+        too (fine; just no Explorer to delegate to).
+      - No Explorer, elevated -> we cannot de-elevate, so RB would run High and
+        its agent would fail. Refuse with a clear message instead of hanging.
+
+    Our elevated automation can still drive the Medium RB window afterwards
+    (High->Medium is permitted by UIPI; the reverse would be blocked)."""
+    target = exe if (newest and Path(exe).exists()) else RB_SHORTCUT
+    elevated = _is_elevated()
+    explorer = _explorer_available()
+    print(f"  RB: launcher integrity={'High/admin' if elevated else 'Medium'}, "
+          f"explorer={'yes' if explorer else 'no'} -> "
+          f"{'explorer.exe (de-elevate)' if explorer else ('shell start' if not elevated else 'REFUSE')}")
+    if explorer:
+        subprocess.Popen(["explorer.exe", str(target)])
+        return
+    if not elevated:
+        cwd = str(exe.parent) if (newest and Path(exe).exists()) else None
+        subprocess.Popen(["cmd", "/c", "start", "", str(target)], shell=False, cwd=cwd)
+        return
+    raise RekordboxAgentError(
+        "Cannot launch rekordbox safely: this process is elevated (admin) and\n"
+        "there is no interactive Explorer to de-elevate through, so rekordbox\n"
+        "would run elevated and its agent would fail.\n"
+        "  FIX: run the pipeline from a non-admin context, or open rekordbox\n"
+        "  manually first — the pipeline reuses a running instance."
+    )
+
+
+def _wait_for_rb_main_window(timeout: float):
+    """Wait for RB's main window using ONLY lightweight top-level checks (window
+    titles + rectangles via _find_window) plus process-aliveness. Never scans
+    RB's UIA descendants, so it cannot freeze the loading app.
+
+    Returns one of:
+      ('ready', window)        — main window is up and sized
+      ('error_dialog', window) — the agent-error modal appeared
+      ('crash', None)          — RB process was seen then vanished
+      ('timeout', None)        — nothing within the timeout
+    """
+    t0 = time.time()
+    proc_seen = False
+    next_diag = t0 + 12
+    while time.time() - t0 < timeout:
+        win = _find_window("rekordbox", largest=True)  # top-level only, light
+        if win:
+            try:
+                r = win.rectangle()
+                if r.width() >= 700 and r.height() >= 450:
+                    return ("ready", win)
+            except Exception:
+                return ("ready", win)
+        err = _find_rb_error_window_light()
+        if err is not None:
+            return ("error_dialog", err)
+        if _rb_process_alive():
+            proc_seen = True
+        elif proc_seen:
+            return ("crash", None)
+        if time.time() >= next_diag:
+            print(f"  RB: waiting for main window ({int(time.time() - t0)}s) "
+                  f"— windows: {_list_rb_windows() or 'none'}")
+            next_diag = time.time() + 12
+        time.sleep(2.0)
+    return ("timeout", None)
+
+
+def _launch_rb_healthy(max_attempts: int = 2, settle_sec: float = 15.0):
+    """Launch rekordbox and guarantee a healthy app+agent pair.
+
+    Designed to be indistinguishable from a manual double-click of the shortcut
+    (the only launch that reliably works on this machine):
+      - First attempt with no RB running: just launch — NO pre-kill, so the
+        agent's loopback port is free and binds cleanly.
+      - Wait for the main window using only lightweight top-level window checks
+        (never scanning RB's UIA descendants, which freezes the loading app).
+      - Only on recovery (or a hung RB) does it kill the family, then WAIT for
+        the port to actually free before relaunching.
+
+    Returns the main RB window on success; raises RekordboxAgentError with
+    manual-recovery instructions if it can't get healthy.
+    """
+    newest = _newest_rb_install()
+    if newest:
+        _ver_tuple, ver_str, exe = newest
+        print(f"  RB: newest install = {ver_str} ({exe})")
+    else:
+        ver_str = None
+        exe = RB_EXE
+        print(f"  RB: version probe failed; will try shortcut/{exe}")
+
+    last_reason = "unknown"
+    for attempt in range(1, max_attempts + 1):
+        print(f"  RB: launch attempt {attempt}/{max_attempts}")
+
+        # Clean slate ONLY when recovering (attempt > 1) or when a (likely hung)
+        # rekordbox is already running. A first clean launch mirrors a manual
+        # double-click — NO pre-kill — so the agent's port stays free and the new
+        # agent binds cleanly. Kill-then-immediately-relaunch is exactly what
+        # raced the port release and caused "Communication with rekordboxAgent
+        # failed"; and any pre-kill also wastes time + risk for nothing when RB
+        # isn't even running.
+        if attempt > 1 or _rb_process_alive():
+            print("  RB: clearing existing/hung rekordbox processes (recovery)")
+            _kill_rb_family()
+            if not _wait_port_free(RB_AGENT_PORT, timeout=20):
+                print(f"  RB: WARNING — port {RB_AGENT_PORT} still busy after kill")
+            if _agent_state_is_stale(ver_str):
+                print("  RB: agent state pinned to an old version — resetting")
+                _reset_agent_state()
+
+        # Launch exactly like the user's double-click (shortcut via shell start).
+        try:
+            _start_rb_like_manual(newest, exe)
+        except Exception as e:
+            last_reason = f"launch failed: {e}"
+            print(f"  RB: {last_reason}")
+            continue
+
+        # Wait WITHOUT touching RB's UI thread (no descendant scanning).
+        status, win = _wait_for_rb_main_window(RB_LOAD_TIMEOUT_SEC)
+        if status == "ready":
+            print(f"  RB: main window up — settling {settle_sec:.0f}s")
+            time.sleep(settle_sec)
+            return win
+        if status == "error_dialog":
+            last_reason = "rekordboxAgent communication failed"
+            print("  RB: agent-error dialog — dismissing; recovering port-safe")
+            _dismiss_window_light(win)
+            time.sleep(1.0)
+            # Recovery (kill + wait-port-free + reset) runs at the top of the
+            # next attempt — never a kill+relaunch in the same breath.
+            continue
+        if status == "crash":
+            last_reason = "rekordbox exited during load"
+            print(f"  RB: {last_reason}")
+            continue
+        last_reason = f"main window did not appear within {RB_LOAD_TIMEOUT_SEC}s"
+        print(f"  RB: {last_reason}")
+
+    raise RekordboxAgentError(
+        f"Rekordbox could not reach a healthy rekordboxAgent after "
+        f"{max_attempts} attempts ({last_reason}).\n"
+        "  Usually a version-mismatched / multi-install rekordbox.\n"
+        "  MANUAL FIX:\n"
+        "    1. Close rekordbox; uninstall OLD rekordbox versions, keep only the newest.\n"
+        "    2. Delete/rename %APPDATA%\\Pioneer\\rekordboxAgent\\storage\\options.json\n"
+        "    3. Reboot, open rekordbox once, let it analyse the tracks.\n"
+        "    4. Re-run the pipeline with --skip-desktop-analyze (reads RB data directly)."
+    )
+
+
 def _dismiss_rb_menu_popups():
     """Close any rekordbox-titled popup windows (open menus) that aren't
     the main RB window. Uses WM_CLOSE PostMessage — no mouse, no keyboard."""
@@ -1304,40 +1707,40 @@ def analyze_folder_with_rekordbox(
     #    so the folder must exist before the dialog appears
     staging = _create_staging_folder(audio_folder)
 
-    def _launch_rb():
-        if RB_SHORTCUT.exists():
-            subprocess.Popen(
-                ["cmd", "/c", "start", "", str(RB_SHORTCUT)], shell=False,
-            )
-        else:
-            rb_base = Path("C:/Program Files/rekordbox")
-            candidates = sorted(rb_base.glob("rekordbox */rekordbox.exe"), reverse=True)
-            exe = candidates[0] if candidates else RB_EXE
-            subprocess.Popen([str(exe)], shell=False)
-        rb = _wait_for_window("rekordbox", timeout=WINDOW_TIMEOUT_SEC)
-        if not rb:
-            raise RuntimeError("Rekordbox did not appear")
-        time.sleep(15)
-        return rb
-
     try:
-        # 2. Find or launch RB
-        rb = _find_window("rekordbox")
-        if not rb:
-            print("  RB not running — launching")
-            rb = _launch_rb()
+        # 2. Get a healthy RB main window. Reuse an existing instance ONLY if
+        #    it's genuinely healthy (no agent-error modal + real main window);
+        #    otherwise do a clean, self-recovering launch of the newest install.
+        rb = _find_window("rekordbox", largest=True)
+        healthy_existing = False
+        if rb and _find_rb_error_window_light() is None:
+            try:
+                r = rb.rectangle()
+                healthy_existing = (r.width() >= 700 and r.height() >= 450)
+            except Exception:
+                healthy_existing = False
+        if healthy_existing:
+            print("  RB already running (healthy) — using existing instance")
         else:
-            print("  RB already running — using existing instance")
+            print("  RB not running or unhealthy — clean launch")
+            rb = _launch_rb_healthy()
 
         # 3. Navigate File → Import → Import Folder
         nav_ok = _navigate_rb_menu_to_import_folder(rb)
 
-        # Retry: if navigation failed (e.g. stale state or focus issue),
-        # kill RB and relaunch for a clean slate
+        # Retry tier 1: RB may still be settling — wait + retry navigation
+        # WITHOUT relaunching (relaunching a still-settling RB just restarts it).
         if not nav_ok:
-            print("  Menu navigation failed — relaunching RB for clean state")
-            _close_process("rekordbox")
-            rb = _launch_rb()
+            print("  Menu nav failed — waiting 15s + retrying (no relaunch)")
+            time.sleep(15)
+            rb = _find_window("rekordbox", largest=True) or rb
+            nav_ok = _navigate_rb_menu_to_import_folder(rb)
+
+        # Retry tier 2: clean relaunch (kills the family + recovers a stale
+        # agent) as a last resort.
+        if not nav_ok:
+            print("  Menu nav still failing — clean relaunch + retry")
+            rb = _launch_rb_healthy()
             nav_ok = _navigate_rb_menu_to_import_folder(rb)
 
         if not nav_ok:
