@@ -43,9 +43,8 @@ STEMS = ("drums", "bass", "vocals", "other")
 STEM_COLORS = {"drums": "#e4572e", "bass": "#2e86ab", "vocals": "#8e44ad", "other": "#3a3a3a"}
 
 # Tuneables (calibrating on VLAD - I'm Glued, then generalising)
-KICK_REF_PCT = 90         # "typical loud kick" level = this percentile of per-beat drums peaks
-KICK_ON_FRAC = 0.80       # a beat is kick-IN if its peak > this fraction of the loud-kick level
-                          # (high, so it tracks only the kick — not hi-hats on fills or snares)
+KICK_ON_FRAC = 0.80       # a beat is kick-IN if its peak > this fraction of the SOLID kick level
+                          # (the full-drop drum level, found dynamically per track — see below)
 KICK_SMOOTH_BEATS = 3     # median-smooth per-beat kick on/off (kills 1-beat flicker)
 MIN_KICK_OUT_BEATS = 2    # ignore kick-out runs shorter than this (syncopation, not a real drop)
 FILL_MAX_BARS = 6         # kick-out <= this many bars = fill; longer = break (Sam's rule)
@@ -58,6 +57,7 @@ DROP_REL = 0.85           # a drop must reach this fraction of the track's FULLE
                           # (so a bass-heavy intro that isn't full-energy yet stays 'intro')
 OUTRO_LEAD_FRAC = 0.60    # outro starts where the LEAD (vocals+other) drops below this fraction
                           # of its body level near the end (kick+bass can keep running)
+MIN_OUTRO_BARS = 8        # don't push the outro start so late it leaves less than this
 MIN_LOOP_BARS = 4
 MIN_VOCAL_BARS = 2
 
@@ -106,12 +106,32 @@ def _snap_merge(bounds, n_bars):
     return merged
 
 
+def _solid_kick_level(peaks):
+    """The 'solid' kick level = the centre of the LOUD cluster of per-beat drums
+    peaks (kick fully in, on drops), found by a quick 2-means split. Reads where
+    the drums sit when everything's in — dynamically per track — so the kick-in/out
+    call is anchored to the track's own drop level, not a fixed percentile."""
+    p = peaks[peaks > 0]
+    if len(p) < 4:
+        return p.max() if len(p) else 1.0
+    lo, hi = p.min(), p.max()
+    for _ in range(25):
+        mid = 0.5 * (lo + hi)
+        low, high = p[p <= mid], p[p > mid]
+        if len(low) == 0 or len(high) == 0:
+            break
+        nlo, nhi = low.mean(), high.mean()
+        if abs(nlo - lo) < 1e-7 and abs(nhi - hi) < 1e-7:
+            break
+        lo, hi = nlo, nhi
+    return hi
+
+
 def _kick_on_per_beat(drums_env, hop_t, bpm, downbeat, n_bars):
-    """Per-beat kick IN/OUT. The reference level is the TYPICAL loud kick (a high
-    percentile of per-beat drums peaks) — NOT the single loudest transient, which
-    would sit a crash/impact above every normal kick and make them all read 'out'.
-    A beat is kick-IN if its peak clears KICK_ON_FRAC of that level. Median-smoothed
-    to remove single-beat flicker. Returns (on[beat], peaks[beat], ref)."""
+    """Per-beat kick IN/OUT, thresholded against the DYNAMIC solid kick level (the
+    full-drop drum level from _solid_kick_level) rather than a fixed percentile —
+    so one KICK_ON_FRAC generalises across tracks. Median-smoothed to remove
+    single-beat flicker. Returns (on[beat], peaks[beat], solid_level)."""
     beat_sec = 60.0 / bpm
     n_beats = n_bars * 4
     peaks = np.zeros(n_beats)
@@ -119,10 +139,9 @@ def _kick_on_per_beat(drums_env, hop_t, bpm, downbeat, n_bars):
         i0 = int((downbeat + k * beat_sec) / hop_t)
         i1 = min(int((downbeat + (k + 1) * beat_sec) / hop_t), len(drums_env))
         peaks[k] = drums_env[i0:i1].max() if i1 > i0 else 0.0
-    nz = peaks[peaks > 0]
-    ref = np.percentile(nz, KICK_REF_PCT) if len(nz) else 1.0
-    on = _median_bool(peaks > KICK_ON_FRAC * (ref + 1e-9), KICK_SMOOTH_BEATS)
-    return on, peaks, ref + 1e-9
+    ref = _solid_kick_level(peaks) + 1e-9
+    on = _median_bool(peaks > KICK_ON_FRAC * ref, KICK_SMOOTH_BEATS)
+    return on, peaks, ref
 
 
 def _kick_cues(kick_on, bpm, downbeat):
@@ -202,7 +221,8 @@ def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start):
         elif is_drop(s):
             label = "drop"
         elif bf < 0.4 or kf < 0.4:
-            label = "break"
+            # kick/bass out: short = fill, long = break (Sam's 6-bar rule of thumb)
+            label = "fill" if (s["end_bar"] - s["start_bar"]) <= FILL_MAX_BARS else "break"
         else:
             label = "build"
         s["label"] = label
@@ -232,6 +252,9 @@ def _merge_same_label(sections):
             merged[-1]["stems_on"] = sorted(set(merged[-1]["stems_on"]) | set(s["stems_on"]))
         else:
             merged.append(dict(s))
+    for s in merged:   # a 'fill' that merged past the cap is really a break
+        if s["label"] == "fill" and (s["end_bar"] - s["start_bar"]) > FILL_MAX_BARS:
+            s["label"] = "break"
     counts = {}
     for s in merged:
         counts[s["label"]] = counts.get(s["label"], 0) + 1
@@ -270,8 +293,24 @@ def detect(wav: Path, project: Path):
     kick_on_bar = np.array([kick_on[b * 4:(b + 1) * 4].mean() >= 0.5 for b in range(n_bars)])
     kick_cues = _kick_cues(kick_on, bpm, downbeat)
 
-    # Outro start: where the lead (vocals + other) drops off near the end.
+    # A fill = a SHORT kick drop-out then return. Sam's rule: longer than
+    # FILL_MAX_BARS of kick-out is a break, not a fill (the break is its own section).
+    max_fill_sec = FILL_MAX_BARS * sec_per_bar
+    fills = [[a["start_sec"], b["start_sec"]] for a, b in zip(kick_cues, kick_cues[1:])
+             if a["type"] == "kick_dropout" and b["type"] == "kick_return"
+             and b["start_sec"] - a["start_sec"] <= max_fill_sec]
+
+    # Outro start: the lead (vocals+other) drop near the end — but as Sam's rule of
+    # thumb, the END OF THE LAST FILL is the outro start. So if the last fill ends at
+    # or after the lead-drop point (and leaves a real outro), the outro begins there;
+    # the final drop runs up to that fill. (VLAD's last fill is BEFORE its lead-drop,
+    # so the lead-drop wins — no change.)
     outro_start = _find_outro_start(pb, n_bars)
+    if outro_start is not None and fills:
+        last_fill_end = int(round((fills[-1][1] - downbeat) / sec_per_bar))
+        cand = int(round(last_fill_end / PHRASE_GRID) * PHRASE_GRID)
+        if cand >= outro_start and n_bars - cand >= MIN_OUTRO_BARS:
+            outro_start = cand
 
     # Boundaries: a kick drop-out + return marks a new 16-beat section (Sam's
     # rule), plus bass on/off (bass-to-bass) and the outro lead-drop. Snapped to grid.
@@ -310,13 +349,6 @@ def detect(wav: Path, project: Path):
             {"type": "one_min_in", "sec": _nearest(60.0), "guide": 60.0},
             {"type": "one_min_to_end", "sec": _nearest(dur_real - 60.0), "guide": round(dur_real - 60.0, 2)},
         ]
-
-    # A fill = a SHORT kick drop-out then return. Sam's rule: longer than 6 bars
-    # of kick-out is a BREAK, not a fill (and the break is already its own section).
-    max_fill_sec = FILL_MAX_BARS * sec_per_bar
-    fills = [[a["start_sec"], b["start_sec"]] for a, b in zip(kick_cues, kick_cues[1:])
-             if a["type"] == "kick_dropout" and b["type"] == "kick_return"
-             and b["start_sec"] - a["start_sec"] <= max_fill_sec]
 
     signals = {
         "bass_regions": to_sec(_regions(presence["bass"], 1)),
