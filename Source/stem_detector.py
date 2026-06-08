@@ -240,21 +240,28 @@ def _merge_same_label(sections):
     changes survive as cue points, not as extra section splits)."""
     if not sections:
         return sections
+    kickout = {"break", "fill"}
     merged = [dict(sections[0])]
     for s in sections[1:]:
-        # Merge consecutive same-label blocks — EXCEPT drops. Drops stay split at
-        # their internal boundaries (fills / kick returns) so the phrase structure
-        # shows; a fill stays at the tail of the drop that precedes it (the next
-        # section begins after the fill).
-        if s["label"] == merged[-1]["label"] and s["label"] != "drop":
-            merged[-1]["end_bar"] = s["end_bar"]
-            merged[-1]["end_sec"] = s["end_sec"]
-            merged[-1]["stems_on"] = sorted(set(merged[-1]["stems_on"]) | set(s["stems_on"]))
+        prev = merged[-1]
+        # Merge consecutive same-label blocks, AND adjacent kick-out sections
+        # (break+fill are one contiguous kick-out region) — but never drops, which
+        # stay split at their fills. So an edge 'fill' touching a break folds into
+        # the break; only a short kick-out flanked by drops stays a fill.
+        mergeable = (
+            prev["label"] != "drop" and s["label"] != "drop"
+            and (s["label"] == prev["label"]
+                 or (s["label"] in kickout and prev["label"] in kickout))
+        )
+        if mergeable:
+            prev["end_bar"] = s["end_bar"]
+            prev["end_sec"] = s["end_sec"]
+            prev["stems_on"] = sorted(set(prev["stems_on"]) | set(s["stems_on"]))
         else:
             merged.append(dict(s))
-    for s in merged:   # a 'fill' that merged past the cap is really a break
-        if s["label"] == "fill" and (s["end_bar"] - s["start_bar"]) > FILL_MAX_BARS:
-            s["label"] = "break"
+    for s in merged:   # a contiguous kick-out region is a fill if short, else a break
+        if s["label"] in kickout:
+            s["label"] = "fill" if (s["end_bar"] - s["start_bar"]) <= FILL_MAX_BARS else "break"
     counts = {}
     for s in merged:
         counts[s["label"]] = counts.get(s["label"], 0) + 1
