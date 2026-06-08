@@ -194,7 +194,11 @@ def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start):
         elif first_drop is None:
             label = "intro" if i < n / 2 else "outro"
         elif i < first_drop:
-            label = "intro"
+            # Pre-drop is intro — EXCEPT a long kick drop-out, which is a 'first
+            # break' (the drums all come out) even with no bass before it. A short
+            # kick-out stays a fill; an intro where the kick never drops stays intro.
+            is_long = (s["end_bar"] - s["start_bar"]) > FILL_MAX_BARS
+            label = "break" if (kf < 0.4 and is_long) else "intro"
         elif is_drop(s):
             label = "drop"
         elif bf < 0.4 or kf < 0.4:
