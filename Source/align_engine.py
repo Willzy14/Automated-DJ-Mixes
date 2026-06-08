@@ -98,24 +98,21 @@ class Alignment:
     notes: list = field(default_factory=list)
 
 
-def _handoff_candidates(o: Track) -> list[tuple[float, str]]:
-    """Outgoing hand-off markers within the last minute (+ a little slack)."""
+def _handoff_candidates(o: Track) -> list[tuple[float, str, str]]:
+    """EVERY section boundary in the outgoing's last-minute window. The bass
+    switch can be faked at ANY natural marker (Sam: drop the outgoing's bass
+    whenever you like, as long as it's on a natural marker), so the switch point
+    is chosen by best lineup, not by the literal bass-out. Returns
+    (bar, before_label, after_label)."""
     window_start = o.n_bars - o.last_min_bars - HANDOFF_WINDOW_BARS
-    cands: list[tuple[float, str]] = []
-    # Primary: bass-out, but only if it's a real exit (not the track end).
-    if o.bass_out_bar is not None and not o.bass_out_is_end and o.bass_out_bar >= window_start:
-        cands.append((o.bass_out_bar, "bass_out"))
-    # Fallbacks: natural breakpoints near the end.
-    for s in o.sections:
-        if s["label"] in ("fill", "break") and s["end_bar"] >= window_start:
-            cands.append((float(s["end_bar"]), f"{s['label']}_end"))
-        if s["label"] == "outro" and s["start_bar"] >= window_start:
-            cands.append((float(s["start_bar"]), "outro_start"))
-    if not cands:
-        # last resort: outro start, else bass-out even if near the end
-        outro = next((s["start_bar"] for s in o.sections if s["label"] == "outro"), None)
-        cands.append((float(outro), "outro_start") if outro is not None
-                     else (o.bass_out_bar or o.n_bars - o.last_min_bars, "fallback"))
+    cands: list[tuple[float, str, str]] = []
+    for k in range(len(o.sections) - 1):
+        bar = float(o.sections[k]["end_bar"])
+        if window_start <= bar <= o.n_bars:
+            cands.append((bar, o.sections[k]["label"], o.sections[k + 1]["label"]))
+    if not cands and len(o.sections) >= 2:   # fallback: the last boundary
+        cands.append((float(o.sections[-1]["start_bar"]),
+                      o.sections[-2]["label"], o.sections[-1]["label"]))
     return cands
 
 
@@ -136,31 +133,45 @@ def _score_lineup(o: Track, i: Track, arr_offset: float) -> int:
 
 
 def align_pair(o: Track, i: Track) -> Alignment:
-    """Align the incoming's bass-in to the best outgoing hand-off, snap to the
-    phrase grid, and score the resulting lineup."""
+    """Slide the incoming so its bass-in lands on an outgoing natural marker, and
+    pick the marker that maximises section-boundary lineup (energy-matched). The
+    bass switch happens there — faked early on the outgoing if it's before the
+    outgoing's natural bass-out. Marker-coincidence BEATS literal bass-to-bass."""
     anchor_in = i.bass_in_bar if i.bass_in_bar is not None else 0.0
     best: Alignment | None = None
-    for handoff_bar, kind in _handoff_candidates(o):
-        raw_offset = handoff_bar - anchor_in
-        arr_offset = round(raw_offset / PHRASE_GRID) * PHRASE_GRID
+    best_rank = None
+    for bar, before, after in _handoff_candidates(o):
+        arr_offset = round((bar - anchor_in) / PHRASE_GRID) * PHRASE_GRID
         overlap = o.n_bars - arr_offset
+        if overlap < PHRASE_GRID:                  # need at least a phrase of blend
+            continue
         score = _score_lineup(o, i, arr_offset)
-        # Prefer real bass-out, then higher lineup score, then longer overlap.
-        rank = (1 if kind == "bass_out" else 0, score, overlap)
-        if best is None or rank > (1 if best.handoff_kind == "bass_out" else 0, best.score, best.overlap_bars):
+        natural = before in ("drop", "build")      # high->low = a natural bass-drop point
+        is_bassout = (o.bass_out_bar is not None and abs(bar - o.bass_out_bar) <= 2
+                      and not o.bass_out_is_end)
+        # Lineup first; then prefer a natural bass-drop / real bass-out; then longer overlap.
+        rank = (score, int(natural) + int(is_bassout), overlap)
+        if best_rank is None or rank > best_rank:
+            best_rank = rank
+            kind = f"{before}->{after}" + ("/bass_out" if is_bassout else "")
             best = Alignment(
                 out_name=o.name, in_name=i.name,
-                handoff_bar_out=handoff_bar, handoff_kind=kind,
+                handoff_bar_out=bar, handoff_kind=kind,
                 anchor_bar_in=anchor_in, arr_offset_bars=arr_offset,
                 overlap_bars=overlap, score=score,
             )
-    # Constraint notes (symmetry: last minute out / first minute in)
-    if o.n_bars - best.handoff_bar_out > o.last_min_bars + HANDOFF_WINDOW_BARS:
-        best.notes.append("WARN: mix point not in outgoing's last minute")
-    if anchor_in > i.last_min_bars:
-        best.notes.append("WARN: incoming bass-in not in its first minute")
+    if best is None:                               # everything too short: last boundary
+        bar = float(o.sections[-1]["start_bar"])
+        arr_offset = round((bar - anchor_in) / PHRASE_GRID) * PHRASE_GRID
+        best = Alignment(o.name, i.name, bar, "fallback", anchor_in, arr_offset,
+                         o.n_bars - arr_offset, 0)
+    # Notes
+    if o.bass_out_bar is not None and not o.bass_out_is_end and best.handoff_bar_out < o.bass_out_bar - 2:
+        best.notes.append(f"faked bass drop ({o.bass_out_bar - best.handoff_bar_out:.0f}b early)")
     if o.bass_out_is_end:
-        best.notes.append("outgoing bass runs to end -> handed off on a breakpoint")
+        best.notes.append("outgoing bass runs to end")
+    if anchor_in > i.last_min_bars:
+        best.notes.append("WARN: incoming bass-in past its 1st minute")
     return best
 
 
