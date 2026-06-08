@@ -188,6 +188,7 @@ def run_pipeline(
     sections_layout: bool = False,
     allow_partial_rekordbox: bool = False,
     stem_sections: bool = False,
+    track_order: list[str] | None = None,
 ) -> Path | None:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
@@ -336,6 +337,23 @@ def run_pipeline(
         td["energy"] = mik.energy if mik else None
     sequenced = apply_energy_arc(sequenced)
     ordered_analyses = [t["analysis"] for t in sequenced]
+
+    # Optional manual order override (testing different arrangements): each entry
+    # is a case-insensitive substring matched against the track filename stem.
+    if track_order:
+        remaining = list(ordered_analyses)
+        reordered = []
+        for key in track_order:
+            a = next((x for x in remaining if key.lower() in x.path.stem.lower()), None)
+            if a is not None:
+                reordered.append(a)
+                remaining.remove(a)
+        if len(reordered) == len(ordered_analyses):
+            ordered_analyses = reordered
+            print(f"Custom track order applied ({len(reordered)} tracks)")
+        else:
+            print(f"  WARNING: custom order matched {len(reordered)}/{len(ordered_analyses)} "
+                  f"tracks — keeping sequencer order")
 
     for i, a in enumerate(ordered_analyses):
         mik = mik_data.get(str(a.path))
@@ -600,6 +618,10 @@ def main():
                              "(Source/stem_detector.py) as the section source instead of "
                              "Rekordbox phrases. Analysis-only; envelope cache makes re-runs "
                              "on known tracks instant.")
+    parser.add_argument("--order", type=str, default=None,
+                        help="Manual track order override (testing). Comma-separated, case-"
+                             "insensitive substrings of filenames, e.g. \"Samm,Call Me,Crusy\". "
+                             "Bypasses the auto-sequencer.")
     args = parser.parse_args()
 
     als_path = run_pipeline(
@@ -612,6 +634,7 @@ def main():
         sections_layout=args.sections_layout,
         allow_partial_rekordbox=args.allow_partial_rekordbox,
         stem_sections=args.stem_sections,
+        track_order=[k.strip() for k in args.order.split(",")] if args.order else None,
     )
     if als_path is not None:
         print(f"Generated: {als_path}")
