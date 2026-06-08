@@ -34,7 +34,9 @@ from matplotlib.patches import Rectangle
 
 from stem_section_probe import _seccol  # shared section colour map
 
-PHRASE_GRID = 16          # snap staggers to 16-bar phrases
+PHRASE_GRID = 16          # 16-bar phrase grid (viz gridlines)
+SNAP_BARS = 8             # snap the incoming's stagger to 8-bar phrases (Sam: several
+                          # alignments were 8 bars off — 8 is the finest musical phrase)
 HANDOFF_WINDOW_BARS = 8   # allow a hand-off marker this far before the last-minute line
 COINCIDE_TOL_BARS = 2     # two section boundaries "line up" if within this many bars
 LIKE_ENERGY = {"drop": "high", "build": "high", "break": "low", "fill": "low",
@@ -110,6 +112,13 @@ def _handoff_candidates(o: Track) -> list[tuple[float, str, str]]:
         bar = float(o.sections[k]["end_bar"])
         if window_start <= bar <= o.n_bars:
             cands.append((bar, o.sections[k]["label"], o.sections[k + 1]["label"]))
+    # The real bass-out is also a candidate even if it doesn't fall on a section
+    # boundary (Sam: align to where the bass naturally comes in/out — the cleanest
+    # non-faked swap). Tag it so it ranks as a real bass-out.
+    if o.bass_out_bar is not None and not o.bass_out_is_end and window_start <= o.bass_out_bar <= o.n_bars:
+        lbl = next((s["label"] for s in o.sections
+                    if s["start_bar"] <= o.bass_out_bar < s["end_bar"]), "drop")
+        cands.append((o.bass_out_bar, lbl, "bass_out"))
     if not cands and len(o.sections) >= 2:   # fallback: the last boundary
         cands.append((float(o.sections[-1]["start_bar"]),
                       o.sections[-2]["label"], o.sections[-1]["label"]))
@@ -141,7 +150,7 @@ def align_pair(o: Track, i: Track) -> Alignment:
     best: Alignment | None = None
     best_rank = None
     for bar, before, after in _handoff_candidates(o):
-        arr_offset = round((bar - anchor_in) / PHRASE_GRID) * PHRASE_GRID
+        arr_offset = round((bar - anchor_in) / SNAP_BARS) * SNAP_BARS
         overlap = o.n_bars - arr_offset
         if overlap < PHRASE_GRID:                  # need at least a phrase of blend
             continue
@@ -162,7 +171,7 @@ def align_pair(o: Track, i: Track) -> Alignment:
             )
     if best is None:                               # everything too short: last boundary
         bar = float(o.sections[-1]["start_bar"])
-        arr_offset = round((bar - anchor_in) / PHRASE_GRID) * PHRASE_GRID
+        arr_offset = round((bar - anchor_in) / SNAP_BARS) * SNAP_BARS
         best = Alignment(o.name, i.name, bar, "fallback", anchor_in, arr_offset,
                          o.n_bars - arr_offset, 0)
     # Notes
