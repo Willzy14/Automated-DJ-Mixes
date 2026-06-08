@@ -493,13 +493,87 @@ def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, section
     plt.close(fig)
 
 
+def hints_from_stem_result(res: dict) -> dict:
+    """Derive the four mix hints the pipeline's production gate requires —
+    first_drop_sec, first_break_sec, outro_start_sec, last_bass_drop_sec — from a
+    detect() result. All absolute seconds, all positive (the gate rejects None /
+    non-positive). This is what makes a fully-autonomous mix possible: the cues
+    Sam used to hand-author from the waveform now come straight from the stems.
+    """
+    secs = res["sections"]
+    sig = res.get("signals", {})
+    sec_per_bar = 4 * 60.0 / res["bpm"]
+    end_sec = secs[-1]["end_sec"] if secs else 0.0
+
+    drops = [s for s in secs if s["label"] == "drop"]
+    breaks = [s for s in secs if s["label"] == "break"]
+    outro = next((s for s in secs if s["label"] == "outro"), None)
+
+    first_drop = drops[0]["start_sec"] if drops else None
+    outro_start = outro["start_sec"] if outro else None
+
+    # first_break = the first break AFTER the first drop (the energy drop the hint
+    # describes), falling back to the first break of any kind.
+    first_break = None
+    if breaks:
+        after = [b["start_sec"] for b in breaks if first_drop is None or b["start_sec"] > first_drop]
+        first_break = after[0] if after else breaks[0]["start_sec"]
+
+    # last_bass_drop = the natural bass swap near the end: the last fill drop-out
+    # before the outro, else the last break before it.
+    pre = outro_start if outro_start is not None else end_sec
+    window_start = pre - 32 * sec_per_bar   # only a swap NEAR the end counts
+    cand = [f[0] for f in sig.get("fills", []) if window_start <= f[0] < pre]
+    cand += [b["start_sec"] for b in breaks if window_start <= b["start_sec"] < pre]
+    last_bass_drop = max(cand) if cand else None
+
+    # Fallbacks — guarantee all four present + positive for the hint gate.
+    if not first_drop or first_drop <= 0:
+        first_drop = 16 * sec_per_bar
+    if not outro_start or outro_start <= 0:
+        outro_start = max(first_drop + sec_per_bar, end_sec - 32 * sec_per_bar)
+    if not first_break or first_break <= 0:
+        first_break = first_drop + 16 * sec_per_bar
+    if not last_bass_drop or last_bass_drop <= 0:
+        last_bass_drop = max(first_drop, outro_start - 16 * sec_per_bar)
+
+    return {
+        "first_drop_sec": round(first_drop, 2),
+        "first_break_sec": round(first_break, 2),
+        "outro_start_sec": round(outro_start, 2),
+        "last_bass_drop_sec": round(last_bass_drop, 2),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project", type=Path)
     ap.add_argument("--track", type=str, default=None)
+    ap.add_argument("--write-hints", action="store_true",
+                    help="Auto-write Hints/track_hints.json from stem sections (the "
+                         "fully-autonomous path — no manual visual-pass needed). No PNGs.")
     args = ap.parse_args()
     audio = args.project / "Audio"
     wavs = [audio / args.track] if args.track else sorted(audio.glob("*.wav"))
+
+    if args.write_hints:
+        hints = {}
+        print(f"Auto-generating hints from stem detection for {len(wavs)} track(s):")
+        for w in wavs:
+            res = detect(w, args.project, make_viz=False)
+            if not res:
+                continue
+            h = hints_from_stem_result(res)
+            hints[w.name] = h
+            print(f"  {w.stem[:42]:42} drop {h['first_drop_sec']:6.1f}  break {h['first_break_sec']:6.1f}  "
+                  f"bass-swap {h['last_bass_drop_sec']:6.1f}  outro {h['outro_start_sec']:6.1f}")
+        hints_dir = args.project / "Hints"
+        hints_dir.mkdir(parents=True, exist_ok=True)
+        out = hints_dir / "track_hints.json"
+        out.write_text(json.dumps(hints, indent=2), encoding="utf-8")
+        print(f"Wrote {len(hints)} hints -> {out}")
+        return
+
     print(f"Stem section detection on {len(wavs)} track(s):")
     for w in wavs:
         detect(w, args.project)
