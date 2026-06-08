@@ -149,6 +149,12 @@ Automated diff tool for PROPOSE-LEARN cycle. Extracts automation envelopes from 
 Key types: `TrackAutomation`, `ParamDiff`, `TransitionDiff` (with `classified_style`).
 Key functions: `extract_track_automation()`, `analyse_transitions()`, `_classify_style()` (sneak level + bass kill depth + instant swap detection), `diff_to_jsonl_entry()`, `print_report()`, `main()`.
 
+### `Source/stem_detector.py`
+**Added 2026-06-08.** Stem-based section detector (the new section source — Demucs stems, ANALYSIS-ONLY, original WAV untouched, envelopes cached as `.npz`). `detect(wav, project, bpm=, downbeat=, make_viz=, write_json=)` → `{track, bpm, n_bars, sections, signals}`; `--write-hints` auto-generates the 4 production-gate hints; renders `DETECT_*.png` (track + 4 stems, labelled sections + bar counts + bass-IN/OUT markers + kick cues). Calibration rules + signals in memory `reference-stem-section-detector`. Wired into the orchestrator via `--stem-sections`.
+
+### `Source/align_engine.py`
+**Added 2026-06-08.** Bass-to-bass alignment engine + per-transition visualiser (TESTING tool; production arrangement stays autonomous). Reads `SECTIONS_STEM_*.json`, aligns each adjacent pair by sliding the incoming on the 8-bar grid to maximise energy-matched section coincidence (markers-first; the bass switch can be faked early at any natural marker), snaps, scores lineup, renders `_Alignment Review/ALIGN_*.png`. Key fns: `align_pair()`, `_handoff_candidates()`, `_score_lineup()`, `visualize_transition()`. **NOT yet feeding the ALS — that's the top next task** (replaces `propose_arrangement.compute_natural_positions`). Model + 9-transition verdicts in memory `reference-arrangement-model`.
+
 ### Diagnostic / Research Scripts
 
 - `Source/analyze_real_mix.py` — Decompresses a real Sam DJ mix `.als` and lists tracks/clips. Used 2026-05-19 to learn transition patterns from Bargrooves Summer 2015 Mix 1.
