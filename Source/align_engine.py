@@ -97,6 +97,7 @@ class Alignment:
     arr_offset_bars: float       # where the incoming starts, relative to outgoing bar 0
     overlap_bars: float
     score: int                   # coinciding like-energy boundaries (the bonus)
+    swap_beats: float | None = None  # absolute arrangement-beat of the bass swap (set by compute_aligned_positions)
     notes: list = field(default_factory=list)
 
 
@@ -235,6 +236,65 @@ def visualize_transition(o: Track, i: Track, al: Alignment, out_png: Path, idx: 
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=95)
     plt.close(fig)
+
+
+def _resolve_stem_key(name: str, stems: dict) -> str | None:
+    """Match a propose_arrangement track name (possibly XML-escaped from the ALS,
+    e.g. 'I&apos;m') to a stem-JSON key (load_track().name, real apostrophe)."""
+    import html
+    n = html.unescape(name)
+    if n in stems:
+        return n
+    return next((k for k in stems if k.startswith(n[:30]) or n.startswith(k[:30])), None)
+
+
+def compute_aligned_positions(tracks, stem_dir, order=None):
+    """Bass-to-bass ABSOLUTE arrangement positions for the whole mix — a drop-in
+    replacement for propose_arrangement.compute_natural_positions().
+
+    `tracks` is the propose_arrangement TrackInfo list, already in mix order, with
+    arr_start/arr_end in arrangement BEATS. Reads the SECTIONS_STEM_*.json the
+    aligner understands, aligns each adjacent pair (align_pair), and accumulates
+    absolute positions: arr_pos[k] = arr_pos[k-1] + arr_offset_bars*4 (anti-rewind
+    clamped). bars->beats is exactly *4 (4/4); stem bar 0 == the track's downbeat
+    == the sections-JSON zero point, so no per-track offset correction is needed.
+
+    Returns (positions, alignments):
+      positions  = [(name, current_arr_start, new_arr_start, delta_beats), ...]
+      alignments = per-pair Alignment objects (k = transition tracks[k] -> tracks[k+1]),
+                   each with .swap_beats = the absolute arrangement-beat of the bass
+                   swap (outgoing's final position + handoff_bar_out*4) for apply_automation.
+    """
+    stem_dir = Path(stem_dir)
+    stems = {}
+    for j in sorted(stem_dir.glob("SECTIONS_STEM_*.json")):
+        t = load_track(j)
+        stems[t.name] = t
+
+    names = order or [t.name for t in tracks]
+    resolved = []
+    for nm in names:
+        key = _resolve_stem_key(nm, stems)
+        if key is None:
+            raise ValueError(
+                f"align_engine.compute_aligned_positions: no stem JSON for track '{nm}' "
+                f"in {stem_dir}. Run the stem detector (--stem-sections) first.")
+        resolved.append(key)
+
+    arr_pos = {tracks[0].name: tracks[0].arr_start}
+    alignments = []
+    for k in range(1, len(tracks)):
+        o, i = stems[resolved[k - 1]], stems[resolved[k]]
+        al = align_pair(o, i)
+        prev = arr_pos[tracks[k - 1].name]
+        new = max(prev + al.arr_offset_bars * 4.0, prev)     # anti-rewind clamp
+        arr_pos[tracks[k].name] = new
+        al.swap_beats = prev + al.handoff_bar_out * 4.0      # outgoing final pos + handoff
+        alignments.append(al)
+
+    positions = [(t.name, t.arr_start, arr_pos[t.name], arr_pos[t.name] - t.arr_start)
+                 for t in tracks]
+    return positions, alignments
 
 
 def _mix_order(project: Path, stems: dict) -> list[str]:

@@ -56,6 +56,10 @@ from apply_loops import (
 MIN_OVERLAP_BEATS = 64   # 16 bars - minimum for a usable transition
 MAX_OVERLAP_BEATS = 192  # 48 bars - longer than this is unusual
 
+# Position source: True = bass-to-bass align_engine (Sam's model); False = legacy
+# single-anchor compute_natural_positions (kept as a one-line revert if needed).
+USE_ALIGN_ENGINE = True
+
 # Loop granularity - all loops must be multiples of this
 LOOP_GRANULARITY = 4     # 1 bar at 4/4
 
@@ -118,6 +122,7 @@ class ArrangementPlan:
     shifts: list[tuple[str, float]]      # (track_name, delta_beats)
     loops: list[LoopSpec]
     notes: list[str] = field(default_factory=list)
+    alignments: list = field(default_factory=list)   # per-pair align_engine Alignment objects
 
 
 # -- Section helpers ----------------------------------------------------------
@@ -758,9 +763,19 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             i + 1, t.name[:50], t.arr_start, t.arr_end,
             t.track_length, len(t.sections), meta))
 
-    # -- Compute natural positions --
-    print("\n--- Natural-fill alignment ---")
-    positions = compute_natural_positions(tracks)
+    # -- Compute positions: bass-to-bass align_engine (Sam's model), else legacy --
+    alignments = []
+    if USE_ALIGN_ENGINE:
+        from align_engine import compute_aligned_positions
+        stem_dir = als_path.parent.parent / "_Stem Analysis"
+        if not stem_dir.exists():
+            stem_dir = als_path.parent / "_Stem Analysis"
+        print("\n--- Bass-to-bass alignment (align_engine) ---")
+        positions, alignments = compute_aligned_positions(
+            tracks, stem_dir, order=[t.name for t in tracks])
+    else:
+        print("\n--- Natural-fill alignment (legacy) ---")
+        positions = compute_natural_positions(tracks)
     shifts: list[tuple[str, float]] = []
     for name, cur, new, delta in positions:
         marker = " ** SHIFT **" if abs(delta) > 0.5 else ""
@@ -832,6 +847,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         overlaps=overlaps,
         shifts=shifts,
         loops=all_loops,
+        alignments=alignments,
     )
 
     # -- Apply to ALS (unless dry-run) --
@@ -971,6 +987,15 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
                 else "standard"),
             "notes": ov.notes,
         }
+        # align_engine's explicit bass-swap point (so apply_automation doesn't
+        # re-derive a different one). Matched by pair index.
+        al = (plan.alignments[ov.pair_index - 1]
+              if 0 <= ov.pair_index - 1 < len(plan.alignments) else None)
+        if al is not None:
+            t["swap_beats"] = round(al.swap_beats, 2) if al.swap_beats is not None else None
+            t["handoff_kind"] = al.handoff_kind
+            t["arr_offset_bars"] = al.arr_offset_bars
+            t["lineup_score"] = al.score
         if ov.out_tail_loop:
             t["out_tail_loop"] = {
                 "source": "{:.0f}-{:.0f}".format(
