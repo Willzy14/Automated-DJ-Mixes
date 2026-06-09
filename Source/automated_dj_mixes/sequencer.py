@@ -103,14 +103,25 @@ def is_compatible(camelot_a: str, camelot_b: str) -> tuple[bool, str]:
     return score >= 1, transition_type
 
 
+def _count_clashes(track_dicts: list[dict]) -> int:
+    """Number of adjacent Camelot clashes (compatibility_score == 0) in an order."""
+    c = 0
+    for i in range(len(track_dicts) - 1):
+        score, _ = compatibility_score(
+            track_dicts[i].get("camelot", "1A"), track_dicts[i + 1].get("camelot", "1A"))
+        if score == 0:
+            c += 1
+    return c
+
+
 def apply_energy_arc(tracks: list[dict]) -> list[dict]:
-    """Reorder tracks within build/peak/cooldown thirds for an energy arc.
+    """Reorder within build/peak/cooldown thirds for an energy arc — but ONLY if
+    it does NOT break harmony. Energy is a tiebreak WITHIN harmonic constraints
+    (Sam, 2026-06-09), never an override: if the energy reorder would add a
+    Camelot clash, the harmonic order is kept. Also keeps the 15-BPM safety.
 
     Each track dict should have an 'energy' key (MIK OverallEnergy, 0-10).
-    Tracks without energy data keep their position.
-
-    Skips if fewer than 4 tracks or >50% missing energy data. Within each
-    third, only swaps tracks if the swap doesn't create a 15+ BPM gap.
+    Skips if fewer than 4 tracks or >50% missing energy data.
     """
     if len(tracks) < 4:
         return tracks
@@ -150,11 +161,15 @@ def apply_energy_arc(tracks: list[dict]) -> list[dict]:
     cooldown = sorted(groups[2], key=_energy_key, reverse=True)
 
     proposed = build + peak + cooldown
+    proposed_dicts = [tracks[i] for i in proposed]
 
+    # Harmony-preserving: reject the energy reorder if it ADDS a Camelot clash.
+    if _count_clashes(proposed_dicts) > _count_clashes(tracks):
+        return tracks
     if not _bpm_safe(proposed):
         return tracks
 
-    return [tracks[i] for i in proposed]
+    return proposed_dicts
 
 
 def _bpm_proximity(bpm_a: float | None, bpm_b: float | None) -> float:
@@ -165,53 +180,89 @@ def _bpm_proximity(bpm_a: float | None, bpm_b: float | None) -> float:
     return max(0.0, 1.0 - abs(bpm_a - bpm_b) / 15.0)
 
 
+# Cost-weight hierarchy (strict): avoid clashes >> smoother transitions >>
+# ascending BPM >> close BPM. The big separations guarantee the priority order
+# so harmony can never be traded away for tempo.
+_W_CLASH = 1_000_000.0
+_W_SMOOTH = 1_000.0
+_W_BPM_DESCENT = 1.0
+_W_BPM_DIST = 0.01
+
+
+def _edge_cost(a: dict, b: dict) -> float:
+    """Transition cost a->b. Lower is better. Clash dominates; then transition
+    smoothness (identical < smooth < power_mix); then BPM descent (mixes should
+    get faster); then raw BPM distance."""
+    score, _ = compatibility_score(a.get("camelot", "1A"), b.get("camelot", "1A"))
+    cost = (_W_CLASH if score == 0 else 0.0) + _W_SMOOTH * (4 - score)
+    bpm_a, bpm_b = a.get("bpm"), b.get("bpm")
+    if bpm_a and bpm_b:
+        if bpm_b < bpm_a:
+            cost += _W_BPM_DESCENT * (bpm_a - bpm_b)   # penalise dropping tempo
+        cost += _W_BPM_DIST * abs(bpm_a - bpm_b)
+    return cost
+
+
+def _held_karp_path(tracks: list[dict]) -> list[int]:
+    """Exact min-cost Hamiltonian path (free start/end) over _edge_cost via
+    Held-Karp DP. O(2^n * n^2) — fine for realistic mix sizes (<=15)."""
+    import math
+    n = len(tracks)
+    cost = [[_edge_cost(tracks[i], tracks[j]) if i != j else 0.0
+             for j in range(n)] for i in range(n)]
+    size = 1 << n
+    dp = [[math.inf] * n for _ in range(size)]
+    par = [[-1] * n for _ in range(size)]
+    for j in range(n):
+        dp[1 << j][j] = 0.0
+    for mask in range(size):
+        for j in range(n):
+            base = dp[mask][j]
+            if base == math.inf or not (mask & (1 << j)):
+                continue
+            for k in range(n):
+                if mask & (1 << k):
+                    continue
+                nm = mask | (1 << k)
+                c = base + cost[j][k]
+                if c < dp[nm][k]:
+                    dp[nm][k] = c
+                    par[nm][k] = j
+    full = size - 1
+    best_j = min(range(n), key=lambda j: dp[full][j])
+    path, mask, j = [], full, best_j
+    while j != -1:
+        path.append(j)
+        nj = par[mask][j]
+        mask ^= (1 << j)
+        j = nj
+    return path[::-1]
+
+
+def _greedy_path(tracks: list[dict]) -> list[int]:
+    """Greedy nearest-neighbour fallback for large track counts (>15). Starts
+    slowest so the walk ascends; picks the lowest-cost next track each step."""
+    start = min(range(len(tracks)), key=lambda i: tracks[i].get("bpm") or 999)
+    remaining = [i for i in range(len(tracks)) if i != start]
+    path = [start]
+    while remaining:
+        cur = path[-1]
+        nxt = min(remaining, key=lambda idx: _edge_cost(tracks[cur], tracks[idx]))
+        remaining.remove(nxt)
+        path.append(nxt)
+    return path
+
+
 def build_harmonic_path(tracks: list[dict]) -> list[dict]:
-    """Build an optimal path through all tracks using Camelot + BPM proximity.
+    """Order tracks HARMONY-FIRST: minimise Camelot clashes, then prefer smoother
+    transitions, then ascending BPM, then close BPM (see _edge_cost). Uses an
+    EXACT optimal Held-Karp path for realistic mix sizes (<=15 tracks); falls back
+    to greedy nearest-neighbour above that. Replaces the old greedy walk that got
+    stuck in local optima and left avoidable clashes.
 
-    Each track dict must have a 'camelot' key. Optional 'bpm' key enables
-    BPM proximity scoring.
-
-    Composite score = (camelot_norm * 0.6) + (bpm_norm * 0.4)
-    where camelot_norm is the raw 0-4 score divided by 4 (→ 0-1 scale).
-
-    Starts from the slowest-BPM track and uses greedy nearest-neighbour,
-    biasing toward ascending BPM (mixes naturally get faster).
+    Each track dict must have a 'camelot' key; optional 'bpm' enables tempo bias.
     """
     if len(tracks) <= 1:
         return list(tracks)
-
-    # Start from the slowest track so the greedy walk naturally ascends
-    start = min(
-        range(len(tracks)),
-        key=lambda i: tracks[i].get("bpm") or 999,
-    )
-    remaining = [i for i in range(len(tracks)) if i != start]
-    current = start
-    path = [current]
-
-    while remaining:
-        cur_bpm = tracks[current].get("bpm")
-        best_idx = None
-        best_composite = -1.0
-        for idx in remaining:
-            cam_score, _ = compatibility_score(
-                tracks[current]["camelot"], tracks[idx]["camelot"]
-            )
-            cam_norm = cam_score / 4.0
-            bpm_norm = _bpm_proximity(
-                cur_bpm, tracks[idx].get("bpm")
-            )
-            # Small ascending BPM bonus: prefer candidates at same or higher BPM
-            asc_bonus = 0.0
-            cand_bpm = tracks[idx].get("bpm")
-            if cur_bpm and cand_bpm and cand_bpm >= cur_bpm:
-                asc_bonus = 0.05
-            composite = cam_norm * 0.6 + bpm_norm * 0.4 + asc_bonus
-            if composite > best_composite:
-                best_composite = composite
-                best_idx = idx
-        remaining.remove(best_idx)
-        path.append(best_idx)
-        current = best_idx
-
+    path = _held_karp_path(tracks) if len(tracks) <= 15 else _greedy_path(tracks)
     return [tracks[i] for i in path]

@@ -717,8 +717,14 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         audio_dir = als_path.parent.parent / "Audio"
         if not audio_dir.exists():
             audio_dir = als_path.parent / "Audio"
+        import html
         for t in tracks:
-            wav_name = t.name if t.name.endswith(".wav") else t.name + ".wav"
+            # Track names come from the ALS EffectiveName -> XML-escaped (&apos;,
+            # &amp; ...). Unescape before the filesystem lookup or e.g.
+            # "VLAD - I&apos;m Glued" never matches "VLAD - I'm Glued.wav" and the
+            # track silently loses its MIK key/energy.
+            clean = html.unescape(t.name)
+            wav_name = clean if clean.endswith(".wav") else clean + ".wav"
             wav_path = audio_dir / wav_name
             if wav_path.exists():
                 t.wav_path = wav_path

@@ -130,20 +130,30 @@ def test_path_preserves_all_tracks():
     assert set(t["name"] for t in result) == {"a", "b", "c", "d"}
 
 
-def test_path_picks_smooth_neighbours():
+def _clash_count(result):
+    from automated_dj_mixes.sequencer import compatibility_score
+    return sum(1 for i in range(len(result) - 1)
+               if compatibility_score(result[i]["camelot"], result[i + 1]["camelot"])[0] == 0)
+
+
+def test_path_keeps_smooth_neighbours_adjacent():
+    """The smooth pair (5A,6A) must end up adjacent; 10B can't be made compatible
+    with either, so the optimal path has the minimum 1 clash with 5A/6A together."""
     tracks = [
         {"camelot": "5A", "name": "start"},
         {"camelot": "10B", "name": "far_away"},
         {"camelot": "6A", "name": "smooth_next"},
     ]
     result = build_harmonic_path(tracks)
-    assert result[0]["name"] == "start"
-    assert result[1]["name"] == "smooth_next"
+    names = [t["name"] for t in result]
+    assert abs(names.index("start") - names.index("smooth_next")) == 1
+    assert _clash_count(result) == 1   # 10B is the one unavoidable clash
 
 
-def test_path_favours_smooth_chain():
-    """Greedy picks smooth (+1) transitions first. After 3A→4A→5A, both
-    remaining (1A, 2A) are clashes from 5A, so tie-breaks by list order."""
+def test_path_finds_optimal_smooth_chain():
+    """1A..5A form a perfect +1 chain, so the optimal path is the whole chain with
+    ZERO clashes. (The old greedy got stuck after 3A→4A→5A and left 2 clashes;
+    the Held-Karp path reaches the floor.)"""
     tracks = [
         {"camelot": "3A", "name": "t3"},
         {"camelot": "5A", "name": "t5"},
@@ -152,6 +162,6 @@ def test_path_favours_smooth_chain():
         {"camelot": "2A", "name": "t2"},
     ]
     result = build_harmonic_path(tracks)
-    names = [t["name"] for t in result]
-    assert names[:3] == ["t3", "t4", "t5"]
-    assert set(names[3:]) == {"t1", "t2"}
+    assert _clash_count(result) == 0
+    nums = [int(t["camelot"][:-1]) for t in result]
+    assert all(abs(nums[i] - nums[i + 1]) == 1 for i in range(len(nums) - 1))
