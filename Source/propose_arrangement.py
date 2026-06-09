@@ -642,6 +642,13 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                 in_track.dropped_clip_names = list(dict.fromkeys(existing + dropped))
                 analysis.notes += "; intro cut {:d} clip(s) to bar {:.0f}".format(
                     len(dropped), fc.cut_to_bar)
+            else:
+                # planned cut lands mid-clip (single long intro clip) — can't
+                # partial-trim yet. Surface it rather than silently dropping it.
+                print("  WARNING: intro cut to bar {:.0f} matched no whole clip on '{}' "
+                      "(mid-clip; partial trim not yet supported)".format(
+                          fc.cut_to_bar, in_track.name[:40]))
+                analysis.notes += "; intro cut planned but matched no clip (mid-clip)"
 
 
 # -- Pair history matching ----------------------------------------------------
@@ -791,7 +798,10 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         hint = hints.get(t.name) or hints.get(t.name + ".wav") or {}
         t.intro_skip_bars = hint.get("intro_skip_bars", 0)
         t.loop_source_sec = hint.get("loop_source_sec")
-        if t.intro_skip_bars:
+        # Only the LEGACY path pre-trims here. With align_engine on, intros are
+        # handled by its intro_cut (which reads untrimmed stems) — pre-trimming
+        # would desync the cut maths, so skip it (warned below).
+        if t.intro_skip_bars and not USE_ALIGN_ENGINE:
             skip_beats = t.intro_skip_bars * 4
             # Capture the clip names of the sections we're dropping so their
             # clips can be removed from the .als (otherwise the trimmed intro

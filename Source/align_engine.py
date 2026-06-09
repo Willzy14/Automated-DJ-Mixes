@@ -348,9 +348,12 @@ def plan_fill_or_cut(o, i, al):
 
     # (2) OUTGOING-TAIL LOOP — outgoing ends before the incoming's next marker
     anchor = i.bass_in_bar or 0.0
-    next_marker_in = next((s["start_bar"] for s in i.sections if s["start_bar"] > anchor + 1), None)
+    # next section marker strictly after the swap (bass-in is a float; compare to
+    # the rounded anchor so we skip the marker it sits on, not an extra bar)
+    next_marker_in = next((s["start_bar"] for s in i.sections if s["start_bar"] > round(anchor)), None)
     if next_marker_in is not None and not o.bass_out_is_end:
-        gap = round(((arr + next_marker_in) - o.n_bars) / SNAP_BARS) * SNAP_BARS
+        # TRUNCATE (not round) so the loop never extends PAST the marker (undershoot)
+        gap = int(((arr + next_marker_in) - o.n_bars) / SNAP_BARS) * SNAP_BARS
         if gap >= SNAP_BARS:
             outro = next((s for s in o.sections if s["label"] == "outro"), None)
             if outro:
