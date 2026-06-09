@@ -424,7 +424,11 @@ def compute_aligned_positions(tracks, stem_dir, order=None):
                 f"in {stem_dir}. Run the stem detector (--stem-sections) first.")
         resolved.append(key)
 
-    arr_pos = {0: tracks[0].arr_start}                       # keyed by INDEX (names may repeat)
+    # The mix ALWAYS starts at the timeline origin. Seeding from tracks[0].arr_start
+    # would let the orchestrator's baked (old natural-fill) position leak in as the
+    # baseline — hardcode 0.0 so align_engine is the SOLE position authority and the
+    # orchestrator's layout can never contaminate the mix. (Audit 2026-06-09.)
+    arr_pos = {0: 0.0}                                       # keyed by INDEX (names may repeat)
     alignments = []
     for k in range(1, len(tracks)):
         o, i = stems[resolved[k - 1]], stems[resolved[k]]
