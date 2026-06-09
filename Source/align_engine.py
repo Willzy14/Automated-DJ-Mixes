@@ -178,40 +178,55 @@ def align_pair(o: Track, i: Track) -> Alignment:
     pick the marker that maximises section-boundary lineup (energy-matched). The
     bass switch happens there — faked early on the outgoing if it's before the
     outgoing's natural bass-out. Marker-coincidence BEATS literal bass-to-bass."""
-    anchor_in = i.bass_in_bar if i.bass_in_bar is not None else 0.0
+    bass_in = i.bass_in_bar if i.bass_in_bar is not None else 0.0
+    # Anchor on the bass-in OR the intro-end (start of the first NON-intro
+    # section). Bass-in alone fails when the bass enters mid-intro (My Own Thang:
+    # bass-in bar 8, but the structural entry is break_1 at 32) — the intro then
+    # lands off every outgoing marker (lineup 0). The intro-end anchor lets the
+    # SECTION markers coincide (Sam aligned My Own's break_1 to Sinners' fill-end).
+    # Only these two EARLY anchors are tried, so a late section can't be pinned to
+    # a late handoff to game a huge overlap. Lineup picks; bass-to-bass tiebreaks,
+    # so genuine bass-to-bass winners are preserved.
+    intro_end = next((float(s["start_bar"]) for s in i.sections
+                      if s["label"] != "intro"), bass_in)
+    anchors = {bass_in, intro_end}
     best: Alignment | None = None
     best_rank = None
     for bar, before, after in _handoff_candidates(o):
-        arr_offset = round((bar - anchor_in) / SNAP_BARS) * SNAP_BARS
-        overlap = o.n_bars - arr_offset
-        if overlap < PHRASE_GRID:                  # need at least a phrase of blend
-            continue
-        score = _score_lineup(o, i, arr_offset)
         natural = before in ("drop", "build")      # high->low = a natural bass-drop point
         is_bassout = (o.bass_out_bar is not None and abs(bar - o.bass_out_bar) <= 2
                       and not o.bass_out_is_end)
-        # Lineup first; then prefer a natural bass-drop / real bass-out; then longer overlap.
-        rank = (score, int(natural) + int(is_bassout), overlap)
-        if best_rank is None or rank > best_rank:
-            best_rank = rank
-            kind = f"{before}->{after}" + ("/bass_out" if is_bassout else "")
-            best = Alignment(
-                out_name=o.name, in_name=i.name,
-                handoff_bar_out=bar, handoff_kind=kind,
-                anchor_bar_in=anchor_in, arr_offset_bars=arr_offset,
-                overlap_bars=overlap, score=score,
-            )
+        for anchor in anchors:
+            arr_offset = round((bar - anchor) / SNAP_BARS) * SNAP_BARS
+            overlap = o.n_bars - arr_offset
+            if overlap < PHRASE_GRID:              # need at least a phrase of blend
+                continue
+            score = _score_lineup(o, i, arr_offset)
+            # bass-to-bass bonus: the incoming's real bass-in lands on the swap.
+            # TIEBREAK only — lineup dominates, so this preserves bass-in winners
+            # and only rescues lineup-0 (mid-intro-bass) pairs like My Own.
+            bass_to_bass = abs(arr_offset + bass_in - bar) <= COINCIDE_TOL_BARS
+            rank = (score, int(bass_to_bass) + int(natural) + int(is_bassout), overlap)
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                kind = f"{before}->{after}" + ("/bass_out" if is_bassout else "")
+                best = Alignment(
+                    out_name=o.name, in_name=i.name,
+                    handoff_bar_out=bar, handoff_kind=kind,
+                    anchor_bar_in=bass_in, arr_offset_bars=arr_offset,
+                    overlap_bars=overlap, score=score,
+                )
     if best is None:                               # everything too short: last boundary
         bar = float(o.sections[-1]["start_bar"])
-        arr_offset = round((bar - anchor_in) / SNAP_BARS) * SNAP_BARS
-        best = Alignment(o.name, i.name, bar, "fallback", anchor_in, arr_offset,
+        arr_offset = round((bar - bass_in) / SNAP_BARS) * SNAP_BARS
+        best = Alignment(o.name, i.name, bar, "fallback", bass_in, arr_offset,
                          o.n_bars - arr_offset, 0)
     # Notes
     if o.bass_out_bar is not None and not o.bass_out_is_end and best.handoff_bar_out < o.bass_out_bar - 2:
         best.notes.append(f"faked bass drop ({o.bass_out_bar - best.handoff_bar_out:.0f}b early)")
     if o.bass_out_is_end:
         best.notes.append("outgoing bass runs to end")
-    if anchor_in > i.last_min_bars:
+    if bass_in > i.last_min_bars:
         best.notes.append("WARN: incoming bass-in past its 1st minute")
     return best
 
