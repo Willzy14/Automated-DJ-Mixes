@@ -502,44 +502,27 @@ def run_pipeline(
                 print(f"  WARNING: no Rekordbox data for {analysis.path.name} — single uncoloured clip")
             track_data.append((analysis, markers, mode, segments, total_beats))
 
-        # Compute arrangement positions using natural-fill alignment.
-        def first_drop_source(segs):
+        # Sections-layout is a per-track section-chop artifact for REVIEW only.
+        # The mix ARRANGEMENT (track positions, swaps, loops/cuts) is computed
+        # SOLELY by align_engine in propose_arrangement, which re-positions every
+        # clip from a 0 baseline. So we lay tracks out END-TO-END here — a plain,
+        # deterministic, order-preserving layout with NO arrangement model.
+        # (The old natural-fill positioner — last_natural_swap_source/first_drop_
+        # source — was PURGED 2026-06-09 so no old positioning code can run.)
+        def first_drop_source(segs):    # logging only, not positioning
             return next((s.source_start_beats for s in segs if s.label == "drop"), 0.0)
-
-        def last_natural_swap_source(segs, total_beats):
-            """Outgoing's natural bass-drop point: the LAST fill or break
-            before the outro. Falls back to outro start, then 75% of total."""
-            outro_idx = next((i for i, s in enumerate(segs) if s.label == "outro"), len(segs))
-            for s in reversed(segs[:outro_idx]):
-                if s.label in ("fill", "break"):
-                    return s.source_start_beats
-            if outro_idx < len(segs):
-                return segs[outro_idx].source_start_beats
-            return total_beats * 0.75
 
         cumulative_arr = 0.0
         for i, (analysis, markers, mode, segments, total_beats) in enumerate(track_data):
-            if i == 0:
-                arr_start = 0.0
-            else:
-                prev_analysis, prev_markers, prev_mode, prev_segs, prev_total = track_data[i - 1]
-                prev_arr_start = patches[-1].arrangement_start_beats
-                if prev_segs and segments:
-                    swap_src = last_natural_swap_source(prev_segs, prev_total)
-                    drop_src = first_drop_source(segments)
-                    arr_start = prev_arr_start + swap_src - drop_src
-                else:
-                    arr_start = prev_arr_start + prev_total
-                # Clamp to ≥ prev_arr_start (no negative overlap with rewinding)
-                arr_start = max(arr_start, prev_arr_start)
+            arr_start = cumulative_arr
+            cumulative_arr += max(float(total_beats), 4.0)   # end-to-end, no overlap
 
             if segments:
                 label_counts: dict[str, int] = {}
                 for s in segments:
                     label_counts[s.label] = label_counts.get(s.label, 0) + 1
                 counts_str = " ".join(f"{k}:{v}" for k, v in label_counts.items())
-                first_drop = first_drop_source(segments)
-                print(f"  {i+1}. {analysis.path.name[:60]} @ arr-beat {arr_start:.0f}  drop_1@src {first_drop:.0f}  [{counts_str}]")
+                print(f"  {i+1}. {analysis.path.name[:60]} @ arr-beat {arr_start:.0f}  drop_1@src {first_drop_source(segments):.0f}  [{counts_str}]")
             else:
                 print(f"  {i+1}. {analysis.path.name[:60]} @ arr-beat {arr_start:.0f}  [no sections — full clip]")
 
