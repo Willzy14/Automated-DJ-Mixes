@@ -59,6 +59,9 @@ class Track:
     bass_out_bar: float | None
     last_min_bars: int = 0
     bass_out_is_end: bool = False
+    loop_windows: list = field(default_factory=list)   # (start_bar,end_bar) clean drums = drums-on/bass-off
+    vocal_regions: list = field(default_factory=list)   # (start_bar,end_bar) vocals present
+    fills: list = field(default_factory=list)           # (start_bar,end_bar) kick-out fills
 
     def boundaries(self) -> list[tuple[float, str]]:
         """(bar, label) for every section start — the markers."""
@@ -81,6 +84,15 @@ def load_track(stem_json: Path) -> Track:
     sig = d.get("signals", {})
     bass_in = _sec_to_bar(sig.get("bass_in"), downbeat, spb)
     bass_out = _sec_to_bar(sig.get("bass_out"), downbeat, spb)
+    # loop_windows / vocal_regions carry [start_sec, end_sec, start_bar, end_bar] —
+    # use the bar fields directly (no sec re-conversion, avoids downbeat rounding).
+    loop_windows = [(w[2], w[3]) for w in sig.get("loop_windows", []) if len(w) >= 4]
+    vocal_regions = [(w[2], w[3]) for w in sig.get("vocal_regions", []) if len(w) >= 4]
+    fills = []
+    for f in sig.get("fills", []):
+        a, b = _sec_to_bar(f[0], downbeat, spb), _sec_to_bar(f[1], downbeat, spb)
+        if a is not None and b is not None:
+            fills.append((a, b))
     n_bars = d["n_bars"]
     last_min = max(8, round(60.0 / spb))
     return Track(
@@ -88,7 +100,20 @@ def load_track(stem_json: Path) -> Track:
         sections=secs, bass_in_bar=bass_in, bass_out_bar=bass_out,
         last_min_bars=last_min,
         bass_out_is_end=(bass_out is not None and (n_bars - bass_out) <= 4),
+        loop_windows=loop_windows, vocal_regions=vocal_regions, fills=fills,
     )
+
+
+@dataclass
+class FillCutSpec:
+    """A loop or cut around a transition's (locked) bass-swap. Track-native bars."""
+    kind: str                          # 'outgoing_tail' | 'incoming_intro' | 'intro_cut'
+    reps: int = 0                      # loop repeats (loops only)
+    source_start_bar: float = 0.0      # clean-drum loop source (loops only)
+    source_end_bar: float = 0.0
+    cut_to_bar: float = 0.0            # intro_cut: drop incoming clips ending at/before this bar
+    target_marker_bar: float = 0.0     # the marker being reached (audit)
+    note: str = ""
 
 
 @dataclass
@@ -102,6 +127,8 @@ class Alignment:
     overlap_bars: float
     score: int                   # coinciding like-energy boundaries (the bonus)
     swap_beats: float | None = None  # absolute arrangement-beat of the bass swap (set by compute_aligned_positions)
+    fills_cuts: list = field(default_factory=list)   # FillCutSpec list (loops/cuts around the swap)
+    intro_cut_bars: float = 0.0
     notes: list = field(default_factory=list)
 
 
@@ -257,6 +284,67 @@ def _resolve_stem_key(name: str, stems: dict) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def pick_clean_drum_loop(track, sec_start, sec_end):
+    """Pick a clean 4-bar (fallback 2-bar) drum chunk from the track's loop_windows
+    (drums-on/bass-off) overlapping [sec_start, sec_end), avoiding vocals + fills.
+    Returns (start_bar, end_bar) in track-native bars, else None."""
+    def _blocked(a, b):
+        for rs, re_ in list(track.vocal_regions) + list(track.fills):
+            if a < re_ and b > rs:
+                return True
+        return False
+    for length in (4, 2):                            # prefer 4 bars, then 2
+        for ws, we in track.loop_windows:
+            lo, hi = max(ws, sec_start), min(we, sec_end)
+            for skip_first in (1, 0):                # skip the window's 1st bar first
+                for s in range(int(lo) + skip_first, int(hi) - length + 1):
+                    if not _blocked(s, s + length):
+                        return (float(s), float(s + length))
+    return None
+
+
+def plan_fill_or_cut(o, i, al):
+    """Decide loops/cuts around the LOCKED swap (Sam's rules). NEVER alters
+    al.arr_offset_bars / al.swap_beats. Returns a list of FillCutSpec:
+      1. incoming intro front lands in an outgoing break/fill -> CUT it to the
+         drop-after-break (the intro's drums clash over the low break);
+      2. else the outgoing runs out before the incoming's next marker -> LOOP the
+         outgoing outro (clean drums) forward to reach it.
+    (Incoming-intro looping deferred until a real case needs it.)"""
+    arr = al.arr_offset_bars
+    first_drop_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
+
+    # (1) CUT — only when the intro lands in a LOW-energy break/fill (drop masks it otherwise)
+    if first_drop_in and first_drop_in > 0:
+        host = next((s for s in o.sections if s["start_bar"] <= arr < s["end_bar"]), None)
+        if host and host["label"] in ("break", "fill"):
+            cut_to = min(round((host["end_bar"] - arr) / SNAP_BARS) * SNAP_BARS, first_drop_in)
+            if cut_to > 0:
+                al.intro_cut_bars = float(cut_to)
+                return [FillCutSpec(kind="intro_cut", cut_to_bar=float(cut_to),
+                        target_marker_bar=float(host["end_bar"]),
+                        note=f"intro in {host['label']} -> cut to bar {cut_to:.0f}")]
+
+    # (2) OUTGOING-TAIL LOOP — outgoing ends before the incoming's next marker
+    anchor = i.bass_in_bar or 0.0
+    next_marker_in = next((s["start_bar"] for s in i.sections if s["start_bar"] > anchor + 1), None)
+    if next_marker_in is not None and not o.bass_out_is_end:
+        gap = round(((arr + next_marker_in) - o.n_bars) / SNAP_BARS) * SNAP_BARS
+        if gap >= SNAP_BARS:
+            outro = next((s for s in o.sections if s["label"] == "outro"), None)
+            if outro:
+                chunk = pick_clean_drum_loop(o, outro["start_bar"], outro["end_bar"])
+                if chunk:
+                    clen = chunk[1] - chunk[0]
+                    reps = int(gap // clen)              # undershoot, never overshoot the marker
+                    if reps >= 1:
+                        return [FillCutSpec(kind="outgoing_tail", reps=reps,
+                                source_start_bar=chunk[0], source_end_bar=chunk[1],
+                                target_marker_bar=float(arr + next_marker_in),
+                                note=f"loop outro {clen:.0f}bx{reps} to incoming marker")]
+    return []
+
+
 def compute_aligned_positions(tracks, stem_dir, order=None):
     """Bass-to-bass ABSOLUTE arrangement positions for the whole mix — a drop-in
     replacement for propose_arrangement.compute_natural_positions().
@@ -299,6 +387,7 @@ def compute_aligned_positions(tracks, stem_dir, order=None):
         new = max(prev + al.arr_offset_bars * 4.0, prev)     # anti-rewind clamp
         arr_pos[k] = new
         al.swap_beats = prev + al.handoff_bar_out * 4.0      # outgoing final pos + handoff
+        al.fills_cuts = plan_fill_or_cut(o, i, al)           # loops/cuts around the swap
         alignments.append(al)
 
     positions = [(t.name, t.arr_start, arr_pos[idx], arr_pos[idx] - t.arr_start)
