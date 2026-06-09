@@ -464,8 +464,15 @@ def plan_fill_or_cut(o, i, al):
                     chunk = (float(outro["start_bar"]), float(e))
             if chunk:
                 clen = chunk[1] - chunk[0]
-                reps = int(gap // clen)                        # whole chunks
-                partial = gap - reps * clen                    # remainder -> exact landing
+                reps = int(gap // clen)
+                partial = gap - reps * clen
+                # Sam (2026-06-09, from his amended-outros ALS): loop in WHOLE phrases.
+                # A 2-3 bar fragment of a 4-bar phrase cuts mid-phrase and sounds wrong,
+                # so round a >=2-bar remainder UP to a whole chunk (ending a bar or two
+                # past the marker is fine). A 1-bar remainder is tiny — keep it exact.
+                if partial >= 2:
+                    reps += 1
+                    partial = 0.0
                 if reps >= 1 or partial > 0:
                     specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
                         source_start_bar=chunk[0], source_end_bar=chunk[1],
