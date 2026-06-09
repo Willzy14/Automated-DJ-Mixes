@@ -237,9 +237,30 @@ def visualize_transition(o: Track, i: Track, al: Alignment, out_png: Path, idx: 
                               (track.bass_out_bar, "b.out", "#1f4e9e")):
             if bar is not None:
                 ax.plot([bar + shift, bar + shift], [y - 0.05, y + 0.85], color=col, lw=2.2, zorder=7)
+        # clean-drum windows (loop sources) as a green strip under the lane
+        for ws, we in track.loop_windows:
+            ax.add_patch(Rectangle((ws + shift, y - 0.11), we - ws, 0.08,
+                         facecolor="#2e9e5b", edgecolor="none", alpha=0.85, zorder=5))
 
     draw_lane(o, 1.1, 0.0, f"OUT: {o.name[:46]}")
     draw_lane(i, 0.05, off, f"IN:  {i.name[:46]}")
+
+    # loops/cuts decisions (FillCutSpec): red hatch = intro cut, green hatch = outro loop
+    for fc in getattr(al, "fills_cuts", None) or []:
+        if fc.kind == "intro_cut":
+            ax.axvspan(off, off + fc.cut_to_bar, ymin=0.02, ymax=0.42,
+                       color="#d11", alpha=0.18, zorder=3, hatch="//")
+            ax.text(off + fc.cut_to_bar / 2, 0.92, f"CUT {fc.cut_to_bar:.0f}b",
+                    ha="center", fontsize=7, color="#900", fontweight="bold", zorder=8)
+        elif fc.kind == "outgoing_tail":
+            outro = next((s for s in o.sections if s["label"] == "outro"), None)
+            clen = fc.source_end_bar - fc.source_start_bar
+            ext = fc.reps * clen
+            x0 = outro["start_bar"] if outro else o.n_bars
+            ax.axvspan(x0, x0 + ext, ymin=0.55, ymax=0.97,
+                       color="#2e9e5b", alpha=0.22, zorder=3, hatch="//")
+            ax.text(x0 + ext / 2, 1.96, f"LOOP {clen:.0f}b x{fc.reps}",
+                    ha="center", fontsize=7, color="#176", fontweight="bold", zorder=8)
 
     # The bass-swap mix point (outgoing bar = handoff)
     mix_x = al.handoff_bar_out
@@ -439,6 +460,7 @@ def main():
     for idx in range(1, len(order)):
         o, i = stems[order[idx - 1]], stems[order[idx]]
         al = align_pair(o, i)
+        al.fills_cuts = plan_fill_or_cut(o, i, al)
         png = out_dir / f"ALIGN_{idx:02d}_{o.name[:24]} __ {i.name[:24]}.png"
         visualize_transition(o, i, al, png, idx)
         note = ("  ! " + " ; ".join(al.notes)) if al.notes else ""
