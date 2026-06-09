@@ -647,6 +647,33 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                                        trim_beats)
                 analysis.notes += "; intro front trimmed {:.0f}b to marker".format(
                     fc.cut_to_bar)
+        elif fc.kind == "incoming_intro" and fc.reps >= 1:
+            # Bring the incoming in at the outgoing's last drop: PREPEND clean-drum
+            # loop clips into the EMPTY space BEFORE the incoming's intro. No shift —
+            # the incoming's clips (incl. the drop = swap) do not move, so the swap
+            # stays byte-identical; the incoming just enters earlier with looped drums.
+            intro = in_track.sections[0] if in_track.sections else None
+            if intro is not None:
+                chunk_beats = (fc.source_end_bar - fc.source_start_bar) * 4.0
+                fill = fc.reps * chunk_beats
+                analysis.in_intro_loop = LoopSpec(
+                    track_name=in_track.name,
+                    source_beat_start=fc.source_start_bar * 4.0,
+                    source_beat_end=fc.source_end_bar * 4.0,
+                    count=fc.reps,
+                    insert_at_beat=float(intro["arr_time"] - fill),
+                    clip_name="{}_intro_loop".format(intro.get("name", "intro")),
+                )
+                analysis.notes += "; intro loop {:.0f}bx{:d} (fill {:.0f}b before intro)".format(
+                    chunk_beats, fc.reps, fill)
+        elif fc.kind == "break_skip":
+            # Mix CHOICE, soft + still ambiguous (Sam): would drop the incoming's
+            # pre-drop break to avoid mixing break->break. DEFERRED apply — it
+            # restructures the incoming and MOVES the drop (unlike the loops), so it
+            # needs separate handling + verification. Logged only for now.
+            print("  NOTE: break->break would drop '{}' on '{}' (soft rule; apply deferred)".format(
+                fc.clip_name, in_track.name[:40]))
+            analysis.notes += "; break->break flagged ({}, not yet applied)".format(fc.clip_name)
 
 
 # -- Pair history matching ----------------------------------------------------

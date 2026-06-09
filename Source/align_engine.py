@@ -43,6 +43,10 @@ SNAP_BARS = 4             # snap the incoming's stagger to the 4-bar (16-beat) g
                           # valid marker alignment off the grid.
 HANDOFF_WINDOW_BARS = 8   # allow a hand-off marker this far before the last-minute line
 COINCIDE_TOL_BARS = 2     # two section boundaries "line up" if within this many bars
+AVOID_BREAK_TO_BREAK = True   # mix CHOICE (Sam 2026-06-09), NOT a hardline: when the
+                              # incoming's pre-drop break would coincide with an outgoing
+                              # break (two breaks at once = a dead spot), drop the incoming
+                              # break. Toggle/replace _resolve_break_to_break to manipulate.
 LIKE_ENERGY = {"drop": "high", "build": "high", "break": "low", "fill": "low",
                "intro": "low", "outro": "low"}
 
@@ -106,13 +110,14 @@ def load_track(stem_json: Path) -> Track:
 
 @dataclass
 class FillCutSpec:
-    """A loop or cut around a transition's (locked) bass-swap. Track-native bars."""
-    kind: str                          # 'outgoing_tail' | 'incoming_intro' | 'intro_cut'
+    """A loop / cut / break-skip around a transition's (locked) bass-swap. Track-native bars."""
+    kind: str                          # 'incoming_intro' | 'outgoing_tail' | 'intro_cut' | 'break_skip'
     reps: int = 0                      # loop repeats (loops only)
     source_start_bar: float = 0.0      # clean-drum loop source (loops only)
     source_end_bar: float = 0.0
     cut_to_bar: float = 0.0            # intro_cut: drop incoming clips ending at/before this bar
     target_marker_bar: float = 0.0     # the marker being reached (audit)
+    clip_name: str = ""                # break_skip: the incoming break clip to drop
     note: str = ""
 
 
@@ -339,56 +344,122 @@ def pick_clean_drum_loop(track, sec_start, sec_end):
     return None
 
 
+def _last_drop_start(t):
+    """Start bar of the track's LAST drop (the drop before its outro), else None."""
+    return max((s["start_bar"] for s in t.sections if s["label"] == "drop"), default=None)
+
+
+def _pre_outro_label(t):
+    """Label of the section immediately before the outro (None if no outro)."""
+    for k, s in enumerate(t.sections):
+        if s["label"] == "outro" and k > 0:
+            return t.sections[k - 1]["label"]
+    return None
+
+
+def _incoming_pre_drop_break(i):
+    """The incoming's break sitting between its intro and its first drop, else None."""
+    for s in i.sections:
+        if s["label"] == "drop":
+            return None
+        if s["label"] == "break":
+            return s
+    return None
+
+
+def _resolve_break_to_break(o, i):
+    """Mix-CHOICE policy (soft, swappable — Sam 2026-06-09): if the incoming's
+    pre-drop break would coincide with an outgoing break before its outro, drop the
+    incoming break so we don't mix break-into-break. Returns a break_skip FillCutSpec
+    or None. Flip AVOID_BREAK_TO_BREAK or replace this function to change the rule."""
+    if not AVOID_BREAK_TO_BREAK or _pre_outro_label(o) != "break":
+        return None
+    pdb = _incoming_pre_drop_break(i)
+    if pdb is None:
+        return None
+    return FillCutSpec(kind="break_skip", clip_name=pdb.get("name", ""),
+                       cut_to_bar=float(pdb["start_bar"]),
+                       note=f"no break->break: drop incoming {pdb.get('name', 'break')}")
+
+
 def plan_fill_or_cut(o, i, al):
-    """Decide loops/cuts around the LOCKED swap (Sam's rules). NEVER alters
-    al.arr_offset_bars / al.swap_beats. Returns a list of FillCutSpec:
-      1. incoming intro front lands in an outgoing break/fill -> CUT it to the
-         drop-after-break (the intro's drums clash over the low break);
-      2. else the outgoing runs out before the incoming's next marker -> LOOP the
-         outgoing outro (clean drums) forward to reach it.
-    (Incoming-intro looping deferred until a real case needs it.)"""
+    """Decide loops / cuts / break-skips around the LOCKED swap (Sam's CONFIRMED
+    model, 2026-06-09 — derived from his hand-edited 'Intro Loops' ALS). NEVER alters
+    al.arr_offset_bars / al.swap_beats. Returns a LIST of FillCutSpec (a transition can
+    carry several):
+      1. INCOMING-INTRO loop — bring the incoming in at the OUTGOING's last drop and
+         loop its clean drums backward to fill, keeping the drop on the swap. Source =
+         the incoming's intro drums if clean; its outro drums if the intro has vocals.
+      2. INTRO CUT — only if NO intro loop AND the intro starts in a low-energy break.
+      3. OUTGOING-OUTRO loop — loop the outgoing outro forward to the incoming's next
+         section marker after the outgoing ends.
+      4. BREAK-SKIP — mix choice: drop the incoming's pre-drop break if it would mix
+         break-into-break (soft; see _resolve_break_to_break)."""
     arr = al.arr_offset_bars
+    specs = []
     first_drop_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
     intro_end = (i.sections[0]["end_bar"]
                  if i.sections and i.sections[0]["label"] == "intro" else 0.0)
 
-    # (1) CUT — trim the FRONT of a long intro that lands in a low-energy break so
-    # it starts later (its full drums clash over the quiet break). NEVER remove the
-    # whole intro: a track can't start on a break (Sam). Only a PARTIAL trim
-    # (cut_to strictly inside the intro) is allowed — a short intro is kept whole.
-    if first_drop_in and first_drop_in > 0 and intro_end > 0:
+    # (1) INCOMING-INTRO LOOP — enter at the outgoing's last drop; loop clean drums back.
+    last_drop_o = _last_drop_start(o)
+    intro_loop = False
+    if last_drop_o is not None and intro_end > 0:
+        fill_bars = round((arr - last_drop_o) / SNAP_BARS) * SNAP_BARS
+        if fill_bars >= SNAP_BARS:
+            chunk = pick_clean_drum_loop(i, 0, intro_end)            # intro drums (vocal-free)
+            src = "intro"
+            if chunk is None:                                         # vocal intro -> outro drums
+                i_out = next((s for s in i.sections if s["label"] == "outro"), None)
+                if i_out:
+                    chunk = pick_clean_drum_loop(i, i_out["start_bar"], i.n_bars)
+                    src = "outro"
+            if chunk:
+                clen = chunk[1] - chunk[0]
+                reps = int(fill_bars // clen)
+                if reps >= 1:
+                    intro_loop = True
+                    specs.append(FillCutSpec(kind="incoming_intro", reps=reps,
+                        source_start_bar=chunk[0], source_end_bar=chunk[1],
+                        target_marker_bar=float(last_drop_o),
+                        note=f"intro {src}-loop {clen:.0f}bx{reps} ({fill_bars:.0f}b) back to outgoing last drop"))
+
+    # (2) INTRO CUT — only if no intro loop and the intro lands in a low-energy break.
+    if not intro_loop and first_drop_in and first_drop_in > 0 and intro_end > 0:
         host = next((s for s in o.sections if s["start_bar"] <= arr < s["end_bar"]), None)
         if host and host["label"] in ("break", "fill"):
             cut_to = min(round((host["end_bar"] - arr) / SNAP_BARS) * SNAP_BARS, first_drop_in)
-            if 0 < cut_to < intro_end:          # partial trim only — keep some intro
+            if 0 < cut_to < intro_end:
                 al.intro_cut_bars = float(cut_to)
-                return [FillCutSpec(kind="intro_cut", cut_to_bar=float(cut_to),
-                        target_marker_bar=float(host["end_bar"]),
-                        note=f"trim intro front {cut_to:.0f}b (started in {host['label']})")]
+                specs.append(FillCutSpec(kind="intro_cut", cut_to_bar=float(cut_to),
+                    target_marker_bar=float(host["end_bar"]),
+                    note=f"trim intro front {cut_to:.0f}b (started in {host['label']})"))
 
-    # (2) OUTGOING-TAIL LOOP — the outgoing ends before the incoming CARRIES the
-    # mix (its first drop). Loop the outgoing's outro (clean drums) to bridge the
-    # gap so the energy holds until the incoming drops. Target = the incoming's
-    # first drop (fall back to its first non-intro marker).
-    target_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
-    if target_in is None:
-        target_in = next((s["start_bar"] for s in i.sections if s["label"] != "intro"), None)
-    if target_in is not None and not o.bass_out_is_end:
-        # TRUNCATE (not round) so the loop never extends PAST the marker (undershoot)
-        gap = int(((arr + target_in) - o.n_bars) / SNAP_BARS) * SNAP_BARS
-        if gap >= SNAP_BARS:
-            outro = next((s for s in o.sections if s["label"] == "outro"), None)
-            if outro:
-                chunk = pick_clean_drum_loop(o, outro["start_bar"], outro["end_bar"])
-                if chunk:
-                    clen = chunk[1] - chunk[0]
-                    reps = int(gap // clen)              # undershoot, never overshoot the marker
-                    if reps >= 1:
-                        return [FillCutSpec(kind="outgoing_tail", reps=reps,
+    # (3) OUTGOING-OUTRO LOOP — loop the outro forward to the incoming's next marker.
+    if not o.bass_out_is_end:
+        nxt = next((arr + s["start_bar"] for s in i.sections
+                    if (arr + s["start_bar"]) > o.n_bars), None)
+        if nxt is not None:
+            gap = int((nxt - o.n_bars) / SNAP_BARS) * SNAP_BARS
+            if gap >= SNAP_BARS:
+                outro = next((s for s in o.sections if s["label"] == "outro"), None)
+                if outro:
+                    chunk = pick_clean_drum_loop(o, outro["start_bar"], outro["end_bar"])
+                    if chunk:
+                        clen = chunk[1] - chunk[0]
+                        reps = int(gap // clen)
+                        if reps >= 1:
+                            specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
                                 source_start_bar=chunk[0], source_end_bar=chunk[1],
-                                target_marker_bar=float(arr + target_in),
-                                note=f"loop outro {clen:.0f}bx{reps} to incoming drop")]
-    return []
+                                target_marker_bar=float(nxt),
+                                note=f"loop outro {clen:.0f}bx{reps} to incoming marker {nxt:.0f}"))
+
+    # (4) NO BREAK-TO-BREAK (mix choice, soft / swappable).
+    bspec = _resolve_break_to_break(o, i)
+    if bspec is not None:
+        specs.append(bspec)
+
+    return specs
 
 
 def compute_aligned_positions(tracks, stem_dir, order=None):
