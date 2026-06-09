@@ -245,7 +245,12 @@ def _resolve_stem_key(name: str, stems: dict) -> str | None:
     n = html.unescape(name)
     if n in stems:
         return n
-    return next((k for k in stems if k.startswith(n[:30]) or n.startswith(k[:30])), None)
+    # Prefix fallback — but ONLY if unambiguous. Real filenames share long
+    # prefixes ('... (Original Mix) SW V2' vs '... (Extended Mix) SW V2'), so a
+    # first-match would silently align the wrong track. Require exactly one match,
+    # else None so compute_aligned_positions raises instead of mis-aligning.
+    matches = [k for k in stems if k.startswith(n[:30]) or n.startswith(k[:30])]
+    return matches[0] if len(matches) == 1 else None
 
 
 def compute_aligned_positions(tracks, stem_dir, order=None):
@@ -281,19 +286,19 @@ def compute_aligned_positions(tracks, stem_dir, order=None):
                 f"in {stem_dir}. Run the stem detector (--stem-sections) first.")
         resolved.append(key)
 
-    arr_pos = {tracks[0].name: tracks[0].arr_start}
+    arr_pos = {0: tracks[0].arr_start}                       # keyed by INDEX (names may repeat)
     alignments = []
     for k in range(1, len(tracks)):
         o, i = stems[resolved[k - 1]], stems[resolved[k]]
         al = align_pair(o, i)
-        prev = arr_pos[tracks[k - 1].name]
+        prev = arr_pos[k - 1]
         new = max(prev + al.arr_offset_bars * 4.0, prev)     # anti-rewind clamp
-        arr_pos[tracks[k].name] = new
+        arr_pos[k] = new
         al.swap_beats = prev + al.handoff_bar_out * 4.0      # outgoing final pos + handoff
         alignments.append(al)
 
-    positions = [(t.name, t.arr_start, arr_pos[t.name], arr_pos[t.name] - t.arr_start)
-                 for t in tracks]
+    positions = [(t.name, t.arr_start, arr_pos[idx], arr_pos[idx] - t.arr_start)
+                 for idx, t in enumerate(tracks)]
     return positions, alignments
 
 

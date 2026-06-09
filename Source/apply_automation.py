@@ -798,10 +798,18 @@ def main() -> None:
     lines = decompress_als(als_path)
     print(f"  {len(lines)} lines")
 
-    print(f"Reading {json_path.name} ...")
-    with open(json_path, encoding="utf-8") as f:
-        sections_data: dict = json.load(f)
-    print(f"  {len(sections_data)} tracks in JSON")
+    # Sections come from the ARRANGED ALS itself — the single source of truth, so
+    # every position matches the clips. The passed JSON can be stale/pre-shift
+    # after arrangement (the /mix skill reuses Sections_V<N>.json), which would put
+    # automation at the wrong beats. Fall back to the JSON only if the ALS is empty.
+    from extract_sections_als import parse_sections_als
+    sections_data: dict = parse_sections_als(als_path)
+    if sections_data:
+        print(f"  {len(sections_data)} tracks (parsed from arranged ALS)")
+    else:
+        print(f"  ALS parse empty; reading {json_path.name} ...")
+        with open(json_path, encoding="utf-8") as f:
+            sections_data = json.load(f)
 
     # ── build track list ──────────────────────────────────────────────
     tracks = ordered_tracks(sections_data)

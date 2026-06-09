@@ -771,6 +771,14 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         if not stem_dir.exists():
             stem_dir = als_path.parent / "_Stem Analysis"
         print("\n--- Bass-to-bass alignment (align_engine) ---")
+        # align_engine reads its own untrimmed stem JSONs, so it can't see an
+        # intro_skip_bars trim applied above — warn loudly rather than mis-align
+        # silently (intro-skip will be handled by the cuts feature).
+        skipped = [t.name for t in tracks if getattr(t, "intro_skip_bars", 0)]
+        if skipped:
+            print(f"  WARNING: align_engine does not yet honour intro_skip_bars "
+                  f"(set on {len(skipped)} track(s)) — positions ignore that trim. "
+                  f"Use USE_ALIGN_ENGINE=False for hinted intro-skips until cuts land.")
         positions, alignments = compute_aligned_positions(
             tracks, stem_dir, order=[t.name for t in tracks])
     else:
