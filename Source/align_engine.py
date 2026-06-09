@@ -349,17 +349,22 @@ def plan_fill_or_cut(o, i, al):
     (Incoming-intro looping deferred until a real case needs it.)"""
     arr = al.arr_offset_bars
     first_drop_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
+    intro_end = (i.sections[0]["end_bar"]
+                 if i.sections and i.sections[0]["label"] == "intro" else 0.0)
 
-    # (1) CUT — only when the intro lands in a LOW-energy break/fill (drop masks it otherwise)
-    if first_drop_in and first_drop_in > 0:
+    # (1) CUT — trim the FRONT of a long intro that lands in a low-energy break so
+    # it starts later (its full drums clash over the quiet break). NEVER remove the
+    # whole intro: a track can't start on a break (Sam). Only a PARTIAL trim
+    # (cut_to strictly inside the intro) is allowed — a short intro is kept whole.
+    if first_drop_in and first_drop_in > 0 and intro_end > 0:
         host = next((s for s in o.sections if s["start_bar"] <= arr < s["end_bar"]), None)
         if host and host["label"] in ("break", "fill"):
             cut_to = min(round((host["end_bar"] - arr) / SNAP_BARS) * SNAP_BARS, first_drop_in)
-            if cut_to > 0:
+            if 0 < cut_to < intro_end:          # partial trim only — keep some intro
                 al.intro_cut_bars = float(cut_to)
                 return [FillCutSpec(kind="intro_cut", cut_to_bar=float(cut_to),
                         target_marker_bar=float(host["end_bar"]),
-                        note=f"intro in {host['label']} -> cut to bar {cut_to:.0f}")]
+                        note=f"trim intro front {cut_to:.0f}b (started in {host['label']})")]
 
     # (2) OUTGOING-TAIL LOOP — the outgoing ends before the incoming CARRIES the
     # mix (its first drop). Loop the outgoing's outro (clean drums) to bridge the
