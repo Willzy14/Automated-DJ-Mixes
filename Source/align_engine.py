@@ -325,16 +325,18 @@ def _resolve_stem_key(name: str, stems: dict) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def pick_clean_drum_loop(track, sec_start, sec_end):
-    """Pick a clean 4-bar (fallback 2-bar) drum chunk from the track's loop_windows
-    (drums-on/bass-off) overlapping [sec_start, sec_end), avoiding vocals + fills.
-    Returns (start_bar, end_bar) in track-native bars, else None."""
+def pick_clean_drum_loop(track, sec_start, sec_end, pref=4):
+    """Pick a clean drum chunk from the track's loop_windows (drums-on/bass-off)
+    overlapping [sec_start, sec_end), avoiding vocals + fills. Tries `pref`-bar
+    first then the other of {4,2} — pass pref=2 for a small gap. Returns
+    (start_bar, end_bar) in track-native bars, else None."""
     def _blocked(a, b):
         for rs, re_ in list(track.vocal_regions) + list(track.fills):
             if a < re_ and b > rs:
                 return True
         return False
-    for length in (4, 2):                            # prefer 4 bars, then 2
+    lengths = [pref] + [x for x in (4, 2) if x != pref]
+    for length in lengths:                           # prefer `pref` bars, then the other
         for ws, we in track.loop_windows:
             lo, hi = max(ws, sec_start), min(we, sec_end)
             for skip_first in (1, 0):                # skip the window's 1st bar first
@@ -435,24 +437,37 @@ def plan_fill_or_cut(o, i, al):
                     target_marker_bar=float(host["end_bar"]),
                     note=f"trim intro front {cut_to:.0f}b (started in {host['label']})"))
 
-    # (3) OUTGOING-OUTRO LOOP — loop the outro forward to the incoming's next marker.
-    if not o.bass_out_is_end:
-        nxt = next((arr + s["start_bar"] for s in i.sections
-                    if (arr + s["start_bar"]) > o.n_bars), None)
-        if nxt is not None:
-            gap = int((nxt - o.n_bars) / SNAP_BARS) * SNAP_BARS
-            if gap >= SNAP_BARS:
-                outro = next((s for s in o.sections if s["label"] == "outro"), None)
-                if outro:
-                    chunk = pick_clean_drum_loop(o, outro["start_bar"], outro["end_bar"])
-                    if chunk:
-                        clen = chunk[1] - chunk[0]
-                        reps = int(gap // clen)
-                        if reps >= 1:
-                            specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
-                                source_start_bar=chunk[0], source_end_bar=chunk[1],
-                                target_marker_bar=float(nxt),
-                                note=f"loop outro {clen:.0f}bx{reps} to incoming marker {nxt:.0f}"))
+    # (3) OUTGOING-OUTRO LOOP — loop the outro forward to REACH the incoming's next
+    # marker. Fires whenever the outgoing has an outro section + a gap; we loop the
+    # outro DRUMS (the bass-out-is-end guard was wrong — bass is irrelevant here).
+    # reps REACH the marker (round, not floor — floor undershot the break); a small
+    # gap uses a 2-bar chunk ("a little").
+    nxt = next((arr + s["start_bar"] for s in i.sections
+                if (arr + s["start_bar"]) > o.n_bars + 1), None)
+    outro = next((s for s in o.sections if s["label"] == "outro"), None)
+    if nxt is not None and outro is not None:
+        gap = nxt - o.n_bars                                   # exact bars to the marker
+        if gap >= 2:
+            pref = 4 if gap >= 4 else 2
+            chunk = pick_clean_drum_loop(o, outro["start_bar"], outro["end_bar"], pref)
+            if chunk is None and o.loop_windows:
+                # bassy / vocal outro has no clean-drum window — use the outgoing's
+                # LATEST clean-drum window (a late break's drums) as the tail source.
+                ws, we = max(o.loop_windows, key=lambda w: w[1])
+                chunk = pick_clean_drum_loop(o, ws, we, pref)
+            if chunk is None:
+                # last resort (no clean-drum window ANYWHERE, e.g. Crusy): loop the
+                # outro section itself so it still fires. May carry bass — flagged.
+                e = min(outro["start_bar"] + pref, o.n_bars)
+                if e - outro["start_bar"] >= 2:
+                    chunk = (float(outro["start_bar"]), float(e))
+            if chunk:
+                clen = chunk[1] - chunk[0]
+                reps = max(1, int(round(gap / clen)))          # reach the marker
+                specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
+                    source_start_bar=chunk[0], source_end_bar=chunk[1],
+                    target_marker_bar=float(nxt),
+                    note=f"loop outro {clen:.0f}bx{reps} to incoming marker {nxt:.0f}"))
 
     # (4) NO BREAK-TO-BREAK (mix choice, soft / swappable).
     bspec = _resolve_break_to_break(o, i)
