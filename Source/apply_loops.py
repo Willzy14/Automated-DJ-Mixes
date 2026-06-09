@@ -702,6 +702,59 @@ def shift_clips_from_beat(lines: list[str], track_start: int, track_end: int,
     return shifted
 
 
+def split_clip_skip_before_end(lines: list[str], track_start: int, track_end: int,
+                               clip_name: str, skip_beats: float,
+                               keep_end_beats: float) -> bool:
+    """Shorten the named clip by skip_beats while KEEPING its final keep_end_beats:
+    the clip plays its body, skips skip_beats of source just before the tail, then
+    plays the final keep_end_beats. Splits it into two clips. Returns True if applied.
+    Used by the break-skip to trim the outgoing outro to the (pulled) incoming marker
+    WITHOUT losing its ending — mimics Sam's Crusy middle-skip (2026-06-09)."""
+    from types import SimpleNamespace
+    es, ee = find_clip_events(lines, track_start, track_end)
+    if es < 0:
+        return False
+    span = _find_named_clip_span(lines, es, ee, {clip_name})
+    if span is None:
+        return False
+    a, b = span
+    T = ls = le = None
+    for k in range(a, b + 1):
+        s = lines[k].strip()
+        if "<AudioClip " in s and 'Time="' in s:
+            mm = re.search(r'Time="([^"]+)"', s)
+            if mm:
+                T = float(mm.group(1))
+        elif "<LoopStart " in s and 'Value="' in s and ls is None:
+            mm = re.search(r'Value="([^"]+)"', s)
+            if mm:
+                ls = float(mm.group(1))
+        elif "<LoopEnd " in s and 'Value="' in s and le is None:
+            mm = re.search(r'Value="([^"]+)"', s)
+            if mm:
+                le = float(mm.group(1))
+    if T is None or ls is None or le is None:
+        return False
+    if skip_beats + keep_end_beats >= (le - ls):      # too short to split — leave it
+        return False
+    a_src_end = le - keep_end_beats - skip_beats      # body plays [ls, a_src_end]
+    a_arr_end = T + (a_src_end - ls)
+    b_src_start = le - keep_end_beats                 # tail plays [b_src_start, le]
+    template = lines[a:b + 1]                          # full original (pre-trim) as clone template
+    # 1) trim the ORIGINAL clip's end to a_src_end
+    for k in range(a, b + 1):
+        s = lines[k].strip()
+        if "<CurrentEnd " in s and 'Value="' in s:
+            lines[k] = re.sub(r'Value="[^"]+"', f'Value="{a_arr_end}"', lines[k], count=1)
+        elif ("<LoopEnd " in s or "<HiddenLoopEnd " in s or "<OutMarker " in s) and 'Value="' in s:
+            lines[k] = re.sub(r'Value="[^"]+"', f'Value="{a_src_end}"', lines[k], count=1)
+    # 2) clone the TAIL [b_src_start, le] right after the trimmed body
+    spec = SimpleNamespace(source_beat_start=b_src_start, source_beat_end=le,
+                           clip_name=clip_name, track_name=clip_name)
+    lines[b + 1:b + 1] = clone_clip(template, spec, a_arr_end)
+    return True
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():

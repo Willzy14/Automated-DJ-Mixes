@@ -111,6 +111,7 @@ class OverlapAnalysis:
     in_intro_loop: LoopSpec | None = None
     intro_trim: tuple | None = None   # (track_name, clip_name, trim_beats) — partial front trim
     break_skip_shift: tuple | None = None  # (track_name, threshold_beat, delta) — pull drop onto swap
+    outro_split: tuple | None = None       # (track_name, clip_name, skip_beats, keep_end_beats)
     shift_delta: float = 0.0
     similar_pairs: list[dict] = field(default_factory=list)
     notes: str = ""
@@ -694,6 +695,13 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                         s["arr_time"] -= skip_beats
                         s["arr_end"] -= skip_beats
                 in_track.arr_end -= skip_beats
+                # The outgoing's outro was reaching the incoming's OLD marker, now pulled
+                # skip_bars closer — trim the outro by the same amount, KEEPING its final
+                # bar (skip the chunk just before the ending, as Sam did to Crusy).
+                outro_o = next((s for s in out_track.sections if _label(s) == "outro"), None)
+                if outro_o is not None:
+                    analysis.outro_split = (out_track.name, outro_o.get("name", "outro_1"),
+                                            skip_beats, 4.0)
                 analysis.notes += "; break->break: dropped {} ({:.0f}b), drop pulled onto swap".format(
                     brk.get("name", fc.clip_name), fc.skip_bars)
 
@@ -925,6 +933,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
     all_loops: list[LoopSpec] = []
     all_trims: list[tuple] = []      # (track_name, clip_name, trim_beats) front trims
     all_break_skips: list[tuple] = []  # (track_name, threshold_beat, delta) — pull drop onto swap
+    all_outro_splits: list[tuple] = []  # (track_name, clip_name, skip_beats, keep_end_beats)
 
     for i in range(len(tracks) - 1):
         out_t = tracks[i]
@@ -956,6 +965,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             all_trims.append(analysis.intro_trim)
         if analysis.break_skip_shift:
             all_break_skips.append(analysis.break_skip_shift)
+        if analysis.outro_split:
+            all_outro_splits.append(analysis.outro_split)
 
         # Print summary
         status_icon = {"ok": "+", "short": "!", "none": "X"}
@@ -1058,6 +1069,23 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         if all_loops:
             print("  Applying {} loop specs...".format(len(all_loops)))
             lines = apply_loops(lines, all_loops)
+
+        # Step 3: Outgoing-outro trim for break-skips — shorten the outro to the pulled
+        # marker, keeping its ending. AFTER loops, because the outro's tail loops set its
+        # final position (the split reads the clip's live Time + source range).
+        if all_outro_splits:
+            from apply_loops import split_clip_skip_before_end
+            als_tracks = find_track_line_ranges(lines)
+            for track_name, clip_name, skip_beats, keep_end_beats in all_outro_splits:
+                matched = _match_track(track_name, als_tracks)
+                if not matched:
+                    print("  WARNING: track '{}' not found for outro split".format(track_name[:40]))
+                    continue
+                start, end, tname = matched
+                ok = split_clip_skip_before_end(lines, start, end, clip_name,
+                                                skip_beats, keep_end_beats)
+                print("  Outro trim: {} '{}' on '{}' (-{:.0f}b, kept ending)".format(
+                    "split" if ok else "SKIPPED", clip_name, tname[:40], skip_beats))
 
         # Write output
         compress_als(lines, output_path)
