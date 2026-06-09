@@ -361,14 +361,16 @@ def plan_fill_or_cut(o, i, al):
                         target_marker_bar=float(host["end_bar"]),
                         note=f"intro in {host['label']} -> cut to bar {cut_to:.0f}")]
 
-    # (2) OUTGOING-TAIL LOOP — outgoing ends before the incoming's next marker
-    anchor = i.bass_in_bar or 0.0
-    # next section marker strictly after the swap (bass-in is a float; compare to
-    # the rounded anchor so we skip the marker it sits on, not an extra bar)
-    next_marker_in = next((s["start_bar"] for s in i.sections if s["start_bar"] > round(anchor)), None)
-    if next_marker_in is not None and not o.bass_out_is_end:
+    # (2) OUTGOING-TAIL LOOP — the outgoing ends before the incoming CARRIES the
+    # mix (its first drop). Loop the outgoing's outro (clean drums) to bridge the
+    # gap so the energy holds until the incoming drops. Target = the incoming's
+    # first drop (fall back to its first non-intro marker).
+    target_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
+    if target_in is None:
+        target_in = next((s["start_bar"] for s in i.sections if s["label"] != "intro"), None)
+    if target_in is not None and not o.bass_out_is_end:
         # TRUNCATE (not round) so the loop never extends PAST the marker (undershoot)
-        gap = int(((arr + next_marker_in) - o.n_bars) / SNAP_BARS) * SNAP_BARS
+        gap = int(((arr + target_in) - o.n_bars) / SNAP_BARS) * SNAP_BARS
         if gap >= SNAP_BARS:
             outro = next((s for s in o.sections if s["label"] == "outro"), None)
             if outro:
@@ -379,8 +381,8 @@ def plan_fill_or_cut(o, i, al):
                     if reps >= 1:
                         return [FillCutSpec(kind="outgoing_tail", reps=reps,
                                 source_start_bar=chunk[0], source_end_bar=chunk[1],
-                                target_marker_bar=float(arr + next_marker_in),
-                                note=f"loop outro {clen:.0f}bx{reps} to incoming marker")]
+                                target_marker_bar=float(arr + target_in),
+                                note=f"loop outro {clen:.0f}bx{reps} to incoming drop")]
     return []
 
 
