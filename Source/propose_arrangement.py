@@ -110,6 +110,7 @@ class OverlapAnalysis:
     out_tail_loop: LoopSpec | None = None
     in_intro_loop: LoopSpec | None = None
     intro_trim: tuple | None = None   # (track_name, clip_name, trim_beats) — partial front trim
+    break_skip_shift: tuple | None = None  # (track_name, threshold_beat, delta) — pull drop onto swap
     shift_delta: float = 0.0
     similar_pairs: list[dict] = field(default_factory=list)
     notes: str = ""
@@ -669,14 +670,32 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                 )
                 analysis.notes += "; intro loop {:.0f}bx{:d} (fill {:.0f}b before intro)".format(
                     chunk_beats, fc.reps, fill)
-        elif fc.kind == "break_skip":
-            # Mix CHOICE, soft + still ambiguous (Sam): would drop the incoming's
-            # pre-drop break to avoid mixing break->break. DEFERRED apply — it
-            # restructures the incoming and MOVES the drop (unlike the loops), so it
-            # needs separate handling + verification. Logged only for now.
-            print("  NOTE: break->break would drop '{}' on '{}' (soft rule; apply deferred)".format(
-                fc.clip_name, in_track.name[:40]))
-            analysis.notes += "; break->break flagged ({}, not yet applied)".format(fc.clip_name)
+        elif fc.kind == "break_skip" and fc.skip_bars > 0:
+            # Mix CHOICE (Sam 2026-06-09): the incoming enters on a short, no-kick
+            # pre-drop break stacked on the outgoing's outro (a dead spot). Drop that
+            # break and pull the drop + everything after it ONTO the swap; the timeline
+            # contracts (downstream tracks were already left-shifted by
+            # compute_aligned_positions). The intro in front of the break stays, so the
+            # swap is preserved.
+            brk = next((s for s in in_track.sections if s.get("name") == fc.clip_name), None)
+            if brk is None:
+                brk = next((s for s in in_track.sections if _label(s) == "break"), None)
+            if brk is not None:
+                skip_beats = fc.skip_bars * 4.0
+                threshold = float(brk["arr_end"])        # the drop's arr_time (break sits on the swap)
+                if not getattr(in_track, "dropped_clip_names", None):
+                    in_track.dropped_clip_names = []
+                in_track.dropped_clip_names.append(brk.get("name", fc.clip_name))
+                analysis.break_skip_shift = (in_track.name, threshold, -skip_beats)
+                # keep in-memory sections consistent so this track's OWN next transition
+                # (as outgoing) places its outro loop at the pulled location
+                for s in in_track.sections:
+                    if s["arr_time"] >= threshold - 0.001:
+                        s["arr_time"] -= skip_beats
+                        s["arr_end"] -= skip_beats
+                in_track.arr_end -= skip_beats
+                analysis.notes += "; break->break: dropped {} ({:.0f}b), drop pulled onto swap".format(
+                    brk.get("name", fc.clip_name), fc.skip_bars)
 
 
 # -- Pair history matching ----------------------------------------------------
@@ -905,6 +924,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
     overlaps: list[OverlapAnalysis] = []
     all_loops: list[LoopSpec] = []
     all_trims: list[tuple] = []      # (track_name, clip_name, trim_beats) front trims
+    all_break_skips: list[tuple] = []  # (track_name, threshold_beat, delta) — pull drop onto swap
 
     for i in range(len(tracks) - 1):
         out_t = tracks[i]
@@ -934,6 +954,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             all_loops.append(analysis.in_intro_loop)
         if analysis.intro_trim:
             all_trims.append(analysis.intro_trim)
+        if analysis.break_skip_shift:
+            all_break_skips.append(analysis.break_skip_shift)
 
         # Print summary
         status_icon = {"ok": "+", "short": "!", "none": "X"}
@@ -992,6 +1014,23 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                 else:
                     print("  WARNING: track '{}' not found for shift".format(
                         track_name))
+
+        # Step 1.6: Break-skip — pull the incoming's drop + everything after it onto the
+        # swap (the pre-drop break was already removed in Step 0). Partial shift: the
+        # intro in front of the break stays put. After the whole-track shift so the
+        # threshold + clip positions are final.
+        if all_break_skips:
+            from apply_loops import shift_clips_from_beat
+            als_tracks = find_track_line_ranges(lines)
+            for track_name, threshold_beat, delta in all_break_skips:
+                matched = _match_track(track_name, als_tracks)
+                if not matched:
+                    print("  WARNING: track '{}' not found for break-skip".format(track_name[:40]))
+                    continue
+                start, end, tname = matched
+                n = shift_clips_from_beat(lines, start, end, threshold_beat, delta)
+                print("  Break-skip: pulled {} clip(s) on '{}' by {:+.0f} (drop onto swap)".format(
+                    n, tname[:40], delta))
 
         # Step 1.5: Apply intro front-trims (partial cuts that whole-clip removal
         # can't do — e.g. trim the front of a single long intro clip to a marker).

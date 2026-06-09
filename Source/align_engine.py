@@ -47,6 +47,10 @@ AVOID_BREAK_TO_BREAK = True   # mix CHOICE (Sam 2026-06-09), NOT a hardline: whe
                               # incoming's pre-drop break would coincide with an outgoing
                               # break (two breaks at once = a dead spot), drop the incoming
                               # break. Toggle/replace _resolve_break_to_break to manipulate.
+MAX_SKIP_BREAK_BARS = 8       # only skip a SHORT pre-drop break (Sam 2026-06-09): a thin
+                              # 8-bar break-before-drop is a dead spot to skip; a longer
+                              # section (e.g. Sinners' 32-bar breakdown) is a real feature —
+                              # KEEP it. Raise this to skip longer pre-drop breaks too.
 LIKE_ENERGY = {"drop": "high", "build": "high", "break": "low", "fill": "low",
                "intro": "low", "outro": "low"}
 
@@ -118,6 +122,7 @@ class FillCutSpec:
     cut_to_bar: float = 0.0            # intro_cut: drop incoming clips ending at/before this bar
     target_marker_bar: float = 0.0     # the marker being reached (audit)
     partial_bars: float = 0.0          # loops: shorter FINAL chunk to land exactly on the marker
+    skip_bars: float = 0.0             # break_skip: bars removed (the dropped break's length)
     clip_name: str = ""                # break_skip: the incoming break clip to drop
     note: str = ""
 
@@ -370,19 +375,31 @@ def _incoming_pre_drop_break(i):
     return None
 
 
-def _resolve_break_to_break(o, i):
+def _resolve_break_to_break(o, i, al):
     """Mix-CHOICE policy (soft, swappable — Sam 2026-06-09): if the incoming's
     pre-drop break would coincide with an outgoing break before its outro, drop the
-    incoming break so we don't mix break-into-break. Returns a break_skip FillCutSpec
-    or None. Flip AVOID_BREAK_TO_BREAK or replace this function to change the rule."""
+    incoming break (and pull its drop onto the swap) so we don't mix break-into-break.
+    Returns a break_skip FillCutSpec or None. Flip AVOID_BREAK_TO_BREAK or replace this
+    function to change the rule.
+
+    Gates (Sam 2026-06-09): (a) outgoing low-energy at the swap (pre-outro is a break);
+    (b) incoming opens intro->break->...->drop; (c) the break is SHORT
+    (<= MAX_SKIP_BREAK_BARS) — a long breakdown (e.g. Sinners' 32 bars) is a feature, KEEP
+    it; (d) the break is drums-OFF (no kick) — a break that still grooves isn't a dead spot."""
     if not AVOID_BREAK_TO_BREAK or _pre_outro_label(o) != "break":
         return None
     pdb = _incoming_pre_drop_break(i)
     if pdb is None:
         return None
+    skip_bars = pdb["end_bar"] - pdb["start_bar"]
+    if skip_bars > MAX_SKIP_BREAK_BARS:                      # (c) keep long breakdowns
+        return None
+    if "drums" in pdb.get("stems_on", []):                   # (d) a kicking break grooves, not a dead spot
+        return None
     return FillCutSpec(kind="break_skip", clip_name=pdb.get("name", ""),
-                       cut_to_bar=float(pdb["start_bar"]),
-                       note=f"no break->break: drop incoming {pdb.get('name', 'break')}")
+                       cut_to_bar=float(pdb["start_bar"]), skip_bars=float(skip_bars),
+                       note=f"no break->break: drop incoming {pdb.get('name', 'break')} "
+                            f"({skip_bars:.0f}b), pull drop onto swap")
 
 
 def plan_fill_or_cut(o, i, al):
@@ -480,7 +497,7 @@ def plan_fill_or_cut(o, i, al):
                         note=f"loop outro {clen:.0f}bx{reps}+{partial:.0f}b to marker {nxt:.0f}"))
 
     # (4) NO BREAK-TO-BREAK (mix choice, soft / swappable).
-    bspec = _resolve_break_to_break(o, i)
+    bspec = _resolve_break_to_break(o, i, al)
     if bspec is not None:
         specs.append(bspec)
 
@@ -526,14 +543,23 @@ def compute_aligned_positions(tracks, stem_dir, order=None):
     # orchestrator's layout can never contaminate the mix. (Audit 2026-06-09.)
     arr_pos = {0: 0.0}                                       # keyed by INDEX (names may repeat)
     alignments = []
+    contraction = 0.0       # left-shift owed to a break-skip at the PREVIOUS pair (beats)
     for k in range(1, len(tracks)):
         o, i = stems[resolved[k - 1]], stems[resolved[k]]
         al = align_pair(o, i)
         prev = arr_pos[k - 1]
-        new = max(prev + al.arr_offset_bars * 4.0, prev)     # anti-rewind clamp
+        # A break-skip at an earlier pair tightened the timeline (its incoming lost a
+        # break), so THIS track + the swap into it move left by `contraction`. The
+        # break-skip pair's OWN incoming does NOT move (its drop lands on the existing
+        # swap); only tracks AFTER it contract. So apply `contraction` here, then let a
+        # break-skip detected at THIS pair set it for the next iteration. prev is already
+        # contracted for later pairs, so the shift propagates once via the prefix sum.
+        new = max(prev + al.arr_offset_bars * 4.0 - contraction, prev)   # anti-rewind clamp
         arr_pos[k] = new
-        al.swap_beats = prev + al.handoff_bar_out * 4.0      # outgoing final pos + handoff
+        al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
         al.fills_cuts = plan_fill_or_cut(o, i, al)           # loops/cuts around the swap
+        bskip = next((f for f in al.fills_cuts if f.kind == "break_skip"), None)
+        contraction = bskip.skip_bars * 4.0 if bskip else 0.0
         alignments.append(al)
 
     positions = [(t.name, t.arr_start, arr_pos[idx], arr_pos[idx] - t.arr_start)

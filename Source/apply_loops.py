@@ -670,6 +670,38 @@ def shift_track_clips(lines: list[str], track_start: int, track_end: int,
                 line, count=1)
 
 
+def shift_clips_from_beat(lines: list[str], track_start: int, track_end: int,
+                          threshold_beat: float, delta_beats: float) -> int:
+    """Shift only the AudioClips whose Time >= threshold_beat by delta_beats (in-place),
+    within the track range. Used by the break-skip: once the incoming's pre-drop break is
+    removed, pull its drop + everything after it left, WITHOUT moving the intro in front
+    of the break. Returns the number of clips shifted. LoopStart/LoopEnd (source) untouched."""
+    if abs(delta_beats) < 0.001:
+        return 0
+    shifted, active = 0, False
+    for i in range(track_start, track_end + 1):
+        stripped = lines[i].strip()
+        if "<AudioClip " in stripped and 'Time="' in stripped:
+            m = re.search(r'Time="([^"]+)"', stripped)
+            active = m is not None and float(m.group(1)) >= threshold_beat - 0.001
+            if active:
+                lines[i] = re.sub(r'(Time=")([^"]+)(")',
+                    lambda mm: f'{mm.group(1)}{float(mm.group(2)) + delta_beats}{mm.group(3)}',
+                    lines[i], count=1)
+                shifted += 1
+        elif active and "<CurrentStart " in stripped and 'Value="' in stripped:
+            lines[i] = re.sub(r'(Value=")([^"]+)(")',
+                lambda mm: f'{mm.group(1)}{float(mm.group(2)) + delta_beats}{mm.group(3)}',
+                lines[i], count=1)
+        elif active and "<CurrentEnd " in stripped and 'Value="' in stripped:
+            lines[i] = re.sub(r'(Value=")([^"]+)(")',
+                lambda mm: f'{mm.group(1)}{float(mm.group(2)) + delta_beats}{mm.group(3)}',
+                lines[i], count=1)
+        elif "</AudioClip>" in stripped:
+            active = False
+    return shifted
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
