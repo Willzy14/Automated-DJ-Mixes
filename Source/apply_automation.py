@@ -784,6 +784,69 @@ def _short(name: str) -> str:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _wav_for_track(track_name: str, wavs: list[Path]) -> Path | None:
+    import html
+    n = _normalise(html.unescape(track_name))         # ALS names are XML-escaped (&apos; etc.)
+    for w in wavs:
+        if _normalise(w.stem) == n:
+            return w
+    for w in wavs:                                   # prefix fallback (long names)
+        wn = _normalise(w.stem)
+        if wn[:24] == n[:24]:
+            return w
+    return None
+
+
+def _apply_track_levelling(lines: list[str], tracks, audio_dir: Path) -> None:
+    """LUFS-match the tracks — the per-track levelling the three-phase pipeline was
+    missing (Sam 2026-06-09). Measure each track's integrated loudness from its WAV,
+    bring the louder ones DOWN toward the quietest (<= 12 dB), and set each track's
+    MIXER Volume fader to that static, manual-rideable level. The volume CROSSFADE
+    automation lives on the Utility Gain plugin, so this fader is independent of it."""
+    try:
+        import numpy as _np
+        import soundfile as _sf
+        import pyloudnorm as _pyln
+    except ImportError as exc:
+        print(f"\n  [levelling] skipped — {exc}")
+        return
+    wavs = sorted(Path(audio_dir).glob("*.wav"))
+    if not wavs:
+        print(f"\n  [levelling] no WAVs in {audio_dir} — skipped")
+        return
+    lufs: list[float | None] = []
+    for t in tracks:
+        w = _wav_for_track(t.name, wavs)
+        if w is None:
+            lufs.append(None)
+            continue
+        y, sr = _sf.read(str(w))
+        if y.ndim == 1:
+            y = _np.stack([y, y], axis=1)
+        lufs.append(float(_pyln.Meter(sr).integrated_loudness(y)))
+    measured = [l for l in lufs if l is not None]
+    if len(measured) < 2:
+        print("\n  [levelling] fewer than 2 tracks measured — skipped")
+        return
+    from automated_dj_mixes.automation import calculate_gain_offsets
+    from automated_dj_mixes.als_generator import _set_mixer_volume_level
+    off_iter = iter(calculate_gain_offsets(measured))
+    offsets = [next(off_iter) if l is not None else 0.0 for l in lufs]
+    als_tracks = find_track_line_ranges(lines)
+    print("\nLevelling (LUFS-matched mixer faders, quietest = 0 dB):")
+    for t, lf, off in zip(tracks, lufs, offsets):
+        if lf is None:
+            print(f"  {_short(t.name):20s}  no WAV — 0.0 dB")
+            continue
+        m = next(((s, e) for (s, e, nm) in als_tracks
+                  if _normalise(nm) == _normalise(t.name)), None)
+        if m is None:
+            print(f"  {_short(t.name):20s}  not matched in ALS — skipped")
+            continue
+        _set_mixer_volume_level(lines, m[0], m[1], off)
+        print(f"  {_short(t.name):20s}  LUFS {lf:6.1f}  ->  {off:+5.1f} dB")
+
+
 def main() -> None:
     if len(sys.argv) < 4:
         print("Usage: python apply_automation.py <sections.als> <sections.json> <output.als>")
@@ -903,6 +966,15 @@ def main() -> None:
         # set both automation lanes visible (EQ bass + volume)
         delta = set_automation_lanes(lines, s, e)
         offset += delta
+
+    # ── per-track levelling (LUFS-matched mixer faders) ───────────────
+    audio_dir = next((c / "Audio" for c in
+                      (als_path.parent.parent, als_path.parent.parent.parent, als_path.parent)
+                      if (c / "Audio").is_dir()), None)
+    if audio_dir is not None:
+        _apply_track_levelling(lines, tracks, audio_dir)
+    else:
+        print("\n  [levelling] Audio folder not found near the .als — skipped")
 
     # ── write output ──────────────────────────────────────────────────
     print(f"\nWriting {output_path.name} ...")
