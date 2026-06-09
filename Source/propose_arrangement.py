@@ -365,7 +365,7 @@ def compute_natural_positions(tracks: list[TrackInfo]) -> list[tuple[str, float,
 # -- Overlap analysis ---------------------------------------------------------
 
 def analyse_overlap(out_track: TrackInfo, in_track: TrackInfo,
-                    pair_index: int) -> OverlapAnalysis:
+                    pair_index: int, al=None) -> OverlapAnalysis:
     """Analyse the overlap between two positioned tracks.
 
     Determines if overlap is sufficient, and if not, what loops are needed.
@@ -399,8 +399,11 @@ def analyse_overlap(out_track: TrackInfo, in_track: TrackInfo,
         notes="; ".join(notes_parts) if notes_parts else "",
     )
 
-    # If overlap is too short, compute loop extensions
-    if status in ("short", "none"):
+    # Marker-based loops/cuts from align_engine (Sam's model). Legacy
+    # deficit-based loop extension only runs when align_engine is off.
+    if al is not None and getattr(al, "fills_cuts", None):
+        _plan_marker_loops(out_track, in_track, al, analysis)
+    elif not USE_ALIGN_ENGINE and status in ("short", "none"):
         _plan_loop_extensions(out_track, in_track, analysis)
 
     return analysis
@@ -594,6 +597,51 @@ def _plan_loop_extensions(out_track: TrackInfo, in_track: TrackInfo,
         new_overlap = current_overlap + out_extension + in_extension
         analysis.notes += "; loops: " + ", ".join(parts)
         analysis.notes += " -> {:.0f}b overlap".format(new_overlap)
+
+
+def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
+                       analysis: OverlapAnalysis) -> None:
+    """Apply align_engine's FillCutSpecs (Sam's marker-based loops/cuts).
+
+    - outgoing_tail -> analysis.out_tail_loop, inserted BEFORE the outro via the
+      existing apply_loops mechanism (the outro is pushed back to make room). The
+      swap sits before the outro, so it can't move.
+    - intro_cut -> in_track.dropped_clip_names (the existing clip-removal). NO
+      shift: the surviving clips keep their positions and get moved only by the
+      track's own align_engine shift, so the swap stays byte-identical; the
+      removed front-intro clips simply don't play.
+
+    Source/target are in track-native bars; bars->beats is *4.
+    """
+    for fc in getattr(al, "fills_cuts", None) or []:
+        if fc.kind == "outgoing_tail" and fc.reps >= 1:
+            outro = next((s for s in out_track.sections if _label(s) == "outro"), None)
+            if not outro:
+                continue
+            chunk_beats = (fc.source_end_bar - fc.source_start_bar) * 4.0
+            ext = fc.reps * chunk_beats
+            analysis.out_tail_loop = LoopSpec(
+                track_name=out_track.name,
+                source_beat_start=fc.source_start_bar * 4.0,
+                source_beat_end=fc.source_end_bar * 4.0,
+                count=fc.reps,
+                insert_at_beat=outro["arr_time"],
+                clip_name="{}_tail_loop".format(outro.get("name", "tail")),
+                shifts_before_insert=[(outro.get("name", "outro_1"), float(ext))],
+            )
+            outro["arr_time"] += ext
+            outro["arr_end"] += ext
+            out_track.arr_end = max(out_track.arr_end, outro["arr_end"])
+            analysis.notes += "; out tail loop {:.0f}b x{:d}".format(chunk_beats, fc.reps)
+        elif fc.kind == "intro_cut":
+            cut_beats = fc.cut_to_bar * 4.0
+            dropped = [s["name"] for s in in_track.sections
+                       if 0 < s.get("source_end_beats", 0) <= cut_beats]
+            if dropped:
+                existing = list(getattr(in_track, "dropped_clip_names", []) or [])
+                in_track.dropped_clip_names = list(dict.fromkeys(existing + dropped))
+                analysis.notes += "; intro cut {:d} clip(s) to bar {:.0f}".format(
+                    len(dropped), fc.cut_to_bar)
 
 
 # -- Pair history matching ----------------------------------------------------
@@ -823,7 +871,9 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         out_t = tracks[i]
         in_t = tracks[i + 1]
 
-        analysis = analyse_overlap(out_t, in_t, i + 1)
+        analysis = analyse_overlap(
+            out_t, in_t, i + 1,
+            alignments[i] if i < len(alignments) else None)
 
         # Check pair history for similar transitions
         bpm = out_t.bpm or in_t.bpm or 128.0
