@@ -117,6 +117,7 @@ class FillCutSpec:
     source_end_bar: float = 0.0
     cut_to_bar: float = 0.0            # intro_cut: drop incoming clips ending at/before this bar
     target_marker_bar: float = 0.0     # the marker being reached (audit)
+    partial_bars: float = 0.0          # loops: shorter FINAL chunk to land exactly on the marker
     clip_name: str = ""                # break_skip: the incoming break clip to drop
     note: str = ""
 
@@ -463,11 +464,13 @@ def plan_fill_or_cut(o, i, al):
                     chunk = (float(outro["start_bar"]), float(e))
             if chunk:
                 clen = chunk[1] - chunk[0]
-                reps = max(1, int(round(gap / clen)))          # reach the marker
-                specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
-                    source_start_bar=chunk[0], source_end_bar=chunk[1],
-                    target_marker_bar=float(nxt),
-                    note=f"loop outro {clen:.0f}bx{reps} to incoming marker {nxt:.0f}"))
+                reps = int(gap // clen)                        # whole chunks
+                partial = gap - reps * clen                    # remainder -> exact landing
+                if reps >= 1 or partial > 0:
+                    specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
+                        source_start_bar=chunk[0], source_end_bar=chunk[1],
+                        partial_bars=float(partial), target_marker_bar=float(nxt),
+                        note=f"loop outro {clen:.0f}bx{reps}+{partial:.0f}b to marker {nxt:.0f}"))
 
     # (4) NO BREAK-TO-BREAK (mix choice, soft / swappable).
     bspec = _resolve_break_to_break(o, i)

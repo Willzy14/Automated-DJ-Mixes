@@ -615,12 +615,13 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
     Source/target are in track-native bars; bars->beats is *4.
     """
     for fc in getattr(al, "fills_cuts", None) or []:
-        if fc.kind == "outgoing_tail" and fc.reps >= 1:
+        if fc.kind == "outgoing_tail" and (fc.reps >= 1 or fc.partial_bars > 0):
             outro = next((s for s in out_track.sections if _label(s) == "outro"), None)
             if not outro:
                 continue
             chunk_beats = (fc.source_end_bar - fc.source_start_bar) * 4.0
-            ext = fc.reps * chunk_beats
+            partial_beats = fc.partial_bars * 4.0
+            ext = fc.reps * chunk_beats + partial_beats          # total fill (exact)
             analysis.out_tail_loop = LoopSpec(
                 track_name=out_track.name,
                 source_beat_start=fc.source_start_bar * 4.0,
@@ -628,12 +629,14 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                 count=fc.reps,
                 insert_at_beat=outro["arr_time"],
                 clip_name="{}_tail_loop".format(outro.get("name", "tail")),
+                tail_partial_beats=partial_beats,                # land exactly on the marker
                 shifts_before_insert=[(outro.get("name", "outro_1"), float(ext))],
             )
             outro["arr_time"] += ext
             outro["arr_end"] += ext
             out_track.arr_end = max(out_track.arr_end, outro["arr_end"])
-            analysis.notes += "; out tail loop {:.0f}b x{:d}".format(chunk_beats, fc.reps)
+            analysis.notes += "; out tail loop {:.0f}bx{:d}+{:.0f}b".format(
+                chunk_beats, fc.reps, partial_beats)
         elif fc.kind == "intro_cut":
             # The cut lands strictly INSIDE the intro (guaranteed by
             # plan_fill_or_cut's partial-trim guard), so front-trim the intro clip

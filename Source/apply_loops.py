@@ -214,6 +214,10 @@ class LoopSpec:
     count: int
     insert_at_beat: float
     clip_name: str = ""
+    # Optional shorter FINAL clip (a partial chunk) placed after the `count` full
+    # clips, so a loop lands EXACTLY on a marker when the gap isn't a whole
+    # multiple of the chunk (e.g. outro loops, where the track length is off-grid).
+    tail_partial_beats: float = 0.0
     # Clips in the same track to shift LATER (positive delta) BEFORE the
     # new loop clips are inserted. Used for tail loops, where the outro
     # must be pushed back to make room for the loop region in front of it.
@@ -547,6 +551,14 @@ def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
             arr_beat = spec.insert_at_beat + i * loop_len
             cloned = clone_clip(template, spec, arr_beat)
             all_new_lines.extend(cloned)
+
+        # Optional partial final clip — lands the loop EXACTLY on the marker.
+        if spec.tail_partial_beats and spec.tail_partial_beats > 0:
+            import copy
+            pspec = copy.copy(spec)
+            pspec.source_beat_end = spec.source_beat_start + spec.tail_partial_beats
+            arr_beat = spec.insert_at_beat + spec.count * loop_len
+            all_new_lines.extend(clone_clip(template, pspec, arr_beat))
 
         # Insertion point — events on the current lines (post-expansion).
         _, events_end_now = find_clip_events(lines, track_start, track_end)
