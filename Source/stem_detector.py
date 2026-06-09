@@ -242,17 +242,26 @@ def _merge_same_label(sections):
     if not sections:
         return sections
     kickout = {"break", "fill"}
+    # Pre-pass: a 'build' that doesn't lead INTO a drop is a mis-detection (you
+    # don't build into an outro/break) — relabel it 'drop' so it folds into the
+    # surrounding drop (James Poole's phantom build128-132 before the outro).
+    sections = [dict(s) for s in sections]
+    for k in range(len(sections)):
+        if sections[k]["label"] == "build":
+            nxt = sections[k + 1]["label"] if k + 1 < len(sections) else None
+            if nxt != "drop":
+                sections[k]["label"] = "drop"
     merged = [dict(sections[0])]
     for s in sections[1:]:
         prev = merged[-1]
-        # Merge consecutive same-label blocks, AND adjacent kick-out sections
-        # (break+fill are one contiguous kick-out region) — but never drops, which
-        # stay split at their fills. So an edge 'fill' touching a break folds into
-        # the break; only a short kick-out flanked by drops stays a fill.
+        # Merge consecutive same-label blocks (INCLUDING drops — a long drop split
+        # into 8-bar chunks is one drop, Sam 2026-06-09), AND adjacent kick-out
+        # sections (break+fill are one contiguous kick-out region). A drop broken
+        # by a real kick-out keeps that kick-out as a separate fill/break marker
+        # between the two drops; only truly adjacent same-label blocks fold together.
         mergeable = (
-            prev["label"] != "drop" and s["label"] != "drop"
-            and (s["label"] == prev["label"]
-                 or (s["label"] in kickout and prev["label"] in kickout))
+            s["label"] == prev["label"]
+            or (s["label"] in kickout and prev["label"] in kickout)
         )
         if mergeable:
             prev["end_bar"] = s["end_bar"]
