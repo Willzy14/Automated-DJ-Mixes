@@ -426,6 +426,65 @@ def shift_named_clip(lines: list[str], track_start: int, track_end: int,
     return changed
 
 
+def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
+                          clip_name: str, trim_beats: float) -> int:
+    """Trim the FRONT of a named clip by `trim_beats`: move its start later in
+    BOTH the arrangement (Time/CurrentStart) and the source (LoopStart), KEEPING
+    its end (CurrentEnd/LoopEnd/OutMarker). The clip then plays `trim_beats`
+    further into its source and starts that much later, leaving a gap where its
+    front was — the outgoing track covers it. Used for partial intro trims (e.g.
+    My Own Thang: trim the front of its 32-bar intro to land on a marker) that
+    can't be done by whole-clip removal. Returns fields modified (0 if not found).
+    """
+    if trim_beats <= 0:
+        return 0
+    in_scale_info = False
+    clip_open_idx = None
+    found_idx = None
+    for i in range(track_start, track_end + 1):
+        stripped = lines[i].strip()
+        if "<ScaleInformation>" in stripped or "<ScaleInformation " in stripped:
+            in_scale_info = True
+        if "</ScaleInformation>" in stripped:
+            in_scale_info = False
+            continue
+        if "<AudioClip " in stripped and 'Id="' in stripped:
+            clip_open_idx = i
+        if (not in_scale_info and "<Name " in stripped
+                and f'Value="{clip_name}"' in stripped):
+            found_idx = i
+            break
+    if found_idx is None or clip_open_idx is None:
+        return 0
+    clip_close_idx = None
+    for j in range(found_idx, min(track_end + 1, len(lines))):
+        if "</AudioClip>" in lines[j]:
+            clip_close_idx = j
+            break
+    if clip_close_idx is None:
+        return 0
+    changed = 0
+    m = re.search(r'Time="([\d.\-]+)"', lines[clip_open_idx])
+    if m:
+        lines[clip_open_idx] = re.sub(
+            r'Time="[\d.\-]+"', f'Time="{float(m.group(1)) + trim_beats}"',
+            lines[clip_open_idx], count=1)
+        changed += 1
+    # ONLY the start fields move (keep the end). CurrentStart + LoopStart shift
+    # together to preserve the 1:1 source->arrangement mapping.
+    for k in range(clip_open_idx, clip_close_idx + 1):
+        line = lines[k]
+        for tag in ("CurrentStart", "LoopStart"):
+            m = re.search(rf'<{tag} Value="([\d.\-]+)"', line)
+            if m:
+                lines[k] = re.sub(
+                    rf'(<{tag} Value=")[\d.\-]+(")',
+                    rf'\g<1>{float(m.group(1)) + trim_beats}\g<2>', line, count=1)
+                line = lines[k]
+                changed += 1
+    return changed
+
+
 def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
     """Insert loop clips into the ALS lines.  Returns modified lines."""
     global _NEXT_ID

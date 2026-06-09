@@ -109,6 +109,7 @@ class OverlapAnalysis:
     status: str            # "ok", "short", "none"
     out_tail_loop: LoopSpec | None = None
     in_intro_loop: LoopSpec | None = None
+    intro_trim: tuple | None = None   # (track_name, clip_name, trim_beats) — partial front trim
     shift_delta: float = 0.0
     similar_pairs: list[dict] = field(default_factory=list)
     notes: str = ""
@@ -634,21 +635,18 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
             out_track.arr_end = max(out_track.arr_end, outro["arr_end"])
             analysis.notes += "; out tail loop {:.0f}b x{:d}".format(chunk_beats, fc.reps)
         elif fc.kind == "intro_cut":
-            cut_beats = fc.cut_to_bar * 4.0
-            dropped = [s["name"] for s in in_track.sections
-                       if 0 < s.get("source_end_beats", 0) <= cut_beats]
-            if dropped:
-                existing = list(getattr(in_track, "dropped_clip_names", []) or [])
-                in_track.dropped_clip_names = list(dict.fromkeys(existing + dropped))
-                analysis.notes += "; intro cut {:d} clip(s) to bar {:.0f}".format(
-                    len(dropped), fc.cut_to_bar)
-            else:
-                # planned cut lands mid-clip (single long intro clip) — can't
-                # partial-trim yet. Surface it rather than silently dropping it.
-                print("  WARNING: intro cut to bar {:.0f} matched no whole clip on '{}' "
-                      "(mid-clip; partial trim not yet supported)".format(
-                          fc.cut_to_bar, in_track.name[:40]))
-                analysis.notes += "; intro cut planned but matched no clip (mid-clip)"
+            # The cut lands strictly INSIDE the intro (guaranteed by
+            # plan_fill_or_cut's partial-trim guard), so front-trim the intro clip
+            # by cut_to_bar bars: it now starts on the drop-after-break marker,
+            # keeping the rest. Clip-trimming applies it (whole-clip removal can't
+            # trim a single long intro clip — the old no-op).
+            intro = in_track.sections[0] if in_track.sections else None
+            if intro is not None:
+                trim_beats = fc.cut_to_bar * 4.0
+                analysis.intro_trim = (in_track.name, intro.get("name", "intro_1"),
+                                       trim_beats)
+                analysis.notes += "; intro front trimmed {:.0f}b to marker".format(
+                    fc.cut_to_bar)
 
 
 # -- Pair history matching ----------------------------------------------------
@@ -876,6 +874,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
 
     overlaps: list[OverlapAnalysis] = []
     all_loops: list[LoopSpec] = []
+    all_trims: list[tuple] = []      # (track_name, clip_name, trim_beats) front trims
 
     for i in range(len(tracks) - 1):
         out_t = tracks[i]
@@ -898,11 +897,13 @@ def propose_arrangement(als_path: Path, sections_path: Path,
 
         overlaps.append(analysis)
 
-        # Collect loops
+        # Collect loops + intro front-trims
         if analysis.out_tail_loop:
             all_loops.append(analysis.out_tail_loop)
         if analysis.in_intro_loop:
             all_loops.append(analysis.in_intro_loop)
+        if analysis.intro_trim:
+            all_trims.append(analysis.intro_trim)
 
         # Print summary
         status_icon = {"ok": "+", "short": "!", "none": "X"}
@@ -961,6 +962,28 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                 else:
                     print("  WARNING: track '{}' not found for shift".format(
                         track_name))
+
+        # Step 1.5: Apply intro front-trims (partial cuts that whole-clip removal
+        # can't do — e.g. trim the front of a single long intro clip to a marker).
+        # After shifts so the clip is at its final position; the trim starts it
+        # later, leaving a gap the outgoing covers. The swap (a later clip) is
+        # untouched.
+        if all_trims:
+            from apply_loops import trim_named_clip_front
+            als_tracks = find_track_line_ranges(lines)
+            for track_name, clip_name, trim_beats in all_trims:
+                matched = _match_track(track_name, als_tracks)
+                if not matched:
+                    print("  WARNING: track '{}' not found for intro trim".format(track_name[:40]))
+                    continue
+                start, end, tname = matched
+                n = trim_named_clip_front(lines, start, end, clip_name, trim_beats)
+                if n:
+                    print("  Trimmed '{}' front by {:.0f} beats on '{}' ({} field(s))".format(
+                        clip_name, trim_beats, tname[:40], n))
+                else:
+                    print("  WARNING: clip '{}' not found to trim on '{}'".format(
+                        clip_name, tname[:40]))
 
         # Step 2: Apply loop extensions
         if all_loops:
