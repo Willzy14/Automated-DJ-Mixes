@@ -35,8 +35,12 @@ from matplotlib.patches import Rectangle
 from stem_section_probe import _seccol  # shared section colour map
 
 PHRASE_GRID = 16          # 16-bar phrase grid (viz gridlines)
-SNAP_BARS = 8             # snap the incoming's stagger to 8-bar phrases (Sam: several
-                          # alignments were 8 bars off — 8 is the finest musical phrase)
+SNAP_BARS = 4             # snap the incoming's stagger to the 4-bar (16-beat) grid the
+                          # detector's section markers live on. 8 was COARSER than the
+                          # markers, so a marker-aligned offset like 116 got rounded to
+                          # 112 (off every marker -> lineup 0, the Jaz->Route 94 case).
+                          # 4 still reaches every 8/16-bar offset, just no longer rounds a
+                          # valid marker alignment off the grid.
 HANDOFF_WINDOW_BARS = 8   # allow a hand-off marker this far before the last-minute line
 COINCIDE_TOL_BARS = 2     # two section boundaries "line up" if within this many bars
 LIKE_ENERGY = {"drop": "high", "build": "high", "break": "low", "fill": "low",
