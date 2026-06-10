@@ -314,10 +314,14 @@ def main():
     print("Loading audio...")
     audio_cache = {}
     bpm_cache = {}
+    import html
     for name in tracks:
-        wav = audio_dir / (name + ".wav")
+        # Track names from the ALS are XML-escaped (&amp; &apos;) but the WAV
+        # filenames use the real characters — unescape before matching, or every
+        # track with & or ' is "MISSING" and its transitions skip (Sam 2026-06-10).
+        wav = audio_dir / (html.unescape(name) + ".wav")
         if not wav.exists():
-            print(f"  MISSING: {name}.wav")
+            print(f"  MISSING: {html.unescape(name)}.wav")
             continue
         print(f"  {name[:50]}")
         y, sr = librosa.load(str(wav), sr=22050, mono=True)
