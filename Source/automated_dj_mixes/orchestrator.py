@@ -466,7 +466,9 @@ def run_pipeline(
                     stem_res = stem_detect(
                         analysis.path, input_dir.parent,
                         bpm=analysis.bpm, downbeat=analysis.first_downbeat_sec,
-                        make_viz=False,
+                        make_viz=True,   # DETECT_<track>.png = the per-track sanity check
+                                         # (full track + 4 stem panels + section/beat annotations).
+                                         # Replaces the old 80-PNG blind pass (Sam 2026-06-10).
                     )
                     if stem_res:
                         segments = segments_from_stem_sections(stem_res)
