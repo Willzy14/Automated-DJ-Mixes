@@ -48,12 +48,19 @@ def _seccol(label):
 _MODEL = None
 
 
+def _device() -> str:
+    """GPU if a CUDA build + GPU are present, else CPU. Demucs separation runs
+    ~10-30x faster on the GPU — one-time PyTorch CUDA install (Sam 2026-06-10)."""
+    import torch
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 def _model():
     global _MODEL
     if _MODEL is None:
         from demucs.pretrained import get_model
         _MODEL = get_model("htdemucs")
-        _MODEL.cpu().eval()
+        _MODEL.to(_device()).eval()
     return _MODEL
 
 
@@ -83,9 +90,10 @@ def _separate_envelopes(wav_path: Path, cache_dir: Path, hop_sec: float = 0.1):
     t = torch.from_numpy(wav)
     ref = t.mean(0)
     t = (t - ref.mean()) / (ref.std() + 1e-8)
-    print(f"  separating {wav_path.name} (CPU)...")
+    dev = _device()
+    print(f"  separating {wav_path.name} ({dev.upper()})...")
     with torch.no_grad():
-        out = apply_model(model, t[None], device="cpu", progress=True)[0]   # [src, ch, n]
+        out = apply_model(model, t[None], device=dev, progress=True)[0]   # [src, ch, n]
     out = out * (ref.std() + 1e-8) + ref.mean()
 
     hop = max(1, int(sr * hop_sec))
