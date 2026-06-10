@@ -28,11 +28,17 @@ from automated_dj_mixes.waveform_preview import PreviewContext, render_preview
 
 
 def _count_audio_tracks(als_path: Path) -> int:
-    """Count <AudioTrack elements in a gzipped ALS file."""
+    """Count the USABLE mix tracks in a template = <AudioTrack> elements minus the
+    reserved first track (the 'Session Time' marker track that als_generator skips
+    via track_ranges[1:]). Without the -1 a 12-AudioTrack template (only 11 mixable)
+    gets picked for a 12-track mix and the 12th track is silently dropped — that's
+    why Huxley fell off the 09.06.26 mix (Sam 2026-06-10). Keep in sync with
+    als_generator._find_track_line_ranges / the track_ranges[1:] reservation."""
     import gzip
     try:
         data = gzip.open(str(als_path)).read().decode("utf-8", errors="replace")
-        return data.count("<AudioTrack ")
+        n = data.count("<AudioTrack ")
+        return max(0, n - 1)   # exclude the reserved Session Time track
     except Exception:
         return 0
 
