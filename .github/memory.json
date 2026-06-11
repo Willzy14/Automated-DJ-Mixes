@@ -30,7 +30,7 @@
     },
     "warping": {
       "path": "Source/automated_dj_mixes/warping.py",
-      "purpose": "Per-beat warp markers from Rekordbox grid",
+      "purpose": "Per-beat warp markers from Rekordbox grid; sec_to_clip_beats + grid_bpm_and_downbeat (the one-clock converter used by stem-section cuts)",
       "status": "working"
     },
     "automation": {
@@ -168,6 +168,21 @@
     "samwillsmixing.com"
   ],
   "sessions": [
+    {
+      "date": "2026-06-11 evening",
+      "focus": "Warp/cut regression diagnosed + FIXED ? one-clock rule + beatgrid gate + Todd phase override",
+      "key_changes": [
+        "ONE-CLOCK: warping.grid_bpm_and_downbeat + sec_to_clip_beats; stem detector runs on grid BPM + true downbeat; phrase_viz.segments_from_stem_sections maps section TIMES through the grid + bar-snaps (zero-length/monotonic guards); analysis.first_downbeat_sec offset-indexed",
+        "BEATGRID GATE (Source/validate_beatgrid.py): whole-track kick onsets (150Hz lowpass), half-beat-circle concentration R (folds offbeat house bass) + mean phase, per-track +1pct detuned twin as known-bad control; hard stop in --sections-layout, --allow-bad-grids override, --write-override CLI",
+        "GRID OVERRIDES (Hints/grid_overrides.json): applied before enrichment; Todd +72.5ms -> re-gates phase +0.00 PASS",
+        "Kelly G. acapella moved to _Excluded Audio (11 tracks remain)"
+      ],
+      "validation": "Suite 63 -> 75 (Tests/test_one_clock.py); production re-run --sections-layout --stem-sections: one-clock 11/11, gate PASS 11/11 (incl Todd override), stem JSONs grid-true (Rulers 126.0 not librosa 126.05), DETECT pngs regenerated, Sections V4.als + validate_als [OK]",
+      "open_items": [
+        "Full /mix on the fixed chain (Phase-1d DETECT scan NOT to be skipped) -> arrangement -> automation -> Sam's ear on the render = final validation",
+        "If a future track ever FAILs on TEMPO (no current track does): build drum-stem beat-tracking as documented escalation"
+      ]
+    },
     {
       "date": "2026-06-01",
       "focus": "Opus 4.8 audit + 12 bug-fixes + housekeeping + collapsed to one pipeline (retired Path A)",

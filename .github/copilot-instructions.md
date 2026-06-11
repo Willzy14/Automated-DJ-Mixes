@@ -3,7 +3,7 @@
 ## Project Overview
 Automated DJ mix pipeline for Wired Masters showreels. Takes pre-tagged dance tracks and produces a ready-to-review Ableton Live 12 session via template-based ALS XML patching. Multi-signal cue candidate detection feeds bass-to-bass transition planning.
 
-> **⚠ This file is stale (May 2026 priorities below). For the live state read `Documentation/AI_CONTEXT.md`.** As of 2026-06-11: GPU stem separation + template/transition-viz fixes + a golden regression test shipped (commits a13d801 d456787 b6720b2 68d7973). The active blocker is the **warp/beatgrid bug** — clips warp to Rekordbox grids that read ~1% off the actual audio → warp drifts + section cuts land off; blocked on Sam confirming whether his RB grids are tight. See memory `project-warp-beatgrid-bug`.
+> **⚠ This file is stale (May 2026 priorities below). For the live state read `Documentation/AI_CONTEXT.md`.** As of 2026-06-11 evening: the warp/cut regression is **FIXED in code, pending Sam's ear on the re-render**. Two causes — (1) two-clock bug (stem sections cut on librosa's quantized BPM while audio warped to the RB grid) → fixed by `warping.sec_to_clip_beats` + grid-derived detector params; (2) Todd's grid PHASE-shifted +70ms → fixed via `Hints/grid_overrides.json`. New `Source/validate_beatgrid.py` gate hard-stops bad grids in sections-layout. Suite 75/75. See memory `project-warp-beatgrid-bug`.
 
 ## Current Project Status (2026-05-20)
 

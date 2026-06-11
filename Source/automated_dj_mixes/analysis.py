@@ -522,9 +522,15 @@ def enrich_from_rekordbox(track: TrackAnalysis, rb) -> None:
     track.rekordbox_phrases = rb.phrases
     track.analysis_source = "rekordbox"
 
-    # Beat 1 from beat grid → first_downbeat_sec
+    # First TRUE downbeat from the beat grid → first_downbeat_sec.
+    # NOT entry 0: grids often start on beat 2/3/4 of a bar —
+    # first_downbeat_offset indexes the first beat_of_bar=1 entry, matching
+    # warp beat 0 in calculate_warp_markers_from_beat_grid. (Anchoring at
+    # entry 0 put the bar phase off by up to 3 beats — e.g. Todd Edwards.)
     if rb.beat_times_ms:
-        track.first_downbeat_sec = rb.beat_times_ms[0] / 1000.0
+        off = getattr(rb, "first_downbeat_offset", 0) or 0
+        off = min(max(off, 0), len(rb.beat_times_ms) - 1)
+        track.first_downbeat_sec = rb.beat_times_ms[off] / 1000.0
 
     # Intro end = end of last consecutive "intro" phrase
     for i, p in enumerate(rb.phrases):

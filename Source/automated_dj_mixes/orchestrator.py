@@ -193,6 +193,7 @@ def run_pipeline(
     no_hints_required: bool = False,
     sections_layout: bool = False,
     allow_partial_rekordbox: bool = False,
+    allow_bad_grids: bool = False,
     stem_sections: bool = False,
     track_order: list[str] | None = None,
 ) -> Path | None:
@@ -258,9 +259,22 @@ def run_pipeline(
         from automated_dj_mixes.rekordbox_reader import read_rekordbox_library, find_rekordbox_match
         print("Reading Rekordbox library...")
         rb_library = read_rekordbox_library()
+        # Grid overrides (phase corrections from the beatgrid gate) apply
+        # BEFORE enrichment so the warp markers, downbeat anchor, one-clock
+        # cuts and the gate itself all see the corrected grid.
+        grid_overrides: dict = {}
+        try:
+            from validate_beatgrid import load_grid_overrides, apply_grid_override
+            grid_overrides = load_grid_overrides(input_dir.parent)
+        except ImportError:
+            pass
         for a in analyses:
             rb_match = find_rekordbox_match(a.path.name, rb_library)
             if rb_match and rb_match.phrases:
+                if a.path.name in grid_overrides:
+                    apply_grid_override(rb_match, grid_overrides[a.path.name])
+                    print(f"  [grid-override] {a.path.name[:50]}: shifted "
+                          f"{grid_overrides[a.path.name].get('shift_ms', 0):+.1f}ms")
                 enrich_from_rekordbox(a, rb_match)
                 rb_matches[str(a.path)] = rb_match
                 rb_count += 1
@@ -272,6 +286,19 @@ def run_pipeline(
     # (see enforce_rekordbox_coverage). previews_only doesn't need RB.
     if not previews_only:
         enforce_rekordbox_coverage(analyses, rb_matches, allow_partial_rekordbox)
+
+    # Beatgrid quality gate — sections-layout is the production entry point
+    # where warp markers + cuts get baked, so bad grids must hard-stop HERE
+    # (the 09.06.26 'Todd' bug shipped because nothing checked the grids
+    # against the audio). Previews don't warp; skip there.
+    if sections_layout and not previews_only:
+        try:
+            from validate_beatgrid import enforce_beatgrid_quality
+        except ImportError as e:
+            print(f"  WARNING: beatgrid gate unavailable ({e}) — proceeding unchecked")
+        else:
+            enforce_beatgrid_quality(analyses, rb_matches,
+                                     allow_bad_grids=allow_bad_grids)
 
     # Enrich with Mixed In Key 11 data — cue points (highest-confidence
     # structural signal) AND key/BPM from the MIK SQLite DB (critical for
@@ -469,15 +496,39 @@ def run_pipeline(
                     from automated_dj_mixes.phrase_viz import (
                         segments_from_stem_sections, validate_bar_math,
                     )
+                    from automated_dj_mixes.warping import grid_bpm_and_downbeat
+
+                    # ONE CLOCK: the detector's constant bpm/downbeat MUST come
+                    # from the same grid the warp markers use — analysis.bpm is
+                    # librosa's quantized lattice when tags are absent (cannot
+                    # say 128.00; caused the 09.06.26 cuts-off regression).
+                    det_bpm, det_downbeat = analysis.bpm, analysis.first_downbeat_sec
+                    grid_times, grid_offset = None, 0
+                    if rb_match and len(getattr(rb_match, "beat_times_ms", [])) >= 8:
+                        g_bpm, g_db = grid_bpm_and_downbeat(
+                            rb_match.beat_times_ms,
+                            getattr(rb_match, "first_downbeat_offset", 0),
+                            getattr(rb_match, "bpm", None),
+                        )
+                        if g_bpm:
+                            det_bpm, det_downbeat = g_bpm, g_db
+                            grid_times = rb_match.beat_times_ms
+                            grid_offset = getattr(rb_match, "first_downbeat_offset", 0)
+                            print(f"  [one-clock] {analysis.path.name[:46]}: "
+                                  f"detector on RB grid ({g_bpm:.2f} BPM, downbeat {g_db:.3f}s)")
                     stem_res = stem_detect(
                         analysis.path, input_dir.parent,
-                        bpm=analysis.bpm, downbeat=analysis.first_downbeat_sec,
+                        bpm=det_bpm, downbeat=det_downbeat,
                         make_viz=True,   # DETECT_<track>.png = the per-track sanity check
                                          # (full track + 4 stem panels + section/beat annotations).
                                          # Replaces the old 80-PNG blind pass (Sam 2026-06-10).
                     )
                     if stem_res:
-                        segments = segments_from_stem_sections(stem_res)
+                        segments = segments_from_stem_sections(
+                            stem_res,
+                            beat_times_ms=grid_times,
+                            first_downbeat_offset=grid_offset,
+                        )
                         for w in validate_bar_math(segments, analysis.path.stem[:40]):
                             print(f"  BAR-MATH: {w}")
                 except Exception as e:
@@ -588,6 +639,10 @@ def main():
     parser.add_argument("--config", help="Path to settings.json")
     parser.add_argument("--skip-desktop-analyze", action="store_true",
                         help="Skip driving MIK and Rekordbox UI (use only existing analysis data)")
+    parser.add_argument("--allow-bad-grids", action="store_true",
+                        help="Proceed even if the beatgrid gate finds grids that "
+                             "don't sit on their audio (warp WILL drift on those "
+                             "tracks — the 09.06.26 'Todd' bug).")
     parser.add_argument("--allow-partial-rekordbox", action="store_true",
                         help="Proceed even if some tracks lack Rekordbox phrase data "
                              "(knowingly degraded — librosa fallback). Default: hard-stop.")
@@ -624,6 +679,7 @@ def main():
         no_hints_required=args.no_hints_required,
         sections_layout=args.sections_layout,
         allow_partial_rekordbox=args.allow_partial_rekordbox,
+        allow_bad_grids=args.allow_bad_grids,
         stem_sections=args.stem_sections,
         track_order=[k.strip() for k in args.order.split(",")] if args.order else None,
     )

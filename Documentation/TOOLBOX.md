@@ -4,6 +4,10 @@ Module reference for all pipeline components.
 
 ## Modules
 
+### `Source/validate_beatgrid.py` (2026-06-11)
+Hard-stop gate: does each track's Rekordbox beat grid sit ON its audio? Whole-track kick onsets (150Hz lowpass — not mel fmax, which produces empty filters), half-beat-circle phase concentration (R) folds house offbeat-bass stabs so locked grids read high regardless of bassline; mean full-circle phase catches grids whose tempo is right but markers sit between the kicks (the Todd case). Per-track +1% detuned twin acts as a known-bad control. Calibrated on 22 tracks across the 08.06.26 + 09.06.26 projects. Wired into `--sections-layout`; `--allow-bad-grids` to override. Library: `check_grid(audio_path, beat_times_ms) -> GridCheck`, `enforce_beatgrid_quality(analyses, rb_matches, allow_bad_grids)`, `load_grid_overrides(project_dir)`, `apply_grid_override(rb_match, override)`. CLI: `python Source/validate_beatgrid.py "<project>"` table; `--write-override <substr>` measures and writes a phase correction into `<project>/Hints/grid_overrides.json` (orchestrator applies it before enrichment so warp/cuts/gate all see the corrected grid).
+
+
 ### `Source/automated_dj_mixes/orchestrator.py`
 Main pipeline controller. Wires analysis → Rekordbox enrichment → sequencing → gain offsets → warping → per-track features (cached) → cue candidates → candidate-driven transition planning → ALS generation → objective validation + transition report. CLI: `python -m automated_dj_mixes.orchestrator --input "Tracks/" --output "Output/"`. Visualize mode: `--visualize` produces colour-coded section ALS + per-track CSV reports.
 
@@ -83,7 +87,7 @@ Key functions: `write_track_csv()`, `write_transition_report()`.
 Output dir: `Test Project/May 2026 Mix/Reports/` and `{output_dir}/Reports/`.
 
 ### `Source/automated_dj_mixes/warping.py`
-Warp marker calculation. Two modes: (1) 2-marker linear from BPM + downbeat (fallback), (2) per-beat grid from Rekordbox — one marker per downbeat using exact ms timestamps (165-252 markers per track, eliminates up to 13-beat drift). **5 tests.**
+Warp marker calculation. Two modes: (1) 2-marker linear from BPM + downbeat (fallback), (2) per-beat grid from Rekordbox — one marker per downbeat using exact ms timestamps (165-252 markers per track, eliminates up to 13-beat drift). Now also the home of the **one-clock converter** that fixes the 2026-06-11 warp/cut regression: `grid_bpm_and_downbeat(beat_times_ms, first_downbeat_offset, db_bpm)` returns the effective constant BPM + true-downbeat anchor seconds; `sec_to_clip_beats(sec, beat_times_ms, first_downbeat_offset)` maps audio time → clip warp-beat coordinate via the same grid the warp markers use, so section cuts land on warped audio by construction. **5+ tests in Tests/test_one_clock.py.**
 
 Key types: `WarpMarker` (beat_time, sample_time).
 Key functions: `calculate_warp_markers()`, `calculate_warp_markers_from_beat_grid()`, `choose_warp_mode()`.
