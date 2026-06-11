@@ -161,6 +161,67 @@ def test_verdict_boundaries():
     assert verdict_from(0.50, 0.01, 0.30)[0] == "FAIL"   # too close to control
 
 
+def test_verdict_mik_tiebreaker():
+    """11.06.26 cases: percussion-heavy tracks with MIK-confirmed tempo."""
+    from validate_beatgrid import verdict_from
+    # Floorplan / Light It Up: low R, clean phase, MIK agrees -> rescued
+    v, d = verdict_from(0.26, 0.02, 0.01, tempo_confirmed=True)
+    assert v == "PASS" and "MIK" in d
+    assert verdict_from(0.23, -0.04, 0.01, tempo_confirmed=True)[0] == "PASS"
+    # Same R without confirmation -> still FAIL (no loosening)
+    assert verdict_from(0.26, 0.02, 0.01, tempo_confirmed=False)[0] == "FAIL"
+    # Tempo confirmed but PHASE off -> FAIL (rescue never overrides phase)
+    assert verdict_from(0.37, -0.17, 0.01, tempo_confirmed=True)[0] == "FAIL"
+    # Noise-floor grid (acapella class) -> never rescued
+    assert verdict_from(0.14, 0.01, 0.02, tempo_confirmed=True)[0] == "FAIL"
+    # WARN band with confirmation + clean phase -> PASS
+    assert verdict_from(0.36, 0.01, 0.02, tempo_confirmed=True)[0] == "PASS"
+
+
+def test_fit_anchor_recovers_true_grid_from_broken_start():
+    """La Trumpter case: RB grid broken (123.87-ish), true tempo 126.00.
+    The fitter starts from the broken grid's downbeat (bar-phase hint) and
+    must recover a 126-spaced grid with ~zero kick phase."""
+    import numpy as np
+    from validate_beatgrid import _fit_anchor, _grade
+    rng = np.random.default_rng(3)
+    true_bpm, period = 126.0, 60.0 / 126.0
+    true_anchor = 0.483
+    dur = 300.0
+    kicks = np.arange(true_anchor, dur - 1.0, period)
+    onsets = np.sort(kicks + rng.normal(0.0, 0.012, len(kicks)))
+    broken_anchor = 0.451   # old grid's downbeat — near, but off
+    first, n, dboff, _, _ = _fit_anchor(onsets, true_bpm, dur, broken_anchor)
+    grid = first + np.arange(n) * period
+    r, phase, _ = _grade(onsets, grid, period)
+    assert r > 0.8, r
+    assert abs(phase) < 0.03, phase
+    assert grid[-1] <= dur + period and grid[0] >= 0.0
+    # the fitted downbeat lands on a true kick position (bar phase kept)
+    db_sec = first + dboff * period
+    assert min(abs(kicks - db_sec)) < 0.03
+
+
+def test_replace_grid_override_application():
+    from validate_beatgrid import apply_grid_override
+
+    class FakeRB:
+        beat_times_ms = [450, 935, 1419]   # broken spacing
+        first_downbeat_offset = 2
+        bpm = 125.0
+
+    rb = FakeRB()
+    apply_grid_override(rb, {"replace_grid": {
+        "bpm": 126.0, "first_ms": 483.0, "n_beats": 5, "first_downbeat_offset": 1,
+    }})
+    assert len(rb.beat_times_ms) == 5
+    assert rb.beat_times_ms[0] == 483
+    spacing = rb.beat_times_ms[1] - rb.beat_times_ms[0]
+    assert abs(spacing - 60000.0 / 126.0) < 1.0
+    assert rb.first_downbeat_offset == 1
+    assert rb.bpm == 126.0
+
+
 def test_grid_mode_guards_zero_length_and_monotonic():
     grid = make_grid(128.0, 700)
     _, downbeat = grid_bpm_and_downbeat(grid, 0)

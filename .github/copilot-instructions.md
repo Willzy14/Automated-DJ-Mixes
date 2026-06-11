@@ -3,7 +3,7 @@
 ## Project Overview
 Automated DJ mix pipeline for Wired Masters showreels. Takes pre-tagged dance tracks and produces a ready-to-review Ableton Live 12 session via template-based ALS XML patching. Multi-signal cue candidate detection feeds bass-to-bass transition planning.
 
-> **⚠ This file is stale (May 2026 priorities below). For the live state read `Documentation/AI_CONTEXT.md`.** As of 2026-06-11 evening: the warp/cut regression is **FIXED in code, pending Sam's ear on the re-render**. Two causes — (1) two-clock bug (stem sections cut on librosa's quantized BPM while audio warped to the RB grid) → fixed by `warping.sec_to_clip_beats` + grid-derived detector params; (2) Todd's grid PHASE-shifted +70ms → fixed via `Hints/grid_overrides.json`. New `Source/validate_beatgrid.py` gate hard-stops bad grids in sections-layout. Suite 75/75. See memory `project-warp-beatgrid-bug`.
+> **⚠ This file is stale (May 2026 priorities below). For the live state read `Documentation/AI_CONTEXT.md`.** As of 2026-06-11 late evening: **first full `/mix` through all the new gates → `Test Mix 11.06.26/Output/In-Key Mix V1.als`, awaiting Sam's ear (~next week)**. The beatgrid gate caught 5 issues on 12 fresh tracks: gate v2 added a MIK tiebreaker (false tempo-fails on percussion-heavy material), 3 phase overrides written, and 1 truly broken grid (La Trumpter) fixed via the new `replace_grid` override (constant grid kick-fitted at the Sam-confirmed 126, gate-proven). Also fixed a vacuous-pass hole in `validate_hints_vs_sections` (0 checks used to "PASS"). Suite 78/78. See memory `project-warp-beatgrid-bug` + `Documentation/AI_CONTEXT.md`.
 
 ## Current Project Status (2026-05-20)
 

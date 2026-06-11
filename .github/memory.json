@@ -169,6 +169,21 @@
   ],
   "sessions": [
     {
+      "date": "2026-06-11 late evening",
+      "focus": "First full /mix through all the new gates -> In-Key Mix V1 (Test Mix 11.06.26, 12 fresh tracks) + gate v2 + replace_grid + vacuous-gate fix",
+      "key_changes": [
+        "Beatgrid gate v2: MIK tiebreaker (independent-BPM rescue for percussion-smeared R; requires internal consistency + control separation + clean phase)",
+        "replace_grid override: _fit_anchor kick-fits a constant grid at a confirmed BPM, write_grid_replacement gate-proves before writing (first case: La Trumpter 126)",
+        "validate_hints_vs_sections: vacuous-pass hole fixed (stem-JSON BPM fallback + rows==0 fails) + semantics aligned with the model (first_break after first drop; last_bass_drop in pre-outro swap window)",
+        "3 phase overrides written for fresh tracks (Hold Me +85.9ms, Blackout +97.4ms, Bullerengue -83.1ms)"
+      ],
+      "validation": "Suite 78/78; gate 12/12 PASS final run; one-clock 12/12; hints gate 44/44 real checks; all .als validate_als OK; all 12 DETECT + all 11 transition FULL pictures read (REVIEW_V1.md)",
+      "open_items": [
+        "SAM'S EAR on In-Key Mix V1 (car listen, verdict ~next week). Listen flags: T4/T9 tail-loop regions (Hyzteria 11x = monotony flag), T8 tight 19-bar swap, four 56-57-bar long blends",
+        "Backlog: loop-aware source mapping in transition_review_viz (looped outgoing tails render empty); stem_detector --write-hints standalone should fall back to SECTIONS_STEM JSONs; extract_sections_als V1_baseline naming bridge"
+      ]
+    },
+    {
       "date": "2026-06-11 evening",
       "focus": "Warp/cut regression diagnosed + FIXED ? one-clock rule + beatgrid gate + Todd phase override",
       "key_changes": [

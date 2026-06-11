@@ -51,6 +51,20 @@ PASS_R = 0.40           # half-beat-circle concentration above this = tempo lock
 FAIL_R = 0.30           # below this = grid tempo not on the audio
 PHASE_TOL = 0.12        # |mean phase| (beats) within this = markers on the kicks
 PHASE_FAIL = 0.15       # beyond this = markers consistently off the kicks
+
+# Independent-BPM tiebreaker (added 2026-06-11 evening, Test Mix 11.06.26):
+# percussion-heavy material (Latin house, gospel stabs) smears R below the
+# absolute thresholds even when the grid is right. If an INDEPENDENT analyzer
+# (MIK) agrees with the grid's span-BPM exactly, and the grid is internally
+# consistent, and the phase is clean, tempo is confirmed by two independent
+# sources — that beats one noisy concentration stat. The rescue floor keeps
+# garbage grids (acapellas ≈ 0.14) out, and an internally INCONSISTENT grid
+# (span disagreeing with RB's own DB BPM — the La Trumpter case: grid 123.87,
+# DB 125.00, MIK 126.00) can never be rescued.
+RESCUE_MIN_R = 0.20     # below this no tiebreaker applies — grid is noise
+RESCUE_CONTROL_X = 5.0  # must still separate clearly from the +1% twin
+BPM_AGREE = 0.002       # MIK vs grid-span agreement (0.2%)
+SPAN_DB_TOL = 0.005     # grid-span vs RB-DB internal consistency (0.5%)
 MIN_ONSETS = 80         # fewer kick onsets whole-track = cannot judge (acapella)
 N_SEGMENTS = 8          # per-segment R, reported for drift diagnosis
 KICK_CUTOFF_HZ = 150.0  # lowpass for kick isolation (NOT mel fmax — a 160Hz
@@ -128,7 +142,9 @@ def _grade(onsets: np.ndarray, grid_sec: np.ndarray,
     return r_half, mean_phase, seg_r
 
 
-def check_grid(audio_path: Path, beat_times_ms: list[int]) -> GridCheck:
+def check_grid(audio_path: Path, beat_times_ms: list[int],
+               independent_bpm: float | None = None,
+               db_bpm: float | None = None) -> GridCheck:
     """Verify a beat grid against its audio. Read-only; one full-track load.
 
     Self-referencing verdict: the track's own kick onsets are graded against
@@ -136,6 +152,11 @@ def check_grid(audio_path: Path, beat_times_ms: list[int]) -> GridCheck:
     control with identical onset quality. A locked grid separates widely
     from its detuned twin; a wrong grid grades like its control. This makes
     the verdict robust to per-track onset noise (busy low end, swing).
+
+    independent_bpm (e.g. MIK's) + db_bpm (RB's stored value) enable the
+    tiebreaker for percussion-heavy tracks whose R lands in the ambiguous
+    band: two independent analyzers agreeing on tempo + a clean phase beats
+    one noisy concentration stat.
     """
     name = Path(audio_path).name
     if not beat_times_ms or len(beat_times_ms) < 32:
@@ -170,33 +191,84 @@ def check_grid(audio_path: Path, beat_times_ms: list[int]) -> GridCheck:
     detuned = grid_sec[0] + (grid_sec - grid_sec[0]) * 1.01
     r_detuned, _, _ = _grade(onsets, detuned, beat_period * 1.01)
 
-    verdict, detail = verdict_from(r_half, mean_phase, r_detuned)
+    # Independent-BPM tiebreaker eligibility: grid internally consistent
+    # (span agrees with RB's own DB value) AND an independent analyzer
+    # agrees with the span. An internally inconsistent grid can never be
+    # tempo-confirmed (its "span" is mush).
+    span_bpm = 60000.0 * (len(beat_times_ms) - 1) / (
+        beat_times_ms[-1] - beat_times_ms[0])
+    internally_consistent = (
+        db_bpm is None
+        or abs(span_bpm - db_bpm) / db_bpm <= SPAN_DB_TOL
+    )
+    tempo_confirmed = bool(
+        independent_bpm and independent_bpm > 40.0
+        and internally_consistent
+        and abs(span_bpm - independent_bpm) / independent_bpm <= BPM_AGREE
+    )
+
+    verdict, detail = verdict_from(r_half, mean_phase, r_detuned, tempo_confirmed)
+    if db_bpm is not None and not internally_consistent:
+        detail += (f" [grid INTERNALLY INCONSISTENT: span {span_bpm:.2f} vs "
+                   f"RB DB {db_bpm:.2f}]")
     return GridCheck(name, verdict, r_half, mean_phase, r_detuned, seg_r, n, detail)
 
 
-def verdict_from(r_half: float, mean_phase: float,
-                 r_detuned: float) -> tuple[str, str]:
-    """Pure verdict logic — unit-testable without audio."""
+def verdict_from(r_half: float, mean_phase: float, r_detuned: float,
+                 tempo_confirmed: bool = False) -> tuple[str, str]:
+    """Pure verdict logic — unit-testable without audio.
+
+    tempo_confirmed = an independent analyzer (MIK) agrees with the grid's
+    span BPM and the grid is internally consistent. It rescues percussion-
+    heavy tracks from the ambiguous R band, but never rescues noise-floor
+    grids (RESCUE_MIN_R) and never overrides a bad PHASE.
+    """
     phase_ok = abs(mean_phase) <= PHASE_TOL
     phase_bad = abs(mean_phase) >= PHASE_FAIL
 
+    rescue_eligible = (
+        tempo_confirmed
+        and r_half >= RESCUE_MIN_R
+        and r_half >= r_detuned * RESCUE_CONTROL_X
+    )
+
     if r_half <= FAIL_R or r_half < r_detuned * 2.0:
+        if rescue_eligible and phase_ok:
+            return "PASS", (
+                f"tempo confirmed by MIK (grid span = MIK BPM; R={r_half:.2f} "
+                f"is percussion-smeared but {r_half / max(r_detuned, 0.01):.0f}x "
+                f"its +1% control, phase {mean_phase:+.2f})")
+        if rescue_eligible and phase_bad:
+            return "FAIL", (
+                f"grid PHASE off the kicks (tempo confirmed by MIK but markers "
+                f"sit {mean_phase:+.2f} beats off — fix with --write-override)")
         return "FAIL", (
             f"grid TEMPO off the audio (R={r_half:.2f} vs +1% control "
             f"{r_detuned:.2f} — locked grids separate widely from "
             f"their detuned twin)")
-    if r_half >= PASS_R and phase_bad:
+    if phase_bad and (r_half >= PASS_R or rescue_eligible):
         return "FAIL", (
             f"grid PHASE off the kicks (tempo locked R={r_half:.2f} "
             f"but markers sit {mean_phase:+.2f} beats from the kicks "
             f"— 'floating between the transients')")
-    if r_half >= PASS_R and phase_ok:
+    if phase_ok and (r_half >= PASS_R or rescue_eligible):
+        note = ", tempo confirmed by MIK" if (rescue_eligible and r_half < PASS_R) else ""
         return "PASS", (
             f"grid locked on the audio (R={r_half:.2f}, "
-            f"phase {mean_phase:+.2f}, control {r_detuned:.2f})")
+            f"phase {mean_phase:+.2f}, control {r_detuned:.2f}{note})")
     return "WARN", (
         f"borderline (R={r_half:.2f}, phase {mean_phase:+.2f}, "
         f"control {r_detuned:.2f}) — eyeball the DETECT picture")
+
+
+def _mik_bpm(audio_path) -> float | None:
+    """MIK's independently-analyzed BPM for a track (None if unavailable)."""
+    try:
+        from automated_dj_mixes.mik_reader import read_mik_db_track
+        m = read_mik_db_track(Path(audio_path))
+        return float(m.bpm) if m and m.bpm else None
+    except Exception:
+        return None
 
 
 def enforce_beatgrid_quality(analyses, rb_matches: dict,
@@ -212,7 +284,9 @@ def enforce_beatgrid_quality(analyses, rb_matches: dict,
         rb = rb_matches.get(str(a.path))
         if rb is None:
             continue
-        c = check_grid(a.path, getattr(rb, "beat_times_ms", []) or [])
+        c = check_grid(a.path, getattr(rb, "beat_times_ms", []) or [],
+                       independent_bpm=_mik_bpm(a.path),
+                       db_bpm=getattr(rb, "bpm", None))
         checks.append(c)
         stats = f"R={c.resultant:.2f}" if c.resultant >= 0 else "-"
         print(f"  [{c.verdict:4s}] {c.track[:54]:56s} {stats:8s} {c.detail}")
@@ -258,11 +332,109 @@ def load_grid_overrides(project_dir: Path) -> dict:
 
 
 def apply_grid_override(rb_match, override: dict) -> None:
-    """Shift an RB match's beat grid in place by override['shift_ms']."""
+    """Apply a grid override in place. Two kinds:
+
+    shift_ms      — slide the existing grid (phase correction, the Todd fix)
+    replace_grid  — synthesize a whole new constant-BPM grid (the escalation
+                    for grids that are wrong beyond a slide — first case:
+                    La Trumpter, RB grid internally inconsistent, true tempo
+                    confirmed by MIK + Sam = 126.00). Fields: bpm, first_ms
+                    (grid entry 0 in ms), n_beats, first_downbeat_offset.
+    """
+    rep = override.get("replace_grid")
+    if rep:
+        bpm = float(rep["bpm"])
+        first = float(rep["first_ms"])
+        n = int(rep["n_beats"])
+        period_ms = 60000.0 / bpm
+        rb_match.beat_times_ms = [int(round(first + k * period_ms)) for k in range(n)]
+        rb_match.first_downbeat_offset = int(rep.get("first_downbeat_offset", 0))
+        rb_match.bpm = bpm
+        return
     shift = float(override.get("shift_ms", 0.0))
     if abs(shift) < 0.5 or not getattr(rb_match, "beat_times_ms", None):
         return
     rb_match.beat_times_ms = [int(round(t + shift)) for t in rb_match.beat_times_ms]
+
+
+def _fit_anchor(onsets: np.ndarray, bpm: float, duration_sec: float,
+                anchor0_sec: float) -> tuple[float, int, int, float, float]:
+    """Fit a constant-BPM grid's anchor to kick onsets (pure math).
+
+    Starting from anchor0 (e.g. the old grid's first downbeat — inherits its
+    BAR phase), iteratively zeroes the mean kick phase. Returns
+    (first_sec, n_beats, first_downbeat_offset, r_half, mean_phase) where
+    first_sec is grid entry 0 (within one beat of audio start) and
+    first_downbeat_offset marks the bar-beat-1 entry, matching the RB grid
+    convention used by the warp markers.
+    """
+    period = 60.0 / bpm
+    anchor = float(anchor0_sec)
+    first = anchor
+    n = 1
+    for _ in range(3):
+        k0 = max(0, int(anchor / period))      # whole beats between ~0 and anchor
+        first = anchor - k0 * period           # grid entry 0, in [0, period)
+        n = max(2, int((duration_sec - first) / period) + 1)
+        grid = first + np.arange(n) * period
+        r_half, mean_phase, _ = _grade(onsets, grid, period)
+        if abs(mean_phase) < 0.005:
+            break
+        anchor += mean_phase * period
+    k0 = max(0, int(round((anchor - first) / period)))
+    return first, n, k0 % 4, r_half, mean_phase
+
+
+def write_grid_replacement(project_dir: Path, wav: Path, rb_match,
+                           true_bpm: float) -> dict | None:
+    """Fit a constant true_bpm grid to the track's kicks and store it as a
+    replace_grid override. Verifies the fit with the gate before writing."""
+    import json
+    res = _kick_onsets(wav)
+    if res is None:
+        print(f"  cannot fit {wav.name}: audio load failed / too short")
+        return None
+    onsets, dur = res
+    if len(onsets) < MIN_ONSETS:
+        print(f"  cannot fit {wav.name}: only {len(onsets)} kick onsets")
+        return None
+    old_times = getattr(rb_match, "beat_times_ms", None) or []
+    old_off = getattr(rb_match, "first_downbeat_offset", 0)
+    anchor0 = (old_times[min(old_off, len(old_times) - 1)] / 1000.0
+               if old_times else float(onsets[0]))
+    first, n, dboff, r_half, mean_phase = _fit_anchor(onsets, true_bpm, dur, anchor0)
+
+    # Prove the fit before writing anything.
+    period = 60.0 / true_bpm
+    grid = first + np.arange(n) * period
+    r_fit, phase_fit, _ = _grade(onsets, grid, period)
+    detuned = grid[0] + (grid - grid[0]) * 1.01
+    r_ctrl, _, _ = _grade(onsets, detuned, period * 1.01)
+    verdict, detail = verdict_from(r_fit, phase_fit, r_ctrl, tempo_confirmed=True)
+    print(f"  fit: {true_bpm:.2f} BPM, first={first:.3f}s, {n} beats, "
+          f"downbeat offset {dboff} -> {verdict}: {detail}")
+    if verdict == "FAIL":
+        print("  NOT writing override — the fitted grid doesn't verify.")
+        return None
+
+    overrides = load_grid_overrides(project_dir)
+    overrides[wav.name] = {
+        "replace_grid": {
+            "bpm": round(true_bpm, 2),
+            "first_ms": round(first * 1000.0, 1),
+            "n_beats": int(n),
+            "first_downbeat_offset": int(dboff),
+        },
+        "fit_R": round(r_fit, 2),
+        "fit_phase": round(phase_fit, 3),
+        "reason": "RB grid unusable (internally inconsistent); constant grid "
+                  "fitted to kicks at the confirmed true BPM",
+    }
+    p = overrides_path(project_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
+    print(f"  wrote {p.name}: {wav.name} replace_grid @ {true_bpm:.2f} BPM")
+    return overrides[wav.name]
 
 
 def write_phase_override(project_dir: Path, wav: Path, rb_match) -> dict | None:
@@ -330,7 +502,8 @@ def main() -> int:
             overrides = load_grid_overrides(project_dir)
         if wav.name in overrides:
             apply_grid_override(rb, overrides[wav.name])
-        c = check_grid(wav, rb.beat_times_ms)
+        c = check_grid(wav, rb.beat_times_ms,
+                       independent_bpm=_mik_bpm(wav), db_bpm=rb.bpm)
         ov = " [override applied]" if wav.name in overrides else ""
         stats = (f"R={c.resultant:.2f} n={c.n_onsets} segs={c.seg_r}"
                  if c.resultant >= 0 else "-")

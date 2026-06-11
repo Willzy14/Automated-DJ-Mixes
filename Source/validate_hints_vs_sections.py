@@ -46,7 +46,13 @@ def _find_latest_sections_json(sections_dir: Path) -> tuple[int, Path]:
 
 
 def _bpm_lookup(project_dir: Path) -> dict[str, float]:
-    """Prefer the most-recent ARRANGEMENT_REPORT*.json for BPMs (MIK-enriched)."""
+    """Prefer the most-recent ARRANGEMENT_REPORT*.json for BPMs (MIK-enriched).
+
+    Fallback (2026-06-11): the per-track stem JSONs carry the grid-true BPM
+    the sections were detected on. Without this, a FIRST pipeline run (no
+    arrangement report yet — that's a Phase-2 artifact) found no BPMs,
+    skipped every track, and the gate PASSed having checked NOTHING.
+    """
     out: dict[str, float] = {}
     reports = sorted((project_dir / "Output").glob("ARRANGEMENT_REPORT*.json"),
                      key=lambda p: p.stat().st_mtime)
@@ -57,6 +63,15 @@ def _bpm_lookup(project_dir: Path) -> dict[str, float]:
                 out[t["name"]] = t["bpm"]
         except Exception:
             pass
+    for j in (project_dir / "_Stem Analysis").glob("SECTIONS_STEM_*.json"):
+        try:
+            d = json.loads(j.read_text(encoding="utf-8"))
+            stem = j.stem.replace("SECTIONS_STEM_", "")
+            if d.get("bpm"):
+                out.setdefault(stem, float(d["bpm"]))
+                out.setdefault(stem + ".wav", float(d["bpm"]))
+        except Exception:
+            continue
     return out
 
 
@@ -68,10 +83,22 @@ def _first_section_of(secs: list[dict], label: str) -> dict | None:
 
 
 def _expected_for_hint(hint_key: str, secs: list[dict]) -> dict | None:
-    """Return the section dict whose source_start_beats should match the hint."""
+    """Return the section dict whose source_start_beats should match the hint.
+
+    Semantics match the hint derivation (stem_detector.hints_from_stem_result):
+    first_break = the first break AFTER the first drop — tracks often carry a
+    pre-drop intro break (long kick-out before the drop) which is NOT the
+    energy-drop the hint describes (2026-06-11, Hyzteria).
+    """
     if hint_key == "first_drop_sec":
         return _first_section_of(secs, "drop")
     if hint_key == "first_break_sec":
+        first_drop = _first_section_of(secs, "drop")
+        if first_drop is not None:
+            after = [s for s in secs if _label(s) == "break"
+                     and s["source_start_beats"] > first_drop["source_start_beats"]]
+            if after:
+                return after[0]
         return _first_section_of(secs, "break")
     if hint_key == "outro_start_sec":
         return _first_section_of(secs, "outro")
@@ -149,23 +176,26 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
                 f"{hint_bar:.1f} | {sec_bar:.1f} | {diff:+.1f} | {v} |")
             rows += 1
 
-        # last_bass_drop_sec — must fall inside the outro region
+        # last_bass_drop_sec — Sam's model: the natural bass-out BEFORE the
+        # final kicks, i.e. within the 32-bar swap window leading INTO the
+        # outro (or inside it). Matches hints_from_stem_result's window.
         last_bass = hint_entry.get("last_bass_drop_sec")
         outro = _first_section_of(secs, "outro")
         if last_bass is not None and outro is not None:
             last_bar = float(last_bass) / sec_per_bar
             outro_start = outro["source_start_beats"] / 4
             outro_end = outro["source_end_beats"] / 4
-            if outro_start - 4 <= last_bar <= outro_end + 4:
+            window_lo = outro_start - 32
+            if window_lo - 4 <= last_bar <= outro_end + 4:
                 v = "✓"
-            elif outro_start - 8 <= last_bar <= outro_end + 8:
+            elif window_lo - 8 <= last_bar <= outro_end + 8:
                 v = "⚠ warn"; has_warn = True
             else:
-                v = "✗ error (outside outro region)"; has_error = True
+                v = "✗ error (outside the pre-outro swap window)"; has_error = True
             lines.append(
                 f"| {track_name[:40]} | last_bass_drop_sec | {float(last_bass):.1f} | "
-                f"{last_bar:.1f} | outro {outro_start:.1f}-{outro_end:.1f} | "
-                f"{'-' if outro_start <= last_bar <= outro_end else 'OUT'} | {v} |")
+                f"{last_bar:.1f} | window {window_lo:.1f}-{outro_end:.1f} | "
+                f"{'-' if window_lo <= last_bar <= outro_end else 'OUT'} | {v} |")
             rows += 1
 
     summary = (
@@ -178,6 +208,12 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
     out_path = sections_dir / f"HINTS_VS_SECTIONS_V{version}.md"
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
+    if rows == 0:
+        # A gate that compared nothing must not pass (2026-06-11: first runs
+        # had no ARRANGEMENT_REPORT for BPMs, every track was skipped, and
+        # "PASS" went out over zero checks).
+        return 2, ["0 checks performed — the gate compared NOTHING (hint/section "
+                   f"key pairing or BPM lookup failed). See {out_path}"], "\n".join(lines)
     if has_error:
         return 2, [f"Hints disagree with sections by >8 bars in at least one row. "
                    f"See {out_path}"], "\n".join(lines)

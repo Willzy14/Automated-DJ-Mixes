@@ -4,8 +4,16 @@ Module reference for all pipeline components.
 
 ## Modules
 
-### `Source/validate_beatgrid.py` (2026-06-11)
-Hard-stop gate: does each track's Rekordbox beat grid sit ON its audio? Whole-track kick onsets (150Hz lowpass — not mel fmax, which produces empty filters), half-beat-circle phase concentration (R) folds house offbeat-bass stabs so locked grids read high regardless of bassline; mean full-circle phase catches grids whose tempo is right but markers sit between the kicks (the Todd case). Per-track +1% detuned twin acts as a known-bad control. Calibrated on 22 tracks across the 08.06.26 + 09.06.26 projects. Wired into `--sections-layout`; `--allow-bad-grids` to override. Library: `check_grid(audio_path, beat_times_ms) -> GridCheck`, `enforce_beatgrid_quality(analyses, rb_matches, allow_bad_grids)`, `load_grid_overrides(project_dir)`, `apply_grid_override(rb_match, override)`. CLI: `python Source/validate_beatgrid.py "<project>"` table; `--write-override <substr>` measures and writes a phase correction into `<project>/Hints/grid_overrides.json` (orchestrator applies it before enrichment so warp/cuts/gate all see the corrected grid).
+### `Source/validate_beatgrid.py` (2026-06-11, v2 same day)
+Hard-stop gate: does each track's Rekordbox beat grid sit ON its audio? Whole-track kick onsets (150Hz lowpass — not mel fmax, which produces empty filters), half-beat-circle phase concentration (R) folds house offbeat-bass stabs so locked grids read high regardless of bassline; mean full-circle phase catches grids whose tempo is right but markers sit between the kicks (the Todd case). Per-track +1% detuned twin acts as a known-bad control. Calibrated on 22 tracks (08.06.26 + 09.06.26) + 12 more (11.06.26). Wired into `--sections-layout`; `--allow-bad-grids` to override.
+
+**v2 — MIK tiebreaker (11.06.26 run):** percussion-heavy genres (Latin house, gospel stabs) smear R below the absolute thresholds even on correct grids. `check_grid(..., independent_bpm, db_bpm)` + `verdict_from(..., tempo_confirmed)`: a track is rescued from the ambiguous band only when R≥0.20, ≥5× its detuned control, the grid is internally consistent (span vs RB DB ≤0.5%) AND MIK agrees with the grid span ≤0.2% AND the phase is clean. Never rescues noise-floor grids; never overrides a bad phase.
+
+**Grid overrides** (`<project>/Hints/grid_overrides.json`, applied by the orchestrator before enrichment so warp/cuts/gate all see the corrected grid):
+- `shift_ms` — phase slide (the Todd fix). Written by CLI `--write-override <substr>` (measures, composes with existing shifts).
+- `replace_grid` — full constant-grid synthesis for unusable grids (first case: La Trumpter — internally inconsistent RB grid, true 126 BPM confirmed by MIK + Sam). `_fit_anchor` kick-fits the anchor (bar-phase inherited from the old grid's downbeat); `write_grid_replacement(project, wav, rb, true_bpm)` PROVES the fit with the gate before writing — a failing fit is refused.
+
+Library: `check_grid`, `enforce_beatgrid_quality`, `load_grid_overrides`, `apply_grid_override`, `write_phase_override`, `write_grid_replacement`, `_fit_anchor`, `verdict_from` (pure). CLI: project table + `--write-override`.
 
 
 ### `Source/automated_dj_mixes/orchestrator.py`
