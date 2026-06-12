@@ -66,6 +66,9 @@ RESCUE_CONTROL_X = 5.0  # must still separate clearly from the +1% twin
 BPM_AGREE = 0.002       # MIK vs grid-span agreement (0.2%)
 SPAN_DB_TOL = 0.005     # grid-span vs RB-DB internal consistency (0.5%)
 MIN_ONSETS = 80         # fewer kick onsets whole-track = cannot judge (acapella)
+TICK_PHASE_TOL_MS = 12.0   # |grid offset vs Ableton ticks| within this = on the transients
+TICK_PHASE_FAIL_MS = 20.0  # beyond this = visibly/audibly off the transients in Live
+TICK_MIN_HITS = 64         # beats that must find a tick within ±60ms to judge phase
 N_SEGMENTS = 8          # per-segment R, reported for drift diagnosis
 KICK_CUTOFF_HZ = 150.0  # lowpass for kick isolation (NOT mel fmax — a 160Hz
                         # mel basis has empty filters and garbage onset times)
@@ -82,6 +85,8 @@ class GridCheck:
     seg_r: list[float] = field(default_factory=list)
     n_onsets: int = 0
     detail: str = ""
+    phase_src: str = "librosa-advisory"  # "ableton-ticks" when a .asd was used
+    tick_offset_ms: float = 0.0
 
 
 def _resultant(phases: np.ndarray) -> float:
@@ -207,24 +212,69 @@ def check_grid(audio_path: Path, beat_times_ms: list[int],
         and abs(span_bpm - independent_bpm) / independent_bpm <= BPM_AGREE
     )
 
-    verdict, detail = verdict_from(r_half, mean_phase, r_detuned, tempo_confirmed)
+    # Phase reference: Ableton's cached transient ticks (.asd) when present —
+    # sample-accurate and identical to what the eye sees in Live. The librosa
+    # kick-onset phase carries a track-dependent bias up to ~100ms (Latin
+    # percussion in the kick band skews the circular mean — the 11.06.26
+    # false-override bug), so without ticks phase is ADVISORY: it can colour
+    # the detail but never fails a grid and never writes an override.
+    phase_src = "librosa-advisory"
+    tick_offset_ms = 0.0
+    phase_beats = mean_phase
+    phase_tol, phase_fail, advisory = PHASE_TOL, PHASE_FAIL, True
+    try:
+        from asd_onsets import ableton_onsets_sec, grid_offset_vs_ticks
+        ticks = ableton_onsets_sec(audio_path)
+    except Exception:
+        ticks = None
+    if ticks is not None and len(ticks) >= 100:
+        off_ms, nhit, _q = grid_offset_vs_ticks(grid_sec, ticks)
+        if nhit >= TICK_MIN_HITS and not np.isnan(off_ms):
+            phase_src = "ableton-ticks"
+            tick_offset_ms = off_ms
+            phase_beats = (off_ms / 1000.0) / beat_period
+            phase_tol = (TICK_PHASE_TOL_MS / 1000.0) / beat_period
+            phase_fail = (TICK_PHASE_FAIL_MS / 1000.0) / beat_period
+            advisory = False
+            # A grid whose lines sit on Ableton's sample-accurate ticks
+            # across hundreds of beats is tempo-confirmed by an independent
+            # analyzer — rescues percussion-smeared R exactly like MIK
+            # agreement does (and works on machines without the MIK DB).
+            if abs(off_ms) <= TICK_PHASE_TOL_MS:
+                tempo_confirmed = True
+
+    verdict, detail = verdict_from(r_half, phase_beats, r_detuned, tempo_confirmed,
+                                   phase_tol=phase_tol, phase_fail=phase_fail,
+                                   phase_advisory=advisory)
+    if phase_src == "ableton-ticks":
+        detail += f" [phase {tick_offset_ms:+.1f}ms vs Ableton ticks]"
+    else:
+        detail += (f" [phase ADVISORY — no .asd ticks; librosa estimate "
+                   f"{mean_phase:+.2f} beats is bias-prone]")
     if db_bpm is not None and not internally_consistent:
         detail += (f" [grid INTERNALLY INCONSISTENT: span {span_bpm:.2f} vs "
                    f"RB DB {db_bpm:.2f}]")
-    return GridCheck(name, verdict, r_half, mean_phase, r_detuned, seg_r, n, detail)
+    return GridCheck(name, verdict, r_half, phase_beats, r_detuned, seg_r, n,
+                     detail, phase_src=phase_src, tick_offset_ms=tick_offset_ms)
 
 
 def verdict_from(r_half: float, mean_phase: float, r_detuned: float,
-                 tempo_confirmed: bool = False) -> tuple[str, str]:
+                 tempo_confirmed: bool = False,
+                 phase_tol: float = PHASE_TOL, phase_fail: float = PHASE_FAIL,
+                 phase_advisory: bool = False) -> tuple[str, str]:
     """Pure verdict logic — unit-testable without audio.
 
     tempo_confirmed = an independent analyzer (MIK) agrees with the grid's
     span BPM and the grid is internally consistent. It rescues percussion-
     heavy tracks from the ambiguous R band, but never rescues noise-floor
     grids (RESCUE_MIN_R) and never overrides a bad PHASE.
+
+    phase_advisory = the phase came from the bias-prone librosa kick-onset
+    estimate (no .asd ticks): it never fails a grid and never blocks a
+    rescue — verify visually in Live instead.
     """
-    phase_ok = abs(mean_phase) <= PHASE_TOL
-    phase_bad = abs(mean_phase) >= PHASE_FAIL
+    phase_ok = abs(mean_phase) <= phase_tol or phase_advisory
+    phase_bad = abs(mean_phase) >= phase_fail and not phase_advisory
 
     rescue_eligible = (
         tempo_confirmed
@@ -288,8 +338,10 @@ def enforce_beatgrid_quality(analyses, rb_matches: dict,
                        independent_bpm=_mik_bpm(a.path),
                        db_bpm=getattr(rb, "bpm", None))
         checks.append(c)
-        stats = f"R={c.resultant:.2f}" if c.resultant >= 0 else "-"
-        print(f"  [{c.verdict:4s}] {c.track[:54]:56s} {stats:8s} {c.detail}")
+        ph = (f" ph={c.tick_offset_ms:+.0f}ms[ticks]"
+              if c.phase_src == "ableton-ticks" else " ph=advisory")
+        stats = f"R={c.resultant:.2f}{ph}" if c.resultant >= 0 else "-"
+        print(f"  [{c.verdict:4s}] {c.track[:54]:56s} {stats:22s} {c.detail}")
     fails = [c for c in checks if c.verdict == "FAIL"]
     if fails and not allow_bad_grids:
         names = "\n".join(f"  - {c.track}: {c.detail}" for c in fails)
@@ -385,11 +437,98 @@ def _fit_anchor(onsets: np.ndarray, bpm: float, duration_sec: float,
     return first, n, k0 % 4, r_half, mean_phase
 
 
+def _fit_grid_to_ticks(ticks: np.ndarray, bpm0: float, duration_sec: float,
+                       anchor0_sec: float
+                       ) -> tuple[float, float, int, int, float, float, int]:
+    """Fit a constant grid (first + bpm) to Ableton's tick lattice.
+
+    Iteratively zeroes the median gridline→nearest-tick offset, then flattens
+    the residual slope (a slope = the BPM is slightly off). anchor0 supplies
+    the BAR phase (downbeat parity) only. Returns
+    (first_sec, bpm, n_beats, downbeat_offset, final_offset_ms, drift_ms, hits).
+    """
+    from asd_onsets import grid_offset_vs_ticks
+    period = 60.0 / bpm0
+    anchor = float(anchor0_sec)
+    first = anchor % period
+    for _ in range(8):
+        n = max(2, int((duration_sec - first) / period) + 1)
+        grid = first + np.arange(n) * period
+        idx = np.clip(np.searchsorted(ticks, grid), 1, len(ticks) - 1)
+        d_prev = grid - ticks[idx - 1]
+        d_next = ticks[idx] - grid
+        nearest = np.where(d_prev <= d_next, -d_prev, d_next) * 1000.0
+        m = np.abs(nearest) <= 60.0
+        if m.sum() < TICK_MIN_HITS:
+            break
+        med = float(np.median(nearest[m]))
+        first += med / 1000.0
+        slope = float(np.polyfit(np.arange(n)[m], nearest[m], 1)[0])  # ms/beat
+        period += slope / 1000.0
+        if abs(med) < 0.5 and abs(slope) * n < 2.0:
+            break
+    bpm = 60.0 / period
+    n = max(2, int((duration_sec - first) / period) + 1)
+    off, hits, quarts = grid_offset_vs_ticks(first + np.arange(n) * period, ticks)
+    drift = (quarts[-1] - quarts[0]) if quarts else float("nan")
+    k0 = max(0, int(round((anchor - first) / period)))
+    return first, bpm, n, k0 % 4, off, drift, hits
+
+
 def write_grid_replacement(project_dir: Path, wav: Path, rb_match,
                            true_bpm: float) -> dict | None:
-    """Fit a constant true_bpm grid to the track's kicks and store it as a
-    replace_grid override. Verifies the fit with the gate before writing."""
+    """Fit a constant grid to the track and store it as a replace_grid
+    override. Prefers Ableton's .asd transient ticks (sample-accurate, what
+    the eye sees in Live); falls back to librosa kick onsets only when no
+    .asd exists. Verifies the fit before writing."""
     import json
+
+    ticks = None
+    try:
+        from asd_onsets import ableton_onsets_sec
+        ticks = ableton_onsets_sec(wav)
+    except Exception:
+        ticks = None
+    if ticks is not None and len(ticks) >= 200:
+        import soundfile as sf
+        info = sf.info(str(wav))
+        dur = info.frames / info.samplerate
+        old_times = getattr(rb_match, "beat_times_ms", None) or []
+        old_off = getattr(rb_match, "first_downbeat_offset", 0)
+        anchor0 = (old_times[min(old_off, len(old_times) - 1)] / 1000.0
+                   if old_times else float(ticks[0]))
+        first, bpm, n, dboff, off, drift, hits = _fit_grid_to_ticks(
+            ticks, true_bpm, dur, anchor0)
+        print(f"  tick fit: {bpm:.4f} BPM, first={first:.3f}s, {n} beats, "
+              f"downbeat offset {dboff}, offset {off:+.1f}ms, "
+              f"drift {drift:+.1f}ms over {hits} beats")
+        if np.isnan(off) or abs(off) > 3.0 or abs(drift) > 10.0 or hits < 200:
+            print("  NOT writing override — the tick fit doesn't verify.")
+            return None
+        overrides = load_grid_overrides(project_dir)
+        overrides[wav.name] = {
+            "replace_grid": {
+                "bpm": round(bpm, 4),
+                "first_ms": round(first * 1000.0, 1),
+                "n_beats": int(n),
+                "first_downbeat_offset": int(dboff),
+            },
+            "fit_offset_ms": round(off, 1),
+            "fit_drift_ms": round(drift, 1),
+            "tick_hits": int(hits),
+            "phase_source": "ableton-ticks",
+            "reason": "RB grid unusable; constant grid fitted to Ableton "
+                      "transient ticks at the confirmed BPM",
+        }
+        p = overrides_path(project_dir)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
+        print(f"  wrote {p.name}: {wav.name} replace_grid @ {bpm:.4f} BPM "
+              f"(Ableton ticks)")
+        return overrides[wav.name]
+
+    print("  no .asd ticks — falling back to librosa kick fit (bias-prone; "
+          "open the track in Ableton once for a tick-accurate fit)")
     res = _kick_onsets(wav)
     if res is None:
         print(f"  cannot fit {wav.name}: audio load failed / too short")
@@ -438,31 +577,44 @@ def write_grid_replacement(project_dir: Path, wav: Path, rb_match,
 
 
 def write_phase_override(project_dir: Path, wav: Path, rb_match) -> dict | None:
-    """Measure a track's grid phase (with any existing override applied) and
-    write/merge the corrective shift into grid_overrides.json."""
+    """Measure a track's grid offset against Ableton's transient ticks (.asd)
+    and write/merge the corrective shift into grid_overrides.json.
+
+    TICK-BASED ONLY. The librosa kick-phase estimate carries track-dependent
+    bias up to ~100ms (it mis-corrected three healthy RB grids on 11.06.26,
+    the 'warping gone to shit' bug) — it is never allowed to write an
+    override. No .asd = no override: open the track in Ableton once so Live
+    writes its analysis file, then re-run.
+    """
     import json
+    from asd_onsets import ableton_onsets_sec, grid_offset_vs_ticks
     overrides = load_grid_overrides(project_dir)
     existing = float(overrides.get(wav.name, {}).get("shift_ms", 0.0))
 
-    times = [int(round(t + existing)) for t in rb_match.beat_times_ms]
-    c = check_grid(wav, times)
-    if c.resultant < 0:
-        print(f"  cannot measure {wav.name}: {c.detail}")
+    ticks = ableton_onsets_sec(wav)
+    if ticks is None or len(ticks) < 100:
+        print(f"  REFUSING override for {wav.name}: no usable .asd tick "
+              f"analysis — open the track in Ableton once, then re-run.")
         return None
-    period_ms = float(np.median(np.diff(np.asarray(times, dtype=float))))
-    add = c.mean_phase * period_ms
-    total = existing + add
+    times = np.asarray(rb_match.beat_times_ms, dtype=float) + existing
+    off, nhit, quarts = grid_offset_vs_ticks(times / 1000.0, ticks)
+    if nhit < TICK_MIN_HITS or np.isnan(off):
+        print(f"  cannot measure {wav.name}: only {nhit} beats found a tick")
+        return None
+    total = existing + off
     overrides[wav.name] = {
         "shift_ms": round(total, 1),
-        "measured_phase_beats": round(c.mean_phase, 3),
-        "tempo_R": round(c.resultant, 2),
-        "reason": "phase-correct grid to the kicks (beatgrid gate)",
+        "measured_offset_ms": round(off, 1),
+        "tick_hits": int(nhit),
+        "drift_quartiles_ms": [round(q, 1) for q in quarts],
+        "phase_source": "ableton-ticks",
+        "reason": "phase-correct grid to Ableton transient ticks (.asd)",
     }
     p = overrides_path(project_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
     print(f"  wrote {p.name}: {wav.name} shift_ms={total:+.1f} "
-          f"(was {existing:+.1f}, measured phase {c.mean_phase:+.3f} beats)")
+          f"(was {existing:+.1f}, ticks offset {off:+.1f}ms over {nhit} beats)")
     return overrides[wav.name]
 
 

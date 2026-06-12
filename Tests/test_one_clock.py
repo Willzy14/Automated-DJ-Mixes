@@ -242,3 +242,74 @@ def test_grid_mode_guards_zero_length_and_monotonic():
         if prev_end is not None:
             assert s.source_start_beats >= prev_end        # monotonic
         prev_end = s.source_end_beats
+
+
+# --- gate v3: Ableton-tick phase reference (2026-06-12 false-override bug) ---
+
+import numpy as np
+
+from validate_beatgrid import verdict_from as _vf, _fit_grid_to_ticks
+from asd_onsets import _scan_onset_array, grid_offset_vs_ticks
+
+
+def test_verdict_phase_advisory_never_fails():
+    # The exact Todd-class librosa phase reading that used to hard-FAIL must
+    # only colour the verdict when no .asd ticks exist (bias-prone estimate).
+    assert _vf(0.56, 0.15, 0.02, phase_advisory=True)[0] == "PASS"
+    # MIK rescue must not be blocked by an unverifiable phase either.
+    assert _vf(0.26, 0.30, 0.01, tempo_confirmed=True,
+               phase_advisory=True)[0] == "PASS"
+    # Tempo failures still fail regardless of phase mode.
+    assert _vf(0.14, 0.01, 0.02, phase_advisory=True)[0] == "FAIL"
+
+
+def test_verdict_tick_thresholds():
+    period = 60.0 / 126.0
+    tol = (12.0 / 1000.0) / period
+    fail = (20.0 / 1000.0) / period
+    ms = lambda v: (v / 1000.0) / period
+    # 25ms off the ticks = visibly off in Live -> FAIL even with locked tempo
+    assert _vf(0.70, ms(25), 0.02, phase_tol=tol, phase_fail=fail)[0] == "FAIL"
+    # 8ms = on the transients
+    assert _vf(0.70, ms(8), 0.02, phase_tol=tol, phase_fail=fail)[0] == "PASS"
+
+
+def test_grid_offset_vs_ticks_measures_shift():
+    period = 60.0 / 126.0
+    beats = 10.0 + np.arange(400) * period
+    # ticks = beats shifted +20ms, plus 16th-note clutter that must not bias
+    ticks = np.sort(np.concatenate([
+        beats + 0.020,
+        beats[::3] + period * 0.25,
+        beats[::5] + period * 0.5,
+    ]))
+    off, hits, _ = grid_offset_vs_ticks(beats, ticks)
+    assert hits >= 380
+    assert abs(off - 20.0) < 1.5
+
+
+def test_fit_grid_to_ticks_recovers_grid():
+    true_bpm, true_first = 126.02, 0.45
+    period = 60.0 / true_bpm
+    beats = true_first + np.arange(700) * period
+    ticks = np.sort(np.concatenate([beats, beats[::4] + period * 0.25]))
+    dur = float(beats[-1] + 1.0)
+    first, bpm, n, dboff, off, drift, hits = _fit_grid_to_ticks(
+        ticks, 126.0, dur, anchor0_sec=true_first + period)  # off-tempo start
+    assert abs(bpm - true_bpm) < 0.005
+    assert abs(off) < 1.0
+    assert abs(drift) < 3.0
+    assert dboff == 1  # bar parity inherited from the anchor
+
+
+def test_asd_onset_scanner_finds_positions_array():
+    sr, n_samples = 44100, 44100 * 300
+    period = int(sr * 60 / 126)
+    positions = (np.arange(600, dtype=np.uint64) * period + 19000).astype("<u4")
+    junk_a = np.arange(0, 5000, 7, dtype="<u4")  # overview-like, spacing 7
+    blob = (b"\x06I\xefO" + junk_a.tobytes() + b"OnSets\x00Positions"
+            + positions.tobytes() + b"\xff" * 64)
+    got = _scan_onset_array(blob, n_samples, sr)
+    assert got is not None and len(got) == 600
+    assert abs(got[0] - 19000 / sr) < 1e-6
+    assert abs(np.median(np.diff(got)) - period / sr) < 1e-6
