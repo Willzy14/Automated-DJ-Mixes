@@ -38,3 +38,14 @@ def test_different_bpms_produce_different_beat_counts():
     m2 = calculate_warp_markers(bpm=140.0, first_downbeat_sec=0.0, duration_sec=300.0)
     assert m1[1].beat_time != m2[1].beat_time
     assert m2[1].beat_time > m1[1].beat_time  # faster BPM = more beats
+
+
+def test_choose_warp_mode_never_repitches_audible_shifts():
+    # 127 vs 126 = ~14 cents if repitched — must time-stretch instead
+    # (2026-06-12: grid-true BPMs hit the old <=1.0 boundary exactly)
+    from automated_dj_mixes.warping import (
+        WARP_MODE_COMPLEX_PRO, WARP_MODE_REPITCH, choose_warp_mode,
+    )
+    assert choose_warp_mode(127.0, 126.0) == WARP_MODE_COMPLEX_PRO
+    assert choose_warp_mode(126.0033, 126.0) == WARP_MODE_REPITCH
+    assert choose_warp_mode(126.0, 126.0) == WARP_MODE_REPITCH

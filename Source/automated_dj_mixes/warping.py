@@ -23,11 +23,14 @@ class WarpMarker:
 def choose_warp_mode(track_bpm: float, project_bpm: float) -> int:
     """Choose warp mode based on BPM difference.
 
-    Repitch sounds more natural but shifts pitch with tempo.
-    Beyond ~1 BPM difference the pitch change becomes audible,
-    so switch to Complex Pro (time-stretch without pitch change).
+    Repitch sounds more natural but shifts pitch with tempo — at 1 BPM on a
+    126 track that's ~14 cents, which detunes an in-key mix (caught on the
+    2026-06-12 rebuild: grid-true 127.0000 vs project 126 selected Repitch
+    where MIK's 127.00002 had missed the old <=1.0 boundary by 2e-5). Only
+    repitch when the shift is inaudible (<0.05 BPM ~ 0.7 cents); otherwise
+    Complex Pro time-stretches without touching pitch.
     """
-    if abs(track_bpm - project_bpm) <= 1.0:
+    if abs(track_bpm - project_bpm) <= 0.05:
         return WARP_MODE_REPITCH
     return WARP_MODE_COMPLEX_PRO
 
