@@ -252,6 +252,20 @@ def run_pipeline(
         raise ValueError(f"No audio files found in {input_dir}")
     print(f"  Found {len(analyses)} tracks")
 
+    # Grid overrides apply BEFORE enrichment so the warp markers, downbeat
+    # anchor, one-clock cuts and the gate all see the corrected grid. Loaded
+    # up front because replace_grid overrides (fitted from Ableton .asd
+    # ticks) are also the RB-LESS grid source when the local Rekordbox DB
+    # doesn't know these tracks — RB/MIK DBs are machine-local and don't
+    # follow the project between Sam's machines; the .asd files do.
+    grid_overrides: dict = {}
+    apply_grid_override = None
+    try:
+        from validate_beatgrid import load_grid_overrides, apply_grid_override
+        grid_overrides = load_grid_overrides(input_dir.parent)
+    except ImportError:
+        pass
+
     # Enrich with Rekordbox phrase analysis (if available)
     rb_count = 0
     rb_matches: dict[str, object] = {}  # track path → RekordboxAnalysis (for beat grid warp)
@@ -259,28 +273,64 @@ def run_pipeline(
         from automated_dj_mixes.rekordbox_reader import read_rekordbox_library, find_rekordbox_match
         print("Reading Rekordbox library...")
         rb_library = read_rekordbox_library()
-        # Grid overrides (phase corrections from the beatgrid gate) apply
-        # BEFORE enrichment so the warp markers, downbeat anchor, one-clock
-        # cuts and the gate itself all see the corrected grid.
-        grid_overrides: dict = {}
-        try:
-            from validate_beatgrid import load_grid_overrides, apply_grid_override
-            grid_overrides = load_grid_overrides(input_dir.parent)
-        except ImportError:
-            pass
         for a in analyses:
             rb_match = find_rekordbox_match(a.path.name, rb_library)
             if rb_match and rb_match.phrases:
-                if a.path.name in grid_overrides:
-                    apply_grid_override(rb_match, grid_overrides[a.path.name])
-                    print(f"  [grid-override] {a.path.name[:50]}: shifted "
-                          f"{grid_overrides[a.path.name].get('shift_ms', 0):+.1f}ms")
+                if apply_grid_override and a.path.name in grid_overrides:
+                    ov = grid_overrides[a.path.name]
+                    apply_grid_override(rb_match, ov)
+                    kind = ("replace_grid" if ov.get("replace_grid")
+                            else f"shift {ov.get('shift_ms', 0):+.1f}ms")
+                    print(f"  [grid-override] {a.path.name[:50]}: {kind}")
                 enrich_from_rekordbox(a, rb_match)
                 rb_matches[str(a.path)] = rb_match
                 rb_count += 1
         print(f"  Rekordbox: {rb_count}/{len(analyses)} tracks enriched with phrase data")
     except Exception as e:
         print(f"  Rekordbox unavailable ({e}), using librosa analysis only")
+
+    # RB-LESS grid source: synthesize a grid carrier from a replace_grid
+    # override for any track Rekordbox didn't cover. Stem-sections mode only —
+    # these shells carry a beat grid but NO phrase data, so they must not
+    # satisfy the phrase-coverage gate for the retired RB-phrase path.
+    if stem_sections and apply_grid_override:
+        from automated_dj_mixes.rekordbox_reader import RekordboxAnalysis
+        tick_count = 0
+        for a in analyses:
+            if str(a.path) in rb_matches:
+                continue
+            ov = grid_overrides.get(a.path.name)
+            if not ov or not ov.get("replace_grid"):
+                continue
+            shell = RekordboxAnalysis(
+                file_path=str(a.path), title=a.path.stem, bpm=0.0,
+                key_name=None, mood=1, end_beat=0, phrases=[],
+                beat_times_ms=[], first_downbeat_offset=0)
+            apply_grid_override(shell, ov)
+            shell.end_beat = len(shell.beat_times_ms)
+            rb_matches[str(a.path)] = shell
+            tick_count += 1
+            print(f"  [tick-grid] {a.path.name[:50]}: "
+                  f"{ov['replace_grid']['bpm']} BPM grid from Ableton ticks")
+        if tick_count:
+            print(f"  Tick grids: {tick_count}/{len(analyses)} tracks gridded "
+                  f"from .asd-fitted overrides (RB-less)")
+
+    # The grid is the BPM AUTHORITY for every track that has one. Without
+    # this, a.bpm stays librosa's quantized lattice whenever the MIK DB is
+    # absent (machine-local) — on 2026-06-12 those lattice values matched
+    # project_bpm within 0.05 and selected Repitch, which would have
+    # detuned 7 tracks of an in-key mix. MIK enrichment may still refine
+    # a.bpm later where its DB exists.
+    from automated_dj_mixes.warping import grid_bpm_and_downbeat
+    for a in analyses:
+        rb = rb_matches.get(str(a.path))
+        if rb and len(getattr(rb, "beat_times_ms", [])) >= 8:
+            g_bpm, _ = grid_bpm_and_downbeat(
+                rb.beat_times_ms, getattr(rb, "first_downbeat_offset", 0),
+                getattr(rb, "bpm", None))
+            if g_bpm and g_bpm > 40.0:
+                a.bpm = g_bpm
 
     # HARD GATE — never silently build a mix on partial Rekordbox data
     # (see enforce_rekordbox_coverage). previews_only doesn't need RB.
