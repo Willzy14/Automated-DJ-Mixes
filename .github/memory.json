@@ -169,6 +169,22 @@
   ],
   "sessions": [
     {
+      "date": "2026-06-12 overnight",
+      "focus": "V1 warp post-mortem -> gate v3 (Ableton .asd ticks = phase ground truth) -> RB-less rebuild -> In-Key Mix V2 + automated Ableton bounce (Sam's home PC)",
+      "key_changes": [
+        "asd_onsets.py: parse Ableton's cached transient ticks (OnSets/Positions uint32) - sample-accurate phase ruler matching what Sam sees in Live",
+        "Gate v3 (validate_beatgrid): phase verdicts/overrides tick-based (12ms PASS/20ms FAIL); librosa phase advisory-only after it mis-corrected 3 healthy RB grids (~100ms track-dependent bias); tick agreement = tempo confirmation",
+        "RB-less mode: fit_grids_from_ticks.py + orchestrator [tick-grid] shells + grid-as-BPM-authority (RB/MIK DBs are machine-local; .asd syncs with the project)",
+        "choose_warp_mode: Repitch only <=0.05 BPM (was <=1.0 - grid-true BPMs would have detuned 7 tracks)",
+        "ableton_ui.py: pyautogui Live driver (DPI + virtual-origin calibrated) - in-app transition eyeball + automated Export Audio/Video bounce"
+      ],
+      "validation": "Suite 84/84; tick probe on In-Key Mix V2.als <=0.8ms every track; DETECT 12/12 + hints gate 44/44; T1/T2/T4/T10/T11 eyeballed in Live (kicks columned, swaps on bar lines); La Trumpter parity restored to validated bars -24ms (hint-diff oracle)",
+      "open_items": [
+        "SAM'S EAR on Output/In-Key Mix V2.wav (Dropbox) - the A/B against V1 validates gate v3",
+        "Backlog: variable tick-grid for Cure My Desire (+-9ms wobble); loop-aware viz; gate PASS message says 'MIK' when confirmation came from ticks; flam-probe T9 loop region on the render"
+      ]
+    },
+    {
       "date": "2026-06-11 late evening",
       "focus": "First full /mix through all the new gates -> In-Key Mix V1 (Test Mix 11.06.26, 12 fresh tracks) + gate v2 + replace_grid + vacuous-gate fix",
       "key_changes": [
