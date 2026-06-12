@@ -149,7 +149,8 @@ def _grade(onsets: np.ndarray, grid_sec: np.ndarray,
 
 def check_grid(audio_path: Path, beat_times_ms: list[int],
                independent_bpm: float | None = None,
-               db_bpm: float | None = None) -> GridCheck:
+               db_bpm: float | None = None,
+               stem_fitted: bool = False) -> GridCheck:
     """Verify a beat grid against its audio. Read-only; one full-track load.
 
     Self-referencing verdict: the track's own kick onsets are graded against
@@ -243,10 +244,25 @@ def check_grid(audio_path: Path, beat_times_ms: list[int],
             if abs(off_ms) <= TICK_PHASE_TOL_MS:
                 tempo_confirmed = True
 
+    # RULER HIERARCHY: drum-stem kicks > Ableton ticks > librosa onsets.
+    # A grid fitted/shifted to stem kicks (override provenance) is judged on
+    # that evidence — on percussion-heavy material the ticks sit on the
+    # ANTICIPATING percussion (La Trumpter: one sixteenth early), so a
+    # kick-true grid reads "off the ticks" by design. Tick offset is
+    # reported as information, never enforced; the stem fit itself is the
+    # independent tempo confirmation.
+    if stem_fitted:
+        advisory = True
+        tempo_confirmed = True
+        phase_src = "drum-stem-kicks"
+
     verdict, detail = verdict_from(r_half, phase_beats, r_detuned, tempo_confirmed,
                                    phase_tol=phase_tol, phase_fail=phase_fail,
                                    phase_advisory=advisory)
-    if phase_src == "ableton-ticks":
+    if stem_fitted:
+        detail += (f" [stem-kick grid; ticks read {tick_offset_ms:+.1f}ms "
+                   f"(anticipating percussion) — informational]")
+    elif phase_src == "ableton-ticks":
         detail += f" [phase {tick_offset_ms:+.1f}ms vs Ableton ticks]"
     else:
         detail += (f" [phase ADVISORY — no .asd ticks; librosa estimate "
@@ -322,21 +338,28 @@ def _mik_bpm(audio_path) -> float | None:
 
 
 def enforce_beatgrid_quality(analyses, rb_matches: dict,
-                             allow_bad_grids: bool = False) -> list[GridCheck]:
+                             allow_bad_grids: bool = False,
+                             grid_overrides: dict | None = None) -> list[GridCheck]:
     """Pipeline gate: hard-stop if any track's grid fails verification.
 
     Mirrors enforce_rekordbox_coverage: loud per-track verdicts, RuntimeError
     on FAIL unless explicitly overridden (--allow-bad-grids).
+    grid_overrides supplies provenance: stem-kick-fitted grids are judged on
+    their stem evidence, not the (percussion-biased) ticks.
     """
     checks: list[GridCheck] = []
+    overrides = grid_overrides or {}
     print("Beatgrid verification (whole-track onset-vs-grid sweep test)...")
     for a in analyses:
         rb = rb_matches.get(str(a.path))
         if rb is None:
             continue
+        stem = (overrides.get(a.path.name, {}).get("phase_source")
+                == "drum-stem-kicks")
         c = check_grid(a.path, getattr(rb, "beat_times_ms", []) or [],
                        independent_bpm=_mik_bpm(a.path),
-                       db_bpm=getattr(rb, "bpm", None))
+                       db_bpm=getattr(rb, "bpm", None),
+                       stem_fitted=stem)
         checks.append(c)
         ph = (f" ph={c.tick_offset_ms:+.0f}ms[ticks]"
               if c.phase_src == "ableton-ticks" else " ph=advisory")

@@ -348,7 +348,8 @@ def run_pipeline(
             print(f"  WARNING: beatgrid gate unavailable ({e}) — proceeding unchecked")
         else:
             enforce_beatgrid_quality(analyses, rb_matches,
-                                     allow_bad_grids=allow_bad_grids)
+                                     allow_bad_grids=allow_bad_grids,
+                                     grid_overrides=grid_overrides)
 
     # Enrich with Mixed In Key 11 data — cue points (highest-confidence
     # structural signal) AND key/BPM from the MIK SQLite DB (critical for
