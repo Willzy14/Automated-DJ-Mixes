@@ -258,7 +258,7 @@ def check_grid(audio_path: Path, beat_times_ms: list[int],
 
     verdict, detail = verdict_from(r_half, phase_beats, r_detuned, tempo_confirmed,
                                    phase_tol=phase_tol, phase_fail=phase_fail,
-                                   phase_advisory=advisory)
+                                   phase_advisory=advisory, stem_fitted=stem_fitted)
     if stem_fitted:
         detail += (f" [stem-kick grid; ticks read {tick_offset_ms:+.1f}ms "
                    f"(anticipating percussion) — informational]")
@@ -277,7 +277,7 @@ def check_grid(audio_path: Path, beat_times_ms: list[int],
 def verdict_from(r_half: float, mean_phase: float, r_detuned: float,
                  tempo_confirmed: bool = False,
                  phase_tol: float = PHASE_TOL, phase_fail: float = PHASE_FAIL,
-                 phase_advisory: bool = False) -> tuple[str, str]:
+                 phase_advisory: bool = False, stem_fitted: bool = False) -> tuple[str, str]:
     """Pure verdict logic — unit-testable without audio.
 
     tempo_confirmed = an independent analyzer (MIK) agrees with the grid's
@@ -285,12 +285,28 @@ def verdict_from(r_half: float, mean_phase: float, r_detuned: float,
     heavy tracks from the ambiguous R band, but never rescues noise-floor
     grids (RESCUE_MIN_R) and never overrides a bad PHASE.
 
+    stem_fitted = the grid was built directly FROM the drum-stem kicks and the
+    upstream detector already verified it sits on them (its own grid_vs_kick
+    gate rejects >15ms as JIT before the grid is ever injected). The whole-mix
+    librosa R test is the WRONG ruler for such a grid — it collapses to the
+    noise floor (R~0.01) on percussion-heavy house even when the grid sits
+    0.3ms on the kicks — so R is bypassed entirely. Phase is advisory (the
+    detector owns downbeat); tempo is confirmed by the stem fit itself.
+
     phase_advisory = the phase came from the bias-prone librosa kick-onset
     estimate (no .asd ticks): it never fails a grid and never blocks a
     rescue — verify visually in Live instead.
     """
     phase_ok = abs(mean_phase) <= phase_tol or phase_advisory
     phase_bad = abs(mean_phase) >= phase_fail and not phase_advisory
+
+    if stem_fitted:
+        # Judged on the stem fit, not the whole-mix R (see docstring). Phase is
+        # advisory for stem grids, so phase_bad is False here by construction.
+        return "PASS", (
+            f"stem-kick grid — tempo from the drum-stem kicks (whole-mix R={r_half:.2f} "
+            f"is not the ruler for a kick-fitted grid; the detector's grid_vs_kick "
+            f"gate already verified it sits on the transients)")
 
     rescue_eligible = (
         tempo_confirmed

@@ -204,6 +204,19 @@ def run_pipeline(
 
     config = load_config(config_path or project_root / "Config" / "settings.json")
 
+    # --stem-grid is only one-clock-safe on the stem-section cut path
+    # (segments_from_stem_sections -> sec_to_clip_beats reads the injected grid). The
+    # RB-phrase cut path uses extract_track_features, whose disk cache key omits the
+    # beat grid — so cuts could be computed on a stale RB grid while audio warps to the
+    # stem grid (two clocks ~1% apart = the bug the one-clock rule forbids). Require
+    # --stem-sections so the safe cut path is the one that runs.
+    if stem_grid and not previews_only and not (sections_layout and stem_sections):
+        raise RuntimeError(
+            "--stem-grid requires --sections-layout --stem-sections (the one-clock-safe "
+            "cut path). Without it, section cuts read grid-unaware cached features while "
+            "audio warps to the stem grid — a two-clock split. Add both flags, or drop "
+            "--stem-grid to use the Rekordbox/.asd grid.")
+
     # ------------------------------------------------------------------
     # Master-file gate — refuse to feed stems, freezes, or raw audio into
     # the pipeline.  Only mastered WAVs belong here:
@@ -379,6 +392,15 @@ def run_pipeline(
                     beat_times_ms=bg.beat_times_ms,
                     first_downbeat_offset=bg.first_downbeat_offset)
                 note = " — no RB; stem-grid sole source"
+            # Tell the beatgrid gate this grid is STEM-derived (built FROM the kicks):
+            # without provenance the gate judges it by the librosa whole-mix R test,
+            # which smears on percussion-heavy house and FALSE-FAILS perfect grids
+            # (10/35 corpus tracks hard-stop, universally where R < the rescue floor).
+            # stem_fitted=True makes the gate judge tempo confirmed + phase advisory.
+            grid_overrides.setdefault(a.path.name, {})["phase_source"] = "drum-stem-kicks"
+            # Keep the downbeat clock single: a.first_downbeat_sec was set from the RB/
+            # librosa grid earlier; realign it to OUR grid so no later reader can split it.
+            a.first_downbeat_sec = bg.beat_times_ms[bg.first_downbeat_offset] / 1000.0
             n_stem += 1
             flag_s = f" [{bg.flag}]" if bg.flag else ""
             print(f"  [stem-grid] {a.path.name[:46]}: {bg.bpm}bpm, "

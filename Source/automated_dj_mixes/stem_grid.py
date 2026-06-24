@@ -161,13 +161,23 @@ def build_grid(kicks: np.ndarray, period: float) -> tuple[np.ndarray, np.ndarray
     return grid, aidx.astype(float), atim
 
 
+SNARE_CONTRAST = 1.25      # min parity-pair energy ratio to trust the snare backbeat
+
+
 def find_downbeat(grid: np.ndarray, aidx: np.ndarray, snares: np.ndarray,
                   period: float) -> tuple[int, float, str]:
     """Fuse the two cues: the SNARE backbeat (on 2 & 4) narrows the downbeat to the
     two non-backbeat phases; the DROP-ENTRY kicks (first anchor after a >=3-beat gap,
-    which land on beat 1) pick between them. Returns (phase 0-3, agreement, method)."""
+    which land on beat 1) pick between them. Returns (phase 0-3, agreement, method).
+
+    The backbeat is always a PARITY PAIR — beats 2 & 4 are two beats apart, so they
+    share parity: {1,3} (=> downbeat even) or {0,2} (=> downbeat odd). We only trust
+    the snare veto when one parity CLEARLY dominates (ratio >= SNARE_CONTRAST). A flat
+    snare histogram (hats/perc firing on every beat) must NOT manufacture a veto — that
+    was the bug that silently inverted a confident downbeat by one beat (the snares-on-
+    all-four-beats clash Sam heard in V3). When the snare and entry cues CONFLICT, the
+    agreement is forced low so DB? fires and the pipeline can fall back."""
     gstart = int(aidx[0])
-    # snare beat-phase histogram (only snares that sit on a gridline)
     back = None
     if len(snares) > 8:
         pos = np.clip(np.searchsorted(grid, snares), 1, len(grid) - 1)
@@ -176,18 +186,32 @@ def find_downbeat(grid: np.ndarray, aidx: np.ndarray, snares: np.ndarray,
         on = dist < 0.20 * period
         sp = ((gstart + nearest_j[on]) % 4).astype(int)
         if len(sp) > 8:
-            c = np.bincount(sp, minlength=4)
-            back = set(np.argsort(c)[-2:])              # two phases the snare lands on = 2 & 4
+            c = np.bincount(sp, minlength=4).astype(float)
+            even, odd = c[0] + c[2], c[1] + c[3]        # backbeat is a PARITY pair
+            if max(even, odd) >= SNARE_CONTRAST * (min(even, odd) + 1e-9):
+                back = {1, 3} if odd > even else {0, 2}  # only veto when genuinely bimodal
     # drop-entry kicks land on beat 1
     entries = [int(aidx[a] % 4) for a in range(1, len(aidx)) if aidx[a] - aidx[a - 1] >= 3]
-    cands = [p for p in range(4) if back is None or p not in back]  # non-backbeat phases
     if entries:
-        votes = [e for e in entries if e in cands] or entries
-        vals, counts = np.unique(votes, return_counts=True)
-        d = int(vals[np.argmax(counts)]); agree = float(counts.max() / len(votes))
-        method = "snare+entry" if back is not None else "entry"
-    elif back is not None and cands:
-        d = cands[0]; agree = 0.5; method = "snare-only"
+        vals, counts = np.unique(entries, return_counts=True)
+        raw_winner = int(vals[np.argmax(counts)])
+        raw_agree = float(counts.max() / len(entries))   # agreement on the FULL vote, pre-veto
+        if back is not None:
+            cands = [p for p in range(4) if p not in back]
+            in_cands = [e for e in entries if e in cands]
+            if in_cands:
+                v2, c2 = np.unique(in_cands, return_counts=True)
+                d = int(v2[np.argmax(c2)])
+            else:
+                d = cands[0]
+            if d != raw_winner:                          # snare veto overruled the entry plurality
+                agree = min(raw_agree, 0.5); method = "snare!=entry"   # cues CONFLICT -> DB?
+            else:
+                agree = raw_agree; method = "snare+entry"
+        else:
+            d = raw_winner; agree = raw_agree; method = "entry"
+    elif back is not None:
+        d = [p for p in range(4) if p not in back][0]; agree = 0.5; method = "snare-only"
     else:
         d = int(aidx[0] % 4); agree = 0.0; method = "weak"
     return d, agree, method
@@ -205,10 +229,21 @@ def extrapolate_grid(grid: np.ndarray, duration_sec: float) -> tuple[np.ndarray,
     as Rekordbox does. Returns (full_grid, n_added_before) so the downbeat offset
     can be shifted by the beats prepended at the front."""
     g = list(map(float, grid))
+    if len(g) < 2:                                   # degenerate: can't infer an interval
+        raise ValueError("grid too short to extrapolate (<2 beats)")
+    # the spline can undershoot a few ms below 0 at the first anchor -> a negative
+    # first beat = an invalid SecTime (before the clip head). Floor the negative head
+    # to an even ramp up from 0 so warp markers stay >= 0 and strictly increasing.
+    ga = np.asarray(g, float)
+    if ga[0] < 0.0:
+        first_pos = int(np.argmax(ga > 0.0))
+        if first_pos > 0:
+            ga[:first_pos] = np.linspace(0.0, ga[first_pos], first_pos, endpoint=False)
+        g = list(ga)
     head_iv = float(np.median(np.diff(g[:9]))) if len(g) >= 3 else (g[1] - g[0])
     tail_iv = float(np.median(np.diff(g[-9:]))) if len(g) >= 3 else (g[-1] - g[-2])
     added_before = 0
-    while g[0] - head_iv > 0.0:
+    while g[0] - head_iv >= 0.0:                      # clamp at >= 0 — no negative SecTime in the ALS
         g.insert(0, g[0] - head_iv)
         added_before += 1
     while g[-1] + tail_iv < duration_sec:
@@ -241,6 +276,9 @@ def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
         from probe_stem_kick_grid import stem_audio
         drums, _bass, sr = stem_audio(Path(wav))
     sr = int(sr or 44100)
+    if drums is None or len(drums) < sr:             # < 1s of audio: degenerate input
+        raise ValueError(f"drum stem too short for {Path(wav).name} "
+                         f"({0 if drums is None else len(drums)} samples) — fall back to the .asd/RB ruler")
     duration_sec = len(drums) / sr
     kicks = refine_to_click(drums, sr, band_onsets(drums, sr, 0, 150, 0.25))
     snares = band_onsets(drums, sr, 200, 3000, 0.18)
