@@ -27,8 +27,7 @@ CLICK_HP = float(os.environ.get("CLICK_HP", "1500"))         # transient band hi
 ROOT = Path(__file__).parents[2]          # Source/automated_dj_mixes/stem_grid.py -> root
 PROJ = Path(os.environ["STEMGRID_PROJ"]) if os.environ.get("STEMGRID_PROJ") else (ROOT / "Test Project" / "23.06.26")
 AUDIO = PROJ / "Audio"
-OUT = PROJ / "_Bakeoff"
-OUT.mkdir(parents=True, exist_ok=True)
+OUT = PROJ / "_Bakeoff"                      # bake-off scratch; created lazily by the CLI builders
 GRID_CACHE = OUT / "stem_grid_cache.json"
 sys.path.insert(0, str(ROOT / "Source"))   # for sibling imports when run as a script
 
@@ -271,6 +270,7 @@ def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
 def main_build() -> None:
     """Detect grids. Reuses cached kick/snare onsets (the slow Demucs pass) so the
     grid algorithm can be re-iterated instantly; only re-separates if onsets absent."""
+    OUT.mkdir(parents=True, exist_ok=True)
     cache = json.loads(GRID_CACHE.read_text()) if GRID_CACHE.exists() else {}
     redetect = "--redetect" in sys.argv
     retune = "--retune" in sys.argv                  # re-detect from cached stems, NO Demucs

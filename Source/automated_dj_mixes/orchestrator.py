@@ -196,6 +196,7 @@ def run_pipeline(
     allow_bad_grids: bool = False,
     allow_non_master: bool = False,
     stem_sections: bool = False,
+    stem_grid: bool = False,
     track_order: list[str] | None = None,
 ) -> Path | None:
     if project_root is None:
@@ -324,6 +325,67 @@ def run_pipeline(
         if tick_count:
             print(f"  Tick grids: {tick_count}/{len(analyses)} tracks gridded "
                   f"from .asd-fitted overrides (RB-less)")
+
+    # OUR-OWN-GRID source: replace the Rekordbox beat grid with the stem-kick
+    # detector (Source/automated_dj_mixes/stem_grid.py). Injected into rb_matches
+    # here — BEFORE the BPM-authority loop, the beatgrid gate, the warp loop and
+    # the section-cut path — so every grid consumer reads ONE grid object per
+    # track and the one-clock invariant holds by construction.
+    #   - confident grid (flag "") -> stem-grid is authority; RB is an advisory
+    #     cross-check, and the kicks arbitrate disagreements (we've caught RB
+    #     locking the wrong tempo on house — project-warp-beatgrid-bug).
+    #   - weak/syncopated (LOWC/JIT) -> keep RB if present (the kick path is
+    #     unreliable there); else use ours with a warning.
+    # Separates its own drum stem (GPU Demucs); the Phase-1a reuse is a TODO.
+    if stem_grid and not previews_only:
+        from automated_dj_mixes.stem_grid import detect_beat_grid
+        from automated_dj_mixes.rekordbox_reader import RekordboxAnalysis
+        import numpy as _np
+        def _disagree_ms(a_ms, b_ms):
+            a = _np.asarray(a_ms, float); b = _np.sort(_np.asarray(b_ms, float))
+            idx = _np.clip(_np.searchsorted(b, a), 1, len(b) - 1)
+            near = _np.where(_np.abs(a - b[idx - 1]) <= _np.abs(a - b[idx]), b[idx - 1], b[idx])
+            res = _np.abs(a - near)
+            res = res[res <= _np.median(_np.diff(b)) / 2]
+            return float(_np.median(res)) if len(res) else float("nan")
+        n_stem = 0
+        for a in analyses:
+            try:
+                bg = detect_beat_grid(a.path)
+            except Exception as e:
+                print(f"  [stem-grid] {a.path.name[:46]}: detection failed "
+                      f"({type(e).__name__}) — keeping existing grid")
+                continue
+            existing = rb_matches.get(str(a.path))
+            has_rb = existing is not None and len(getattr(existing, "beat_times_ms", [])) >= 8
+            if bg.flag in ("LOWC", "JIT") and has_rb:
+                print(f"  [stem-grid] {a.path.name[:46]}: flagged {bg.flag} "
+                      f"({bg.grid_vs_kick_ms}ms on kicks) — keeping RB grid")
+                continue
+            note = ""
+            if has_rb:
+                dis = _disagree_ms(bg.beat_times_ms, existing.beat_times_ms)
+                note = (f" — OVERRIDES RB (disagree {dis:.0f}ms; we sit {bg.grid_vs_kick_ms}ms "
+                        f"on the kicks)" if not _np.isnan(dis) and dis > 25
+                        else f" — agrees w/ RB ({dis:.0f}ms)")
+                existing.beat_times_ms = bg.beat_times_ms
+                existing.first_downbeat_offset = bg.first_downbeat_offset
+                existing.bpm = bg.bpm
+                existing.end_beat = len(bg.beat_times_ms)
+            else:
+                rb_matches[str(a.path)] = RekordboxAnalysis(
+                    file_path=str(a.path), title=a.path.stem, bpm=bg.bpm,
+                    key_name=None, mood=1, end_beat=len(bg.beat_times_ms), phrases=[],
+                    beat_times_ms=bg.beat_times_ms,
+                    first_downbeat_offset=bg.first_downbeat_offset)
+                note = " — no RB; stem-grid sole source"
+            n_stem += 1
+            flag_s = f" [{bg.flag}]" if bg.flag else ""
+            print(f"  [stem-grid] {a.path.name[:46]}: {bg.bpm}bpm, "
+                  f"{bg.grid_vs_kick_ms}ms on kicks{flag_s}{note}")
+        if n_stem:
+            print(f"  Stem-grid: {n_stem}/{len(analyses)} tracks gridded from our own "
+                  f"kick detector (RB demoted to cross-check)")
 
     # The grid is the BPM AUTHORITY for every track that has one. Without
     # this, a.bpm stays librosa's quantized lattice whenever the MIK DB is
@@ -519,7 +581,11 @@ def run_pipeline(
         mode = choose_warp_mode(a.bpm, project_bpm)
         warp_modes.append(mode)
         mode_name = "Repitch" if mode == 6 else "Complex Pro"
-        warp_src = f"RB grid ({len(markers)} markers)" if rb_match and hasattr(rb_match, "beat_times_ms") and len(rb_match.beat_times_ms) >= 8 else "2-marker linear"
+        if rb_match and hasattr(rb_match, "beat_times_ms") and len(rb_match.beat_times_ms) >= 8:
+            grid_label = "stem-grid" if (stem_grid and not getattr(rb_match, "phrases", None)) else "beat grid"
+            warp_src = f"{grid_label} ({len(markers)} markers)"
+        else:
+            warp_src = "2-marker linear"
         print(f"  {a.path.name}: {mode_name}, {warp_src}")
     if rb_warp_count:
         print(f"  Beat grid warp: {rb_warp_count}/{len(ordered_analyses)} tracks using Rekordbox grid")
@@ -730,6 +796,12 @@ def main():
                              "(Source/stem_detector.py) as the section source instead of "
                              "Rekordbox phrases. Analysis-only; envelope cache makes re-runs "
                              "on known tracks instant.")
+    parser.add_argument("--stem-grid", action="store_true",
+                        help="Use our own stem-kick beat detector "
+                             "(automated_dj_mixes.stem_grid) as the beat-grid source instead "
+                             "of Rekordbox. Confident grids become authority (RB demoted to "
+                             "an advisory cross-check, kicks arbitrate); weak/syncopated "
+                             "tracks keep RB. Separates its own drum stem (GPU Demucs).")
     parser.add_argument("--order", type=str, default=None,
                         help="Manual track order override (testing). Comma-separated, case-"
                              "insensitive substrings of filenames, e.g. \"Samm,Call Me,Crusy\". "
@@ -748,6 +820,7 @@ def main():
         allow_bad_grids=args.allow_bad_grids,
         allow_non_master=args.allow_non_master,
         stem_sections=args.stem_sections,
+        stem_grid=args.stem_grid,
         track_order=[k.strip() for k in args.order.split(",")] if args.order else None,
     )
     if als_path is not None:
