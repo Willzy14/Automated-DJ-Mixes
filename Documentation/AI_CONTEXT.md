@@ -80,7 +80,12 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-**Four-phase mix pipeline operational. Stem-kick beat detector (our own IP) now WIRED INTO the pipeline via `--stem-grid`, adversarially verified, drop-in for the Rekordbox grid. Beat grids previously from .asd ticks (gate v3).**
+**Four-phase mix pipeline operational. Stem-kick beat detector (our own IP) WIRED INTO the pipeline via `--stem-grid` — self-sufficient (own broadband transient timing, matches Ableton ~1ms, no .asd/RB needed), adversarially verified, gate-guarded. ⚠ OPEN BLOCKER: the arrangement/automation LOOP layer corrupts the mix downstream — see Known Issues.**
+
+**⚠ OPEN BLOCKER (end of 2026-06-24, Sam's Ableton eyeball on In-Key Mix V4):** the grids are good (Mr V base warp = smooth 124bpm) but the mix is wrong downstream — **big loops (`apply_loops` cloning 22× / 15× clips) drift the per-clip shift so sections + automation walk out of place**. NOT the detector — the loop layer. Park + fix tomorrow: (1) trace `apply_loops` shift math on big loops; (2) **cap loop length** (no 88-bar tail loops — bug magnet + musically wrong); (3) re-check automation targets post-loop beats; (4) **open the .als in Ableton before calling done.** Process gap: the Phase-4 FULL transition pictures render SOURCE envelopes at arrangement positions, NOT the actual warped output / cloned loop clips — so they can't catch warp/section/loop placement. Only the Ableton eyeball does. Fix the review step.
+
+**As of 2026-06-24 PM (STEM-KICK DETECTOR → PIPELINE-READY + ADVERSARIALLY VERIFIED):**
+- **Timing self-sufficient + gate-guarded:** `detect_transients()` (spectral flux on stem ∪ full mix = Ableton's method) refines per-beat timing to ~1ms vs Ableton with NO `.asd` (snaps to `.asd` when present for 0ms). 3 gate holes closed (commit 24a0b89): JIT fires post-snap on kf>15; the beatgrid gate FAILs stem grids with grid_vs_kick>15ms (no more blanket stem_fitted pass); no-RB JIT tracks hard-stop. `Tests/test_beatgrid_stem_gate.py`. First two real-mix casualties: Afro/Latin (Izinque) + jackin' (Natural High) correctly excluded — detector validated on clean 4-to-floor house only.
 
 **As of 2026-06-24 PM (STEM-KICK DETECTOR → PIPELINE-READY + ADVERSARIALLY VERIFIED):**
 - **Detector now in the package: `Source/automated_dj_mixes/stem_grid.py`** (committed; the `_Bakeoff` copy was scratch). Algorithm (Sam+Claude): kick onsets (sub <150Hz) + snare onsets (200–3kHz) from the Demucs drum stem → period histogram → smooth UnivariateSpline grid (NOT raw onsets — the warp-jitter fix) → downbeat fusion. Sam's "sub locates, click times": `refine_to_click()` snaps to the >1.5kHz beater transient.
