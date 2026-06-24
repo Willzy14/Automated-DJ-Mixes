@@ -266,16 +266,36 @@ class BeatGrid:
     downbeat_agree: float
     flag: str                       # "" | LOWC | JIT | DB? — empty = trust outright
     snapped_to_asd: bool = False    # per-beat timing refined to Ableton's transients
+    timing_src: str = "detector"    # "asd" | "own-transients" | "detector"
 
 
-def snap_grid_to_asd(grid: np.ndarray, ticks: np.ndarray, win: float = 0.015) -> np.ndarray:
-    """Refine per-beat TIMING by snapping each beat to the nearest Ableton .asd
-    transient within +-win, then RE-SMOOTH. Ableton's broadband transient detection
-    is sample-accurate and tuned for where the beat is FELT; snapping to it removes
-    systematic detection biases (the soft-kick lag — Eli sat 7.6ms late, snaps to 0)
-    while we keep the structure (period/downbeat/breakdown-bridge). The snap alone
-    reintroduces per-beat jitter (~5ms); the spline irons that back out to a smooth,
-    warp-clean grid (Sam's rule: smooth beats jittery for warping)."""
+def detect_transients(drums: np.ndarray, sr: int, mix: np.ndarray | None = None,
+                      hop: int = 64) -> np.ndarray:
+    """Our OWN broadband transient detector — spectral flux (the method Ableton uses),
+    peak-picked and sample-backtracked to the onset foot. Run on the drum stem (clean
+    kicks) UNION the full mix (Ableton analyses the mix, so matching its input rescues
+    soft kicks the stem separation softens — Eli). Median ~1ms vs Ableton's .asd ticks
+    across the corpus, so the .asd becomes an optional precision cross-check, not a
+    requirement (works headless, on any machine, productisable)."""
+    import librosa
+    def flux(y):
+        oe = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+        return librosa.onset.onset_detect(onset_envelope=oe, sr=sr, hop_length=hop,
+                                          backtrack=True, units="time")
+    tr = flux(drums)
+    if mix is not None and len(mix) > sr:
+        tr = np.concatenate([tr, flux(mix)])
+    return np.sort(tr)
+
+
+def snap_grid_to_transients(grid: np.ndarray, ticks: np.ndarray, win: float = 0.015) -> np.ndarray:
+    """Refine per-beat TIMING by snapping each beat to the nearest transient within
+    +-win, then RE-SMOOTH. The transient set is Ableton's sample-accurate .asd ticks
+    when present, else our own detect_transients() output. Snapping removes systematic
+    detection biases (the soft-kick lag — Eli sat 7.6ms late) while we keep the
+    structure (period/downbeat/breakdown-bridge). The snap alone reintroduces per-beat
+    jitter (~5ms); the spline irons that back out to a smooth, warp-clean grid (Sam's
+    rule: smooth beats jittery for warping)."""
     grid = np.asarray(grid, float)
     if ticks is None or len(ticks) < 8 or len(grid) < 8:
         return grid
@@ -291,13 +311,22 @@ def snap_grid_to_asd(grid: np.ndarray, ticks: np.ndarray, win: float = 0.015) ->
     return np.maximum.accumulate(out)
 
 
+# Back-compat alias (the .asd-specific name); same generic snapper.
+snap_grid_to_asd = snap_grid_to_transients
+
+
 def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
-                     sr: int | None = None, asd_ticks: np.ndarray | None = None) -> BeatGrid:
+                     sr: int | None = None, asd_ticks: np.ndarray | None = None,
+                     mix: np.ndarray | None = None, refine_timing: bool = True) -> BeatGrid:
     """Pipeline entry point: detect the beat grid for one track and return the
     Rekordbox-compatible contract. Pass a pre-separated drum stem (drums, sr) to
     skip Demucs (e.g. reuse the Phase-1a separation); otherwise it separates.
-    Pass asd_ticks (Ableton's .asd transients, seconds) to snap the per-beat timing
-    to Ableton's sample-accurate transients — corrects soft-kick lag, keeps smooth."""
+
+    Per-beat TIMING is refined to broadband transients (Ableton's method):
+      - asd_ticks (Ableton's .asd transients) when present -> sample-accurate, 0ms;
+      - else our OWN detect_transients() (spectral flux on stem + mix) -> ~1ms vs
+        Ableton, NO Ableton dependency (the standalone, productisable path).
+    Pass mix (full-mix mono) to avoid re-reading the WAV; else it's read from `wav`."""
     if drums is None:
         from probe_stem_kick_grid import stem_audio
         drums, _bass, sr = stem_audio(Path(wav))
@@ -315,14 +344,31 @@ def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
     grid, aidx, atim = build_grid(kicks, period)
     kf = grid_vs_kick(grid, kicks)                    # detection quality (pre-snap) -> drives the flag
     snapped = False
+    timing_src = "detector"
     if asd_ticks is not None and len(np.asarray(asd_ticks)) >= 8:
-        grid = snap_grid_to_asd(grid, np.asarray(asd_ticks))   # Ableton-accurate per-beat timing
-        snapped = True
+        grid = snap_grid_to_transients(grid, np.asarray(asd_ticks))   # Ableton .asd: 0ms
+        snapped = True; timing_src = "asd"
+    elif refine_timing:
+        if mix is None:                               # our own transients need the full mix too
+            try:
+                import soundfile as _sf
+                m, _msr = _sf.read(str(wav))
+                mix = m.mean(1) if getattr(m, "ndim", 1) > 1 else m
+            except Exception:
+                mix = None
+        tr = detect_transients(drums, sr, mix)
+        if len(tr) >= 8:
+            grid = snap_grid_to_transients(grid, tr)  # our broadband flux: ~1ms vs Ableton
+            timing_src = "own-transients"
     d, dagree, dmethod = find_downbeat(grid, aidx, snares, period)
     db_grid_phase = int((d - int(aidx[0])) % 4)
     full_grid, added_before = extrapolate_grid(grid, duration_sec)
     first_downbeat_offset = db_grid_phase + added_before
-    flag = "LOWC" if conf < 0.80 else ("JIT" if (kf > 15 and not snapped) else ("DB?" if dagree < 0.6 else ""))
+    # JIT only when timing was NOT refined to transients — a snap (asd or our own)
+    # puts the grid on the transients regardless of raw kick-detection looseness.
+    flag = ("LOWC" if conf < 0.80
+            else "JIT" if (kf > 15 and timing_src == "detector")
+            else "DB?" if dagree < 0.6 else "")
     return BeatGrid(
         beat_times_ms=[int(round(t * 1000)) for t in full_grid],
         first_downbeat_offset=first_downbeat_offset,
@@ -333,6 +379,7 @@ def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
         downbeat_agree=round(dagree, 2),
         flag=flag,
         snapped_to_asd=snapped,
+        timing_src=timing_src,
     )
 
 

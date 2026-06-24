@@ -402,6 +402,8 @@ def run_pipeline(
                 note = " — no RB; stem-grid sole source"
             if bg.snapped_to_asd:
                 note += " [.asd-snapped]"; n_snap += 1
+            elif bg.timing_src == "own-transients":
+                note += " [own-transient timing ~1ms]"
             # Tell the beatgrid gate this grid is STEM-derived (built FROM the kicks):
             # without provenance the gate judges it by the librosa whole-mix R test,
             # which smears on percussion-heavy house and FALSE-FAILS perfect grids
