@@ -347,12 +347,19 @@ def run_pipeline(
     #   - confident grid (flag "") -> stem-grid is authority; RB is an advisory
     #     cross-check, and the kicks arbitrate disagreements (we've caught RB
     #     locking the wrong tempo on house — project-warp-beatgrid-bug).
-    #   - weak/syncopated (LOWC/JIT) -> keep RB if present (the kick path is
-    #     unreliable there); else use ours with a warning.
+    #   - per-beat TIMING is snapped to Ableton's .asd transients where present
+    #     (sample-accurate, fixes soft-kick lag — Eli sat 7.6ms late, snaps to 0);
+    #     our detector keeps the structure, Ableton refines the timing.
+    #   - weak/syncopated (LOWC/JIT) with NO .asd to rescue timing -> fall back to
+    #     RB only as a last resort; RB is never PREFERRED over our (snapped) grid.
     # Separates its own drum stem (GPU Demucs); the Phase-1a reuse is a TODO.
     if stem_grid and not previews_only:
         from automated_dj_mixes.stem_grid import detect_beat_grid
         from automated_dj_mixes.rekordbox_reader import RekordboxAnalysis
+        try:
+            from asd_onsets import ableton_onsets_sec
+        except ImportError:
+            ableton_onsets_sec = lambda _p: None
         import numpy as _np
         def _disagree_ms(a_ms, b_ms):
             a = _np.asarray(a_ms, float); b = _np.sort(_np.asarray(b_ms, float))
@@ -361,19 +368,20 @@ def run_pipeline(
             res = _np.abs(a - near)
             res = res[res <= _np.median(_np.diff(b)) / 2]
             return float(_np.median(res)) if len(res) else float("nan")
-        n_stem = 0
+        n_stem = n_snap = 0
         for a in analyses:
             try:
-                bg = detect_beat_grid(a.path)
+                ticks = ableton_onsets_sec(a.path)       # Ableton's transients if analysed
+                bg = detect_beat_grid(a.path, asd_ticks=ticks)
             except Exception as e:
                 print(f"  [stem-grid] {a.path.name[:46]}: detection failed "
                       f"({type(e).__name__}) — keeping existing grid")
                 continue
             existing = rb_matches.get(str(a.path))
             has_rb = existing is not None and len(getattr(existing, "beat_times_ms", [])) >= 8
-            if bg.flag in ("LOWC", "JIT") and has_rb:
-                print(f"  [stem-grid] {a.path.name[:46]}: flagged {bg.flag} "
-                      f"({bg.grid_vs_kick_ms}ms on kicks) — keeping RB grid")
+            if bg.flag in ("LOWC", "JIT") and not bg.snapped_to_asd and has_rb:
+                print(f"  [stem-grid] {a.path.name[:46]}: flagged {bg.flag}, no .asd to "
+                      f"rescue timing — keeping RB as fallback")
                 continue
             note = ""
             if has_rb:
@@ -392,6 +400,8 @@ def run_pipeline(
                     beat_times_ms=bg.beat_times_ms,
                     first_downbeat_offset=bg.first_downbeat_offset)
                 note = " — no RB; stem-grid sole source"
+            if bg.snapped_to_asd:
+                note += " [.asd-snapped]"; n_snap += 1
             # Tell the beatgrid gate this grid is STEM-derived (built FROM the kicks):
             # without provenance the gate judges it by the librosa whole-mix R test,
             # which smears on percussion-heavy house and FALSE-FAILS perfect grids
@@ -407,7 +417,8 @@ def run_pipeline(
                   f"{bg.grid_vs_kick_ms}ms on kicks{flag_s}{note}")
         if n_stem:
             print(f"  Stem-grid: {n_stem}/{len(analyses)} tracks gridded from our own "
-                  f"kick detector (RB demoted to cross-check)")
+                  f"kick detector ({n_snap} timing-snapped to Ableton .asd transients; "
+                  f"RB demoted to cross-check)")
 
     # The grid is the BPM AUTHORITY for every track that has one. Without
     # this, a.bpm stays librosa's quantized lattice whenever the MIK DB is
