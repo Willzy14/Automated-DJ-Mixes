@@ -89,15 +89,21 @@ _MASTER_PATTERN = re.compile(
 )
 
 
-def _validate_masters_only(audio_paths: list[Path]) -> None:
-    """Hard gate: refuse to feed stems, freezes, or raw audio to MIK / RB."""
+def _validate_masters_only(audio_paths: list[Path],
+                           allow_non_master: bool = False) -> None:
+    """Hard gate: refuse to feed stems, freezes, or raw audio to MIK / RB.
+
+    allow_non_master bypasses it for finished third-party tracks (promo/
+    curated sets) — kept in lockstep with the orchestrator's own gate.
+    """
     non_masters = [p.name for p in audio_paths if not _MASTER_PATTERN.search(p.stem)]
-    if non_masters:
+    if non_masters and not allow_non_master:
         raise ValueError(
             f"Refusing to analyze {len(non_masters)} non-master file(s) — "
             "only '24 Bit MASTER' or 'SW V<N>' WAVs are allowed:\n"
             + "\n".join(f"  - {n}" for n in non_masters[:10])
             + ("\n  ..." if len(non_masters) > 10 else "")
+            + "\n  (pass --allow-non-master for finished third-party tracks)"
         )
 
 
@@ -958,6 +964,7 @@ def analyze_folder_with_mik(
     audio_folder: Path,
     expected_tracks: list[Path] | None = None,
     timeout_per_track_sec: float = ANALYSIS_TIMEOUT_PER_TRACK_SEC,
+    allow_non_master: bool = False,
 ):
     """Drive MIK to analyze every audio file in a folder.
 
@@ -972,7 +979,7 @@ def analyze_folder_with_mik(
     if expected_tracks is None:
         expected_tracks = sorted(audio_folder.glob("*.wav"))
 
-    _validate_masters_only(expected_tracks)
+    _validate_masters_only(expected_tracks, allow_non_master)
 
     to_analyze = [p for p in expected_tracks if not is_mik_analyzed(p)]
     if not to_analyze:
@@ -1681,6 +1688,7 @@ def analyze_folder_with_rekordbox(
     audio_folder: Path,
     expected_tracks: list[Path] | None = None,
     timeout_per_track_sec: float = ANALYSIS_TIMEOUT_PER_TRACK_SEC,
+    allow_non_master: bool = False,
 ):
     """Drive Rekordbox to import + analyze every audio file in a folder.
 
@@ -1694,7 +1702,7 @@ def analyze_folder_with_rekordbox(
     if expected_tracks is None:
         expected_tracks = sorted(audio_folder.glob("*.wav"))
 
-    _validate_masters_only(expected_tracks)
+    _validate_masters_only(expected_tracks, allow_non_master)
 
     to_analyze = [p for p in expected_tracks if not is_rekordbox_analyzed(p)]
     if not to_analyze:

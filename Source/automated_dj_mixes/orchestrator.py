@@ -194,6 +194,7 @@ def run_pipeline(
     sections_layout: bool = False,
     allow_partial_rekordbox: bool = False,
     allow_bad_grids: bool = False,
+    allow_non_master: bool = False,
     stem_sections: bool = False,
     track_order: list[str] | None = None,
 ) -> Path | None:
@@ -216,15 +217,21 @@ def run_pipeline(
     )
     audio_wavs = sorted(input_dir.glob("*.wav"))
     non_masters = [p.name for p in audio_wavs if not _MASTER_PATTERN.search(p.stem)]
-    if non_masters:
+    if non_masters and not allow_non_master:
         raise ValueError(
             f"\nAudio folder contains {len(non_masters)} non-master file(s):\n"
             + "\n".join(f"  - {n}" for n in non_masters) + "\n\n"
             "Only mastered WAVs are allowed (filename must contain '24 Bit MASTER' or 'SW V<N>').\n"
-            "Remove stems, freezes, and pre-masters from Audio/ before running the pipeline."
+            "Remove stems, freezes, and pre-masters from Audio/ before running the pipeline,\n"
+            "OR pass --allow-non-master if these are finished third-party tracks (a promo/"
+            "curated set). The gate exists to keep stems/freezes/pre-masters out — only "
+            "bypass it when you've confirmed every file is a finished release."
         )
+    if non_masters and allow_non_master:
+        print(f"Master-file gate: --allow-non-master set — proceeding with "
+              f"{len(non_masters)} non-Sam-master WAV(s) (confirmed finished tracks).")
     if audio_wavs:
-        print(f"Master-file gate: {len(audio_wavs)} WAVs, all verified as masters OK")
+        print(f"Master-file gate: {len(audio_wavs)} WAVs OK")
 
     # Drive MIK + Rekordbox desktop apps to analyze any tracks they haven't
     # seen yet. Skips quickly when everything is already analyzed.
@@ -236,8 +243,10 @@ def run_pipeline(
             )
             audio_paths = sorted(input_dir.glob("*.wav"))
             if audio_paths:
-                analyze_folder_with_mik(input_dir, expected_tracks=audio_paths)
-                analyze_folder_with_rekordbox(input_dir, expected_tracks=audio_paths)
+                analyze_folder_with_mik(input_dir, expected_tracks=audio_paths,
+                                        allow_non_master=allow_non_master)
+                analyze_folder_with_rekordbox(input_dir, expected_tracks=audio_paths,
+                                              allow_non_master=allow_non_master)
         except Exception as e:
             # Don't bury this — the Rekordbox-coverage gate below decides
             # whether partial analysis is acceptable. Surface the full message
@@ -697,6 +706,12 @@ def main():
     parser.add_argument("--allow-partial-rekordbox", action="store_true",
                         help="Proceed even if some tracks lack Rekordbox phrase data "
                              "(knowingly degraded — librosa fallback). Default: hard-stop.")
+    parser.add_argument("--allow-non-master", action="store_true",
+                        help="Allow WAVs that don't match Sam's master naming "
+                             "('24 Bit MASTER' / 'SW V<N>') — for mixing finished "
+                             "THIRD-PARTY tracks (promo/curated sets). The gate still "
+                             "exists to keep stems/freezes out; only set this when every "
+                             "file is a confirmed finished release.")
     parser.add_argument("--previews-only", action="store_true",
                         help="Render blank-canvas preview PNGs and exit before transition "
                              "planning. Used by the /mix skill so Claude can read previews "
@@ -731,6 +746,7 @@ def main():
         sections_layout=args.sections_layout,
         allow_partial_rekordbox=args.allow_partial_rekordbox,
         allow_bad_grids=args.allow_bad_grids,
+        allow_non_master=args.allow_non_master,
         stem_sections=args.stem_sections,
         track_order=[k.strip() for k in args.order.split(",")] if args.order else None,
     )
