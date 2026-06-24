@@ -16,6 +16,7 @@ Pipeline (the design Sam + Claude worked out):
 """
 from __future__ import annotations
 import json, os, sys
+from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
@@ -191,6 +192,80 @@ def find_downbeat(grid: np.ndarray, aidx: np.ndarray, snares: np.ndarray,
     else:
         d = int(aidx[0] % 4); agree = 0.0; method = "weak"
     return d, agree, method
+
+
+def extrapolate_grid(grid: np.ndarray, duration_sec: float) -> tuple[np.ndarray, int]:
+    """Extend the kick-spanning grid to cover the whole file [0, duration].
+
+    The detected grid runs first-kick -> last-kick; Ableton wants warp markers from
+    the clip start (intros are often played). We extrapolate at the EDGE tempo — a
+    constant interval taken from the first/last few beats — purely across the
+    transient-free intro/outro. This does NOT violate Sam's no-static-grid rule:
+    the BODY stays the per-beat detected grid (which follows real drift); only the
+    kick-less head/tail (where there's nothing to drift against) is filled, exactly
+    as Rekordbox does. Returns (full_grid, n_added_before) so the downbeat offset
+    can be shifted by the beats prepended at the front."""
+    g = list(map(float, grid))
+    head_iv = float(np.median(np.diff(g[:9]))) if len(g) >= 3 else (g[1] - g[0])
+    tail_iv = float(np.median(np.diff(g[-9:]))) if len(g) >= 3 else (g[-1] - g[-2])
+    added_before = 0
+    while g[0] - head_iv > 0.0:
+        g.insert(0, g[0] - head_iv)
+        added_before += 1
+    while g[-1] + tail_iv < duration_sec:
+        g.append(g[-1] + tail_iv)
+    return np.asarray(g), added_before
+
+
+@dataclass
+class BeatGrid:
+    """Drop-in replacement for the Rekordbox grid at orchestrator.py:504. Carries
+    exactly the contract the warp/section code consumes — beat_times_ms (full-file,
+    int ms) + first_downbeat_offset (index of the first true downbeat) — plus the
+    self-assessment the pipeline cross-check needs."""
+    beat_times_ms: list[int]
+    first_downbeat_offset: int
+    bpm: float
+    confidence: float
+    grid_vs_kick_ms: float
+    downbeat_method: str
+    downbeat_agree: float
+    flag: str                       # "" | LOWC | JIT | DB? — empty = trust outright
+
+
+def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
+                     sr: int | None = None) -> BeatGrid:
+    """Pipeline entry point: detect the beat grid for one track and return the
+    Rekordbox-compatible contract. Pass a pre-separated drum stem (drums, sr) to
+    skip Demucs (e.g. reuse the Phase-1a separation); otherwise it separates."""
+    if drums is None:
+        from probe_stem_kick_grid import stem_audio
+        drums, _bass, sr = stem_audio(Path(wav))
+    sr = int(sr or 44100)
+    duration_sec = len(drums) / sr
+    kicks = refine_to_click(drums, sr, band_onsets(drums, sr, 0, 150, 0.25))
+    snares = band_onsets(drums, sr, 200, 3000, 0.18)
+    period, conf = estimate_period(kicks)
+    if period <= 0 or len(kicks) < 8:
+        raise ValueError(f"no usable kick period for {Path(wav).name} "
+                         f"({len(kicks)} kicks) — fall back to the .asd/RB ruler")
+    grid, aidx, atim = build_grid(kicks, period)
+    d, dagree, dmethod = find_downbeat(grid, aidx, snares, period)
+    db_grid_phase = int((d - int(aidx[0])) % 4)
+    kf = grid_vs_kick(grid, kicks)
+    full_grid, added_before = extrapolate_grid(grid, duration_sec)
+    first_downbeat_offset = db_grid_phase + added_before
+    flag = "LOWC" if conf < 0.80 else ("JIT" if kf > 15 else ("DB?" if dagree < 0.6 else ""))
+    return BeatGrid(
+        beat_times_ms=[int(round(t * 1000)) for t in full_grid],
+        first_downbeat_offset=first_downbeat_offset,
+        bpm=round(60.0 / period, 2),
+        confidence=round(conf, 3),
+        grid_vs_kick_ms=round(kf, 2),
+        downbeat_method=dmethod,
+        downbeat_agree=round(dagree, 2),
+        flag=flag,
+    )
 
 
 def main_build() -> None:
