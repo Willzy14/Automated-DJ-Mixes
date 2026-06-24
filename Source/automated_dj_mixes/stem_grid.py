@@ -342,7 +342,6 @@ def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
         raise ValueError(f"no usable kick period for {Path(wav).name} "
                          f"({len(kicks)} kicks) — fall back to the .asd ruler")
     grid, aidx, atim = build_grid(kicks, period)
-    kf = grid_vs_kick(grid, kicks)                    # detection quality (pre-snap) -> drives the flag
     snapped = False
     timing_src = "detector"
     if asd_ticks is not None and len(np.asarray(asd_ticks)) >= 8:
@@ -360,14 +359,19 @@ def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
         if len(tr) >= 8:
             grid = snap_grid_to_transients(grid, tr)  # our broadband flux: ~1ms vs Ableton
             timing_src = "own-transients"
+    # Measure grid-vs-kick on the FINAL (post-snap) grid — that is the real warp quality.
+    # A ±15ms snap CANNOT rescue a structurally-wrong grid (Afro/Latin congas in the kick
+    # band, jackin'/syncopated kicks -> 88ms off), so refinement must NOT suppress the JIT
+    # flag (the V3 hole that shipped 88ms grids as DB?/LOWC and silently baked a bad warp).
+    kf = grid_vs_kick(grid, kicks)
     d, dagree, dmethod = find_downbeat(grid, aidx, snares, period)
     db_grid_phase = int((d - int(aidx[0])) % 4)
     full_grid, added_before = extrapolate_grid(grid, duration_sec)
     first_downbeat_offset = db_grid_phase + added_before
-    # JIT only when timing was NOT refined to transients — a snap (asd or our own)
-    # puts the grid on the transients regardless of raw kick-detection looseness.
-    flag = ("LOWC" if conf < 0.80
-            else "JIT" if (kf > 15 and timing_src == "detector")
+    # JIT (grid genuinely off its own kicks) is the most actionable problem — it wins over
+    # LOWC/DB?, and fires whatever the timing source.
+    flag = ("JIT" if kf > 15
+            else "LOWC" if conf < 0.80
             else "DB?" if dagree < 0.6 else "")
     return BeatGrid(
         beat_times_ms=[int(round(t * 1000)) for t in full_grid],

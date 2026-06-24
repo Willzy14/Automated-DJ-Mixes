@@ -400,7 +400,10 @@ def run_pipeline(
                     beat_times_ms=bg.beat_times_ms,
                     first_downbeat_offset=bg.first_downbeat_offset)
                 note = " — no RB; stem-grid sole source"
-            if bg.snapped_to_asd:
+            if bg.flag == "JIT":
+                note += (f" [OFF THE KICKS by {bg.grid_vs_kick_ms:.0f}ms — out of range, "
+                         f"the beatgrid gate will reject this]")
+            elif bg.snapped_to_asd:
                 note += " [.asd-snapped]"; n_snap += 1
             elif bg.timing_src == "own-transients":
                 note += " [own-transient timing ~1ms]"
@@ -409,7 +412,12 @@ def run_pipeline(
             # which smears on percussion-heavy house and FALSE-FAILS perfect grids
             # (10/35 corpus tracks hard-stop, universally where R < the rescue floor).
             # stem_fitted=True makes the gate judge tempo confirmed + phase advisory.
-            grid_overrides.setdefault(a.path.name, {})["phase_source"] = "drum-stem-kicks"
+            # ALSO pass grid_vs_kick_ms so the gate can FAIL a stem grid that's off its
+            # own kicks (Afro/Latin / jackin' out-of-range -> 88ms): provenance must not
+            # be a blanket pass — the grid still has to sit on the transients.
+            ov_entry = grid_overrides.setdefault(a.path.name, {})
+            ov_entry["phase_source"] = "drum-stem-kicks"
+            ov_entry["grid_vs_kick_ms"] = bg.grid_vs_kick_ms
             # Keep the downbeat clock single: a.first_downbeat_sec was set from the RB/
             # librosa grid earlier; realign it to OUR grid so no later reader can split it.
             a.first_downbeat_sec = bg.beat_times_ms[bg.first_downbeat_offset] / 1000.0

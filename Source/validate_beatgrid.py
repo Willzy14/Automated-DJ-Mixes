@@ -150,7 +150,8 @@ def _grade(onsets: np.ndarray, grid_sec: np.ndarray,
 def check_grid(audio_path: Path, beat_times_ms: list[int],
                independent_bpm: float | None = None,
                db_bpm: float | None = None,
-               stem_fitted: bool = False) -> GridCheck:
+               stem_fitted: bool = False,
+               stem_kf_ms: float | None = None) -> GridCheck:
     """Verify a beat grid against its audio. Read-only; one full-track load.
 
     Self-referencing verdict: the track's own kick onsets are graded against
@@ -258,7 +259,8 @@ def check_grid(audio_path: Path, beat_times_ms: list[int],
 
     verdict, detail = verdict_from(r_half, phase_beats, r_detuned, tempo_confirmed,
                                    phase_tol=phase_tol, phase_fail=phase_fail,
-                                   phase_advisory=advisory, stem_fitted=stem_fitted)
+                                   phase_advisory=advisory, stem_fitted=stem_fitted,
+                                   stem_kf_ms=stem_kf_ms)
     if stem_fitted:
         detail += (f" [stem-kick grid; ticks read {tick_offset_ms:+.1f}ms "
                    f"(anticipating percussion) — informational]")
@@ -274,10 +276,14 @@ def check_grid(audio_path: Path, beat_times_ms: list[int],
                      detail, phase_src=phase_src, tick_offset_ms=tick_offset_ms)
 
 
+STEM_KF_FAIL_MS = 15.0     # a stem grid sitting >this off its own kicks = structurally wrong
+
+
 def verdict_from(r_half: float, mean_phase: float, r_detuned: float,
                  tempo_confirmed: bool = False,
                  phase_tol: float = PHASE_TOL, phase_fail: float = PHASE_FAIL,
-                 phase_advisory: bool = False, stem_fitted: bool = False) -> tuple[str, str]:
+                 phase_advisory: bool = False, stem_fitted: bool = False,
+                 stem_kf_ms: float | None = None) -> tuple[str, str]:
     """Pure verdict logic — unit-testable without audio.
 
     tempo_confirmed = an independent analyzer (MIK) agrees with the grid's
@@ -301,12 +307,21 @@ def verdict_from(r_half: float, mean_phase: float, r_detuned: float,
     phase_bad = abs(mean_phase) >= phase_fail and not phase_advisory
 
     if stem_fitted:
-        # Judged on the stem fit, not the whole-mix R (see docstring). Phase is
-        # advisory for stem grids, so phase_bad is False here by construction.
+        # Judged on the stem fit, not the whole-mix R (R is the wrong ruler — see
+        # docstring). But provenance is NOT a blanket pass: a stem grid still has to
+        # sit ON its own kicks. If grid_vs_kick exceeds the JIT threshold the detection
+        # failed structurally (Afro/Latin congas in the kick band, jackin'/syncopated
+        # kicks -> ~88ms) and warping to it WILL drift — FAIL so the pipeline hard-stops.
+        if stem_kf_ms is not None and stem_kf_ms > STEM_KF_FAIL_MS:
+            return "FAIL", (
+                f"stem grid is {stem_kf_ms:.0f}ms OFF its own kicks (>{STEM_KF_FAIL_MS:.0f}ms) "
+                f"— the detector can't grid this track (likely Afro/Latin or jackin'/"
+                f"syncopated, out of its 4-to-floor range). Exclude it, or Auto-Warp it in "
+                f"Ableton and re-run")
+        kf_note = f"; grid_vs_kick {stem_kf_ms:.1f}ms" if stem_kf_ms is not None else ""
         return "PASS", (
             f"stem-kick grid — tempo from the drum-stem kicks (whole-mix R={r_half:.2f} "
-            f"is not the ruler for a kick-fitted grid; the detector's grid_vs_kick "
-            f"gate already verified it sits on the transients)")
+            f"is not the ruler for a kick-fitted grid{kf_note} — sits on the transients)")
 
     rescue_eligible = (
         tempo_confirmed
@@ -370,12 +385,13 @@ def enforce_beatgrid_quality(analyses, rb_matches: dict,
         rb = rb_matches.get(str(a.path))
         if rb is None:
             continue
-        stem = (overrides.get(a.path.name, {}).get("phase_source")
-                == "drum-stem-kicks")
+        ov = overrides.get(a.path.name, {})
+        stem = ov.get("phase_source") == "drum-stem-kicks"
         c = check_grid(a.path, getattr(rb, "beat_times_ms", []) or [],
                        independent_bpm=_mik_bpm(a.path),
                        db_bpm=getattr(rb, "bpm", None),
-                       stem_fitted=stem)
+                       stem_fitted=stem,
+                       stem_kf_ms=ov.get("grid_vs_kick_ms"))
         checks.append(c)
         ph = (f" ph={c.tick_offset_ms:+.0f}ms[ticks]"
               if c.phase_src == "ableton-ticks" else " ph=advisory")
