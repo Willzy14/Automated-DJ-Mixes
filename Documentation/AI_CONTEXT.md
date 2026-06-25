@@ -80,9 +80,11 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
-**Four-phase mix pipeline operational. Stem-kick beat detector (our own IP) WIRED INTO the pipeline via `--stem-grid` — self-sufficient (own broadband transient timing, matches Ableton ~1ms, no .asd/RB needed), adversarially verified, gate-guarded. ⚠ OPEN BLOCKER: the arrangement/automation LOOP layer corrupts the mix downstream — see Known Issues.**
+**Four-phase mix pipeline operational. Stem-kick beat detector (our own IP) drives `--stem-grid`. SECTION DETECTION substantially hardened this session (downbeat anchor + perc-intro/first-kick priors for DB? tracks, bass-finish outro + 32-bar cap, raw-kick fills, intro-top-only) and validated across ~79 of the 109-track Stephanes Playlist (grid-vs-kick median 4ms; ~20% syncopated/Afro-Latin correctly flagged JIT + rejected). ⚠ TWO OPEN PROBLEMS surfaced by an 11-track test mix — see below.**
 
-**⚠ OPEN BLOCKER (end of 2026-06-24, Sam's Ableton eyeball on In-Key Mix V4):** the grids are good (Mr V base warp = smooth 124bpm) but the mix is wrong downstream — **big loops (`apply_loops` cloning 22× / 15× clips) drift the per-clip shift so sections + automation walk out of place**. NOT the detector — the loop layer. Park + fix tomorrow: (1) trace `apply_loops` shift math on big loops; (2) **cap loop length** (no 88-bar tail loops — bug magnet + musically wrong); (3) re-check automation targets post-loop beats; (4) **open the .als in Ableton before calling done.** Process gap: the Phase-4 FULL transition pictures render SOURCE envelopes at arrangement positions, NOT the actual warped output / cloned loop clips — so they can't catch warp/section/loop placement. Only the Ableton eyeball does. Fix the review step.
+**⚠ OPEN #1 — ARRANGEMENT/LOOP LAYER (re-confirmed 2026-06-25, the parked blocker):** `propose_arrangement` / `align_engine` / `apply_loops` produce absurd transitions — outro tail loops cloned **18×/17×** (72 bars of a 4-bar loop) and overlaps of **51-65 bars** that blow past the pipeline's own 48-bar max. The loop-count math is broken (T1 has an 8-bar overlap yet still loops the outro 72 bars). Fix next: enforce the overlap cap, sanity-cap loop counts, fix the count math. NOT touched this session (today was section detection).
+
+**⚠ OPEN #2 — LONG-GROOVE SUBDIVISION (Sam 2026-06-25):** deep/minimal-house tracks with a long continuous groove get labelled one mega-drop; the detector misses the internal break(s) + the 2nd drop (the drop76/88/95/160 corpus tracks). Fills ARE marked, but a genuine internal break should SPLIT the drop into drop→break→drop — and that split point is where the previous track's outro should hand over.
 
 **As of 2026-06-24 PM (STEM-KICK DETECTOR → PIPELINE-READY + ADVERSARIALLY VERIFIED):**
 - **Timing self-sufficient + gate-guarded:** `detect_transients()` (spectral flux on stem ∪ full mix = Ableton's method) refines per-beat timing to ~1ms vs Ableton with NO `.asd` (snaps to `.asd` when present for 0ms). 3 gate holes closed (commit 24a0b89): JIT fires post-snap on kf>15; the beatgrid gate FAILs stem grids with grid_vs_kick>15ms (no more blanket stem_fitted pass); no-RB JIT tracks hard-stop. `Tests/test_beatgrid_stem_gate.py`. First two real-mix casualties: Afro/Latin (Izinque) + jackin' (Natural High) correctly excluded — detector validated on clean 4-to-floor house only.
@@ -154,7 +156,26 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-06-11 late evening (Latest Session) — First full /mix through all the new gates → In-Key Mix V1
+### 2026-06-25 (Latest Session) — Section-detection deep-fix + 109-track corpus robustness + car-mix reveal
+
+**Focus**: Sam heard 24.06.26's sections "way out" after the `--stem-grid` change. Diagnose, fix the section detector across the board, harden it against a real 109-track catalog (Stephanes Playlist), then build a quick test mix — which exposed the arrangement-layer blocker.
+
+**Completed**:
+- **Diagnosis**: the section-MAPPING code was unchanged; the `--stem-grid` downbeat was pinned to the first DETECTED kick (`added_before`), so `stem_detector` (which sections from the downbeat to the end) discarded the real intro. "Sections out" was really "downbeat out".
+- **stem_grid.py**: (1) anchor `first_downbeat_offset` to the first downbeat IN THE FILE `((db_grid_phase+added_before)%4)`; (2) `_first_kick_phase` prior on DB? tracks using the SUB-BAND `kicks[0]` (a filter-sweep intro has no sub-bass, so Delacour stays on its real kick — broadband fooled it); (3) `_percussion_intro_phase` for a sparse clap intro before a late kick (Discosteps) — earliest REGULAR on-grid drum pattern starting at the very first beat.
+- **stem_detector.py**: (4) outro = everything after the last kick+bass BODY bar (bass-finish, drums carry; a trailing break is swept into one outro — never "break then outro"); (5) `OUTRO_CAP_BARS=32` — Sam's rule, an outro is never >32 bars (the long bass-out passage before it stays body); (6) `_phrase_fills` reads the RAW per-beat kick so 1-beat phrase fills survive (Mr V 1→9); (7) intro-top-only (a 2nd "intro" after a pre-drop break → "build").
+- **Validation**: 24.06.26 all 8 land right (Discosteps 1.93→0.48s, Delacour intact 1.01s, Mr V outro8, Tony break+outro→outro). 84 tests pass throughout.
+- **New tooling**: `section_placement_viz.py` (the all-4-stems review image — the artifact Sam wants as the /mix gate); `validate_corpus.py` (full detector stack over a folder → anomaly flags + one compact summary; retry + `torch.cuda.empty_cache()` for a rare batch-load crash); `render_review.py`, `reverify_sections.py`, `reverify_fast.py`.
+- **Corpus pass** (~79/109): grid-vs-kick median **4ms**; ~20% JIT (syncopated/Afro-Latin) correctly flagged + rejected; priors fire ~26% on coherent structures. Found+fixed BIGOUTRO (32-bar cap) + double-intro.
+- **Car test mix**: 11-track BPM-ascending deep-house mix (`Test Project/25.06.26 Car Mix/Output/In-Key Mix V3.als`) on the fixed detectors — REVEALED the two open problems. Did NOT render (Sam's Fallon work was open; he stopped it after seeing the arrangement).
+
+**Key Learnings**:
+- Fix the grid, not the section code — a wrong bar-0 corrupts the bar-aligned ENERGY analysis downstream.
+- House downbeat is genuinely ambiguous from drums alone; reliable priors are the first SUB-BAND kick and an on-grid percussion pattern that starts at beat 0.
+- A real 109-track catalog confirmed the detectors hold AND surfaced the genuine failure modes; ~20% correctly REJECTED (JIT) is robustness working.
+- The section detector and the ARRANGEMENT layer are separate — building a full mix is the only way the arrangement-layer blocker shows itself. Never hand over a mix without checking it in Ableton.
+
+### 2026-06-11 late evening — First full /mix through all the new gates → In-Key Mix V1
 
 **Focus**: Sam: "there are some new tracks at this location /mix" — Test Mix 11.06.26, 12 fresh commercial tracks. First production run exercising every gate built this week, end-to-end autonomous.
 
@@ -563,7 +584,15 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
-> **🔴 TOP — BLOCKED ON SAM: fix the warp/beatgrid bug (Test Mix 09.06.26).** Clips warp to each track's Rekordbox beatgrid, but the read grids are ~1% off the actual audio (Todd grid 128.0 vs audio 129.2) → warp drifts + the bar-based section cuts land off. **Blocked on Sam's answer:** are these tracks' RB grids tight when he DJs them? → if yes, fix track-matching (wrong/duplicate RB entry); if no, beat-analyse from the audio (or he re-grids in RB). Then re-run **without Kelly G.** (acapella accidentally included; its WAV was Ableton-locked — run from a copied input folder or once closed) and verify warp-vs-audio + the cuts. Full handoff: memory `project-warp-beatgrid-bug`. Then resume the `als_io.py` refactor (#2, dedup decompress/find_track_line_ranges/_normalise/_match_track across 9 files — golden test is now the safety net).
+> **🔴 TOP (2026-06-26) — fix the ARRANGEMENT/LOOP layer (OPEN #1 above).** The 11-track car mix exposed it: outro tail loops cloned 18×/17× (72 bars of a 4-bar loop), overlaps 51-65 bars past the 48 max, broken count math (8-bar overlap → 72-bar loop). In `propose_arrangement` / `align_engine` / `apply_loops`: enforce the overlap cap, sanity-cap loop counts (a tail loop never repeats 18×), fix the count math. This is what makes the mixes "ridiculous" — the section data is now good but the arrangement wrecks it.
+
+> **🔴 #2 — LONG-GROOVE SUBDIVISION (OPEN #2 above).** Split a long continuous drop into drop→break→drop at the internal break (even a tiny one) — Sam's deep/minimal-house tracks read as one mega-drop. The split is also the transition hand-over point. (Connects to the LONGDROP corpus flag.)
+
+> **#3 — finish the 109-track corpus re-run** with the section fixes (`validate_corpus.py` on Stephanes Playlist) — the run was stopped at ~17 to build the car mix. And bake `section_placement_viz` (all-4-stems) into the `/mix` review gate as the mandatory per-track eyeball.
+
+> **#4 — phrase-grid snap** (8/16/32 first-class): tiered snap 32→16→8→4 + phrase-align the total (clears the 40% OFFGRID corpus flag, the deliberately-unsnapped outro aside).
+
+> **Earlier (still open): `als_io.py` refactor** — dedup decompress/find_track_line_ranges/_normalise/_match_track across 9 files (golden test is the safety net). The 2026-06-11 warp/beatgrid bug is RESOLVED (the stem-grid detector replaced it).
 
 > **Production-polish backlog** — the smaller "mix → Wired Masters production" details (future fine-tuning, not urgent): see [`Documentation/Production Polish Backlog.md`](Production%20Polish%20Backlog.md). (1) transition loudness compensation — duck ~0.25–0.5 dB so overlaps don't creep louder; (2) bass-switch energy match — boost the incoming bass to hold energy across the swap, then fade it out. Captured from Sam 2026-06-10 after V17 listen.
 

@@ -48,6 +48,8 @@ KICK_ON_FRAC = 0.80       # a beat is kick-IN if its peak > this fraction of the
 KICK_SMOOTH_BEATS = 3     # median-smooth per-beat kick on/off (kills 1-beat flicker)
 MIN_KICK_OUT_BEATS = 2    # ignore kick-out runs shorter than this (syncopation, not a real drop)
 FILL_MAX_BARS = 6         # kick-out <= this many bars = fill; longer = break (Sam's rule)
+FILL_MAX_BEATS = 8        # a SHORT raw-kick dip up to this many beats is a phrase fill; longer = break
+FILL_DIP_FRAC = 0.55      # a fill beat's kick must fall below this fraction of the solid level (real drop, not velocity)
 PRESENCE_FRAC = 0.20      # stem "on" if per-bar energy > this fraction of that stem's peak
 STEM_ABSENT_FRAC = 0.04   # ignore a stem entirely if its peak < this fraction of the mix peak
 SMOOTH_BARS = 3           # median-smooth bass/vocal presence over this many bars
@@ -59,6 +61,7 @@ OUTRO_LEAD_FRAC = 0.60    # outro starts where the LEAD (vocals+other) drops bel
                           # of its body level near the end (kick+bass can keep running)
 MIN_OUTRO_BARS = 8        # don't push the outro start so late it leaves less than this
 MAX_OUTRO_BARS = 48       # a 'last fill' leaving a longer tail than this isn't an outro transition
+OUTRO_CAP_BARS = 32       # Sam's rule (24.06.26): an outro is never more than 32 bars (one phrase) — cap it there
 MIN_LOOP_BARS = 4
 MIN_VOCAL_BARS = 2
 
@@ -169,6 +172,30 @@ def _kick_cues(kick_on, bpm, downbeat):
     return cues
 
 
+def _phrase_fills(peaks, ref, bpm, downbeat, n_bars):
+    """Brief kick dips inside the grooves = phrase-end FILLS (Sam 24.06.26: "those
+    dropouts signify a change... good points to make changes"). Detected on the RAW
+    per-beat kick, NOT the 3-beat-smoothed kick_on — the smoothing irons out the 1-beat
+    fills that mark 16-bar phrase ends (Mr V drops a single kick beat at bars 115/131/147;
+    only the 2-beat dip at 99 survived smoothing, so 3 of 4 fills were lost). A run of
+    1..FILL_MAX_BEATS soft beats (kick below FILL_DIP_FRAC of the solid level), flanked by
+    kick-in and inside the track, is a fill; longer runs are breaks (their own sections)."""
+    soft = (np.asarray(peaks, float) / (ref + 1e-9)) < FILL_DIP_FRAC
+    beat_sec = 60.0 / bpm
+    fills, k, n = [], 0, len(soft)
+    while k < n:
+        if soft[k] and k > 0 and not soft[k - 1]:
+            j = k
+            while j < n and soft[j]:
+                j += 1
+            if 1 <= (j - k) <= FILL_MAX_BEATS and j < n:    # flanked by kick-in, not a trailing fade
+                fills.append([round(downbeat + k * beat_sec, 2), round(downbeat + j * beat_sec, 2)])
+            k = j
+        else:
+            k += 1
+    return fills
+
+
 def _find_outro_start(pb, n_bars):
     """The outro is the DJ wind-down where the LEAD (vocals + 'other'/effects)
     drops out near the end — even if kick + bass keep running. Returns the start
@@ -232,8 +259,19 @@ def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start):
     if n:
         if sections[0]["label"] != "intro":
             sections[0]["label"] = "intro"
-        if not any(s["label"] == "outro" for s in sections):
+        if not any(s["label"] == "outro" for s in sections) and sections[-1]["label"] != "drop":
+            # Never relabel a full DROP as outro just to guarantee one (Sam 24.06.26):
+            # a track that ends on a drop simply has no outro — the next track mixes in.
             sections[-1]["label"] = "outro"
+        # Intro is TOP-ONLY: a later section relabelled 'intro' (a breakdown inside a long
+        # intro, before the first drop) is a BUILD into the drop, not a second intro — Sam's
+        # corpus flagged "All Parties" reading intro16 break12 intro4 drop32. Keep the first.
+        intro_seen = False
+        for s in sections:
+            if s["label"] == "intro":
+                if intro_seen:
+                    s["label"] = "build"
+                intro_seen = True
 
 
 def _merge_same_label(sections):
@@ -320,12 +358,9 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     kick_on_bar = np.array([kick_on[b * 4:(b + 1) * 4].mean() >= 0.5 for b in range(n_bars)])
     kick_cues = _kick_cues(kick_on, bpm, downbeat)
 
-    # A fill = a SHORT kick drop-out then return. Sam's rule: longer than
-    # FILL_MAX_BARS of kick-out is a break, not a fill (the break is its own section).
-    max_fill_sec = FILL_MAX_BARS * sec_per_bar
-    fills = [[a["start_sec"], b["start_sec"]] for a, b in zip(kick_cues, kick_cues[1:])
-             if a["type"] == "kick_dropout" and b["type"] == "kick_return"
-             and b["start_sec"] - a["start_sec"] <= max_fill_sec]
+    # Fills = brief raw-kick dips inside the grooves (1-beat phrase-end fills included —
+    # see _phrase_fills). Sam: kick dropouts mark changes and are good points to mix.
+    fills = _phrase_fills(kick_peaks, kick_ref, bpm, downbeat, n_bars)
 
     # Outro start: the lead (vocals+other) drop near the end. But Sam's rule of
     # thumb — the END OF THE LAST FILL is the outro start — wins when that fill is a
@@ -334,16 +369,24 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     # line after the fill, so the fill stays in the preceding section and the outro
     # begins cleanly after it. (VLAD's last fill precedes its lead-drop, so its
     # lead-drop still wins.)
-    outro_start = _find_outro_start(pb, n_bars)
-    if fills:
-        lf = int(np.ceil((fills[-1][1] - downbeat) / sec_per_bar / PHRASE_GRID)) * PHRASE_GRID
-        outro_len = n_bars - lf
-        # Use the fill if there's no lead-drop, or the fill is at/after it, or it's
-        # within ~a phrase BEFORE it (same transition, snapping noise apart). A fill
-        # far before the lead-drop is mid-body, so the lead-drop wins (VLAD).
-        if (MIN_OUTRO_BARS <= outro_len <= MAX_OUTRO_BARS
-                and (outro_start is None or lf >= outro_start - 2 * PHRASE_GRID)):
-            outro_start = lf
+    # OUTRO = everything after the last BODY bar (kick AND bass both on). Sam (24.06.26):
+    # the outro starts where the bass finishes and the drums carry on ("lots of beats, no
+    # bass = outro"); a kick+bass groove with the vocal stripped is still the BODY (Mr V
+    # bars 149-163); and you NEVER get "a break then an outro" at the end — it's all just
+    # one outro. A break has kick OR bass out, so it falls after the last body bar and the
+    # protected boundary below sweeps the whole tail (break + drums-tail) into one outro.
+    body_idx = np.where(kick_on_bar & presence["bass"])[0]
+    outro_start = (int(body_idx[-1]) + 1) if (len(body_idx) and int(body_idx[-1]) + 1 < n_bars) else None
+
+    # Sam's rule (24.06.26): an outro is never more than 32 bars (one phrase). The bass can
+    # finish many bars deep (a long bass-out drums/perc passage), but THAT is a body section,
+    # not the outro — an 80-bar 'outro' is ~2.7 min, clearly wrong. Cap the outro to the final
+    # OUTRO_CAP_BARS: pull the start forward to that window (which also lands it on a phrase
+    # line); whatever bass-out section sits before it stays body. Short outros are untouched.
+    if outro_start is not None:
+        cap = n_bars - OUTRO_CAP_BARS
+        if cap > 0 and outro_start < cap:
+            outro_start = cap
 
     # Boundaries: a kick drop-out + return marks a new 16-beat section (Sam's
     # rule), plus bass on/off (bass-to-bass) and the outro lead-drop. Snapped to grid.
@@ -351,9 +394,14 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     for b in range(1, n_bars):
         if presence["bass"][b] != presence["bass"][b - 1]:
             raw_bounds.append(b)
-    if outro_start:
-        raw_bounds.append(outro_start)
     bounds = _snap_merge(sorted({b for b in raw_bounds if 0 < b < n_bars}), n_bars)
+    if outro_start is not None and 0 < outro_start < n_bars:
+        # Protected, UNSNAPPED final boundary AT the bass-finish point — Sam wants the
+        # outro exactly where the bass ends, and the file rarely ends on a phrase line,
+        # so don't let _snap_merge round it onto the body or MIN_SECTION_BARS-merge the
+        # (often short) tail away — which then let the hard rule relabel the final DROP
+        # as outro (Delacour/Discosteps).
+        bounds = [b for b in bounds if b < outro_start] + [outro_start, n_bars]
 
     sections = []
     for i in range(len(bounds) - 1):

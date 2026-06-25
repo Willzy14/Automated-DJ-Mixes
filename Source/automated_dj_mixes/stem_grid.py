@@ -162,6 +162,7 @@ def build_grid(kicks: np.ndarray, period: float) -> tuple[np.ndarray, np.ndarray
 
 
 SNARE_CONTRAST = 1.25      # min parity-pair energy ratio to trust the snare backbeat
+DOWNBEAT_PRIOR_AGREE = 0.6   # below this drum-cue agreement (the DB? threshold), fall back to the house "first kick = downbeat" prior
 
 
 def find_downbeat(grid: np.ndarray, aidx: np.ndarray, snares: np.ndarray,
@@ -215,6 +216,52 @@ def find_downbeat(grid: np.ndarray, aidx: np.ndarray, snares: np.ndarray,
     else:
         d = int(aidx[0] % 4); agree = 0.0; method = "weak"
     return d, agree, method
+
+
+def _first_kick_phase(kicks: np.ndarray, full_grid: np.ndarray):
+    """Full-grid index (mod 4) of the beat nearest the FIRST detected kick onset — the
+    downbeat in house (tracks start on the 1). Resolves a DB? track where find_downbeat
+    landed the offset on a beat with NO kick (Discosteps' sparse intro kicks the 1 & 3 on
+    even beats; the grid's first ANCHOR sits on an odd beat). Uses the SUB-BAND kick onsets
+    (not broadband drum energy), so a filter-sweep intro with no sub-bass can't masquerade
+    as a kick — Delacour stays on its real first kick (1.01s), not the sweep. None if no kicks."""
+    if kicks is None or not len(kicks):
+        return None
+    g = np.asarray(full_grid, float)
+    return int(np.argmin(np.abs(g - float(kicks[0])))) % 4
+
+
+def _percussion_intro_phase(drums: np.ndarray, sr: int, full_grid: np.ndarray, period: float):
+    """Earliest grid beat (mod 4) that begins a REGULAR on-grid drum pattern — the downbeat.
+    Catches a percussion intro that starts BEFORE the sub-bass kick (Discosteps: claps on the
+    1 & 3 for a bar before the kick drops), which the kick-based cues miss because they anchor
+    to where the kick enters. A filter-sweep intro (Delacour) produces no regular discrete
+    on-grid onsets, so the earliest regular pattern is the kick itself -> downbeat unchanged.
+    Broadband onsets (kick harmonics + claps/perc); only the first ~40 beats matter for bar 1."""
+    g = np.asarray(full_grid, float)
+    nbeats = min(len(g), 41)
+    if nbeats < 8:
+        return None
+    ons = band_onsets(drums, sr, 150, 12000, 0.10)
+    ons = ons[ons <= g[nbeats - 1]]
+    if len(ons) < 6:
+        return None
+    hit = np.zeros(nbeats, bool)
+    for o in ons:
+        idx = int(np.argmin(np.abs(g[:nbeats] - o)))
+        if abs(g[idx] - o) < 0.18 * period:
+            hit[idx] = True
+    candidates = []
+    for step in (1, 2):                    # 4-on-floor (every beat) or a 1&3 / 2&4 intro
+        for start in np.where(hit)[0]:
+            if all(start + i * step < nbeats and hit[start + i * step] for i in range(4)):
+                candidates.append(int(start))
+                break
+    # Only override when the regular groove begins at the VERY FIRST grid beat — i.e. the
+    # track starts on its downbeat (Discosteps' claps from the top). A pattern that starts a
+    # beat or two in is intro decoration over a sweep (Delacour, pattern at beat 1) whose real
+    # downbeat is the kick -> return None and fall back to the kick-anchored prior.
+    return 0 if (candidates and min(candidates) == 0) else None
 
 
 def extrapolate_grid(grid: np.ndarray, duration_sec: float) -> tuple[np.ndarray, int]:
@@ -367,7 +414,31 @@ def detect_beat_grid(wav: str | Path, drums: np.ndarray | None = None,
     d, dagree, dmethod = find_downbeat(grid, aidx, snares, period)
     db_grid_phase = int((d - int(aidx[0])) % 4)
     full_grid, added_before = extrapolate_grid(grid, duration_sec)
-    first_downbeat_offset = db_grid_phase + added_before
+    # Anchor bar 1 to the FIRST downbeat IN THE FILE, not the first downbeat after
+    # the first DETECTED kick. extrapolate_grid extends the grid back over the intro
+    # to time ~0 (added_before beats prepended); (db_grid_phase + added_before) is the
+    # first downbeat at/after the first kick, so stem_detector — which sections from
+    # this downbeat to the end — discarded everything before it. Real (often quieter /
+    # kick-only) intros were thrown away: Delacour lost ~16 bars, Mr V / Discosteps
+    # their kick-only heads (Sam's 24.06.26 review). The downbeat PHASE is fixed mod 4,
+    # so the earliest downbeat in the full grid is (offset % 4) — within the first bar.
+    first_downbeat_offset = (db_grid_phase + added_before) % 4
+    # Low-confidence tiebreaker (Discosteps): drums alone can't place a 4-on-floor downbeat
+    # when the snare histogram is flat (tied drop-entries, agree 0.5 -> DB?), and here the
+    # offset landed on an odd beat with NO kick on it (the sparse intro kicks the 1 & 3 on
+    # even beats). House tracks start ON the downbeat, so phase bar 1 to the FIRST beat that
+    # actually carries a kick. Tracks whose first kick already sits on their downbeat
+    # (Delacour) are unchanged; the DB? flag stays (a prior, not a confident read).
+    if dagree < DOWNBEAT_PRIOR_AGREE:
+        # First the percussion-intro detector (catches a clap intro before a late kick —
+        # Discosteps); else the plain first-kick prior (tracks that start on the kick).
+        pip = _percussion_intro_phase(drums, sr, full_grid, period)
+        if pip is not None:
+            first_downbeat_offset, dmethod = pip, "perc-intro"
+        else:
+            fkp = _first_kick_phase(kicks, full_grid)
+            if fkp is not None:
+                first_downbeat_offset, dmethod = fkp, "first-kick"
     # JIT (grid genuinely off its own kicks) is the most actionable problem — it wins over
     # LOWC/DB?, and fires whatever the timing source.
     flag = ("JIT" if kf > 15
