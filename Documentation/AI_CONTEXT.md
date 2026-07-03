@@ -80,6 +80,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+**NOTE (2026-07-03): `analysis.py`, `amplitude_analysis.py` and `stem_grid.py` are now SHIMS over the shared `audio_analysis` package (Audio Analysis Toolkit project, Cross-Pollination A2). All import paths, gates and behaviour unchanged (fixed-input grid test bit-identical); edit the toolkit, not the shims. Requires `pip install -e "<Dropbox>/Sam Wills/0.1---GIT HUB---/Audio Analysis Toolkit"` per machine.**
+
 **Four-phase mix pipeline operational. Stem-kick beat detector (our own IP) drives `--stem-grid`. SECTION DETECTION substantially hardened this session (downbeat anchor + perc-intro/first-kick priors for DB? tracks, bass-finish outro + 32-bar cap, raw-kick fills, intro-top-only) and validated across ~79 of the 109-track Stephanes Playlist (grid-vs-kick median 4ms; ~20% syncopated/Afro-Latin correctly flagged JIT + rejected). ⚠ TWO OPEN PROBLEMS surfaced by an 11-track test mix — see below.**
 
 **⚠ OPEN #1 — ARRANGEMENT/LOOP LAYER (re-confirmed 2026-06-25, the parked blocker):** `propose_arrangement` / `align_engine` / `apply_loops` produce absurd transitions — outro tail loops cloned **18×/17×** (72 bars of a 4-bar loop) and overlaps of **51-65 bars** that blow past the pipeline's own 48-bar max. The loop-count math is broken (T1 has an 8-bar overlap yet still loops the outro 72 bars). Fix next: enforce the overlap cap, sanity-cap loop counts, fix the count math. NOT touched this session (today was section detection).
@@ -156,7 +158,18 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-06-25 (Latest Session) — Section-detection deep-fix + 109-track corpus robustness + car-mix reveal
+### 2026-07-03 (Latest Session) — A2: analysis modules extracted to the shared Audio Analysis Toolkit
+**Focus**: Cross-Pollination A2 — one canonical home for the analysis code.
+
+**Completed**:
+- `analysis.py`, `amplitude_analysis.py`, `stem_grid.py` became shims re-exporting the new `audio_analysis` package (`0.1---GIT HUB---/Audio Analysis Toolkit`); `enrich_from_rekordbox`, the CLI mains, project path constants and the lazy Demucs provider registration stay in the shims
+- Demucs separation is now a registered hook in the library (`set_stem_separator`) — semantics identical (lazy import preserved)
+
+**Key Learnings**:
+- Demucs/CUDA is run-to-run non-deterministic: corpus gvk values jitter ±0.3ms and near-threshold flags (OFFGRID) can flip BETWEEN IDENTICAL CODE RUNS. Proving a refactor safe here requires an A/A control run + a fixed-input parity test (same frozen drum stem → grids must hash-identical). Both passed.
+- Plan was Codex-converged (3 rounds); Codex's blockers (vendored-file import contradiction, auto-Demucs call-sites) were real.
+
+### 2026-06-25 — Section-detection deep-fix + 109-track corpus robustness + car-mix reveal
 
 **Focus**: Sam heard 24.06.26's sections "way out" after the `--stem-grid` change. Diagnose, fix the section detector across the board, harden it against a real 109-track catalog (Stephanes Playlist), then build a quick test mix — which exposed the arrangement-layer blocker.
 
