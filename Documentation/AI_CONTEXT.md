@@ -82,6 +82,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 **NOTE (2026-07-03): `analysis.py`, `amplitude_analysis.py` and `stem_grid.py` are now SHIMS over the shared `audio_analysis` package (Audio Analysis Toolkit project, Cross-Pollination A2). All import paths, gates and behaviour unchanged (fixed-input grid test bit-identical); edit the toolkit, not the shims. Requires `pip install -e "<Dropbox>/Sam Wills/0.1---GIT HUB---/Audio Analysis Toolkit"` per machine.**
 
+**NOTE (2026-07-03): Producer Pal (Ableton MCP bridge, security-reviewed clean) is now connected — `mcp__Producer_Pal__ppal-*` tools give direct read/write access to a live Ableton session. Used it to reconfirm the OPEN #1 arrangement/loop blocker below is still present in `In-Key Mix V2` (byte-for-byte match on the 18×/17× outro-loop cloning) and found it ALSO clones intro loops (not just outro tails). Status of a fix is unconfirmed — Sam said "sorted" mid-check but this wasn't verified against git history before the session ended.**
+
 **Four-phase mix pipeline operational. Stem-kick beat detector (our own IP) drives `--stem-grid`. SECTION DETECTION substantially hardened this session (downbeat anchor + perc-intro/first-kick priors for DB? tracks, bass-finish outro + 32-bar cap, raw-kick fills, intro-top-only) and validated across ~79 of the 109-track Stephanes Playlist (grid-vs-kick median 4ms; ~20% syncopated/Afro-Latin correctly flagged JIT + rejected). ⚠ TWO OPEN PROBLEMS surfaced by an 11-track test mix — see below.**
 
 **⚠ OPEN #1 — ARRANGEMENT/LOOP LAYER (re-confirmed 2026-06-25, the parked blocker):** `propose_arrangement` / `align_engine` / `apply_loops` produce absurd transitions — outro tail loops cloned **18×/17×** (72 bars of a 4-bar loop) and overlaps of **51-65 bars** that blow past the pipeline's own 48-bar max. The loop-count math is broken (T1 has an 8-bar overlap yet still loops the outro 72 bars). Fix next: enforce the overlap cap, sanity-cap loop counts, fix the count math. NOT touched this session (today was section detection).
@@ -158,7 +160,23 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-07-03 (Latest Session) — A2: analysis modules extracted to the shared Audio Analysis Toolkit
+### 2026-07-03 (Latest Session) — Producer Pal installed + arrangement/loop blocker reconfirmed live
+
+**Focus**: Sam downloaded Producer Pal (open-source Ableton MCP bridge) and asked for a security review before installing. After install, used it to inspect a live mix project for the still-open arrangement/loop-layer blocker. Ran concurrently with the A2 refactor session below (same repo, same day — different session).
+
+**Completed**:
+- **Security review**: extracted all printable strings from the 8MB `Producer_Pal.amxd` (a JSON-based Max for Live patch container) and checked for shell-out capability, exfiltration domains, obfuscation, embedded credentials, prompt-injection strings. Clean — no `child_process`, no network calls outside declared AI providers + its own GitHub release-check, no obfuscation (readable bundle of known OSS libs), no embedded keys. Cleared for install.
+- **Connected**: `mcp__Producer_Pal__ppal-*` tools now available (connect, read/update-live-set, read/update-track, read/update-clip, create-*, playback, library, select, context). Confirmed live against Ableton 12.4.2.
+- **Used it to inspect `In-Key Mix V2`** (13 tracks, a different project than where the arrangement/loop blocker was first found) via `ppal-read-track` with `arrangement-clips` — **reconfirmed the exact 18×/17× outro-tail-loop cloning bug from memory, byte-for-byte**, and found the **same bug also hits intro loops** (Track 11 "Back in the Days" `intro_1_intro_loop` cloned 16×, Track 9 "Always" 8×) — widening the known scope from "outro tail loops" to "loop extension in general."
+- Investigation was cut short — Sam said the issue was "sorted since then" before clip-length/overlap-cap data was pulled. Status is **unconfirmed, not closed** — see `project_arrangement_loop_blocker` memory.
+- Mid-session, `git status` briefly showed ~1200 phantom-looking deleted lines across 3 core files — turned out to be the A2 refactor session (below) landing its commit concurrently, not corruption. See `reference_concurrent_session_git_changes` memory.
+
+**Key Learnings**:
+- Producer Pal's `ppal-read-track`/`arrangement-clips` is a faster way to check the arrangement layer than zoomed screenshots — clip names + positions come back as structured data, and it already caught the known loop-cloning bug on the first read.
+- Don't take an off-hand "it's sorted" at face value when it interrupts an in-progress diagnosis — verify against git history next session before assuming the blocker is fixed.
+- A large unexplained git diff mid-session can mean a sibling session just committed — check `git log` before assuming corruption or a sync glitch.
+
+### 2026-07-03 — A2: analysis modules extracted to the shared Audio Analysis Toolkit
 **Focus**: Cross-Pollination A2 — one canonical home for the analysis code.
 
 **Completed**:
