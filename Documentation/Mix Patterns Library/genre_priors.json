@@ -1,0 +1,67 @@
+{
+  "notes": "Derived stats computed as the library grows. Based on 9 transitions from Black Book x Defected V2 (house/techno, ~129 BPM). Three proposal versions tested: V21 (baseline), V23 (rules baked in), V24 (Sam's corrections to V23).",
+  "sample_size": 9,
+  "projects": ["Black Book x Defected V2"],
+  "bpm_range": [129.2, 129.2],
+  "v21_stats": {
+    "label": "V21 — baseline (no rules)",
+    "correct_first_try": 5,
+    "corrected": 4,
+    "accuracy": 0.556,
+    "correction_types": {
+      "boundary_avoidance": 2,
+      "two_stage_bass": 1,
+      "arrangement_shift_plus_sneak": 1,
+      "arrangement_cascade_plus_two_stage_volume": 1
+    }
+  },
+  "v23_stats": {
+    "label": "V23 — rules baked in (R1 boundary, R2 two-stage bass, R4 low sneak)",
+    "automated_score": "2/9 (tool-reported — noisy due to V22 arrangement changes)",
+    "effective_score": "~6-7/9 (manual analysis accounting for arrangement noise)",
+    "rules_fired": {
+      "R1_boundary_avoidance": ["T3", "T4", "T7"],
+      "R2_two_stage_bass": ["T2", "T4", "T5", "T9"],
+      "R3_two_stage_volume": "DISABLED (false positives)",
+      "R4_low_sneak": ["T8"]
+    },
+    "improvements": ["T3 boundary→outro (matched Sam)", "T8 low sneak applied", "T5 two-stage bass applied"],
+    "regressions": ["T7 moved from accepted boundary to outro (over-correction)"],
+    "arrangement_noise": ["T4", "T7", "T9 — V22 arrangement changes make comparison unreliable"]
+  },
+  "v24_stats": {
+    "label": "V24 — Sam's corrections to V23",
+    "raw_score": "6/9",
+    "effective_score": "~8/9 (after discounting arrangement changes on T8 and T9)",
+    "arrangement_changes": {
+      "Renegades": "end -32 beats",
+      "Professor_X": "end -30 beats",
+      "Kids": "end -32 beats",
+      "Deep_House": "shifted -32 beats (start and end)"
+    },
+    "corrections": {
+      "T4_real": "swap 2368→2304 (-64 beats). Caused by two bugs: (A) priority 2 outro lacked boundary check, (B) Rule 2 pushed full kill to boundary. Both fixed.",
+      "T8_arrangement": "Professor X shortened to end at swap. Trailing points removed, instant vol kill. Swap@4592 was correct.",
+      "T9_arrangement": "Kids/Deep House shifted -32 beats. Same relative swap position (64 beats into overlap). Two-stage bass removed but confounded by arrangement shift."
+    },
+    "bugs_fixed": [
+      "Priority 2 (outro) now uses _inside_overlap() for boundary avoidance",
+      "Rule 2 (two-stage bass) now checks kill_beat against _inside_overlap() before enabling"
+    ]
+  },
+  "accuracy_progression": {
+    "V21": "5/9 (56%) — no rules",
+    "V23": "~7/9 (78%) — rules baked in, with known bugs",
+    "V24_effective": "~8/9 (89%) — after bug fixes, only T4 was a real correction"
+  },
+  "patterns": {
+    "swap_at_boundary_usually_wrong": true,
+    "swap_at_boundary_exception": "T7 — resolved in V24, Sam accepted outro fallback@4256",
+    "outgoing_outro_as_swap_reliable": true,
+    "outgoing_outro_must_pass_boundary_check": true,
+    "incoming_drop_inside_overlap_correct": true,
+    "short_overlap_needs_low_sneak": true,
+    "two_stage_full_kill_must_clear_boundary": true,
+    "arrangement_changes_are_common": "4/10 tracks moved in V24"
+  }
+}

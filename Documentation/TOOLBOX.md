@@ -112,6 +112,14 @@ Template-based ALS XML patching. Decompresses gzip, patches raw lines (not DOM �
 Key types: `TrackPatch` (analysis, track_index, warp_markers, gain_offset_db, arrangement_start_beats, loop_spec, phrase_segments).
 Key functions: `generate_session()`, `decompress_als()`, `compress_als()`, `_build_audio_clip_xml()` (emits original + duplicates or per-phrase segments), `_build_single_clip_xml()`, `_find_filter_target_id()`, `_insert_audio_clip()`, `_insert_automation_envelopes()`.
 
+### `Source/automated_dj_mixes/mix_plan.py`
+Immutable, versioned production intent for the first two-track/one-transition slice. SHA-256-backed IDs cover sources, track instances, section maps, loops, and the handover; the contract freezes `main_track_sequence`, complete input hashes, policy/tool versions, parent/version, exact overlap geometry, and canonical `plan_hash`. The current proof also freezes project BPM and warp mode through explicit human overrides; render acceptance remains the next extension.
+
+Key types: `MixPlan`, `SourceContract`, `TrackInstanceContract`, `TransitionContract`, `LoopContract`. Key functions: `build_one_transition_mix_plan()`, `validate_mix_plan()`, `write_mix_plan()`.
+
+### `Source/validate_mix_plan_als.py`
+Post-mutation reconciliation gate for the one-transition proof. Verifies canonical plan hash, active main-track sequence, arrangement start/end geometry, loop count/placement, frozen project tempo, absence of an overriding MainTrack tempo envelope for fixed-tempo plans, every active clip's WarpMode, contracted bass-swap boundary, and transition automation in the final ALS. Writes a hash-backed reconciliation JSON and fails on any mismatch.
+
 ### `Source/automated_dj_mixes/config.py`
 Loads settings from `Config/settings.json` with sensible defaults (crossfade_bars=48, max_gain_reduction_db=12, default_project_tempo=128, versioning_prefix="V").
 
@@ -138,16 +146,16 @@ Key functions: `analyze_folder_with_mik(folder)`, `analyze_folder_with_rekordbox
 Prerequisites: Rekordbox Library Protection OFF. Mouse clicks required for RB menu navigation — warn user before running.
 
 ### `Source/propose_arrangement.py`
-**Added 2026-05-21.** Arrangement orchestrator for the `/arrange-mix` skill (PROPOSE mode). Loads a sections JSON + ALS, computes natural-fill alignment (incoming.first_drop at outgoing.last_fill/break) with overlap-size capping (~128 beats target), analyses each overlap for loop requirements, consults pair_history.jsonl for similar transitions, applies position shifts + loop extensions. Supports `--hints` for `intro_skip_bars` (clip sample start offset) and `loop_source_sec` pass-through. Produces arranged ALS + **comprehensive ARRANGEMENT_REPORT.json** (per-track: camelot, bpm, energy, intro_skip_bars; per-transition: harmonic_score, harmonic_type, bpm_delta, selected_style, loop_source, overlap_bars).
+**Added 2026-05-21; safety/MixPlan gate 2026-07-15.** Arrangement orchestrator for the `/arrange-mix` skill. The active align-engine path recomputes final loop-adjusted geometry and rejects transitions outside 16-48 bars before ALS mutation. `--mix-plan PATH` enables the strict two-source slice: source/section/input hashes and stable semantic IDs are written before the ALS writer runs. Supports `--hints` for `intro_skip_bars` and `loop_source_sec`; produces arranged ALS plus `ARRANGEMENT_REPORT.json`.
 
 Key types: `TrackInfo` (sections + positions + camelot/bpm/energy/intro_skip_bars), `OverlapAnalysis` (per-pair overlap details + loop specs), `ArrangementPlan` (full plan container).
-Key functions: `propose_arrangement()` (main entry, accepts `hints_path`), `compute_natural_positions()` (alignment + overlap cap), `analyse_overlap()` (loop planning), `find_similar_pairs()` (pair_history BPM+structure matching), `generate_report()` (JSON output with full audit data).
+Key functions: `propose_arrangement()` (accepts `hints_path` and `mix_plan_path`), `validate_arrangement_plan()` (hard final-geometry gate), `analyse_overlap()` (loop planning + recomputation), `find_similar_pairs()`, `generate_report()`.
 
 ### `Source/apply_loops.py`
-**Added 2026-05-21.** Mechanical clip cloning for loop extensions in ALS files. Takes loop specifications and inserts new AudioClip blocks that repeat existing source regions. Each loop clip is a discrete copy (LoopOn=false) placed back-to-back. Uses line-based text patching (not DOM). Reusable by propose_arrangement.py and apply_automation.py's shift helpers.
+**Added 2026-05-21; hardened 2026-07-15.** Mechanical line-based clip cloning for loop extensions. `LoopSpec` is fail-closed at 8 repeats and 128 extension beats, rejects negative/non-finite geometry, and the entire batch preflights every track, Events block, template clip, and shift target before the first mutation. Post-write ALS validation is mandatory.
 
 Key types: `LoopSpec` (track_name, source_beat_start/end, count, insert_at_beat, clip_name).
-Key functions: `apply_loops()` (main entry), `clone_clip()` (template-based clip creation with ID allocation), `decompress_als()` / `compress_als()` (shared ALS I/O), `find_track_line_ranges()` (track boundary detection), `shift_track_clips()` (position shift helper).
+Key functions: `validate_loop_spec()`, `apply_loops()` (preflighted batch), `clone_clip()`, `decompress_als()` / `compress_als()`, `find_track_line_ranges()`, `shift_track_clips()`.
 
 ### `Source/apply_automation.py`
 **Added 2026-05-21.** Volume crossfades (Utility Gain) + EQ bass kills (ChannelEQ LowShelfGain) applied to an arranged Sections .als. Three transition styles auto-selected by overlap length: **STANDARD** (24-36 bars, existing two-phase model), **LONG_BLEND** (>36 bars, linear crossfade, partial EQ, delayed bass swap by 32 beats), **QUICK_SWAP** (<24 bars, instant swap, no sneak, full EQ kill). Section-structure-driven bass swap detection with 6 learned rules from Sam's corrections.
@@ -162,10 +170,15 @@ Key types: `TrackAutomation`, `ParamDiff`, `TransitionDiff` (with `classified_st
 Key functions: `extract_track_automation()`, `analyse_transitions()`, `_classify_style()` (sneak level + bass kill depth + instant swap detection), `diff_to_jsonl_entry()`, `print_report()`, `main()`.
 
 ### `Source/stem_detector.py`
+**2026-07-09 update:** `detect(...)` now accepts optional `kick_model=False`, `kick_model_path=None`, and `kick_model_device="auto"` kwargs. Default OFF preserves the legacy dynamic stem-energy threshold. `--kick-model` is explicit/default-off and replaces only beat-level kick presence/cues with Kick Detector V3; bass/vocal/loop/fill logic stays unchanged. Orchestrator model use requires `--sections-layout --stem-sections --kick-model`.
+
 **Added 2026-06-08.** Stem-based section detector (the new section source — Demucs stems, ANALYSIS-ONLY, original WAV untouched, envelopes cached as `.npz`). `detect(wav, project, bpm=, downbeat=, make_viz=, write_json=)` → `{track, bpm, n_bars, sections, signals}`; `--write-hints` auto-generates the 4 production-gate hints; renders `DETECT_*.png` (track + 4 stems, labelled sections + bar counts + bass-IN/OUT markers + kick cues). Calibration rules + signals in memory `reference-stem-section-detector`. Wired into the orchestrator via `--stem-sections`.
 
+### `Source/kick_model_adapter.py`
+**Added 2026-07-09.** Lazy adapter for the sibling Kick Detector project. Loads `Kick Detector/Models/kick_crnn_V3.pt` and Kick Detector's reference `model.py` / `presence_postprocess.py` only when `--kick-model` is enabled. Uses the validated product readout: threshold `0.30`, `fill_off_beats=6`, `drop_on_beats=1`. In model mode it runs a single Demucs pass that yields both the normal stem envelopes and the raw drums waveform required by the CRNN, avoiding a double-separation path. Provides `KickPresenceProvider`, `get_provider()` cache, and `separate_envelopes_and_drums()`.
+
 ### `Source/align_engine.py`
-**Added 2026-06-08.** Bass-to-bass alignment engine + per-transition visualiser (TESTING tool; production arrangement stays autonomous). Reads `SECTIONS_STEM_*.json`, aligns each adjacent pair by sliding the incoming on the 8-bar grid to maximise energy-matched section coincidence (markers-first; the bass switch can be faked early at any natural marker), snaps, scores lineup, renders `_Alignment Review/ALIGN_*.png`. Key fns: `align_pair()`, `_handoff_candidates()`, `_score_lineup()`, `visualize_transition()`. **NOT yet feeding the ALS — that's the top next task** (replaces `propose_arrangement.compute_natural_positions`). Model + 9-transition verdicts in memory `reference-arrangement-model`.
+**Added 2026-06-08; production safety gate 2026-07-15.** Bass-to-bass alignment engine used by `propose_arrangement`. Candidate selection enforces a hard 16-48 bar overlap and prefers the smaller overlap when musical scores tie. Incoming-intro and outgoing-tail fills consume one shared remaining transition budget with an 8-repeat ceiling; the fallback clamps or fails if no safe overlap exists. Reads `SECTIONS_STEM_*.json` and retains the transition visualizer.
 
 ### Diagnostic / Research Scripts
 

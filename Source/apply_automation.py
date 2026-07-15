@@ -75,11 +75,12 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
     content = "".join(lines)
     with gzip.open(output_path, "wb") as f:
         f.write(content.encode("utf-8"))
-    try:
-        from validate_als import report_als
-        report_als(output_path)
-    except Exception as _ve:
-        print(f"  [skip] ALS self-validation unavailable: {_ve}")
+    from validate_als import report_als
+    errors = report_als(output_path)
+    if errors:
+        raise ValueError(
+            f"ALS validation failed for {output_path.name}: {errors[0]}"
+        )
     return output_path
 
 
@@ -479,12 +480,17 @@ def _find_incoming_build_drop(track: TrackInfo,
     return None
 
 
-def _load_arrangement_report(als_path: Path) -> dict:
+def _load_arrangement_report(als_path: Path,
+                             explicit_path: Path | None = None) -> dict:
     """{(out_track, in_track): {swap_beats, handoff_kind}} from the ALS's arrangement
     report (align_engine's explicit swap points). Prefers <als-stem>_ARRANGEMENT_
     REPORT.json, else the newest beside the .als. Empty if none (back-compat for
     hand-made mixes -> falls back to find_bass_swap)."""
-    cand = als_path.parent / (als_path.stem + "_ARRANGEMENT_REPORT.json")
+    cand = explicit_path or als_path.parent / (
+        als_path.stem + "_ARRANGEMENT_REPORT.json"
+    )
+    if explicit_path is not None and not cand.is_file():
+        raise ValueError(f"Required arrangement report was not found: {cand}")
     if not cand.exists():
         reps = sorted(als_path.parent.glob("*ARRANGEMENT_REPORT.json"),
                       key=lambda p: p.stat().st_mtime, reverse=True)
@@ -493,7 +499,9 @@ def _load_arrangement_report(als_path: Path) -> dict:
         return {}
     try:
         rep = json.loads(cand.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        if explicit_path is not None:
+            raise ValueError(f"Required arrangement report is unreadable: {cand}") from exc
         return {}
     out = {}
     for tr in rep.get("transitions", []):
@@ -504,6 +512,8 @@ def _load_arrangement_report(als_path: Path) -> dict:
             }
     if out:
         print(f"  Loaded {len(out)} align_engine swap point(s) from {cand.name}")
+    elif explicit_path is not None:
+        raise ValueError(f"Required arrangement report has no swap contracts: {cand}")
     return out
 
 
@@ -849,12 +859,14 @@ def _apply_track_levelling(lines: list[str], tracks, audio_dir: Path) -> None:
 
 def main() -> None:
     if len(sys.argv) < 4:
-        print("Usage: python apply_automation.py <sections.als> <sections.json> <output.als>")
+        print("Usage: python apply_automation.py <sections.als> <sections.json> "
+              "<output.als> [arrangement_report.json]")
         sys.exit(1)
 
     als_path = Path(sys.argv[1])
     json_path = Path(sys.argv[2])
     output_path = Path(sys.argv[3])
+    arrangement_report_path = Path(sys.argv[4]) if len(sys.argv) >= 5 else None
 
     # ── read inputs ───────────────────────────────────────────────────
     print(f"Reading {als_path.name} ...")
@@ -897,7 +909,10 @@ def main() -> None:
         sys.exit(1)
 
     # ── plan transitions ──────────────────────────────────────────────
-    plans = plan_transitions(tracks, _load_arrangement_report(als_path))
+    plans = plan_transitions(
+        tracks,
+        _load_arrangement_report(als_path, arrangement_report_path),
+    )
     print(f"\n{len(plans)} transitions planned:")
     for i, p in enumerate(plans):
         bars = (p.overlap_end - p.overlap_start) / 4

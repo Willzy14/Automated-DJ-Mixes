@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,9 @@ from matplotlib.patches import Rectangle
 from stem_section_probe import _seccol  # shared section colour map
 
 PHRASE_GRID = 16          # 16-bar phrase grid (viz gridlines)
+MAX_OVERLAP_BARS = 48     # hard production ceiling, including loop extensions
+MAX_LOOP_REPEATS = 8
+MAX_LOOP_EXTENSION_BARS = MAX_OVERLAP_BARS - PHRASE_GRID
 SNAP_BARS = 4             # snap the incoming's stagger to the 4-bar (16-beat) grid the
                           # detector's section markers live on. 8 was COARSER than the
                           # markers, so a marker-aligned offset like 116 got rounded to
@@ -212,12 +216,14 @@ def align_pair(o: Track, i: Track) -> Alignment:
             overlap = o.n_bars - arr_offset
             if overlap < PHRASE_GRID:              # need at least a phrase of blend
                 continue
+            if overlap > MAX_OVERLAP_BARS:
+                continue
             score = _score_lineup(o, i, arr_offset)
             # bass-to-bass bonus: the incoming's real bass-in lands on the swap.
             # TIEBREAK only — lineup dominates, so this preserves bass-in winners
             # and only rescues lineup-0 (mid-intro-bass) pairs like My Own.
             bass_to_bass = abs(arr_offset + bass_in - bar) <= COINCIDE_TOL_BARS
-            rank = (score, int(bass_to_bass) + int(natural) + int(is_bassout), overlap)
+            rank = (score, int(bass_to_bass) + int(natural) + int(is_bassout), -overlap)
             if best_rank is None or rank > best_rank:
                 best_rank = rank
                 kind = f"{before}->{after}" + ("/bass_out" if is_bassout else "")
@@ -227,11 +233,24 @@ def align_pair(o: Track, i: Track) -> Alignment:
                     anchor_bar_in=bass_in, arr_offset_bars=arr_offset,
                     overlap_bars=overlap, score=score,
                 )
-    if best is None:                               # everything too short: last boundary
+    if best is None:                               # clamp the fallback into the safe window
         bar = float(o.sections[-1]["start_bar"])
-        arr_offset = round((bar - bass_in) / SNAP_BARS) * SNAP_BARS
+        min_offset = math.ceil(max(0.0, o.n_bars - MAX_OVERLAP_BARS) / SNAP_BARS) * SNAP_BARS
+        max_offset = math.floor((o.n_bars - PHRASE_GRID) / SNAP_BARS) * SNAP_BARS
+        if min_offset > max_offset:
+            raise ValueError(
+                f"No feasible {PHRASE_GRID}-{MAX_OVERLAP_BARS} bar overlap for "
+                f"'{o.name}' -> '{i.name}'"
+            )
+        raw_offset = round((bar - bass_in) / SNAP_BARS) * SNAP_BARS
+        arr_offset = min(max(raw_offset, min_offset), max_offset)
+        overlap = o.n_bars - arr_offset
         best = Alignment(o.name, i.name, bar, "fallback", bass_in, arr_offset,
-                         o.n_bars - arr_offset, 0)
+                         overlap, 0)
+        if arr_offset != raw_offset:
+            best.notes.append(
+                f"fallback clamped to {overlap:.0f}-bar overlap safety window"
+            )
     # Notes
     if o.bass_out_bar is not None and not o.bass_out_is_end and best.handoff_bar_out < o.bass_out_bar - 2:
         best.notes.append(f"faked bass drop ({o.bass_out_bar - best.handoff_bar_out:.0f}b early)")
@@ -417,6 +436,10 @@ def plan_fill_or_cut(o, i, al):
          break-into-break (soft; see _resolve_break_to_break)."""
     arr = al.arr_offset_bars
     specs = []
+    loop_budget = min(
+        MAX_LOOP_EXTENSION_BARS,
+        max(0.0, MAX_OVERLAP_BARS - max(0.0, al.overlap_bars)),
+    )
     first_drop_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
     intro_end = (i.sections[0]["end_bar"]
                  if i.sections and i.sections[0]["label"] == "intro" else 0.0)
@@ -436,13 +459,22 @@ def plan_fill_or_cut(o, i, al):
                     src = "outro"
             if chunk:
                 clen = chunk[1] - chunk[0]
-                reps = int(fill_bars // clen)
+                requested_reps = int(fill_bars // clen)
+                reps = min(
+                    requested_reps,
+                    MAX_LOOP_REPEATS,
+                    int(loop_budget // clen),
+                )
                 if reps >= 1:
+                    used = reps * clen
+                    loop_budget -= used
                     intro_loop = True
                     specs.append(FillCutSpec(kind="incoming_intro", reps=reps,
                         source_start_bar=chunk[0], source_end_bar=chunk[1],
                         target_marker_bar=float(last_drop_o),
-                        note=f"intro {src}-loop {clen:.0f}bx{reps} ({fill_bars:.0f}b) back to outgoing last drop"))
+                        note=f"intro {src}-loop {clen:.0f}bx{reps} ({used:.0f}b) "
+                             f"back to outgoing last drop"
+                             + (" [safety-capped]" if reps < requested_reps else "")))
 
     # (2) INTRO CUT — only if no intro loop and the intro lands in a low-energy break.
     if not intro_loop and first_drop_in and first_drop_in > 0 and intro_end > 0:
@@ -490,11 +522,20 @@ def plan_fill_or_cut(o, i, al):
                 if partial >= 2:
                     reps += 1
                     partial = 0.0
+                requested_reps = reps
+                requested_partial = partial
+                reps = min(reps, MAX_LOOP_REPEATS, int(loop_budget // clen))
+                used = reps * clen
+                remaining = max(0.0, loop_budget - used)
+                partial = min(requested_partial, remaining)
                 if reps >= 1 or partial > 0:
+                    loop_budget -= used + partial
                     specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
                         source_start_bar=chunk[0], source_end_bar=chunk[1],
                         partial_bars=float(partial), target_marker_bar=float(nxt),
-                        note=f"loop outro {clen:.0f}bx{reps}+{partial:.0f}b to marker {nxt:.0f}"))
+                        note=f"loop outro {clen:.0f}bx{reps}+{partial:.0f}b to marker {nxt:.0f}"
+                             + (" [safety-capped]" if (reps < requested_reps or
+                                  partial < requested_partial) else "")))
 
     # (4) NO BREAK-TO-BREAK (mix choice, soft / swappable).
     bspec = _resolve_break_to_break(o, i, al)

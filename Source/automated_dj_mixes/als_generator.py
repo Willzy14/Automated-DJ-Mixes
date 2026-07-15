@@ -67,11 +67,12 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
     raw_bytes = content.encode("utf-8")
     with gzip.open(output_path, "wb") as f:
         f.write(raw_bytes)
-    try:
-        from validate_als import report_als
-        report_als(output_path)
-    except Exception as _ve:
-        print(f"  [skip] ALS self-validation unavailable: {_ve}")
+    from validate_als import report_als
+    errors = report_als(output_path)
+    if errors:
+        raise ValueError(
+            f"ALS validation failed for {output_path.name}: {errors[0]}"
+        )
     return output_path
 
 
@@ -867,7 +868,8 @@ def generate_session(
 
 
 def _set_project_bpm(lines: list[str], bpm: float) -> None:
-    """Set the project tempo in the MasterTrack."""
+    """Set a fixed MainTrack tempo and remove any inherited tempo envelope."""
+    _remove_existing_envelope_for_target(lines, "8")
     for i, line in enumerate(lines):
         if "<Tempo>" in line:
             for j in range(i, min(i + 5, len(lines))):

@@ -1,4 +1,10 @@
-# Mixing Patterns — Extracted from Sam's Teaching Mixes
+# Mixing Patterns - Legacy Extract From Unapproved Teaching Mixes
+
+**Status 2026-07-15:** keep this as historical background only. Sam did not recognise the
+`Teaching Mixes/` folder as the intended source of truth for this learning phase. Do not train
+new arrangement or section priors from these numbers unless Sam explicitly re-approves that
+folder. The approved starting corpus is the finished mix CD ALS project list in
+`Documentation/Mix Patterns Library/README.md`.
 
 Aggregate analysis of 20 professional DJ mixes (4,249 clips, 184 transitions).
 

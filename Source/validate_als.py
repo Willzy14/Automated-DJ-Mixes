@@ -68,8 +68,7 @@ def report_als(path) -> list[str]:
 
     Hook wired into every compress_als() so the corruption gate runs
     automatically on every emitted .als — not only when a human runs the
-    CLI. Non-fatal: prints loudly but does not raise, so a false positive
-    can't block a real mix.
+    CLI. Writers treat a non-empty result as fatal and do not report success.
     """
     p = Path(path)
     errs = validate_als(p)

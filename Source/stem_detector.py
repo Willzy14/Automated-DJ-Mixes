@@ -24,6 +24,10 @@ stem_section_probe._separate_envelopes — the slow separation runs once per tra
 
 Usage:
     python Source/stem_detector.py "<project-path>" [--track "<wav name>"]
+
+Optional:
+    --kick-model replaces only the kick presence signal with Kick Detector V3.
+    Bass/vocal/loop/fill logic stays on the existing stem-envelope path.
 """
 
 from __future__ import annotations
@@ -146,6 +150,38 @@ def _kick_on_per_beat(drums_env, hop_t, bpm, downbeat, n_bars):
     ref = _solid_kick_level(peaks) + 1e-9
     on = _median_bool(peaks > KICK_ON_FRAC * ref, KICK_SMOOTH_BEATS)
     return on, peaks, ref
+
+
+def _model_kick_on_per_beat(wav, bpm, downbeat, n_beats, kick_model_path=None,
+                            kick_model_device="auto", kick_provider=None,
+                            drums_mono=None, drums_sr=None):
+    """Optional learned kick-presence path.
+
+    The provider/model returns beat-level kick IN/OUT only. The caller keeps the
+    old energy peaks/ref for fills and visual thresholding, so flag-on changes
+    only the section-facing kick presence signal.
+    """
+    provider = kick_provider
+    if provider is None:
+        from kick_model_adapter import get_provider
+        provider = get_provider(model_path=kick_model_path, device=kick_model_device)
+    if drums_mono is not None and hasattr(provider, "on_per_beat_from_drums"):
+        on = np.asarray(provider.on_per_beat_from_drums(
+            np.asarray(drums_mono, dtype=np.float32),
+            int(drums_sr),
+            bpm=float(bpm),
+            downbeat=float(downbeat),
+            n_beats=int(n_beats),
+        ), dtype=bool)
+    else:
+        on = np.asarray(provider.on_per_beat(
+            Path(wav), bpm=float(bpm), downbeat=float(downbeat), n_beats=int(n_beats)
+        ), dtype=bool)
+    if len(on) < n_beats:
+        on = np.pad(on, (0, n_beats - len(on)), constant_values=False)
+    elif len(on) > n_beats:
+        on = on[:n_beats]
+    return on
 
 
 def _kick_cues(kick_on, bpm, downbeat):
@@ -317,7 +353,9 @@ def _merge_same_label(sections):
     return merged
 
 
-def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True):
+def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True,
+           kick_model=False, kick_model_path=None, kick_model_device="auto",
+           kick_provider=None):
     """Detect sections + mix signals for one track.
 
     bpm/downbeat may be passed in (pipeline use — they come from Rekordbox/analysis);
@@ -336,7 +374,17 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
         downbeat = stats.get("first_downbeat_sec", 0.0)
     sec_per_bar = 4 * 60.0 / bpm
 
-    envs, hop_t = _separate_envelopes(wav, project / "_Stem Analysis")
+    model_drums = None
+    model_drums_sr = None
+    model_provider = kick_provider
+    if kick_model and kick_provider is None:
+        from kick_model_adapter import get_provider, separate_envelopes_and_drums
+        model_provider = get_provider(model_path=kick_model_path, device=kick_model_device)
+        envs, hop_t, model_drums, model_drums_sr = separate_envelopes_and_drums(
+            wav, project / "_Stem Analysis", device=kick_model_device
+        )
+    else:
+        envs, hop_t = _separate_envelopes(wav, project / "_Stem Analysis")
     dur_real = len(envs["mix"]) * hop_t
     n_bars = max(1, int((dur_real - downbeat) / sec_per_bar))
 
@@ -353,8 +401,22 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
         else:
             presence[s] = _median_bool(pb[s] > PRESENCE_FRAC * peak, SMOOTH_BARS)
 
-    # Per-beat kick IN/OUT (robust threshold) + per-bar kick presence + cues.
+    # Per-beat kick IN/OUT + per-bar kick presence + cues. The default remains
+    # the robust energy threshold. --kick-model replaces only kick_on with the
+    # learned V3 presence readout; kick_peaks/ref stay energy-based so fills and
+    # the visual threshold line remain unchanged.
     kick_on, kick_peaks, kick_ref = _kick_on_per_beat(envs["drums"], hop_t, bpm, downbeat, n_bars)
+    kick_source = "stem-energy-threshold"
+    if kick_model or kick_provider is not None:
+        kick_on = _model_kick_on_per_beat(
+            wav, bpm, downbeat, n_bars * 4,
+            kick_model_path=kick_model_path,
+            kick_model_device=kick_model_device,
+            kick_provider=model_provider,
+            drums_mono=model_drums,
+            drums_sr=model_drums_sr,
+        )
+        kick_source = "kick-detector-v3"
     kick_on_bar = np.array([kick_on[b * 4:(b + 1) * 4].mean() >= 0.5 for b in range(n_bars)])
     kick_cues = _kick_cues(kick_on, bpm, downbeat)
 
@@ -461,6 +523,7 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
         "loop_windows": to_sec(_regions(presence["drums"] & ~presence["bass"], MIN_LOOP_BARS)),
         "vocal_regions": to_sec(_regions(presence["vocals"], MIN_VOCAL_BARS)),
         "kick_cues": kick_cues,
+        "kick_presence_source": kick_source,
         "fills": fills,
         "major_cues": major_cues,
     }
@@ -626,6 +689,13 @@ def main():
     ap.add_argument("--write-hints", action="store_true",
                     help="Auto-write Hints/track_hints.json from stem sections (the "
                          "fully-autonomous path — no manual visual-pass needed). No PNGs.")
+    ap.add_argument("--kick-model", action="store_true",
+                    help="Use Kick Detector V3 for kick IN/OUT presence. Default is off.")
+    ap.add_argument("--kick-model-path", type=Path, default=None,
+                    help="Path to Kick Detector weights. Defaults to sibling "
+                         "'Kick Detector/Models/kick_crnn_V3.pt'.")
+    ap.add_argument("--kick-model-device", default="auto",
+                    help="Torch device for Kick Detector and its Demucs pass: auto, cpu, or cuda.")
     args = ap.parse_args()
     audio = args.project / "Audio"
     wavs = [audio / args.track] if args.track else sorted(audio.glob("*.wav"))
@@ -634,7 +704,12 @@ def main():
         hints = {}
         print(f"Auto-generating hints from stem detection for {len(wavs)} track(s):")
         for w in wavs:
-            res = detect(w, args.project, make_viz=False)
+            res = detect(
+                w, args.project, make_viz=False,
+                kick_model=args.kick_model,
+                kick_model_path=args.kick_model_path,
+                kick_model_device=args.kick_model_device,
+            )
             if not res:
                 continue
             h = hints_from_stem_result(res)
@@ -650,7 +725,12 @@ def main():
 
     print(f"Stem section detection on {len(wavs)} track(s):")
     for w in wavs:
-        detect(w, args.project)
+        detect(
+            w, args.project,
+            kick_model=args.kick_model,
+            kick_model_path=args.kick_model_path,
+            kick_model_device=args.kick_model_device,
+        )
 
 
 if __name__ == "__main__":

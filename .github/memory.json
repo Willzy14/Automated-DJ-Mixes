@@ -40,8 +40,14 @@
     },
     "als_generator": {
       "path": "Source/automated_dj_mixes/als_generator.py",
-      "purpose": "Template-based ALS patching, multi-clip per track for loops + viz",
+      "purpose": "Template-based ALS patching, multi-clip per track for loops + viz; post-write validation is mandatory",
       "status": "working"
+    },
+    "mix_plan": {
+      "path": "Source/automated_dj_mixes/mix_plan.py",
+      "purpose": "Immutable hash-backed production intent for the two-track/one-transition arrangement slice; stable source/track/section/loop/transition IDs and canonical plan_hash",
+      "status": "working (arrangement-only V1; tempo/warp, automation, render approval and ALS reconciliation pending)",
+      "added": "2026-07-15"
     },
     "rekordbox_reader": {
       "path": "Source/automated_dj_mixes/rekordbox_reader.py",
@@ -108,6 +114,12 @@
     }
   },
   "standalone_scripts": {
+    "validate_mix_plan_als": {
+      "path": "Source/validate_mix_plan_als.py",
+      "purpose": "Post-mutation one-transition reconciliation: plan hash, track sequence, final clip geometry, loops, tempo, WarpMode, swap and automation; emits hash-backed JSON",
+      "status": "working",
+      "added": "2026-07-15"
+    },
     "apply_automation": {
       "path": "Source/apply_automation.py",
       "purpose": "Patches volume crossfades (Utility Gain) + EQ bass kills (ChannelEQ LowShelfGain) into a Sections .als. Section-structure-driven bass swap detection (incoming first drop > outgoing outro > outgoing last fill/break > midpoint). Two-phase transition model: incoming ramps up to swap, outgoing fades out after swap. Line-level XML patching, \\r\\n line endings, dynamic AutomationTarget discovery.",
@@ -149,6 +161,12 @@
       "purpose": "8-quarter blind PNG renderer for section validation",
       "status": "working",
       "added": "2026-05-20"
+    },
+    "kick_model_adapter": {
+      "path": "Source/kick_model_adapter.py",
+      "purpose": "Lazy default-off Kick Detector V3 adapter for stem_detector.py; loads sibling V3 weights/reference smoothing only when --kick-model is enabled, runs a single Demucs pass for envelopes + raw drums, and preserves legacy flag-off behavior.",
+      "status": "working",
+      "added": "2026-07-09"
     }
   },
   "config_path": "Config/settings.json",
@@ -168,6 +186,22 @@
     "samwillsmixing.com"
   ],
   "sessions": [
+    {
+      "date": "2026-07-15",
+      "focus": "Hardened one-transition production proof through a clean Ableton-open Final V4",
+      "key_changes": [
+        "Added 16-48-bar arrangement safety, shared loop budgets, immutable MixPlan V1, explicit-report automation, and post-mutation ALS reconciliation",
+        "Rejected Final V1 (wrong swap), Final V2 (fading-outro loop), and Final V3 (stale MainTrack tempo envelope overriding 120.49 with 123 BPM)",
+        "Fixed fixed-tempo writing to remove inherited tempo automation and hardened validate_mix_plan_als.py to reject effective-tempo overrides",
+        "Generated Final V4.als plus MixPlan/Arrangement Report/Reconciliation V3; Live opened cleanly and showed 120.49 BPM"
+      ],
+      "validation": "101 passed, 4 unavailable golden fixtures skipped before the final tempo regression; focused generator/arrangement suite 22 passed; Final V4 validate_als PASS; MixPlan-to-ALS reconciliation 9 checks PASS; Ableton Live visual-open tempo check PASS",
+      "open_items": [
+        "No Render V4.wav exists: the export was stopped before rendering because Sam needed the computer",
+        "Fresh-launch Live, decline V3 recovery if prompted, render Final V4 as Main 44.1kHz/24-bit WAV with normalize/dither off",
+        "Run objective whole-file and beat-448 transition checks, then obtain Sam's listening verdict before three-track expansion"
+      ]
+    },
     {
       "date": "2026-06-12 overnight",
       "focus": "V1 warp post-mortem -> gate v3 (Ableton .asd ticks = phase ground truth) -> RB-less rebuild -> In-Key Mix V2 + automated Ableton bounce (Sam's home PC)",

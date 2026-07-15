@@ -27,10 +27,15 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+MAX_LOOP_REPEATS = 8
+MAX_LOOP_EXTENSION_BEATS = 128.0  # 32 bars at 4/4
 
 
 # ── ALS read / write ─────────────────────────────────────────────────────────
@@ -46,11 +51,12 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
     content = "".join(lines)
     with gzip.open(output_path, "wb") as f:
         f.write(content.encode("utf-8"))
-    try:
-        from validate_als import report_als
-        report_als(output_path)
-    except Exception as _ve:
-        print(f"  [skip] ALS self-validation unavailable: {_ve}")
+    from validate_als import report_als
+    errors = report_als(output_path)
+    if errors:
+        raise ValueError(
+            f"ALS validation failed for {output_path.name}: {errors[0]}"
+        )
     return output_path
 
 
@@ -223,6 +229,62 @@ class LoopSpec:
     # must be pushed back to make room for the loop region in front of it.
     # Each entry: (clip_name_to_find, delta_beats).
     shifts_before_insert: list[tuple[str, float]] = field(default_factory=list)
+
+
+def validate_loop_spec(spec: LoopSpec) -> None:
+    """Reject unsafe loop geometry before any ALS text is mutated."""
+    numeric = {
+        "source_beat_start": spec.source_beat_start,
+        "source_beat_end": spec.source_beat_end,
+        "insert_at_beat": spec.insert_at_beat,
+        "tail_partial_beats": spec.tail_partial_beats,
+    }
+    for field_name, value in numeric.items():
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(
+                f"LoopSpec for '{spec.track_name}' has invalid {field_name}: {value!r}"
+            )
+
+    loop_len = spec.source_beat_end - spec.source_beat_start
+    if loop_len <= 0:
+        raise ValueError(
+            f"LoopSpec for '{spec.track_name}' has non-positive loop length {loop_len}"
+        )
+    if not isinstance(spec.count, int) or isinstance(spec.count, bool) or spec.count < 0:
+        raise ValueError(
+            f"LoopSpec for '{spec.track_name}' has invalid repeat count {spec.count!r}"
+        )
+    if spec.count > MAX_LOOP_REPEATS:
+        raise ValueError(
+            f"LoopSpec for '{spec.track_name}' exceeds repeat cap "
+            f"({spec.count} > {MAX_LOOP_REPEATS})"
+        )
+    if spec.tail_partial_beats < 0 or spec.tail_partial_beats > loop_len:
+        raise ValueError(
+            f"LoopSpec for '{spec.track_name}' has invalid partial length "
+            f"{spec.tail_partial_beats} for a {loop_len}-beat loop"
+        )
+    if spec.insert_at_beat < 0:
+        raise ValueError(
+            f"LoopSpec for '{spec.track_name}' would create negative arrangement Time "
+            f"at beat {spec.insert_at_beat}"
+        )
+
+    extension = spec.count * loop_len + spec.tail_partial_beats
+    if extension > MAX_LOOP_EXTENSION_BEATS:
+        raise ValueError(
+            f"LoopSpec for '{spec.track_name}' exceeds extension cap "
+            f"({extension:g} > {MAX_LOOP_EXTENSION_BEATS:g} beats)"
+        )
+    for clip_name, delta in spec.shifts_before_insert:
+        if not clip_name or not isinstance(delta, (int, float)) or not math.isfinite(delta):
+            raise ValueError(
+                f"LoopSpec for '{spec.track_name}' has an invalid pre-insert shift"
+            )
+        if delta < 0:
+            raise ValueError(
+                f"LoopSpec for '{spec.track_name}' has a negative pre-insert shift"
+            )
 
 
 def clone_clip(template_lines: list[str], spec: LoopSpec,
@@ -489,9 +551,34 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
     return changed
 
 
+def _preflight_loop_specs(lines: list[str], specs: list[LoopSpec]) -> None:
+    """Validate an entire loop batch before the first in-memory edit."""
+    als_tracks = find_track_line_ranges(lines)
+    for spec in specs:
+        validate_loop_spec(spec)
+        matched = _match_track(spec.track_name, als_tracks)
+        if not matched:
+            raise ValueError(f"Loop target track '{spec.track_name}' was not found")
+
+        track_start, track_end, track_name = matched
+        events_start, events_end = find_clip_events(lines, track_start, track_end)
+        if events_start < 0:
+            raise ValueError(f"Loop target track '{track_name}' has no Events block")
+        if not extract_first_clip_lines(lines, events_start, events_end):
+            raise ValueError(f"Loop target track '{track_name}' has no AudioClip template")
+
+        track_text = "".join(lines[track_start:track_end + 1])
+        for clip_name, _delta in spec.shifts_before_insert:
+            if f'Value="{clip_name}"' not in track_text:
+                raise ValueError(
+                    f"Pre-insert shift target '{clip_name}' was not found in '{track_name}'"
+                )
+
+
 def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
-    """Insert loop clips into the ALS lines.  Returns modified lines."""
+    """Insert a preflighted batch of loop clips into the ALS lines."""
     global _NEXT_ID
+    _preflight_loop_specs(lines, specs)
     _NEXT_ID = find_max_id(lines) + 100  # safe gap above existing IDs
 
     # Re-find each track's line range on the CURRENT lines for every spec.
@@ -504,8 +591,7 @@ def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
         als_tracks = find_track_line_ranges(lines)
         matched = _match_track(spec.track_name, als_tracks)
         if not matched:
-            print(f"  WARNING: track '{spec.track_name}' not found, skipping loops")
-            continue
+            raise ValueError(f"Loop target track '{spec.track_name}' disappeared during apply")
 
         track_start, track_end, tname = matched
 
@@ -517,12 +603,13 @@ def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
                 print(f"  Shifted '{clip_to_shift}' in '{tname}' by +{delta:.0f} beats "
                       f"({n} field(s)) to make room for tail loop")
             else:
-                print(f"  WARNING: could not find '{clip_to_shift}' in '{tname}' to shift")
+                raise ValueError(
+                    f"Pre-insert shift target '{clip_to_shift}' disappeared in '{tname}'"
+                )
 
         events_start, events_end = find_clip_events(lines, track_start, track_end)
         if events_start < 0:
-            print(f"  WARNING: no Events block found in '{tname}', skipping")
-            continue
+            raise ValueError(f"Loop target track '{tname}' lost its Events block")
 
         # Handle self-closing <Events />
         is_empty = events_start == events_end and "<Events />" in lines[events_start]
@@ -537,8 +624,7 @@ def apply_loops(lines: list[str], specs: list[LoopSpec]) -> list[str]:
         # Find template clip
         clip_range = extract_first_clip_lines(lines, events_start, events_end)
         if not clip_range:
-            print(f"  WARNING: no AudioClip found in '{tname}', skipping")
-            continue
+            raise ValueError(f"Loop target track '{tname}' lost its AudioClip template")
 
         clip_start, clip_end = clip_range
         template = lines[clip_start:clip_end + 1]

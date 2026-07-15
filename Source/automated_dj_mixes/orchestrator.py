@@ -197,6 +197,9 @@ def run_pipeline(
     allow_non_master: bool = False,
     stem_sections: bool = False,
     stem_grid: bool = False,
+    kick_model: bool = False,
+    kick_model_path: Path | None = None,
+    kick_model_device: str = "auto",
     track_order: list[str] | None = None,
 ) -> Path | None:
     if project_root is None:
@@ -216,6 +219,11 @@ def run_pipeline(
             "cut path). Without it, section cuts read grid-unaware cached features while "
             "audio warps to the stem grid — a two-clock split. Add both flags, or drop "
             "--stem-grid to use the Rekordbox/.asd grid.")
+
+    if kick_model and not (sections_layout and stem_sections):
+        raise RuntimeError(
+            "--kick-model only applies to --sections-layout --stem-sections. "
+            "Add both flags, or drop --kick-model to keep the legacy section path.")
 
     # ------------------------------------------------------------------
     # Master-file gate — refuse to feed stems, freezes, or raw audio into
@@ -688,6 +696,9 @@ def run_pipeline(
                     stem_res = stem_detect(
                         analysis.path, input_dir.parent,
                         bpm=det_bpm, downbeat=det_downbeat,
+                        kick_model=kick_model,
+                        kick_model_path=kick_model_path,
+                        kick_model_device=kick_model_device,
                         make_viz=True,   # DETECT_<track>.png = the per-track sanity check
                                          # (full track + 4 stem panels + section/beat annotations).
                                          # Replaces the old 80-PNG blind pass (Sam 2026-06-10).
@@ -845,6 +856,14 @@ def main():
                              "of Rekordbox. Confident grids become authority (RB demoted to "
                              "an advisory cross-check, kicks arbitrate); weak/syncopated "
                              "tracks keep RB. Separates its own drum stem (GPU Demucs).")
+    parser.add_argument("--kick-model", action="store_true",
+                        help="Use Kick Detector V3 for stem-section kick IN/OUT presence. "
+                             "Requires --sections-layout --stem-sections. Default is off.")
+    parser.add_argument("--kick-model-path", type=Path, default=None,
+                        help="Path to Kick Detector weights. Defaults to sibling "
+                             "'Kick Detector/Models/kick_crnn_V3.pt'.")
+    parser.add_argument("--kick-model-device", default="auto",
+                        help="Torch device for Kick Detector and its Demucs pass: auto, cpu, or cuda.")
     parser.add_argument("--order", type=str, default=None,
                         help="Manual track order override (testing). Comma-separated, case-"
                              "insensitive substrings of filenames, e.g. \"Samm,Call Me,Crusy\". "
@@ -864,6 +883,9 @@ def main():
         allow_non_master=args.allow_non_master,
         stem_sections=args.stem_sections,
         stem_grid=args.stem_grid,
+        kick_model=args.kick_model,
+        kick_model_path=args.kick_model_path,
+        kick_model_device=args.kick_model_device,
         track_order=[k.strip() for k in args.order.split(",")] if args.order else None,
     )
     if als_path is not None:

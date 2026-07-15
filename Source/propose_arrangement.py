@@ -26,7 +26,10 @@ Can also be imported:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +50,7 @@ from apply_loops import (
     find_track_line_ranges,
     remove_named_clips,
     shift_track_clips,
+    validate_loop_spec,
 )
 
 
@@ -126,6 +130,124 @@ class ArrangementPlan:
     loops: list[LoopSpec]
     notes: list[str] = field(default_factory=list)
     alignments: list = field(default_factory=list)   # per-pair align_engine Alignment objects
+    mix_plan: object | None = None
+
+
+def validate_arrangement_plan(plan: ArrangementPlan) -> None:
+    """Hard gate final geometry before the ALS writer can run."""
+    expected_overlaps = max(0, len(plan.tracks) - 1)
+    if len(plan.overlaps) != expected_overlaps:
+        raise ValueError(
+            f"Arrangement has {len(plan.overlaps)} transitions for "
+            f"{len(plan.tracks)} tracks; expected {expected_overlaps}"
+        )
+
+    for track in plan.tracks:
+        for field_name, value in (("arr_start", track.arr_start),
+                                  ("arr_end", track.arr_end)):
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(
+                    f"Track '{track.name}' has invalid {field_name}: {value!r}"
+                )
+        if track.arr_start < 0:
+            raise ValueError(
+                f"Track '{track.name}' has negative arrangement Time {track.arr_start}"
+            )
+        if track.arr_end <= track.arr_start:
+            raise ValueError(
+                f"Track '{track.name}' has non-positive arrangement duration"
+            )
+
+    for index, overlap in enumerate(plan.overlaps):
+        out_track = plan.tracks[index]
+        in_track = plan.tracks[index + 1]
+        final_beats = out_track.arr_end - in_track.arr_start
+
+        if final_beats > MAX_OVERLAP_BEATS:
+            raise ValueError(
+                f"Transition {index + 1} exceeds the 48-bar cap "
+                f"({final_beats / 4.0:g} bars)"
+            )
+        if final_beats < MIN_OVERLAP_BEATS:
+            raise ValueError(
+                f"Transition {index + 1} is below the 16-bar minimum "
+                f"({final_beats / 4.0:g} bars)"
+            )
+        if overlap.out_track != out_track.name or overlap.in_track != in_track.name:
+            raise ValueError(
+                f"Transition {index + 1} does not match the main track sequence"
+            )
+        expected = {
+            "overlap_start": in_track.arr_start,
+            "overlap_end": out_track.arr_end,
+            "overlap_beats": final_beats,
+            "overlap_bars": final_beats / 4.0,
+        }
+        for field_name, value in expected.items():
+            actual = getattr(overlap, field_name)
+            if not isinstance(actual, (int, float)) or not math.isfinite(actual):
+                raise ValueError(
+                    f"Transition {index + 1} has invalid {field_name}: {actual!r}"
+                )
+            if not math.isclose(actual, value, abs_tol=1e-6):
+                raise ValueError(
+                    f"Transition {index + 1} has stale {field_name}: "
+                    f"{actual!r} != {value!r}"
+                )
+        if overlap.status != "ok":
+            raise ValueError(
+                f"Transition {index + 1} final status is '{overlap.status}', not 'ok'"
+            )
+
+    for spec in plan.loops:
+        validate_loop_spec(spec)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_json(value) -> str:
+    content = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        allow_nan=False,
+    )
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def apply_playback_policy(lines: list[str], tracks: list[TrackInfo],
+                          project_bpm: float, warp_mode: int) -> None:
+    """Apply the MixPlan's fixed tempo and per-clip warp mode before writing."""
+    if not math.isfinite(project_bpm) or not 60.0 <= project_bpm <= 200.0:
+        raise ValueError(f"Invalid project BPM: {project_bpm!r}")
+    if warp_mode not in (4, 6):
+        raise ValueError(f"Unsupported Ableton warp mode: {warp_mode!r}")
+
+    from automated_dj_mixes.als_generator import _set_project_bpm
+    _set_project_bpm(lines, project_bpm)
+    for track in tracks:
+        matched = _match_track(track.name, find_track_line_ranges(lines))
+        if not matched:
+            raise ValueError(f"Playback-policy track '{track.name}' was not found")
+        start, end, matched_name = matched
+        changed = 0
+        for index in range(start, end + 1):
+            if "<WarpMode " in lines[index]:
+                updated = re.sub(
+                    r'(<WarpMode Value=")[^"]+("\s*/>)',
+                    rf'\g<1>{warp_mode}\g<2>',
+                    lines[index],
+                    count=1,
+                )
+                if updated != lines[index]:
+                    lines[index] = updated
+                changed += 1
+        if changed == 0:
+            raise ValueError(f"Track '{matched_name}' has no WarpMode targets")
 
 
 # -- Section helpers ----------------------------------------------------------
@@ -409,7 +531,26 @@ def analyse_overlap(out_track: TrackInfo, in_track: TrackInfo,
     elif not USE_ALIGN_ENGINE and status in ("short", "none"):
         _plan_loop_extensions(out_track, in_track, analysis)
 
+    _refresh_overlap_geometry(out_track, in_track, analysis)
     return analysis
+
+
+def _refresh_overlap_geometry(out_track: TrackInfo, in_track: TrackInfo,
+                              analysis: OverlapAnalysis) -> None:
+    """Recompute overlap after every planned cut/loop mutation."""
+    overlap_beats = out_track.arr_end - in_track.arr_start
+    analysis.overlap_start = in_track.arr_start
+    analysis.overlap_end = out_track.arr_end
+    analysis.overlap_beats = overlap_beats
+    analysis.overlap_bars = overlap_beats / 4.0
+    if overlap_beats <= 0:
+        analysis.status = "none"
+    elif overlap_beats < MIN_OVERLAP_BEATS:
+        analysis.status = "short"
+    elif overlap_beats > MAX_OVERLAP_BEATS:
+        analysis.status = "long"
+    else:
+        analysis.status = "ok"
 
 
 def _clean_tail_loop(wav_path, section: dict, loop_len: int,
@@ -583,6 +724,7 @@ def _plan_loop_extensions(out_track: TrackInfo, in_track: TrackInfo,
                 insert_at_beat=insert_beat,
                 clip_name="{}_intro_loop".format(first_intro.get("name", "intro")),
             )
+            in_track.arr_start = min(in_track.arr_start, insert_beat)
 
     # Update analysis notes
     parts = []
@@ -624,10 +766,22 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
             chunk_beats = (fc.source_end_bar - fc.source_start_bar) * 4.0
             partial_beats = fc.partial_bars * 4.0
             ext = fc.reps * chunk_beats + partial_beats          # total fill (exact)
+            source_start = fc.source_start_bar * 4.0
+            source_end = fc.source_end_bar * 4.0
+            outro_source_start = float(outro["source_start_beats"])
+            if source_start >= outro_source_start:
+                previous = pre_outro_section(out_track)
+                source_end = outro_source_start
+                source_start = source_end - chunk_beats
+                if previous is None or source_start < previous["source_start_beats"]:
+                    raise ValueError(
+                        f"No full-energy pre-outro loop window for '{out_track.name}'"
+                    )
+                analysis.notes += "; moved tail-loop source before fading outro"
             analysis.out_tail_loop = LoopSpec(
                 track_name=out_track.name,
-                source_beat_start=fc.source_start_bar * 4.0,
-                source_beat_end=fc.source_end_bar * 4.0,
+                source_beat_start=source_start,
+                source_beat_end=source_end,
                 count=fc.reps,
                 insert_at_beat=outro["arr_time"],
                 clip_name="{}_tail_loop".format(outro.get("name", "tail")),
@@ -668,6 +822,9 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                     count=fc.reps,
                     insert_at_beat=float(intro["arr_time"] - fill),
                     clip_name="{}_intro_loop".format(intro.get("name", "intro")),
+                )
+                in_track.arr_start = min(
+                    in_track.arr_start, analysis.in_intro_loop.insert_at_beat
                 )
                 analysis.notes += "; intro loop {:.0f}bx{:d} (fill {:.0f}b before intro)".format(
                     chunk_beats, fc.reps, fill)
@@ -794,6 +951,9 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                         output_path: Path,
                         history_path: Path | None = None,
                         hints_path: Path | None = None,
+                        mix_plan_path: Path | None = None,
+                        project_bpm: float | None = None,
+                        warp_mode: int | None = None,
                         dry_run: bool = False) -> ArrangementPlan:
     """Propose and optionally apply a full arrangement.
 
@@ -809,6 +969,10 @@ def propose_arrangement(als_path: Path, sections_path: Path,
     # -- Load sections JSON --
     with open(sections_path, encoding="utf-8") as f:
         sections = json.load(f)
+    original_section_hashes = {
+        name: _sha256_json(track_sections)
+        for name, track_sections in sections.items()
+    }
 
     tracks = ordered_tracks(sections)
 
@@ -969,7 +1133,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             all_outro_splits.append(analysis.outro_split)
 
         # Print summary
-        status_icon = {"ok": "+", "short": "!", "none": "X"}
+        status_icon = {"ok": "+", "short": "!", "long": "!", "none": "X"}
         print("  T{} [{}] {} -> {}".format(
             analysis.pair_index,
             status_icon.get(analysis.status, "?"),
@@ -987,12 +1151,71 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         loops=all_loops,
         alignments=alignments,
     )
+    validate_arrangement_plan(plan)
+
+    if (project_bpm is None) != (warp_mode is None):
+        raise ValueError("project_bpm and warp_mode must be supplied together")
+
+    if mix_plan_path is not None:
+        from automated_dj_mixes.mix_plan import (
+            build_one_transition_mix_plan,
+            write_mix_plan,
+        )
+
+        source_hashes: dict[str, str] = {}
+        for track in tracks:
+            wav_path = getattr(track, "wav_path", None)
+            if wav_path is None or not Path(wav_path).is_file():
+                raise ValueError(
+                    f"Cannot certify MixPlan source for '{track.name}': WAV not found"
+                )
+            source_hashes[track.name] = _sha256_file(Path(wav_path))
+
+        input_hashes = {
+            "input_als": _sha256_file(als_path),
+            "sections_json": _sha256_file(sections_path),
+        }
+        if hints_path is not None:
+            if not hints_path.is_file():
+                raise ValueError(f"MixPlan hints file was not found: {hints_path}")
+            input_hashes["hints_json"] = _sha256_file(hints_path)
+
+        plan.mix_plan = build_one_transition_mix_plan(
+            plan,
+            source_hashes=source_hashes,
+            section_map_hashes=original_section_hashes,
+            input_hashes=input_hashes,
+            policy_versions={
+                "alignment": "bounded_alignment_v1",
+                "loop_budget": "shared_loop_budget_v1",
+                "tempo_strategy": "fixed_center_v1" if project_bpm is not None else "inherited_v1",
+                "warp_assignment": "explicit_v1" if warp_mode is not None else "inherited_v1",
+            },
+            tool_versions={"propose_arrangement": "mix_plan_v1"},
+            human_overrides=(
+                {
+                    "project_bpm": f"{project_bpm:.6f}",
+                    "warp_mode": "repitch" if warp_mode == 6 else "complex_pro",
+                }
+                if project_bpm is not None else {}
+            ),
+        )
+        write_mix_plan(plan.mix_plan, mix_plan_path)
+        print(f"  MixPlan: {mix_plan_path} ({plan.mix_plan.plan_hash})")
 
     # -- Apply to ALS (unless dry-run) --
     if not dry_run:
         print("\n--- Applying to ALS ---")
         lines = decompress_als(als_path)
         print("  Read {} lines from {}".format(len(lines), als_path.name))
+
+        if project_bpm is not None and warp_mode is not None:
+            apply_playback_policy(lines, tracks, project_bpm, warp_mode)
+            print(
+                "  Playback policy: {:.3f} BPM, WarpMode {}".format(
+                    project_bpm, warp_mode
+                )
+            )
 
         # Step 0: Remove clips for intro-skipped sections so the trimmed
         # intro doesn't play (intro_skip_bars). Done before shifts so only the
@@ -1111,6 +1334,14 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
     track_lookup = {t.name: t for t in plan.tracks}
 
     report = {
+        "mix_plan": (
+            {
+                "schema_version": plan.mix_plan.schema_version,
+                "production_scope": plan.mix_plan.production_scope,
+                "plan_hash": plan.mix_plan.plan_hash,
+            }
+            if plan.mix_plan is not None else None
+        ),
         "track_count": len(plan.tracks),
         "transition_count": len(plan.overlaps),
         "tracks": [
@@ -1244,6 +1475,12 @@ def main():
                         help="Path to track_hints.json (for intro_skip_bars, etc.)")
     parser.add_argument("--report", type=Path, default=None,
                         help="Path for arrangement report JSON")
+    parser.add_argument("--mix-plan", type=Path, default=None,
+                        help="Write strict one-transition MixPlan V1 before ALS mutation")
+    parser.add_argument("--project-bpm", type=float, default=None,
+                        help="Apply and freeze a fixed project BPM")
+    parser.add_argument("--warp-mode", choices=("repitch", "complex-pro"), default=None,
+                        help="Apply and freeze one Ableton warp mode for this proof")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print plan without modifying ALS")
 
@@ -1255,6 +1492,10 @@ def main():
         output_path=args.output,
         history_path=args.history,
         hints_path=args.hints,
+        mix_plan_path=args.mix_plan,
+        project_bpm=args.project_bpm,
+        warp_mode=(6 if args.warp_mode == "repitch" else 4)
+                  if args.warp_mode is not None else None,
         dry_run=args.dry_run,
     )
 

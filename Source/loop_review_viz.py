@@ -16,6 +16,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import sys
 from pathlib import Path
@@ -228,16 +229,18 @@ def main() -> int:
             print(f"  L{i:02d}: no BPM for {track}, skip")
             continue
 
-        wav = audio_dir / f"{track}.wav"
+        display_track = html.unescape(track)
+        wav = audio_dir / f"{display_track}.wav"
         if not wav.exists():
             print(f"  L{i:02d}: no audio at {wav}, skip")
             continue
         print(f"  L{i:02d} {track[:40]} {ltype} beats {beat_a:.0f}-{beat_b:.0f} ×{count}")
         y, sr = librosa.load(str(wav), sr=22050, mono=True)
-        safe_track = track.replace("/", "_").replace("\\", "_")[:50]
+        safe_track = display_track.replace("/", "_").replace("\\", "_")[:50]
         out_path = out_dir / f"L{i:02d}_{safe_track}_{ltype}.png"
-        render_loop(y, sr, bpm, beat_a, beat_b, track, ltype, count, out_path, i)
-        print(f"     → {out_path.name}")
+        render_loop(y, sr, bpm, beat_a, beat_b, display_track,
+                    ltype, count, out_path, i)
+        print(f"     -> {out_path.name}")
 
     print(f"\nDone. {len(loops)} loop PNG(s) in {out_dir}")
     return 0
