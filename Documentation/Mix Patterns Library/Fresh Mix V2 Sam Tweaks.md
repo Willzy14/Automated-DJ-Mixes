@@ -22,9 +22,9 @@ Inputs:
 |---|---|---:|---:|---:|---|
 | 1 | Falling -> Roadblock | 35 bars | 33 bars | 0 beats | Keep the successful swap; remove eight beats from Falling's exit and finish on its final dropout. |
 | 2 | Roadblock -> Get The Message | 18 bars | 26 bars | 0 beats | Start the incoming track eight bars earlier with a four-bar intro phrase repeated twice at low level; keep bass handover unchanged. |
-| 3 | Get The Message -> Same Thing | 26 bars | 73.82 bars | -64 beats | Add six four-bar incoming intro repeats, mute the incoming track across the outgoing eight-beat dropout, and hand bass over at Same Thing's source beat 96 drop. Extend the outgoing tail. |
+| 3 | Get The Message -> Same Thing | 26 bars | 73.82 bars | -64 beats | Add six four-bar incoming intro repeats, mute the incoming track across the outgoing eight-beat dropout, and hand bass over at Same Thing's source beat 96 drop. Retain the outgoing hat hit at the dropout start and let its long decay act as the transition effect. |
 | 4 | Same Thing -> Making Shapes | 58 bars | 37 bars | -128 beats | Remove the generated outgoing tail loop. Hand bass over at outgoing outro source beat 768 and incoming source beat 64 (`intro_2`). Suppress the outgoing percussion across the beat dropout, then bring back its isolated long-tail hat as transition punctuation. |
-| 5 | Making Shapes -> Natural Child | 56 bars | 58.70 bars | -64 beats | Replace the generated eight-beat source 672-680 loop (7x) with a later 16-beat outro phrase at 704-720 (5x). Bring Natural Child in eight bars earlier and swap at source beat 32. |
+| 5 | Making Shapes -> Natural Child | 56 bars | 58.70 bars | -64 beats | Replace the generated eight-beat source 672-680 loop (7x) with a later 16-beat outro phrase at 704-720 (5x). Bring Natural Child in eight bars earlier, swap at source beat 32, and retain the outgoing delayed hat hit over the incoming fill as transition punctuation. |
 | 6 | Natural Child -> Seein' You | 32 bars | 55.25 bars | -32 beats | Repeat Seein' You's first 32 source beats four times at low level. Preserve the outgoing source-748 cue and make the full handover at incoming source beat 32. |
 | 7 | Seein' You -> Feel Your Touch | 34 bars | 42 bars | -64 beats | Expose a missed 16-beat dropout at Seein' You source 560-576, start the incoming intro at its endpoint, and swap at Feel Your Touch source beat 128/drop start. |
 
@@ -48,12 +48,15 @@ Baseline overlap mean/median: 37/34 bars. Sam overlap mean/median: 46.54/42 bars
 
 8. **The hard bass swap model is validated.** Sam retained binary Channel EQ values (0.18/1.0) and single-beat ownership changes. The main error was where the swap happened, not the bass automation shape.
 
+9. **End-of-track percussion tails are transition assets.** T3, T4 and T5 each retain an outgoing hat/percussion hit and let its delay/reverb tail ring across the incoming change. The event anchor is the hit onset, often at a dropout or incoming fill; the clip may end at a non-integer beat simply because the audible decay has finished and no meaningful audio remains. Learn the transient and its audible tail, never the raw clip endpoint as a phrase boundary.
+
 ## Candidate Architecture Changes
 
 - Represent each transition with independent `entry`, `protected_windows`, `accent_return`, `bass_swap`, and `exit` anchors, each mapped on both tracks' source clocks.
 - Add an evidence-backed extended-transition mode up to at least 80 bars; do not make it the default.
 - Generate incoming intro-loop candidates at 16- and 32-beat phrase lengths, with low-level/bass-killed playback until handover.
 - For short outgoing tail/accent loops, prefer musically justified 4- or 8-beat candidates; do not select 12 beats without explicit phrase evidence.
+- Detect late-track high-frequency percussion transients with useful delay/reverb decay and low kick/bass conflict. Represent them as `transition_accent` candidates with `accent_onset` and `audible_tail_end`; align the onset to an incoming dropout, fill, drop or ownership event.
 - Score outgoing loop candidates across the full late-track region rather than only the detected outro start.
 - Preserve dropout landmarks as evidence; promote them to structural clips only when they interrupt an active section and have phrase-level prominence.
 - Make correction ingestion source-aware and arrangement-aware before adding anything to `pair_history.jsonl`.
@@ -61,9 +64,9 @@ Baseline overlap mean/median: 37/34 bars. Sam overlap mean/median: 46.54/42 bars
 ## Do Not Generalise Yet
 
 - T3's 12-beat outgoing loop was incidental. Sam confirmed it should normally have been a 4- or 8-beat loop, although 12 happened to work here. Never learn 12 beats as the preferred rule from this example.
-- T3 and T5 finish at non-integer source/arrangement beats. These may be deliberate audio-tail edits rather than phrase anchors.
+- T3 and T5's non-integer clip ends are confirmed audible-tail trims. They contain no further meaningful audio and are not phrase anchors; only the preceding hat onset and decay are musically intentional.
 - Exact sneak levels vary. The supported rule is a low-level incoming layer with bass removed, not one fixed gain value.
 
 ## Deployment Status
 
-These are candidate rules from one corrected eight-track mix. The source-clock facts are strong; creative preferences remain N=1 until replayed on a fresh mix or confirmed in the historical ALS corpus. Do not overwrite `interim_v1` or change production defaults solely from this file.
+These are candidate rules from one corrected eight-track mix. The source-clock facts are strong, and the percussion-tail accent now has three confirmed examples within the mix; it still requires held-out replay before becoming a default. All previously ambiguous edits in this correction have now been resolved. Do not overwrite `interim_v1` or change production defaults solely from this file.

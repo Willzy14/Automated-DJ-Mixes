@@ -211,8 +211,8 @@
       "validation": "Sam ALS validate_als PASS; correction analyzer focused tests 2 passed; eight warp grids numerically identical; generated diff JSON parses",
       "open_items": [
         "Replay the high-confidence rules on a fresh or held-out mix before changing production defaults",
-        "Keep T3's confirmed-incidental 12-beat loop out of learned rules; prefer 4/8-beat short-loop candidates and clarify only the non-integer tail edits",
-        "Implement independent transition anchors, protected dropout windows with optional outgoing accent return, and evidence-backed extended transition mode"
+        "Keep T3's confirmed-incidental 12-beat loop out of learned rules and prefer 4/8-beat short-loop candidates",
+        "Implement independent transition anchors, protected dropout windows, outgoing percussion-tail transition accents and evidence-backed extended transition mode"
       ]
     },
     {
