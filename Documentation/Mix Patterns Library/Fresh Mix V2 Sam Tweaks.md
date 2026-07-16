@@ -23,7 +23,7 @@ Inputs:
 | 1 | Falling -> Roadblock | 35 bars | 33 bars | 0 beats | Keep the successful swap; remove eight beats from Falling's exit and finish on its final dropout. |
 | 2 | Roadblock -> Get The Message | 18 bars | 26 bars | 0 beats | Start the incoming track eight bars earlier with a four-bar intro phrase repeated twice at low level; keep bass handover unchanged. |
 | 3 | Get The Message -> Same Thing | 26 bars | 73.82 bars | -64 beats | Add six four-bar incoming intro repeats, mute the incoming track across the outgoing eight-beat dropout, and hand bass over at Same Thing's source beat 96 drop. Extend the outgoing tail. |
-| 4 | Same Thing -> Making Shapes | 58 bars | 37 bars | -128 beats | Remove the generated outgoing tail loop. Hand bass over at outgoing outro source beat 768 and incoming source beat 64 (`intro_2`), not at the incoming first drop. |
+| 4 | Same Thing -> Making Shapes | 58 bars | 37 bars | -128 beats | Remove the generated outgoing tail loop. Hand bass over at outgoing outro source beat 768 and incoming source beat 64 (`intro_2`). Suppress the outgoing percussion across the beat dropout, then bring back its isolated long-tail hat as transition punctuation. |
 | 5 | Making Shapes -> Natural Child | 56 bars | 58.70 bars | -64 beats | Replace the generated eight-beat source 672-680 loop (7x) with a later 16-beat outro phrase at 704-720 (5x). Bring Natural Child in eight bars earlier and swap at source beat 32. |
 | 6 | Natural Child -> Seein' You | 32 bars | 55.25 bars | -32 beats | Repeat Seein' You's first 32 source beats four times at low level. Preserve the outgoing source-748 cue and make the full handover at incoming source beat 32. |
 | 7 | Seein' You -> Feel Your Touch | 34 bars | 42 bars | -64 beats | Expose a missed 16-beat dropout at Seein' You source 560-576, start the incoming intro at its endpoint, and swap at Feel Your Touch source beat 128/drop start. |
@@ -38,7 +38,7 @@ Baseline overlap mean/median: 37/34 bars. Sam overlap mean/median: 46.54/42 bars
 
 3. **A 48-bar ceiling cannot be a universal hard musical limit.** Corrected transitions include 55.25, 58.70 and 73.82 bars. Keep a short/default lane, but allow an evidence-backed extended lane when clean intro loops and paired exit cues exist.
 
-4. **Protect important dropouts inside a transition.** In T3 Sam hard-mutes the incoming track from arrangement beats 1564-1572, exactly matching Get The Message's outgoing eight-beat dropout. Dropout landmarks are not only possible start/end markers; they can create protected silence windows inside a long blend.
+4. **Protect important dropouts inside a transition, then allow a deliberate accent return.** In T3 Sam hard-mutes the incoming track from arrangement beats 1564-1572, exactly matching Get The Message's outgoing eight-beat dropout. In T4 he removes the outgoing percussion that would cover the dropout, then raises the outgoing track again for one isolated long-tail hat that acts as the transition effect. A protected window therefore needs an optional post-dropout `accent_return`, not just a blanket mute until exit.
 
 5. **Do not turn every raw kick gap into a structural clip.** Sam consolidated Roadblock from 30 display fragments to five musical clips, but manually added the missed 16-beat Seein' You dropout inside an active drop. Raw landmarks, visual overlays and structural section splits need separate promotion rules. A gap inside an already kickless intro/break is usually evidence, not a new section; a phrase-level dropout interrupting an active drop is structural.
 
@@ -50,17 +50,17 @@ Baseline overlap mean/median: 37/34 bars. Sam overlap mean/median: 46.54/42 bars
 
 ## Candidate Architecture Changes
 
-- Represent each transition with independent `entry`, `protected_windows`, `bass_swap`, and `exit` anchors, each mapped on both tracks' source clocks.
+- Represent each transition with independent `entry`, `protected_windows`, `accent_return`, `bass_swap`, and `exit` anchors, each mapped on both tracks' source clocks.
 - Add an evidence-backed extended-transition mode up to at least 80 bars; do not make it the default.
 - Generate incoming intro-loop candidates at 16- and 32-beat phrase lengths, with low-level/bass-killed playback until handover.
+- For short outgoing tail/accent loops, prefer musically justified 4- or 8-beat candidates; do not select 12 beats without explicit phrase evidence.
 - Score outgoing loop candidates across the full late-track region rather than only the detected outro start.
 - Preserve dropout landmarks as evidence; promote them to structural clips only when they interrupt an active section and have phrase-level prominence.
 - Make correction ingestion source-aware and arrangement-aware before adding anything to `pair_history.jsonl`.
 
 ## Do Not Generalise Yet
 
-- T3 contains a 12-beat outgoing loop repeated five times. It may be a deliberate three-bar phrase or an accidental edit; it is not evidence for a general 12-beat-loop rule.
-- T4 contains a two-beat gap in Same Thing at arrangement 2370-2372 and a detailed outgoing volume ride. Confirm by ear before learning either.
+- T3's 12-beat outgoing loop was incidental. Sam confirmed it should normally have been a 4- or 8-beat loop, although 12 happened to work here. Never learn 12 beats as the preferred rule from this example.
 - T3 and T5 finish at non-integer source/arrangement beats. These may be deliberate audio-tail edits rather than phrase anchors.
 - Exact sneak levels vary. The supported rule is a low-level incoming layer with bass removed, not one fixed gain value.
 
