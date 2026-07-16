@@ -17,9 +17,9 @@ Library: `check_grid`, `enforce_beatgrid_quality`, `load_grid_overrides`, `apply
 
 
 ### `Source/automated_dj_mixes/orchestrator.py`
-Main pipeline controller. Wires analysis → Rekordbox enrichment → sequencing → gain offsets → warping → per-track features (cached) → cue candidates → candidate-driven transition planning → ALS generation → objective validation + transition report. CLI: `python -m automated_dj_mixes.orchestrator --input "Tracks/" --output "Output/"`. Visualize mode: `--visualize` produces colour-coded section ALS + per-track CSV reports.
+Main pipeline controller. The canonical `/mix` path uses `--stem-grid --stem-sections --kick-model`: owned per-beat grids, Demucs structure and Kick Detector V3 evidence. In this mode the orchestrator runs MIK only for optional key/energy metadata, never launches or reads Rekordbox, requires complete owned-grid coverage, and fails weak grids closed. Legacy non-stem-grid callers retain the old Rekordbox path. CLI: `python -m automated_dj_mixes.orchestrator --input "Tracks/" --output "Output/"`.
 
-Key functions: `run_pipeline()` (full pipeline + visualize branch), `_find_template()`, `_next_version()`, `main()` (CLI).
+Key functions: `run_pipeline()`, `enforce_owned_grid_coverage()`, `_find_template()`, `_next_version()`, `main()` (CLI).
 
 ### `Source/automated_dj_mixes/analysis.py`
 Reads key/BPM from file tags (mutagen ID3/Vorbis). Transient/downbeat detection (librosa). LUFS measurement (pyloudnorm). Bass section detection (off-beat energy sampling). Phrase-aware break detection. Rekordbox enrichment maps RB phrases → pipeline fields (bass_start/end, break_start/end, intro_end, last_kick).
@@ -98,7 +98,7 @@ Output dir: `Test Project/May 2026 Mix/Reports/` and `{output_dir}/Reports/`.
 Warp marker calculation. Two modes: (1) 2-marker linear from BPM + downbeat (fallback), (2) per-beat grid from Rekordbox — one marker per downbeat using exact ms timestamps (165-252 markers per track, eliminates up to 13-beat drift). Now also the home of the **one-clock converter** that fixes the 2026-06-11 warp/cut regression: `grid_bpm_and_downbeat(beat_times_ms, first_downbeat_offset, db_bpm)` returns the effective constant BPM + true-downbeat anchor seconds; `sec_to_clip_beats(sec, beat_times_ms, first_downbeat_offset)` maps audio time → clip warp-beat coordinate via the same grid the warp markers use, so section cuts land on warped audio by construction. **5+ tests in Tests/test_one_clock.py.**
 
 Key types: `WarpMarker` (beat_time, sample_time).
-Key functions: `calculate_warp_markers()`, `calculate_warp_markers_from_beat_grid()`, `choose_warp_mode()`.
+Key functions: `calculate_warp_markers()`, `calculate_warp_markers_from_beat_grid()`, `choose_warp_mode()`, `choose_dj_mix_warp_mode()` (nominal +/-1 BPM Re-Pitch with 0.05 BPM grid tolerance for the MixPlan proof path).
 
 ### `Source/automated_dj_mixes/automation.py`
 Automation primitives + gain offset calc. Gain offsets: match to quietest (min LUFS), cap at max_reduction_db. Transition envelope generation now lives in `transition.py`.
@@ -113,12 +113,18 @@ Key types: `TrackPatch` (analysis, track_index, warp_markers, gain_offset_db, ar
 Key functions: `generate_session()`, `decompress_als()`, `compress_als()`, `_build_audio_clip_xml()` (emits original + duplicates or per-phrase segments), `_build_single_clip_xml()`, `_find_filter_target_id()`, `_insert_audio_clip()`, `_insert_automation_envelopes()`.
 
 ### `Source/automated_dj_mixes/mix_plan.py`
-Immutable, versioned production intent for the first two-track/one-transition slice. SHA-256-backed IDs cover sources, track instances, section maps, loops, and the handover; the contract freezes `main_track_sequence`, complete input hashes, policy/tool versions, parent/version, exact overlap geometry, and canonical `plan_hash`. The current proof also freezes project BPM and warp mode through explicit human overrides; render acceptance remains the next extension.
+Immutable, versioned N-track production intent. Schema 1.3 freezes exact per-track warp marker count, canonical marker-pair hash, encoded source-grid BPM, independent warp mode, source/section hashes, sequence, N-1 transition ownership, overlap policy, loop geometry, project BPM, policies, and canonical `plan_hash`.
 
-Key types: `MixPlan`, `SourceContract`, `TrackInstanceContract`, `TransitionContract`, `LoopContract`. Key functions: `build_one_transition_mix_plan()`, `validate_mix_plan()`, `write_mix_plan()`.
+Key types: `MixPlan`, `SourceContract`, `TrackInstanceContract`, `TransitionContract`, `LoopContract`. Key functions: `build_mix_plan()`, compatibility wrapper `build_one_transition_mix_plan()`, `validate_mix_plan()`, `write_mix_plan()`.
 
 ### `Source/validate_mix_plan_als.py`
-Post-mutation reconciliation gate for the one-transition proof. Verifies canonical plan hash, active main-track sequence, arrangement start/end geometry, loop count/placement, frozen project tempo, absence of an overriding MainTrack tempo envelope for fixed-tempo plans, every active clip's WarpMode, contracted bass-swap boundary, and transition automation in the final ALS. Writes a hash-backed reconciliation JSON and fails on any mismatch.
+Post-mutation reconciliation gate for N-track proofs. Verifies canonical plan hash, active main-track sequence, arrangement geometry, full and partial loop placement, fixed project tempo, absence of a tempo override, every track's explicit WarpMode, exact source warp grids, every bass-swap boundary, and automation on both sides of every transition. Paired-landmark swaps must be real clip boundaries on both tracks; outgoing loops may use any frozen repeat boundary. Writes a hash-backed reconciliation JSON and fails on any mismatch.
+
+### `Source/automated_dj_mixes/warp_contract.py`
+Canonical read-only ALS warp-grid fingerprinting. Summarises marker count, semantic marker-pair SHA-256, and effective source-grid BPM; rejects tracks whose clips do not share one grid.
+
+### `Source/isolate_sections_tracks.py`
+Builds a focused Sections proof without recreating target tracks. It empties non-target arrangement Events, verifies each retained AudioTrack block remains byte-identical, validates the output ALS, and can emit the matching sections JSON from that output.
 
 ### `Source/automated_dj_mixes/config.py`
 Loads settings from `Config/settings.json` with sensible defaults (crossfade_bars=48, max_gain_reduction_db=12, default_project_tempo=128, versioning_prefix="V").
@@ -146,7 +152,7 @@ Key functions: `analyze_folder_with_mik(folder)`, `analyze_folder_with_rekordbox
 Prerequisites: Rekordbox Library Protection OFF. Mouse clicks required for RB menu navigation — warn user before running.
 
 ### `Source/propose_arrangement.py`
-**Added 2026-05-21; safety/MixPlan gate 2026-07-15.** Arrangement orchestrator for the `/arrange-mix` skill. The active align-engine path recomputes final loop-adjusted geometry and rejects transitions outside 16-48 bars before ALS mutation. `--mix-plan PATH` enables the strict two-source slice: source/section/input hashes and stable semantic IDs are written before the ALS writer runs. Supports `--hints` for `intro_skip_bars` and `loop_source_sec`; produces arranged ALS plus `ARRANGEMENT_REPORT.json`.
+**Added 2026-05-21; N-track MixPlan/playback gate 2026-07-16.** Arrangement orchestrator for the `/arrange-mix` skill. The active align-engine path recomputes final loop-adjusted geometry and rejects transitions outside 16-48 bars before ALS mutation. `--mix-plan PATH --project-bpm N --warp-mode auto` freezes exact grids plus per-track playback policy before the ALS writer runs. Reports preserve raw kick-dropout candidates without selecting them and remap original/repeated landmarks through final loop geometry. Supports `--hints` for `intro_skip_bars` and `loop_source_sec`; produces arranged ALS plus the arrangement report.
 
 Key types: `TrackInfo` (sections + positions + camelot/bpm/energy/intro_skip_bars), `OverlapAnalysis` (per-pair overlap details + loop specs), `ArrangementPlan` (full plan container).
 Key functions: `propose_arrangement()` (accepts `hints_path` and `mix_plan_path`), `validate_arrangement_plan()` (hard final-geometry gate), `analyse_overlap()` (loop planning + recomputation), `find_similar_pairs()`, `generate_report()`.
@@ -158,7 +164,7 @@ Key types: `LoopSpec` (track_name, source_beat_start/end, count, insert_at_beat,
 Key functions: `validate_loop_spec()`, `apply_loops()` (preflighted batch), `clone_clip()`, `decompress_als()` / `compress_als()`, `find_track_line_ranges()`, `shift_track_clips()`.
 
 ### `Source/apply_automation.py`
-**Added 2026-05-21.** Volume crossfades (Utility Gain) + EQ bass kills (ChannelEQ LowShelfGain) applied to an arranged Sections .als. Three transition styles auto-selected by overlap length: **STANDARD** (24-36 bars, existing two-phase model), **LONG_BLEND** (>36 bars, linear crossfade, partial EQ, delayed bass swap by 32 beats), **QUICK_SWAP** (<24 bars, instant swap, no sneak, full EQ kill). Section-structure-driven bass swap detection with 6 learned rules from Sam's corrections.
+**Added 2026-05-21; contract fix 2026-07-16.** Volume crossfades (Utility Gain) + EQ bass kills (ChannelEQ LowShelfGain) applied to an arranged Sections .als. Three transition styles auto-selected by overlap length: **STANDARD** (24-36 bars, existing two-phase model), **LONG_BLEND** (>36 bars, linear crossfade, partial EQ, delayed bass swap by 32 beats), **QUICK_SWAP** (<24 bars, instant swap, no sneak, full EQ kill). Explicit arrangement-report swaps are preserved at valid overlap-start/loop boundaries; only the overlap end carries the fade-room guard. This keeps automation identical to the frozen report and MixPlan reconciliation.
 
 Key types: `TransitionStyle` (enum: STANDARD/LONG_BLEND/QUICK_SWAP), `TrackInfo`, `TransitionPlan` (with style, two_stage_bass, low_sneak flags).
 Key functions: `find_bass_swap()` (priority-ordered swap point selection), `plan_transitions()` (style selection + rule application), `build_track_automation()` (style-specific envelope point generation), `insert_envelopes()` (ALS patching).
@@ -170,15 +176,21 @@ Key types: `TrackAutomation`, `ParamDiff`, `TransitionDiff` (with `classified_st
 Key functions: `extract_track_automation()`, `analyse_transitions()`, `_classify_style()` (sneak level + bass kill depth + instant swap detection), `diff_to_jsonl_entry()`, `print_report()`, `main()`.
 
 ### `Source/stem_detector.py`
-**2026-07-09 update:** `detect(...)` now accepts optional `kick_model=False`, `kick_model_path=None`, and `kick_model_device="auto"` kwargs. Default OFF preserves the legacy dynamic stem-energy threshold. `--kick-model` is explicit/default-off and replaces only beat-level kick presence/cues with Kick Detector V3; bass/vocal/loop/fill logic stays unchanged. Orchestrator model use requires `--sections-layout --stem-sections --kick-model`.
+**2026-07-16 update:** model mode uses smoothed V3 presence for coarse sections/cues and raw V3 presence for `signals.musical_landmarks`; dedicated dropout spans no longer disappear when short gaps are bridged for section stability. DETECT images show the raw pre-drop/dropout strip. Default OFF and bass/vocal/loop/fill behavior remain unchanged. Orchestrator model use requires `--sections-layout --stem-sections --kick-model`.
 
 **Added 2026-06-08.** Stem-based section detector (the new section source — Demucs stems, ANALYSIS-ONLY, original WAV untouched, envelopes cached as `.npz`). `detect(wav, project, bpm=, downbeat=, make_viz=, write_json=)` → `{track, bpm, n_bars, sections, signals}`; `--write-hints` auto-generates the 4 production-gate hints; renders `DETECT_*.png` (track + 4 stems, labelled sections + bar counts + bass-IN/OUT markers + kick cues). Calibration rules + signals in memory `reference-stem-section-detector`. Wired into the orchestrator via `--stem-sections`.
 
 ### `Source/kick_model_adapter.py`
-**Added 2026-07-09.** Lazy adapter for the sibling Kick Detector project. Loads `Kick Detector/Models/kick_crnn_V3.pt` and Kick Detector's reference `model.py` / `presence_postprocess.py` only when `--kick-model` is enabled. Uses the validated product readout: threshold `0.30`, `fill_off_beats=6`, `drop_on_beats=1`. In model mode it runs a single Demucs pass that yields both the normal stem envelopes and the raw drums waveform required by the CRNN, avoiding a double-separation path. Provides `KickPresenceProvider`, `get_provider()` cache, and `separate_envelopes_and_drums()`.
+**Added 2026-07-09; dual readout 2026-07-16.** Lazy adapter for the sibling Kick Detector project. Loads `Kick Detector/Models/kick_crnn_V3.pt` and Kick Detector's reference `model.py` / `presence_postprocess.py` only when `--kick-model` is enabled. One inference now returns `KickPresenceReadout(raw, section)`: raw beat presence feeds contextual musical landmarks, while the validated threshold/smoothing (`0.30`, `fill_off_beats=6`, `drop_on_beats=1`) remains the coarse-section signal. The single Demucs pass still yields normal stem envelopes plus raw drums without double separation.
+
+### `Source/automated_dj_mixes/musical_landmarks.py`
+Extracts two-beat-or-longer raw Kick Detector V3 dropout spans, classifies short gaps immediately before drops, attaches section/energy context and candidate roles, and deliberately makes no arrangement selection.
+
+### `Source/extract_musical_landmarks.py`
+Safe standalone landmark refresh for certified stem JSONs. Hashes section geometry before/after persistence, refuses any section mutation, runs one V3 inference per track, and writes dedicated `LANDMARKS_*.png` views.
 
 ### `Source/align_engine.py`
-**Added 2026-06-08; production safety gate 2026-07-15.** Bass-to-bass alignment engine used by `propose_arrangement`. Candidate selection enforces a hard 16-48 bar overlap and prefers the smaller overlap when musical scores tie. Incoming-intro and outgoing-tail fills consume one shared remaining transition budget with an 8-repeat ceiling; the fallback clamps or fails if no safe overlap exists. Reads `SECTIONS_STEM_*.json` and retains the transition visualizer.
+**Added 2026-06-08; paired-landmark V2 2026-07-16.** Bass-to-bass alignment engine used by `propose_arrangement`. `paired_landmarks_v2` preserves odd-bar cues, requires paired incoming/outgoing landmarks, suppresses arbitrary incoming-intro loops, and can extend to a named cue up to 64 bars. Cue-bounded tail loops select a clean phrase length that preserves an intermediate swap boundary as well as the final target. Legacy selection retains the 16-48 bar safety gate. Reads `SECTIONS_STEM_*.json` and retains the transition visualizer.
 
 ### Diagnostic / Research Scripts
 
@@ -190,6 +202,9 @@ Key functions: `extract_track_automation()`, `analyse_transitions()`, `_classify
 - `Source/test_features.py` — Smoke test for `extract_track_features()` on one track
 - `Source/diagnose_rekordbox.py` — (legacy) Rekordbox phrase map vs pipeline fields side-by-side
 - `Source/analyze_phrase_patterns.py` — (legacy) Structural patterns across all RB-analyzed tracks
+
+- `Source/transition_review_viz.py` - Renders zoom + full-context evidence for every transition. Since 2026-07-16, waveform sampling maps every arrangement point through the actual clip's source range, so repeated intro/tail loops display their real audio instead of false silence. Includes color-55 `beat_dropout` bands and frozen swap/landmark overlays.
+- `Source/materialize_section_details.py` - Converts stable coarse sections plus every raw Kick V3 gap up to 16 beats into a separate review ALS/JSON with color-55 `beat_dropout` clips. Proves source warp-grid summaries are unchanged before accepting output.
 
 ### Data files
 

@@ -109,6 +109,57 @@ def test_run_pipeline_exposes_allow_partial_param():
     assert "allow_partial_rekordbox" in inspect.signature(o.run_pipeline).parameters
 
 
+class _FakeGrid:
+    def __init__(self, count):
+        self.beat_times_ms = list(range(count))
+
+
+def test_owned_grid_gate_requires_full_coverage():
+    a1, a2 = _FakeAnalysis("C:/x/T1.wav"), _FakeAnalysis("C:/x/T2.wav")
+    grids = {str(a1.path): _FakeGrid(32)}
+    with pytest.raises(RuntimeError, match="Owned stem-grid MISSING"):
+        o.enforce_owned_grid_coverage([a1, a2], grids)
+
+
+def test_owned_grid_gate_passes_complete_grids():
+    a1 = _FakeAnalysis("C:/x/T1.wav")
+    assert o.enforce_owned_grid_coverage(
+        [a1], {str(a1.path): _FakeGrid(32)}
+    ) == []
+
+
+def test_owned_mode_runs_mik_but_never_launches_rekordbox(tmp_path, monkeypatch):
+    audio = tmp_path / "Audio"
+    audio.mkdir()
+    (audio / "Track SW V1.wav").write_bytes(b"placeholder")
+    calls = []
+    monkeypatch.setattr(
+        d, "analyze_folder_with_mik", lambda *_args, **_kwargs: calls.append("mik")
+    )
+    monkeypatch.setattr(
+        d, "analyze_folder_with_rekordbox",
+        lambda *_args, **_kwargs: calls.append("rekordbox"),
+    )
+    monkeypatch.setattr(
+        o,
+        "analyse_folder",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("stop-after-desktop")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="stop-after-desktop"):
+        o.run_pipeline(
+            audio,
+            tmp_path / "Output",
+            project_root=Path(__file__).resolve().parent.parent,
+            previews_only=True,
+            stem_grid=True,
+        )
+
+    assert calls == ["mik"]
+
+
 # ---------- launch is context-proof (de-elevation) ----------
 # rekordbox's agent fails when RB runs elevated. The launcher must keep RB at
 # Medium integrity no matter where the pipeline is booted from.

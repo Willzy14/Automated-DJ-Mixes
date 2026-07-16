@@ -1,4 +1,4 @@
-"""Reconcile a one-transition MixPlan against the final post-mutation ALS."""
+"""Reconcile an N-track MixPlan against the final post-mutation ALS."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import json
 import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from automated_dj_mixes.warp_contract import summarize_track_warp_grids
 
 
 def _sha256(path: Path) -> str:
@@ -44,6 +46,19 @@ def _float(child: ET.Element | None, attribute: str = "Value") -> float | None:
     if child is None or child.get(attribute) is None:
         return None
     return float(child.get(attribute))
+
+
+def _matches_clip_boundary(clips: list[ET.Element], beat: float) -> bool:
+    boundaries = [
+        value
+        for clip in clips
+        for value in (
+            float(clip.get("Time")),
+            _float(clip.find("CurrentEnd")),
+        )
+        if value is not None
+    ]
+    return any(math.isclose(beat, boundary, abs_tol=1e-6) for boundary in boundaries)
 
 
 def _main_tempo_state(root: ET.Element) -> tuple[float | None, list[float]]:
@@ -99,8 +114,7 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
         checks.append("main_track_sequence")
 
     overrides = {item["name"]: item["value"] for item in plan.get("human_overrides", [])}
-    expected_bpm = float(overrides.get("project_bpm", "nan"))
-    expected_warp = {"repitch": 6, "complex_pro": 4}.get(overrides.get("warp_mode"))
+    expected_bpm = float(plan.get("project_bpm") or overrides.get("project_bpm", "nan"))
     tempo_strategy = {
         item["name"]: item["value"] for item in plan.get("policy_versions", [])
     }.get("tempo_strategy")
@@ -130,47 +144,112 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
         if not math.isclose(max(ends), contract["arrangement_end_beat"], abs_tol=1e-6):
             errors.append(f"{name}: arrangement end mismatch")
         modes = {_float(clip.find("WarpMode")) for clip in clips}
+        expected_warp = {"repitch": 6, "complex_pro": 4}.get(contract.get("warp_mode"))
         if expected_warp is None or modes != {float(expected_warp)}:
             errors.append(f"{name}: WarpMode mismatch {modes} != {expected_warp}")
         else:
             checks.append(f"warp:{contract['track_instance_id']}")
+        try:
+            warp_grid = summarize_track_warp_grids(_track)
+        except ValueError as exc:
+            errors.append(f"{name}: {exc}")
+        else:
+            expected_grid = (
+                int(contract["warp_marker_count"]),
+                contract["warp_grid_sha256"],
+                float(contract["source_grid_bpm"]),
+            )
+            actual_grid = (
+                warp_grid.marker_count,
+                warp_grid.grid_sha256,
+                warp_grid.source_grid_bpm,
+            )
+            if (actual_grid[:2] != expected_grid[:2]
+                    or not math.isclose(actual_grid[2], expected_grid[2], abs_tol=1e-9)):
+                errors.append(
+                    f"{name}: warp grid mismatch "
+                    f"{actual_grid} != {expected_grid}"
+                )
+            else:
+                checks.append(f"warp_grid:{contract['track_instance_id']}")
 
-    transition = plan["transitions"][0]
+    expected_loop_times: dict[str, list[float]] = {}
+    loop_ids_by_track: dict[str, list[str]] = {}
     for loop in plan["loops"]:
+        loop_len = loop["source_beat_end"] - loop["source_beat_start"]
+        expected_loop_times.setdefault(loop["track_instance_id"], []).extend(
+            loop["insert_at_beat"] + index * loop_len
+            for index in range(loop["repeat_count"])
+        )
+        if loop["partial_beats"] > 0:
+            expected_loop_times[loop["track_instance_id"]].append(
+                loop["insert_at_beat"] + loop["repeat_count"] * loop_len
+            )
+        loop_ids_by_track.setdefault(loop["track_instance_id"], []).append(loop["loop_id"])
+    for track_id, expected_times in expected_loop_times.items():
         track_contract = next(
-            track for track in expected_tracks
-            if track["track_instance_id"] == loop["track_instance_id"]
+            track for track in expected_tracks if track["track_instance_id"] == track_id
         )
         name = html.unescape(track_contract["display_name"])
         clips = track_by_name.get(name, (None, []))[1]
-        loop_len = loop["source_beat_end"] - loop["source_beat_start"]
-        expected_times = [
-            loop["insert_at_beat"] + index * loop_len
-            for index in range(loop["repeat_count"])
-        ]
         actual_times = sorted(
             float(clip.get("Time")) for clip in clips
             if _clip_name(clip).endswith("_tail_loop")
             or _clip_name(clip).endswith("_intro_loop")
         )
+        expected_times = sorted(expected_times)
         if actual_times != expected_times:
-            errors.append(f"Loop {loop['loop_id']} times mismatch: {actual_times} != {expected_times}")
+            errors.append(f"{name}: loop times mismatch: {actual_times} != {expected_times}")
         else:
-            checks.append(f"loop:{loop['loop_id']}")
+            checks.extend(f"loop:{loop_id}" for loop_id in loop_ids_by_track[track_id])
 
-    report_transition = report["transitions"][0]
-    swap = float(report_transition["swap_beats"])
-    outgoing_loops = [
-        loop for loop in plan["loops"]
-        if loop["track_instance_id"] == transition["out_track_instance_id"]
-    ]
-    if outgoing_loops and not any(
-            math.isclose(swap, loop["insert_at_beat"], abs_tol=1e-6)
-            for loop in outgoing_loops):
-        errors.append("Arrangement report swap does not match the frozen outgoing loop boundary")
-    else:
-        checks.append("bass_swap")
+    report_transitions = report["transitions"]
+    if len(report_transitions) != len(plan["transitions"]):
+        errors.append("Arrangement report transition count does not match MixPlan")
+    swaps_by_track: dict[str, list[float]] = {}
+    for transition, report_transition in zip(plan["transitions"], report_transitions):
+        swap = float(report_transition["swap_beats"])
+        outgoing_loops = [
+            loop for loop in plan["loops"]
+            if loop["transition_id"] == transition["transition_id"]
+            and loop["track_instance_id"] == transition["out_track_instance_id"]
+        ]
+        loop_boundaries = [
+            loop["insert_at_beat"] + repeat * (
+                loop["source_beat_end"] - loop["source_beat_start"]
+            )
+            for loop in outgoing_loops
+            for repeat in range(loop["repeat_count"] + 1)
+        ]
+        if outgoing_loops and not any(
+                math.isclose(swap, boundary, abs_tol=1e-6)
+                for boundary in loop_boundaries):
+            errors.append(
+                f"Transition {transition['transition_index'] + 1} swap does not match "
+                "the frozen outgoing loop boundary"
+            )
+        else:
+            checks.append(f"bass_swap:{transition['transition_id']}")
+        if report_transition.get("alignment_policy") == "paired_landmarks_v2":
+            for role, key in (("outgoing", "out_track"), ("incoming", "in_track")):
+                name = html.unescape(report_transition[key])
+                clips = track_by_name.get(name, (None, []))[1]
+                if not _matches_clip_boundary(clips, swap):
+                    errors.append(
+                        f"Transition {transition['transition_index'] + 1} {role} "
+                        f"track has no clip boundary at frozen swap {swap:g}"
+                    )
+                else:
+                    checks.append(
+                        f"paired_boundary:{transition['transition_id']}:{role}"
+                    )
+        swaps_by_track.setdefault(transition["out_track_instance_id"], []).append(swap)
+        swaps_by_track.setdefault(transition["in_track_instance_id"], []).append(swap)
 
+    track_id_by_name = {
+        html.unescape(contract["display_name"]): contract["track_instance_id"]
+        for contract in expected_tracks
+    }
     for name, track, _clips in active_tracks:
         envelopes = {}
         for envelope in track.iter("AutomationEnvelope"):
@@ -185,14 +264,18 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
             if events:
                 envelopes[pointee.get("Value")] = events
         event_sets = list(envelopes.values())
+        required_swaps = swaps_by_track.get(track_id_by_name.get(name, ""), [])
         if len(event_sets) < 2:
             errors.append(f"{name}: missing transition automation envelopes")
             continue
-        if not sum(any(math.isclose(time, swap, abs_tol=1e-6) for time, _ in events)
-                   for events in event_sets) >= 2:
-            errors.append(f"{name}: automation does not implement swap beat {swap}")
-        else:
-            checks.append(f"automation:{name}")
+        for swap in required_swaps:
+            if not sum(
+                any(math.isclose(time, swap, abs_tol=1e-6) for time, _ in events)
+                for events in event_sets
+            ) >= 2:
+                errors.append(f"{name}: automation does not implement swap beat {swap}")
+            else:
+                checks.append(f"automation:{name}:{swap:g}")
 
     result = {
         "status": "PASS" if not errors else "FAIL",

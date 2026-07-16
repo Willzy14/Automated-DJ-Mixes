@@ -8,6 +8,7 @@ when the --kick-model path is explicitly enabled.
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,12 @@ _MODEL_MODULE = None
 _PRESENCE_MODULE = None
 _DEMUCS_MODEL = None
 _PROVIDER_CACHE = {}
+
+
+@dataclass(frozen=True)
+class KickPresenceReadout:
+    raw: np.ndarray
+    section: np.ndarray
 
 
 def default_kick_detector_root() -> Path:
@@ -239,20 +246,48 @@ class KickPresenceProvider:
         drums = out[drums_idx].mean(0).cpu().numpy().astype(np.float32)
         return drums, sr
 
-    def on_per_beat(self, wav_path: Path, bpm: float, downbeat: float, n_beats: int | None = None) -> np.ndarray:
-        drums, sr = self._drums_from_mix(Path(wav_path))
+    def _presence_readout(
+        self,
+        drums: np.ndarray,
+        sr: int,
+        bpm: float,
+        downbeat: float,
+        n_beats: int | None,
+    ) -> KickPresenceReadout:
         act = self._activation(drums, sr)
         duration_s = len(drums) / sr
         assert self._model_mod is not None
         raw = self._model_mod.presence_from_activation(
-            act,
-            duration_s,
-            bpm,
-            downbeat=downbeat,
-            thresh=self.threshold,
+            act, duration_s, bpm, downbeat=downbeat, thresh=self.threshold,
         )
-        on = self._presence_mod.smooth_presence(raw, self.fill_off_beats, self.drop_on_beats)
-        return _fit_length(on, n_beats)
+        section = self._presence_mod.smooth_presence(
+            raw, self.fill_off_beats, self.drop_on_beats
+        )
+        return KickPresenceReadout(
+            raw=_fit_length(raw, n_beats),
+            section=_fit_length(section, n_beats),
+        )
+
+    def presence_per_beat(
+        self, wav_path: Path, bpm: float, downbeat: float,
+        n_beats: int | None = None,
+    ) -> KickPresenceReadout:
+        drums, sr = self._drums_from_mix(Path(wav_path))
+        return self._presence_readout(drums, sr, bpm, downbeat, n_beats)
+
+    def on_per_beat(self, wav_path: Path, bpm: float, downbeat: float,
+                    n_beats: int | None = None) -> np.ndarray:
+        return self.presence_per_beat(wav_path, bpm, downbeat, n_beats).section
+
+    def presence_per_beat_from_drums(
+        self,
+        drums_mono: np.ndarray,
+        sr: int,
+        bpm: float,
+        downbeat: float,
+        n_beats: int | None = None,
+    ) -> KickPresenceReadout:
+        return self._presence_readout(drums_mono, sr, bpm, downbeat, n_beats)
 
     def on_per_beat_from_drums(
         self,
@@ -262,18 +297,9 @@ class KickPresenceProvider:
         downbeat: float,
         n_beats: int | None = None,
     ) -> np.ndarray:
-        act = self._activation(drums_mono, sr)
-        duration_s = len(drums_mono) / sr
-        assert self._model_mod is not None
-        raw = self._model_mod.presence_from_activation(
-            act,
-            duration_s,
-            bpm,
-            downbeat=downbeat,
-            thresh=self.threshold,
-        )
-        on = self._presence_mod.smooth_presence(raw, self.fill_off_beats, self.drop_on_beats)
-        return _fit_length(on, n_beats)
+        return self.presence_per_beat_from_drums(
+            drums_mono, sr, bpm, downbeat, n_beats
+        ).section
 
 
 def get_provider(

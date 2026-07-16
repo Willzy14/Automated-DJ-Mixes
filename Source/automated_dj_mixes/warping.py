@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 WARP_MODE_REPITCH = 6
 WARP_MODE_COMPLEX_PRO = 4
+DJ_MIX_REPITCH_LIMIT_BPM = 1.0
+GRID_BPM_TOLERANCE = 0.05
 
 
 @dataclass
@@ -31,6 +33,19 @@ def choose_warp_mode(track_bpm: float, project_bpm: float) -> int:
     Complex Pro time-stretches without touching pitch.
     """
     if abs(track_bpm - project_bpm) <= 0.05:
+        return WARP_MODE_REPITCH
+    return WARP_MODE_COMPLEX_PRO
+
+
+def choose_dj_mix_warp_mode(track_bpm: float, project_bpm: float) -> int:
+    """Apply Sam's DJ-mix Re-Pitch rule with beat-grid drift tolerance.
+
+    A nominal one-BPM move remains Re-Pitch. The extra 0.05 BPM prevents
+    whole-track estimates such as 122.0045 from crossing the creative
+    boundary because of tiny grid drift.
+    """
+    delta = abs(float(track_bpm) - float(project_bpm))
+    if delta <= DJ_MIX_REPITCH_LIMIT_BPM + GRID_BPM_TOLERANCE:
         return WARP_MODE_REPITCH
     return WARP_MODE_COMPLEX_PRO
 

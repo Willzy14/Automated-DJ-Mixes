@@ -49,3 +49,15 @@ def test_choose_warp_mode_never_repitches_audible_shifts():
     assert choose_warp_mode(127.0, 126.0) == WARP_MODE_COMPLEX_PRO
     assert choose_warp_mode(126.0033, 126.0) == WARP_MODE_REPITCH
     assert choose_warp_mode(126.0, 126.0) == WARP_MODE_REPITCH
+
+
+def test_dj_mix_policy_keeps_nominal_one_bpm_moves_in_repitch():
+    from automated_dj_mixes.warping import (
+        WARP_MODE_COMPLEX_PRO,
+        WARP_MODE_REPITCH,
+        choose_dj_mix_warp_mode,
+    )
+
+    assert choose_dj_mix_warp_mode(119.999506, 121.0) == WARP_MODE_REPITCH
+    assert choose_dj_mix_warp_mode(122.004529, 121.0) == WARP_MODE_REPITCH
+    assert choose_dj_mix_warp_mode(122.06, 121.0) == WARP_MODE_COMPLEX_PRO

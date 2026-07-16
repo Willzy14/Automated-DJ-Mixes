@@ -15,7 +15,7 @@ Born from the realisation that the grunt work of DJ mixing (key analysis, Camelo
 - **pyrekordbox** — reading Rekordbox ANLZ files (beat grids, phrase analysis)
 - **Ableton Live 12** — target DAW, ALS file format (gzip-compressed XML)
 - **Mixed In Key** — key + BPM analysis (run separately, writes to file tags)
-- **Rekordbox 7** — phrase analysis (Intro/Up/Down/Chorus/Outro), beat grids, key data
+- **Rekordbox 7** — legacy/debug-only parser and desktop path; not used by canonical `/mix`
 
 Not in V1: Max for Live (future enhancement for real-time automation), pyproject.toml packaging.
 
@@ -27,10 +27,10 @@ Source/automated_dj_mixes/
 ├── orchestrator.py        — Main pipeline controller, --visualize mode
 ├── analysis.py            — Tag reading, transient detection, LUFS
 ├── sequencer.py           — Camelot wheel logic, harmonic path
-├── warping.py             — Per-beat warp markers from Rekordbox grid
+├── warping.py             — Per-beat warp markers from the selected certified grid
 ├── automation.py          — AutomationPoint + gain offset calc
 ├── als_generator.py       — Template-based ALS XML patching (multi-clip per track)
-├── mix_plan.py            — Immutable one-transition production intent + stable IDs
+├── mix_plan.py            — Immutable N-track production intent + per-track playback policy
 ├── rekordbox_reader.py    — Rekordbox ANLZ parser (PSSI phrases, PQTZ beat grid)
 ├── rekordbox_waveform.py  — PWV5/PWV4 colour waveform parser (4th analysis signal)
 ├── features.py            — Per-beat features (RMS + bass + PWV5) with disk cache
@@ -40,11 +40,11 @@ Source/automated_dj_mixes/
 ├── amplitude_analysis.py  — 1s RMS envelope analysis (first_drop, first_break, outro_start, clean-loop-window detector)
 ├── report.py              — Per-track CSV + per-mix Markdown reports
 ├── waveform_preview.py    — Blank-canvas preview PNG (for writing visual hints before pipeline run)
-├── desktop_analyzer.py    — MIK + Rekordbox desktop UI automation (staging folder, dialog detection)
+├── desktop_analyzer.py    — MIK metadata UI for `/mix`; legacy Rekordbox automation remains isolated
 └── config.py              — Settings loader
 ```
 
-Pipeline: desktop analysis (MIK + RB) → analysis → Rekordbox enrichment → sequencing → warping → per-beat features (cached) → factual intervals → ranked cue candidates → candidate-driven transition planning → ALS generation → objective validation.
+Canonical pipeline: optional MIK metadata → owned stem grid → Demucs sections + Kick Detector V3 → sequencing → warping → arrangement → automation → ALS/reconciliation/visual validation. Rekordbox is not launched or read.
 
 ALS generation is **template-based** — a real Ableton Live 12 session is decompressed, studied, and used as the base. The script patches in tracks, clips, warp markers, automation lanes, and gain offsets. Never builds XML from scratch.
 
@@ -81,13 +81,23 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+**NOTE (2026-07-16): Sam rejected Fresh Mix Final V1 after transition review exposed a cropped Roadblock head beat, one-sided cue alignment, arbitrary loop placement, unmarked mini-breaks, and four-beat section mismatches. `Output/16.07.26 Fresh Mix Final V2.als` is the corrected candidate: Roadblock now has 396 owned-grid markers with beat/downbeat zero at sample zero; every short Kick V3 gap up to 16 beats is a color-55 `beat_dropout` clip; all seven swaps use `paired_landmarks_v2` and land on clip boundaries on both tracks; named outgoing loops target later section/dropout cues; and T4's four-bar loop boundaries preserve the incoming drop before finishing at its later eight-beat mini-break. Project tempo remains fixed at 121 BPM with three Re-Pitch and five Complex Pro tracks. `RECONCILIATION_V2.json` passes 58 intent-to-ALS checks; 14 V2 transition images were generated and T1/T4/T6 were visually inspected; the suite is 131 passed/4 skipped and the ALS gate passes. Sam's listening verdict is a strong provisional musical pass: every transition is beatmatched, there is no helicoptering or repeated snare-downbeat failure, some transitions are impressively accurate, and there are no painful basic errors. Expert-level arrangement choices still need correction. Preserve Final V2 untouched; Sam plans to make a manually amended copy later, which becomes the next correction ground truth. No bounce exists.**
+
+**NOTE (2026-07-16): Canonical `/mix` is explicitly Rekordbox-free and the clean `Test Project/16.07.26 Fresh Mix` has now run through the full owned path. Four of 12 candidates failed their own stem-grid quality gate and were excluded without override; the remaining eight passed at 1.6-8.7 ms grid-vs-kick. Kick V3 sections, raw dropout landmarks, refined color-55 `beat_dropout` clips, 30/30 hint/section checks, a fixed 121 BPM arrangement, per-track Re-Pitch/Complex Pro policy, seven 26-48-bar transitions, LUFS offsets, volume/bass automation, and a hash-backed MixPlan all landed in `Output/16.07.26 Fresh Mix Final V1.als`. `RECONCILIATION_V1.json` passes 47 intent-to-ALS checks. Transition review is now clip/loop-aware rather than using one false linear source clock. Validation: 120 passed, 4 skipped; ALS gate PASS. Final Ableton clean-open/listen is deferred because Live currently has unrelated unsaved work (`LeAnn Rimes - One Way Ticket*`).**
+
+**PRODUCTION REQUIREMENT (2026-07-16): Real commissioned jobs are playlist-complete by default: every supplied track must appear in the mix. A failed grid/analysis gate is a diagnosis and recovery case, not permission to silently omit that track. The future pipeline must distinguish exploratory test mode (where exclusions may be useful) from commissioned mode, which blocks final output until every supplied track passes or Sam explicitly approves a documented exception. The current eight-track fresh proof remains unchanged while section and transition quality are assessed first.**
+
+**NOTE (2026-07-16): Sam accepted `Production Proof 01 .../Output/Final V5.als`: both exact source grids and the Change My Mind -> Aight transition look and sound correct. Kick Detector V3 now exposes one inference as both smoothed section presence and raw beat presence. Smoothed presence remains the stable coarse-section clock; raw runs produce report-only `musical_landmarks` for short pre-drop gaps and longer kick dropouts, including Aight source beats 92-96 and 156-160. `Source/extract_musical_landmarks.py` refreshes those landmarks and dedicated PNGs while hashing and preserving certified sections. Arrangement reports map incoming/outgoing landmark candidates, keep `selected=false`, and account for clip movement and repeated evidence around inserted loops.**
+
+**NOTE (2026-07-16): The shared-middle proof `Change My Mind -> Aight -> Chaoss` is built at `Test Project/25.06.26 Car Mix/Production Proof 02 Change My Mind To Aight To Chaoss/Output/Final V1.als`. MixPlan schema 1.2 supports N tracks, N-1 transition ownership, fixed project BPM, exact source-grid fingerprints, and independent per-track warp modes. At fixed 121 BPM, the certified source grids are 119.999506/121.001084/122.004529 BPM and all three select Re-Pitch under Sam's nominal +/-1 BPM rule plus 0.05 BPM grid-drift tolerance. Frozen swaps are 448 and 1184; both coincide with incoming raw kick-gap endpoints. `Reconciliation V1.json` passes 17 plan-to-ALS checks and the test suite is 113 passed/4 unavailable fixtures skipped. Final V1 clean-opened in Ableton Live 12 and is currently responsive; the remaining gate is Sam's listening verdict. No bounce has been made.**
+
 **NOTE (2026-07-09): Kick Detector V3 is now wired into `Source/stem_detector.py` behind an explicit `--kick-model` flag, default OFF. The integration is presence-only: it replaces beat-level kick IN/OUT for section boundaries/cues, while bass/vocal/loop/fill logic stays on the existing stem-envelope path. `Source/kick_model_adapter.py` loads the sibling Kick Detector project lazily, uses `Models/kick_crnn_V3.pt`, threshold `0.30`, `fill_off_beats=6`, `drop_on_beats=1`, and preserves flag-OFF parity/no-heavy-import behavior. Orchestrator usage requires `--sections-layout --stem-sections --kick-model`.**
 
 **NOTE (2026-07-15): The 11-track `25.06.26 Car Mix` V3 control run completed: cue noise fell 125 -> 45, with unchanged label/count sequences on 9/11 tracks and a structurally valid `Sections V1.als`. V3 remains default OFF pending visual/ear verdicts for `Back in the Days`, `Beautiful Mess`, and `Blues`. The downstream blocker found by the Codex + MiniMax audit is now fixed: alignment has a hard 48-bar maximum and smaller-overlap tie-break, intro/outro loops share one remaining budget, loop specs are capped at 8 repeats/128 beats and preflighted as a batch, final geometry is recomputed and fail-closed before ALS mutation, and all active ALS writers now fail on post-write validation errors.**
 
 **NOTE (2026-07-15): Production slice 1 infrastructure has started. `Source/automated_dj_mixes/mix_plan.py` defines immutable/hash-backed V1 contracts for certified sources, track instances, section maps, loops, and exactly one main handover; it freezes `main_track_sequence`, deterministic semantic IDs, complete input hashes, policy/tool versions, parent/version, and a canonical `plan_hash`. `propose_arrangement.py --mix-plan PATH` writes this contract before ALS mutation and refuses missing source WAVs or stale/unsafe geometry. Scope is intentionally `one_transition_arrangement_v1`: tempo/warp, automation, render acceptance, stable-ID ALS reconciliation, and freeze proof remain the next vertical work, not nullable placeholders. Tests: 98 passed, 4 unavailable golden fixtures skipped.**
 
-**NOTE (2026-07-15): First real vertical proof is now `Test Project/25.06.26 Car Mix/Production Proof 01 Change My Mind To Aight/Output/Final V4.als`. Live opened V4 cleanly and visibly confirmed fixed-center 120.49 BPM/Re-Pitch, a 45-bar overlap, beat-448 contracted swap, LUFS offsets, explicit-report automation, and `Reconciliation V3.json` PASS (9 MixPlan-to-final-ALS checks). V1 was rejected because automation rebuilt swap 448 as 496; V2 used fading-outro beats 448-464; V3 was rejected at the Live gate because an inherited MainTrack tempo envelope forced 123 BPM despite the static 120.49 value. `_set_project_bpm` now removes inherited tempo automation and `validate_mix_plan_als.py` fails fixed-tempo plans with an overriding envelope. V4 uses full-energy beats 432-448 x3 (quality 0.65/clean). The attempted V4 render was stopped before a WAV was produced because Sam needed the computer; Ableton was closed. Render, objective audio checks, and listening acceptance remain open.**
+**NOTE (2026-07-16): `Final V4.als` is REJECTED. Sam's visual check found both tracks at the wrong source tempo even though their first markers looked correctly anchored. Forensics proved the upstream full `Sections V1.als` was correct (Change My Mind: 487 markers/119.9995 BPM; Aight: 879 markers/121.0011 BPM), but the old proof-isolation step collapsed both to two markers at 120.1853 BPM and also truncated Aight from 876 to 872 source beats. `Source/isolate_sections_tracks.py` now empties only non-target arrangement Events and proves retained AudioTrack blocks byte-identical. MixPlan schema 1.1 freezes marker count, canonical marker-pair hash, and encoded source-grid BPM; final reconciliation rejects collapsed or changed grids. Corrected `Final V5.als` passed 11 reconciliation checks and Sam accepted its grids and transition on 2026-07-16.**
 
 **NOTE (2026-07-15): Sam approved a new ground-truth ALS corpus for section/loop/arrangement learning and explicitly set aside the old `Teaching Mixes/` folder. Source location: Master Backup 2013-2024 drive, Mixed CD Projects. The starting list and Sol-hardened execution plan are in `Documentation/Mix Patterns Library/README.md`. A five-set read-only probe found Live 8/9/10 schema variation, 70-542 clips, 449-27,184 warp markers, automation absent in 3/5 sets, sparse native LoopOn despite heavy edits, disabled alternative clips, no locators, and many near-name ALS versions. The extractor therefore requires exact file hashes/provenance, version adapters, stable source identity, a five-coordinate warp/tempo/meter model, routing-aware activity, multi-landmark transition episodes, project-balanced statistics, a Sam-reviewed gold set, and held-out falsification before any learned rule reaches the pipeline.**
 
@@ -175,7 +185,36 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-07-15 (Latest Session) - One-transition proof through Ableton-open V4
+### 2026-07-16 (Latest Session) - Fresh Mix V2 correctness breakthrough
+
+**Focus**: Repair the fresh mix's downbeat, section, cue-pairing and loop-placement failures, then test whether the owned analysis path could produce a musically credible full mix.
+
+**Completed**:
+- Rebuilt `16.07.26 Fresh Mix Final V2.als` with a restored Roadblock file-head beat, complete short-dropout display sections, paired musical landmarks, dual-track clip-boundary checks and named cue-driven loops.
+- Reconciled 58 MixPlan intents to the ALS, passed 131 tests plus the ALS gate, and inspected the critical T1/T4/T6 transition evidence.
+- Received Sam's strong provisional listening pass: all seven transitions beatmatch, none exhibit the previous helicopter/snare failures, and several are impressively accurate.
+
+**Key Learnings**:
+- Separating source-grid and section correctness from arrangement choice made the remaining failures diagnosable.
+- Paired cue and both-track clip-boundary proof moved the system from catastrophic sync errors to expert-level musical decisions.
+- Sam's future manual edit of V2 is now the highest-value ground truth; preserve the generated V2 and learn from a structured diff against the amended copy.
+
+### 2026-07-16 (Prior Session) - Rejected collapsed warp grids; rebuilt V5
+
+**Focus**: Investigate Sam's visual finding that both proof tracks had the wrong tempo, repair the proof input without touching the correct upstream section project, and prevent recurrence.
+
+**Completed**:
+- Proved the corruption was introduced by the two-track isolation step, not Kick Detector, section generation, or the full Car Mix `Sections V1.als`.
+- Added byte-preserving `isolate_sections_tracks.py` and regenerated `Sections Pair V2.als/.json` with the original 487/879-marker grids and Aight's correct 876-beat source length.
+- Extended MixPlan to schema 1.1 with exact per-track warp-grid contracts and added post-mutation reconciliation checks.
+- Generated `Final V5.als`; structural validation, 11-check reconciliation, marker/kick probe, and 104-test suite pass. Live opened V5 cleanly in a separate process; Sam's unrelated unsaved set remains untouched.
+
+**Key Learnings**:
+- A correct first marker and project tempo do not prove a correct warp: marker slope/source-grid BPM must be contracted per source.
+- Do not rebuild target AudioTrack XML to make a proof subset. Preserve it byte-for-byte and only clear non-target arrangement Events.
+- V5 is a visual/listening candidate, not an accepted mix. Do not bounce until Sam confirms both track grids.
+
+### 2026-07-15 (Prior Session) - One-transition proof through Ableton-open V4
 
 **Focus**: Execute the hardened production plan on `Change My Mind -> Aight` through arrangement, automation, reconciliation, Ableton-open validation, and render setup.
 
@@ -645,13 +684,13 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
-> **🔴 TOP (2026-07-15) — close the first real one-transition proof.** Resume from `Change My Mind -> Aight/Output/Final V4.als`, `MixPlan V3.json`, `Arrangement Report V3.json`, and `Reconciliation V3.json`. V4 is the only current candidate; V3 is rejected because its inherited tempo envelope rendered at 123 BPM. Ableton is closed and no WAV exists. On a fresh Live launch, decline V3 recovery if prompted, visually reconfirm 120.49 BPM, select the complete 306-bar arrangement, export Main at 44.1 kHz/24-bit WAV with normalization/dither off, run objective whole-file and beat-448 transition checks, then have Sam fill the listening-dependent acceptance fields. Do not expand to three tracks until that proof closes.
+> **TOP (2026-07-16) - capture and learn from Sam's manual Fresh Mix V2 correction.** Preserve `Test Project/16.07.26 Fresh Mix/Output/16.07.26 Fresh Mix Final V2.als` untouched. Sam will save his corrected mix as a clearly versioned amended ALS. Then run `learn_from_correction.py` or an equivalent structured arrangement diff and classify every edit as section boundary, entry, loop phrase, bass swap, exit, or automation. Convert only repeatable corrections into rules and re-run the focused transition gates. Render/freeze only after the amended ALS and learned-rule replay are reviewed; no bounce currently exists.
 
 > **Kick Detector V3 follow-up (2026-07-15):** the Car Mix control batch is complete: 125 -> 45 kick cues across 11 tracks; 9/11 label/count sequences unchanged. Keep the model opt-in until `Back in the Days`, `Beautiful Mess`, and `Blues` receive paired DETECT-picture + ear verdicts. Promotion requires no unapproved regression, not just fewer cues.
 
 > **Ground-truth ALS learning plan (Sam-approved, MiniMax/Claude-reviewed, Sol-hardened 2026-07-15):** use only the exact named finished mix CD ALS files from Master Backup 2013-2024 / Mixed CD Projects. Freeze hashes, provenance, event groups, source availability, and fingerprint overlap first; record rejected near-matches. Build a new read-only Live 8/9/10 extractor rather than reusing the assumption-heavy Teaching Mixes probes. Preserve source/warp/arrangement/project-time/musical-bar coordinates; separate clip presence, gain-estimated activity, and render-confirmed audibility; resolve routing and pilot-scope automation; reconstruct multi-source transition episodes with separate rhythmic, bass, dominance, and tail landmarks; map V3 sections plus per-phrase kick/bass/vocal/hook/energy mixability through the exact clip warp/loop clock; and keep commission constraints separate from transferable DJ craft. Start with Defected Miami 2019 Side 1 Pilot A and Gbox Side 1 Pilot B, freeze the minimum contract only after Sam reviews timed transition cards, then scale. Historical-choice rank is an offline diagnostic; deployment requires blinded musical preference over the safe arranger. The old fixed 0.3 BPM/0.7 structure matcher is retired as unvalidated.
 
-> **Next execution gate - two parallel lanes:** production has completed the 48-bar/loop safety gate and the arrangement-only MixPlan V1 contract. Extend that same contract through tempo/warp, automation, post-ALS reconciliation, actual Ableton render, DJ card, eight-field acceptance, local correction, and freeze proof for one real transition; then prove a three-track/shared-middle case before the complete mix. Learning concurrently runs Phase 0 across all 17 ALS files, followed by Defected Miami 2019 Side 1 Pilot A and edit-dense Gbox Side 1 Pilot B. Corpus priors may replace `interim_v1` only after held-out review; they do not gate production infrastructure or the first finished mix.
+> **Next execution gate - two parallel lanes:** production has completed the accepted one-transition proof and the local three-track/shared-middle build through exact tempo/warp, two-transition automation, loop-aware landmark reporting, and 17-check ALS reconciliation. The immediate gate is Sam's Ableton listening verdict, then render/freeze if accepted and expansion toward the complete mix. Learning concurrently runs Phase 0 across all 17 ALS files, followed by Defected Miami 2019 Side 1 Pilot A and edit-dense Gbox Side 1 Pilot B. Corpus priors may replace `interim_v1` only after held-out review; they do not gate production infrastructure or the first finished mix.
 
 > **🔴 #2 — LONG-GROOVE SUBDIVISION (OPEN #2 above).** Split a long continuous drop into drop→break→drop at the internal break (even a tiny one) — Sam's deep/minimal-house tracks read as one mega-drop. The split is also the transition hand-over point. (Connects to the LONGDROP corpus flag.)
 
@@ -673,6 +712,7 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## Key Decisions
 
+- **Commissioned mixes are playlist-complete** — Every supplied track is required by default. Grid or analysis failures enter a per-track diagnosis/retry/recovery lane and block commissioned output; omission requires Sam's explicit, documented approval. Exploratory test runs may still exclude failed candidates when the exclusion is reported. (Sam, 2026-07-16)
 - **Template-based ALS, not from-scratch XML** — ALS schema is undocumented and fragile. Decompress a real template, learn the structure from fixtures, patch from known-good. (Codex review, 2026-05-14)
 - **Mixed In Key tags first, UI automation last** — V1 reads existing tags via mutagen. CSV/export as fallback. Claude UI automation is a last resort, not a core dependency. (Codex review, 2026-05-14)
 - **V1 constrained to dance music** — Electronic/dance tracks, constant BPM, 4/4 time, first-kick/downbeat detection. Variable-tempo and non-4/4 are out of scope. (Codex review, 2026-05-14)
@@ -721,6 +761,9 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 - **PROPOSE→LEARN cycle starts with automation, not arrangement extraction (2026-05-21)** — Sam's pivot: rather than passively extracting V20's patterns, Claude adds automation to V20 and Sam corrects it. The correction diff IS the first training data. This means Claude's proposals improve from real corrections, not from analyzing Sam's finished work. `apply_automation.py` handles the PROPOSE side; `learn_from_correction.py` (to be built) handles the LEARN side.
 - **Automation lives on Utility Gain (volume) + ChannelEQ LowShelfGain (bass) — same as existing pipeline (2026-05-21)** — `apply_automation.py` follows the exact same targets discovered during the May 14-15 sessions. Volume on Utility (not mixer fader), EQ bass kill at 0.18 (~-15dB), two-phase transition model with section-structure-driven bass swap detection. Standalone script, not wired into orchestrator — this is for Sections .als files, not full pipeline mixes.
 - **`/section-detection` pipeline LOCKED IN — algorithm + Claude corrections = finished sections .als (2026-05-20)** — validated end-to-end on Black Book x Defected V2 (V13 → V19). The canonical chopping pipeline is now: (1) `orchestrator.py --sections-layout` for the programmatic pass, (2) `extract_sections_als.py` → JSON, (3) `sections_blind_viz.py` to render **8 quarter PNGs per track** (NOT 4 — 4 missed 1-2 bar fills), (4) Claude reads every PNG and fills `BLIND_VALIDATION_V<N>.md` per-chop table (hard self-check: chop count must equal row count), (5) for `⚠ off N` errors, edit `apply_section_corrections.py` CORRECTIONS list and patch the .als directly. Algorithm tuning is limited to ONE round per project — beyond that, accept and correct manually. `sections_compare_viz.py` exists in the codebase but is FORBIDDEN by the skill (V7-diff trap). Arrangement positioning (`arrange_sections.py`) is the next step AFTER chops are locked, using natural-fill alignment (incoming.drop_1 aligned to outgoing's last fill/break before outro). Skill auto-fires on triggers like "section detection", "Sections V<N>", `phrase_viz.py`, paths under `Sections Review/` etc. — Sam shouldn't have to type the slash command. (Sam, 2026-05-20)
+
+- **Raw kick dropouts are landmarks, not forced sections (2026-07-16)** — Kick Detector V3 smoothing remains the coarse-section stability layer. Raw two-beat-or-longer kick-off runs are preserved separately as contextual, report-only transition candidates; one-beat syncopation is ignored and every candidate remains unselected until creative policy or human review chooses it.
+- **Warp mode is per track; project tempo is mix-level policy (2026-07-16)** — MixPlan 1.2 freezes one project BPM and an independent Re-Pitch/Complex Pro choice per track. The DJ proof policy allows nominal +/-1 BPM Re-Pitch with 0.05 BPM tolerance for whole-grid drift; the older inaudible-shift `choose_warp_mode()` remains unchanged for the general orchestrator until blind calibration resolves the wider policy.
 
 ## Connections
 

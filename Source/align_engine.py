@@ -37,16 +37,14 @@ from stem_section_probe import _seccol  # shared section colour map
 
 PHRASE_GRID = 16          # 16-bar phrase grid (viz gridlines)
 MAX_OVERLAP_BARS = 48     # hard production ceiling, including loop extensions
+MAX_LANDMARK_OVERLAP_BARS = 64  # only when a named cue justifies the extension
 MAX_LOOP_REPEATS = 8
 MAX_LOOP_EXTENSION_BARS = MAX_OVERLAP_BARS - PHRASE_GRID
-SNAP_BARS = 4             # snap the incoming's stagger to the 4-bar (16-beat) grid the
-                          # detector's section markers live on. 8 was COARSER than the
-                          # markers, so a marker-aligned offset like 116 got rounded to
-                          # 112 (off every marker -> lineup 0, the Jaz->Route 94 case).
-                          # 4 still reaches every 8/16-bar offset, just no longer rounds a
-                          # valid marker alignment off the grid.
+SNAP_BARS = 1             # preserve bar phase without rounding odd-bar section cuts away
 HANDOFF_WINDOW_BARS = 8   # allow a hand-off marker this far before the last-minute line
 COINCIDE_TOL_BARS = 2     # two section boundaries "line up" if within this many bars
+MIN_SWAP_PROGRESS = 0.25  # no immediate bass swap at the start of a long blend
+MAX_SWAP_PROGRESS = 0.95  # leave a small outgoing tail after ownership changes
 AVOID_BREAK_TO_BREAK = True   # mix CHOICE (Sam 2026-06-09), NOT a hardline: when the
                               # incoming's pre-drop break would coincide with an outgoing
                               # break (two breaks at once = a dead spot), drop the incoming
@@ -74,6 +72,7 @@ class Track:
     loop_windows: list = field(default_factory=list)   # (start_bar,end_bar) clean drums = drums-on/bass-off
     vocal_regions: list = field(default_factory=list)   # (start_bar,end_bar) vocals present
     fills: list = field(default_factory=list)           # (start_bar,end_bar) kick-out fills
+    musical_landmarks: list = field(default_factory=list)
 
     def boundaries(self) -> list[tuple[float, str]]:
         """(bar, label) for every section start — the markers."""
@@ -113,6 +112,7 @@ def load_track(stem_json: Path) -> Track:
         last_min_bars=last_min,
         bass_out_is_end=(bass_out is not None and (n_bars - bass_out) <= 4),
         loop_windows=loop_windows, vocal_regions=vocal_regions, fills=fills,
+        musical_landmarks=list(sig.get("musical_landmarks", [])),
     )
 
 
@@ -128,6 +128,7 @@ class FillCutSpec:
     partial_bars: float = 0.0          # loops: shorter FINAL chunk to land exactly on the marker
     skip_bars: float = 0.0             # break_skip: bars removed (the dropped break's length)
     clip_name: str = ""                # break_skip: the incoming break clip to drop
+    target_marker_name: str = ""       # named section/dropout reached by a loop
     note: str = ""
 
 
@@ -145,6 +146,60 @@ class Alignment:
     fills_cuts: list = field(default_factory=list)   # FillCutSpec list (loops/cuts around the swap)
     intro_cut_bars: float = 0.0
     notes: list = field(default_factory=list)
+    landmark_candidates: list = field(default_factory=list)
+    alignment_policy: str = "legacy_v1"
+    paired_cues: list = field(default_factory=list)
+    swap_progress: float | None = None
+
+
+def report_landmark_candidates(
+    outgoing: Track,
+    incoming: Track,
+    alignment: Alignment,
+    outgoing_start_beat: float,
+    incoming_start_beat: float,
+) -> list[dict]:
+    """Map both tracks' landmarks onto the arrangement without selecting one.
+
+    Final overlap filtering happens in `generate_report`, after loop extensions
+    have updated the outgoing arrangement end.
+    """
+    candidates: list[dict] = []
+    for role, track, track_start in (
+        ("outgoing", outgoing, outgoing_start_beat),
+        ("incoming", incoming, incoming_start_beat),
+    ):
+        for landmark in track.musical_landmarks:
+            absolute_start = track_start + float(landmark["start_beat"])
+            absolute_end = track_start + float(landmark["end_beat"])
+            suggested_finish = absolute_start if role == "outgoing" else absolute_end
+            candidates.append({
+                "policy": "report_only_v1",
+                "track_role": role,
+                "track_name": track.name,
+                "landmark_id": landmark["landmark_id"],
+                "type": landmark["type"],
+                "section_name": landmark.get("section_name"),
+                "confidence": landmark.get("confidence"),
+                "duration_beats": landmark["duration_beats"],
+                "source_start_beat": round(float(landmark["start_beat"]), 3),
+                "source_end_beat": round(float(landmark["end_beat"]), 3),
+                "arrangement_start_beat": round(absolute_start, 3),
+                "arrangement_end_beat": round(absolute_end, 3),
+                "suggested_transition_finish_beat": round(suggested_finish, 3),
+                "distance_from_current_swap_beats": (
+                    round(suggested_finish - alignment.swap_beats, 3)
+                    if alignment.swap_beats is not None else None
+                ),
+                "candidate_roles": landmark.get("candidate_roles", []),
+                "selected": False,
+            })
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item["suggested_transition_finish_beat"], item["track_role"]
+        ),
+    )
 
 
 def _handoff_candidates(o: Track) -> list[tuple[float, str, str]]:
@@ -188,11 +243,131 @@ def _score_lineup(o: Track, i: Track, arr_offset: float) -> int:
     return score
 
 
+def _mix_cues(track: Track) -> dict[int, dict]:
+    """Musical cut positions normalised to whole bars without losing provenance."""
+    cues: dict[int, dict] = {}
+
+    def add(position: float, label: str, weight: int) -> None:
+        bar = int(round(position))
+        cue = cues.setdefault(bar, {"weight": 0, "labels": []})
+        cue["weight"] = max(cue["weight"], weight)
+        if label not in cue["labels"]:
+            cue["labels"].append(label)
+
+    add(0, "track_start", 5)
+    add(track.n_bars, "track_end", 5)
+    for section in track.sections:
+        label = section["label"]
+        add(section["start_bar"], f"section:{label}:start",
+            6 if label in ("drop", "outro") else 3)
+        add(section["end_bar"], f"section:{label}:end", 3)
+    for landmark in track.musical_landmarks:
+        # Raw kick gaps can begin/end within a bar. They remain automation cues at
+        # their exact beat, but whole-track placement must retain bar/downbeat phase.
+        start = math.floor(float(landmark["start_bar"]))
+        end = math.ceil(float(landmark["end_bar"]))
+        kind = landmark["type"]
+        add(start, f"landmark:{kind}:start", 4)
+        add(end, f"landmark:{kind}:end", 5)
+    return cues
+
+
+def _incoming_drop_anchors(track: Track) -> list[int]:
+    """Drop ownership points in source order, limited to the mixable head."""
+    return sorted({
+        int(round(float(section["start_bar"])))
+        for section in track.sections
+        if section["label"] == "drop" and float(section["start_bar"]) <= 64.0
+    })
+
+
+def _align_pair_landmark_aware(o: Track, i: Track) -> Alignment:
+    """Pair a named incoming drop with outgoing section/dropout cuts.
+
+    The earliest incoming drop that yields a valid 16-48 bar blend wins. This
+    prevents a later drop from gaming the score while still allowing a second drop
+    when the first would force an immediate bass swap (Fresh Mix T1).
+    """
+    outgoing = _mix_cues(o)
+    incoming = _mix_cues(i)
+    window_start = o.n_bars - o.last_min_bars - HANDOFF_WINDOW_BARS
+    chosen = None
+
+    for incoming_anchor in _incoming_drop_anchors(i):
+        candidates = []
+        for outgoing_anchor, outgoing_cue in outgoing.items():
+            if outgoing_anchor < window_start:
+                continue
+            arr_offset = outgoing_anchor - incoming_anchor
+            overlap = o.n_bars - arr_offset
+            if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+                continue
+            progress = incoming_anchor / overlap if overlap else 1.0
+            if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
+                continue
+
+            pairs = []
+            weighted_score = 0
+            for incoming_bar, incoming_cue in incoming.items():
+                arrangement_bar = arr_offset + incoming_bar
+                outgoing_match = outgoing.get(arrangement_bar)
+                if outgoing_match is None:
+                    continue
+                weighted_score += incoming_cue["weight"] + outgoing_match["weight"]
+                pairs.append({
+                    "arrangement_bar": arrangement_bar,
+                    "outgoing_labels": outgoing_match["labels"],
+                    "incoming_source_bar": incoming_bar,
+                    "incoming_labels": incoming_cue["labels"],
+                })
+            if not pairs:
+                continue
+            entry_paired = arr_offset in outgoing
+            exit_paired = (o.n_bars - arr_offset) in incoming
+            rank = (
+                weighted_score,
+                int(entry_paired) + int(exit_paired),
+                -abs(progress - 0.65),
+                overlap,
+            )
+            candidates.append((rank, arr_offset, overlap, outgoing_anchor,
+                               outgoing_cue, progress, pairs, weighted_score))
+        if candidates:
+            chosen = max(candidates, key=lambda item: item[0])
+            break
+
+    if chosen is None:
+        raise ValueError(
+            f"No paired section/dropout alignment for '{o.name}' -> '{i.name}' "
+            f"inside the {PHRASE_GRID}-{MAX_OVERLAP_BARS} bar window"
+        )
+
+    (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+     progress, pairs, weighted_score) = chosen
+    return Alignment(
+        out_name=o.name,
+        in_name=i.name,
+        handoff_bar_out=float(outgoing_anchor),
+        handoff_kind=f"paired/{outgoing_cue['labels'][0]}->drop",
+        anchor_bar_in=float(outgoing_anchor - arr_offset),
+        arr_offset_bars=float(arr_offset),
+        overlap_bars=float(overlap),
+        score=len(pairs),
+        alignment_policy="paired_landmarks_v2",
+        paired_cues=pairs,
+        swap_progress=progress,
+        notes=[f"paired cue score {weighted_score}; swap {progress:.0%} through overlap"],
+    )
+
+
 def align_pair(o: Track, i: Track) -> Alignment:
     """Slide the incoming so its bass-in lands on an outgoing natural marker, and
     pick the marker that maximises section-boundary lineup (energy-matched). The
     bass switch happens there — faked early on the outgoing if it's before the
     outgoing's natural bass-out. Marker-coincidence BEATS literal bass-to-bass."""
+    if o.musical_landmarks or i.musical_landmarks:
+        return _align_pair_landmark_aware(o, i)
+
     bass_in = i.bass_in_bar if i.bass_in_bar is not None else 0.0
     # Anchor on the bass-in OR the intro-end (start of the first NON-intro
     # section). Bass-in alone fails when the bass enters mid-intro (My Own Thang:
@@ -371,6 +546,49 @@ def pick_clean_drum_loop(track, sec_start, sec_end, pref=4):
     return None
 
 
+def pick_cue_bounded_drum_loop(
+    track,
+    gap_bars: int,
+    required_boundary_bars: int | None = None,
+):
+    """Pick a clean loop whose complete repeats land exactly on a named cue.
+
+    Source chunks terminate at a clean-window boundary, so the loop itself is
+    musically cut; its length must divide the target gap within the repeat cap.
+    """
+    if gap_bars < 2:
+        return None
+
+    def blocked(a, b):
+        return any(a < end and b > start
+                   for start, end in list(track.vocal_regions) + list(track.fills))
+
+    lengths = []
+    for length in (8, 4, 7, 6, 5, 3, 2, 1):
+        repeats = gap_bars // length
+        remainder = gap_bars % length
+        if repeats < 1 or repeats > MAX_LOOP_REPEATS:
+            continue
+        if required_boundary_bars:
+            if required_boundary_bars % length != 0 or remainder > 1:
+                continue
+        elif gap_bars % length != 0:
+            continue
+        lengths.append(length)
+    for start, end in sorted(track.loop_windows, key=lambda window: window[1],
+                             reverse=True):
+        for length in lengths:
+            candidates = [
+                (float(math.floor(end) - length), float(math.floor(end))),
+                (float(math.ceil(start)), float(math.ceil(start) + length)),
+            ]
+            for source_start, source_end in candidates:
+                if (source_start >= start and source_end <= end
+                        and not blocked(source_start, source_end)):
+                    return source_start, source_end
+    return None
+
+
 def _last_drop_start(t):
     """Start bar of the track's LAST drop (the drop before its outro), else None."""
     return max((s["start_bar"] for s in t.sections if s["label"] == "drop"), default=None)
@@ -436,9 +654,13 @@ def plan_fill_or_cut(o, i, al):
          break-into-break (soft; see _resolve_break_to_break)."""
     arr = al.arr_offset_bars
     specs = []
+    landmark_mode = al.alignment_policy == "paired_landmarks_v2"
+    overlap_ceiling = (
+        MAX_LANDMARK_OVERLAP_BARS if landmark_mode else MAX_OVERLAP_BARS
+    )
     loop_budget = min(
         MAX_LOOP_EXTENSION_BARS,
-        max(0.0, MAX_OVERLAP_BARS - max(0.0, al.overlap_bars)),
+        max(0.0, overlap_ceiling - max(0.0, al.overlap_bars)),
     )
     first_drop_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
     intro_end = (i.sections[0]["end_bar"]
@@ -447,7 +669,7 @@ def plan_fill_or_cut(o, i, al):
     # (1) INCOMING-INTRO LOOP — enter at the outgoing's last drop; loop clean drums back.
     last_drop_o = _last_drop_start(o)
     intro_loop = False
-    if last_drop_o is not None and intro_end > 0:
+    if not landmark_mode and last_drop_o is not None and intro_end > 0:
         fill_bars = round((arr - last_drop_o) / SNAP_BARS) * SNAP_BARS
         if fill_bars >= SNAP_BARS:
             chunk = pick_clean_drum_loop(i, 0, intro_end)            # intro drums (vocal-free)
@@ -492,14 +714,54 @@ def plan_fill_or_cut(o, i, al):
     # outro DRUMS (the bass-out-is-end guard was wrong — bass is irrelevant here).
     # reps REACH the marker (round, not floor — floor undershot the break); a small
     # gap uses a 2-bar chunk ("a little").
-    nxt = next((arr + s["start_bar"] for s in i.sections
-                if (arr + s["start_bar"]) > o.n_bars + 1), None)
+    target_name = ""
+    landmark_targets = []
+    if landmark_mode:
+        current_incoming_bar = o.n_bars - arr
+        for section in i.sections:
+            source_bar = int(round(float(section["start_bar"])))
+            if source_bar >= current_incoming_bar + 2:
+                landmark_targets.append((source_bar, f"section:{section['name']}"))
+        for landmark in i.musical_landmarks:
+            source_bar = int(math.ceil(float(landmark["end_bar"])))
+            if source_bar >= current_incoming_bar + 2:
+                landmark_targets.append(
+                    (source_bar, f"landmark:{landmark['landmark_id']}:end")
+                )
+        nxt = None
+    else:
+        nxt = next((arr + s["start_bar"] for s in i.sections
+                    if (arr + s["start_bar"]) > o.n_bars + 1), None)
     outro = next((s for s in o.sections if s["label"] == "outro"), None)
+    chunk = None
+    if landmark_mode and outro is not None:
+        for target_source_bar, candidate_name in sorted(set(landmark_targets)):
+            candidate_nxt = arr + target_source_bar
+            candidate_gap = candidate_nxt - o.n_bars
+            if candidate_gap > loop_budget + 1e-6:
+                continue
+            boundary_gap = max(
+                0,
+                int(round(float(al.handoff_bar_out) - float(outro["start_bar"]))),
+            )
+            candidate_chunk = pick_cue_bounded_drum_loop(
+                o,
+                int(candidate_gap),
+                required_boundary_bars=boundary_gap or None,
+            )
+            if candidate_chunk is not None:
+                nxt = candidate_nxt
+                target_name = candidate_name
+                chunk = candidate_chunk
+                break
     if nxt is not None and outro is not None:
         gap = nxt - o.n_bars                                   # exact bars to the marker
         if gap >= 2:
             pref = 4 if gap >= 4 else 2
-            chunk = pick_clean_drum_loop(o, outro["start_bar"], outro["end_bar"], pref)
+            if not landmark_mode:
+                chunk = pick_clean_drum_loop(
+                    o, outro["start_bar"], outro["end_bar"], pref
+                )
             if chunk is None and o.loop_windows:
                 # bassy / vocal outro has no clean-drum window — use the outgoing's
                 # LATEST clean-drum window (a late break's drums) as the tail source.
@@ -519,7 +781,7 @@ def plan_fill_or_cut(o, i, al):
                 # A 2-3 bar fragment of a 4-bar phrase cuts mid-phrase and sounds wrong,
                 # so round a >=2-bar remainder UP to a whole chunk (ending a bar or two
                 # past the marker is fine). A 1-bar remainder is tiny — keep it exact.
-                if partial >= 2:
+                if partial >= 2 and not landmark_mode:
                     reps += 1
                     partial = 0.0
                 requested_reps = reps
@@ -528,12 +790,19 @@ def plan_fill_or_cut(o, i, al):
                 used = reps * clen
                 remaining = max(0.0, loop_budget - used)
                 partial = min(requested_partial, remaining)
+                if landmark_mode and abs(used + partial - gap) > 1e-6:
+                    raise ValueError(
+                        f"Cannot reach named cue '{target_name}' for '{o.name}' -> "
+                        f"'{i.name}' inside loop safety limits"
+                    )
                 if reps >= 1 or partial > 0:
                     loop_budget -= used + partial
                     specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
                         source_start_bar=chunk[0], source_end_bar=chunk[1],
                         partial_bars=float(partial), target_marker_bar=float(nxt),
-                        note=f"loop outro {clen:.0f}bx{reps}+{partial:.0f}b to marker {nxt:.0f}"
+                        target_marker_name=target_name,
+                        note=f"loop outro {clen:.0f}bx{reps}+{partial:.0f}b to "
+                             f"{target_name or 'marker'} {nxt:.0f}"
                              + (" [safety-capped]" if (reps < requested_reps or
                                   partial < requested_partial) else "")))
 
@@ -598,6 +867,7 @@ def compute_aligned_positions(tracks, stem_dir, order=None):
         new = max(prev + al.arr_offset_bars * 4.0 - contraction, prev)   # anti-rewind clamp
         arr_pos[k] = new
         al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
+        al.landmark_candidates = report_landmark_candidates(o, i, al, prev, new)
         al.fills_cuts = plan_fill_or_cut(o, i, al)           # loops/cuts around the swap
         bskip = next((f for f in al.fills_cuts if f.kind == "break_skip"), None)
         contraction = bskip.skip_bars * 4.0 if bskip else 0.0

@@ -74,6 +74,8 @@ def test_flag_on_fake_provider_overrides_only_kick_presence(monkeypatch, tmp_pat
     assert ("kick_dropout", 16) in cues
     assert ("kick_return", 24) in cues
     assert res["signals"]["kick_presence_source"] == "kick-detector-v3"
+    assert res["signals"]["musical_landmarks"][0]["start_beat"] == 16
+    assert res["signals"]["musical_landmarks"][0]["end_beat"] == 24
     assert res["signals"]["fills"] == []
     assert "kick_model_adapter" not in sys.modules
 

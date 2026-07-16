@@ -1,6 +1,6 @@
 {
   "project": "Automated DJ Mixes",
-  "description": "Automated DJ mix pipeline — template-based ALS generation with multi-signal cue candidate detection (Rekordbox phrases + librosa energy + PWV5 waveform) feeding bass-to-bass transition planning",
+  "description": "Automated DJ mix pipeline — owned stem grids, Demucs sections and Kick Detector V3 evidence feeding template-based Ableton arrangement and automation",
   "tech_stack": [
     "Python 3.x",
     "Librosa",
@@ -15,7 +15,7 @@
   "modules": {
     "orchestrator": {
       "path": "Source/automated_dj_mixes/orchestrator.py",
-      "purpose": "Main pipeline controller. --visualize mode for phrase verification",
+      "purpose": "Main controller. Canonical --stem-grid mode runs MIK metadata only, disables Rekordbox launch/library reads, and requires full owned-grid coverage",
       "status": "working"
     },
     "analysis": {
@@ -30,7 +30,7 @@
     },
     "warping": {
       "path": "Source/automated_dj_mixes/warping.py",
-      "purpose": "Per-beat warp markers from Rekordbox grid; sec_to_clip_beats + grid_bpm_and_downbeat (the one-clock converter used by stem-section cuts)",
+      "purpose": "Per-beat warp markers from the selected certified grid; sec_to_clip_beats + grid_bpm_and_downbeat enforce the one-clock contract",
       "status": "working"
     },
     "automation": {
@@ -45,8 +45,8 @@
     },
     "mix_plan": {
       "path": "Source/automated_dj_mixes/mix_plan.py",
-      "purpose": "Immutable hash-backed production intent for the two-track/one-transition arrangement slice; stable source/track/section/loop/transition IDs and canonical plan_hash",
-      "status": "working (arrangement-only V1; tempo/warp, automation, render approval and ALS reconciliation pending)",
+      "purpose": "Immutable hash-backed N-track production intent with exact source grids, per-track warp modes, N-1 transitions, loop ownership and canonical plan_hash",
+      "status": "working (schema 1.3; Fresh Mix Final V2 reconciled across 58 checks and received a strong provisional listening pass)",
       "added": "2026-07-15"
     },
     "rekordbox_reader": {
@@ -103,7 +103,7 @@
     },
     "desktop_analyzer": {
       "path": "Source/automated_dj_mixes/desktop_analyzer.py",
-      "purpose": "Drives MIK + Rekordbox UIs via pywinauto/pyautogui to analyze tracks without manual clicks. Cursor save+restore so Sam can keep working. MIKStore.db + pyrekordbox for completion polling. Requires RB Library Protection OFF.",
+      "purpose": "Drives MIK for canonical /mix metadata enrichment; legacy Rekordbox UI functions remain but are prohibited when --stem-grid is selected.",
       "status": "working",
       "added": "2026-05-19"
     },
@@ -116,13 +116,13 @@
   "standalone_scripts": {
     "validate_mix_plan_als": {
       "path": "Source/validate_mix_plan_als.py",
-      "purpose": "Post-mutation one-transition reconciliation: plan hash, track sequence, final clip geometry, loops, tempo, WarpMode, swap and automation; emits hash-backed JSON",
+      "purpose": "Post-mutation N-track reconciliation: plan hash, sequence, geometry, full/partial loops, tempo, per-track WarpMode, exact grids, every swap and automation; emits hash-backed JSON",
       "status": "working",
       "added": "2026-07-15"
     },
     "apply_automation": {
       "path": "Source/apply_automation.py",
-      "purpose": "Patches volume crossfades (Utility Gain) + EQ bass kills (ChannelEQ LowShelfGain) into a Sections .als. Section-structure-driven bass swap detection (incoming first drop > outgoing outro > outgoing last fill/break > midpoint). Two-phase transition model: incoming ramps up to swap, outgoing fades out after swap. Line-level XML patching, \\r\\n line endings, dynamic AutomationTarget discovery.",
+      "purpose": "Patches volume crossfades (Utility Gain) + EQ bass kills (ChannelEQ LowShelfGain) into a Sections .als. Explicit arrangement-report swaps remain exact at valid overlap-start/loop boundaries; only the overlap end has a fade-room guard. Line-level XML patching, \\r\\n line endings, dynamic AutomationTarget discovery.",
       "status": "working",
       "added": "2026-05-21"
     },
@@ -164,9 +164,15 @@
     },
     "kick_model_adapter": {
       "path": "Source/kick_model_adapter.py",
-      "purpose": "Lazy default-off Kick Detector V3 adapter for stem_detector.py; loads sibling V3 weights/reference smoothing only when --kick-model is enabled, runs a single Demucs pass for envelopes + raw drums, and preserves legacy flag-off behavior.",
+      "purpose": "Lazy default-off Kick Detector V3 adapter; one inference exposes raw presence for musical landmarks and smoothed presence for stable coarse sections while preserving the single Demucs pass and flag-off behavior.",
       "status": "working",
       "added": "2026-07-09"
+    },
+    "musical_landmarks": {
+      "path": "Source/automated_dj_mixes/musical_landmarks.py",
+      "purpose": "Report-only raw kick-dropout spans with pre-drop, section, energy and candidate-role context",
+      "status": "working",
+      "added": "2026-07-16"
     }
   },
   "config_path": "Config/settings.json",
@@ -186,6 +192,71 @@
     "samwillsmixing.com"
   ],
   "sessions": [
+    {
+      "date": "2026-07-16",
+      "focus": "Rebuilt Fresh Mix Final V2 and cleared the catastrophic beatmatching correctness gate",
+      "key_changes": [
+        "Restored Roadblock beat and downbeat zero with 396 owned-grid markers and prevented multi-beat file-head loss",
+        "Made paired musical landmarks, both-track clip boundaries and named cue-driven loop phrases authoritative",
+        "Materialized every short Kick V3 gap up to 16 beats as a color-55 beat_dropout clip",
+        "Rebuilt seven transitions at 121 BPM with explicit Re-Pitch or Complex Pro policy, LUFS levelling and automation"
+      ],
+      "validation": "131 passed, 4 unavailable fixtures skipped; validate_als PASS; 58 MixPlan-to-ALS checks PASS; Roadblock exact production-path intent PASS; critical T1/T4/T6 evidence inspected",
+      "listening_verdict": "Strong provisional pass: every transition beatmatched, no helicoptering or repeated snare-downbeat failure, no painful basic errors, and several transitions were impressively accurate; expert musical corrections remain",
+      "open_items": [
+        "Preserve Final V2 untouched and have Sam save his manual correction as a clearly versioned amended ALS",
+        "Run a structured correction diff and classify edits by section, entry, loop, swap, exit and automation",
+        "Promote only repeatable corrections into rules; do not render or freeze until the amended result is reviewed"
+      ]
+    },
+    {
+      "date": "2026-07-16",
+      "focus": "Built the Rekordbox-free 16.07.26 Fresh Mix end to end from unused tracks",
+      "key_changes": [
+        "Rejected four of 12 candidates at the owned stem-grid gate and completed fresh MIK, grid, Kick V3 and section analysis on eight certified tracks",
+        "Materialized raw kick gaps as color-55 beat_dropout clips without changing any source warp grid; refined hints passed 30 section comparisons",
+        "Built a 121 BPM, seven-transition arrangement with explicit Re-Pitch/Complex Pro policy, LUFS levelling and volume/bass automation",
+        "Fixed automation silently moving a valid loop-boundary swap and made transition waveform evidence map through actual clip/loop source ranges"
+      ],
+      "validation": "120 passed, 4 unavailable fixtures skipped; final validate_als PASS; 47 MixPlan-to-ALS checks PASS; all 7 zoom and 7 full-context transition images visually inspected",
+      "open_items": [
+        "Save or close the unrelated unsaved LeAnn Rimes Ableton set, then clean-open 16.07.26 Fresh Mix Final V1.als",
+        "Sam listens through all seven transitions; render Main 44.1 kHz/24-bit only after acceptance",
+        "T4 and T7 are deliberate fallback blends rather than natural-marker matches and deserve focused listening"
+      ]
+    },
+    {
+      "date": "2026-07-16",
+      "focus": "Accepted Final V5, added raw V3 dropout landmarks, and built the shared-middle three-track proof",
+      "key_changes": [
+        "Separated raw Kick Detector V3 dropout evidence from smoothed coarse-section presence and added section-preserving landmark refresh/visuals",
+        "Added report-only incoming/outgoing landmark candidates with final loop-aware arrangement mapping",
+        "Generalized MixPlan/reconciliation to N tracks and per-track warp modes; fixed XML-entity report matching and partial-loop reconciliation",
+        "Built Change My Mind -> Aight -> Chaoss Final V1 at fixed 121 BPM with Re-Pitch on all three certified grids"
+      ],
+      "validation": "113 passed, 4 unavailable fixtures skipped; Final V1 validate_als PASS; Reconciliation V1 17 checks PASS; transition visuals use certified 120/121/122 source-grid BPMs; Ableton Live 12 clean-open PASS",
+      "open_items": [
+        "Listen through the currently open three-track Final V1 in Ableton",
+        "If accepted, render 44.1 kHz/24-bit Main with normalize/dither off and run objective transition checks",
+        "Keep all raw dropout candidates report-only until creative selection policy is separately reviewed"
+      ]
+    },
+    {
+      "date": "2026-07-16",
+      "focus": "Rejected collapsed proof warp grids and rebuilt byte-preserving Final V5",
+      "key_changes": [
+        "Traced wrong source tempos to the old two-track isolation step; upstream Car Mix Sections V1 grids were correct",
+        "Added byte-preserving track isolation and regenerated the pair with 487-marker 119.9995 BPM and 879-marker 121.0011 BPM grids",
+        "Extended MixPlan schema 1.1 and final reconciliation with exact marker-count, grid-hash, and source-grid-BPM contracts",
+        "Generated Final V5 and opened it cleanly in a separate Ableton process without touching Sam's unsaved set"
+      ],
+      "validation": "104 passed, 4 unavailable golden fixtures skipped; Sections Pair V2 and Final V5 validate_als PASS; Reconciliation V4 11 checks PASS; warp probe retains 487/879 markers; Ableton Live clean-open PASS",
+      "open_items": [
+        "Sam must visually and aurally approve both source grids in Final V5 before any bounce",
+        "After approval, render Main 44.1kHz/24-bit with normalize/dither off and run whole-file plus beat-448 checks",
+        "Do not expand to three tracks until the corrected one-transition proof is accepted"
+      ]
+    },
     {
       "date": "2026-07-15",
       "focus": "Hardened one-transition production proof through a clean Ableton-open Final V4",

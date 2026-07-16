@@ -356,7 +356,8 @@ def ordered_tracks(sections: dict) -> list[TrackInfo]:
 
 
 def _label(sec: dict) -> str:
-    return sec.get("label", "").lower()
+    label = sec.get("label", "").lower()
+    return "fill" if label == "beat_dropout" else label
 
 
 # ── Bass-swap detection ──────────────────────────────────────────────────────
@@ -506,7 +507,7 @@ def _load_arrangement_report(als_path: Path,
     out = {}
     for tr in rep.get("transitions", []):
         if tr.get("swap_beats") is not None:
-            out[(tr["out_track"], tr["in_track"])] = {
+            out[(_normalise(tr["out_track"]), _normalise(tr["in_track"]))] = {
                 "swap_beats": tr["swap_beats"],
                 "handoff_kind": tr.get("handoff_kind", "align"),
             }
@@ -528,16 +529,18 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             print(f"  WARNING  no overlap: {_short(out_t.name)} -> {_short(in_t.name)}")
             continue
 
-        rep = report_swaps.get((out_t.name, in_t.name))
+        rep = report_swaps.get((_normalise(out_t.name), _normalise(in_t.name)))
         if rep is not None:
             # align_engine already chose the swap — use it (don't re-derive).
-            # Keep only the boundary guardrail as a clamp-and-warn post-check.
+            # Preserve a valid swap near the overlap start: it may intentionally
+            # coincide with an outgoing loop boundary. Only the overlap end needs
+            # a margin so the outgoing fade has room to complete.
             swap = rep["swap_beats"]
             margin = 8.0
-            clamped = min(max(swap, ov_start + margin), ov_end - margin)
+            clamped = min(max(swap, ov_start), ov_end - margin)
             if abs(clamped - swap) > 0.5:
-                print(f"  align_engine swap {swap:.0f} outside overlap "
-                      f"[{ov_start:.0f},{ov_end:.0f}] -> clamped {clamped:.0f}")
+                print(f"  align_engine swap {swap:.0f} outside safe overlap "
+                      f"[{ov_start:.0f},{ov_end - margin:.0f}] -> clamped {clamped:.0f}")
             swap, reason = clamped, f"align_engine {rep.get('handoff_kind', 'swap')}"
         else:
             swap, reason = find_bass_swap(out_t, in_t, ov_start, ov_end)
@@ -760,7 +763,8 @@ def build_track_automation(plans: list[TransitionPlan],
 # ── Track name matching ───────────────────────────────────────────────────────
 
 def _normalise(s: str) -> str:
-    return s.lower().replace("–", "-").replace("—", "-").strip()
+    from apply_loops import _normalise as canonical_normalise
+    return canonical_normalise(s)
 
 
 def match_tracks_to_als(tracks: list[TrackInfo],

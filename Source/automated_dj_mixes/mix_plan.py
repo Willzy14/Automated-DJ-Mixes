@@ -1,9 +1,4 @@
-"""Immutable, hash-backed production intent for the DJ mix pipeline.
-
-V1 intentionally covers the first vertical proof: two certified sources, their
-arrangement geometry, loop intent, and one main handover contract. Later slices
-extend this schema with tempo, warp, automation, render, and approval contracts.
-"""
+"""Immutable, hash-backed production intent for the DJ mix pipeline."""
 
 from __future__ import annotations
 
@@ -16,12 +11,14 @@ from pathlib import Path
 from typing import Mapping
 
 from apply_loops import MAX_LOOP_EXTENSION_BEATS, MAX_LOOP_REPEATS
+from automated_dj_mixes.warp_contract import WarpGridSummary
 
 
-SCHEMA_VERSION = "1.0"
-PRODUCTION_SCOPE = "one_transition_arrangement_v1"
+SCHEMA_VERSION = "1.3"
+PRODUCTION_SCOPE = "multi_transition_arrangement_v1"
 MIN_OVERLAP_BEATS = 64.0
 MAX_OVERLAP_BEATS = 192.0
+MAX_LANDMARK_OVERLAP_BEATS = 256.0
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -51,6 +48,10 @@ class TrackInstanceContract:
     section_map_id: str
     sequence_index: int
     display_name: str
+    warp_marker_count: int
+    warp_grid_sha256: str
+    source_grid_bpm: float
+    warp_mode: str
     arrangement_start_beat: float
     arrangement_end_beat: float
 
@@ -77,6 +78,7 @@ class TransitionContract:
     overlap_end_beat: float
     overlap_beats: float
     loop_ids: tuple[str, ...]
+    overlap_policy: str
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,7 @@ class MixPlan:
     production_scope: str
     plan_version: int
     parent_plan_hash: str | None
+    project_bpm: float | None
     main_track_sequence: tuple[str, ...]
     sources: tuple[SourceContract, ...]
     tracks: tuple[TrackInstanceContract, ...]
@@ -151,11 +154,14 @@ def _compute_plan_hash(plan: MixPlan) -> str:
     ).hexdigest()
 
 
-def build_one_transition_mix_plan(
+def build_mix_plan(
     arrangement_plan,
     *,
     source_hashes: Mapping[str, str],
     section_map_hashes: Mapping[str, str],
+    warp_grid_contracts: Mapping[str, WarpGridSummary],
+    project_bpm: float | None = None,
+    warp_modes: Mapping[str, str] | None = None,
     input_hashes: Mapping[str, str] | None = None,
     policy_versions: Mapping[str, str] | None = None,
     tool_versions: Mapping[str, str] | None = None,
@@ -163,18 +169,24 @@ def build_one_transition_mix_plan(
     plan_version: int = 1,
     parent_plan_hash: str | None = None,
 ) -> MixPlan:
-    """Convert a validated two-track ArrangementPlan into canonical V1 intent."""
+    """Convert a validated N-track ArrangementPlan into canonical intent."""
     from propose_arrangement import validate_arrangement_plan
 
     validate_arrangement_plan(arrangement_plan)
-    if len(arrangement_plan.tracks) != 2 or len(arrangement_plan.overlaps) != 1:
-        raise ValueError("MixPlan V1 requires exactly two tracks and one transition")
+    if len(arrangement_plan.tracks) < 2:
+        raise ValueError("MixPlan requires at least two tracks")
     if plan_version < 1:
         raise ValueError("plan_version must be at least 1")
     if plan_version > 1 and not parent_plan_hash:
         raise ValueError("A revised MixPlan requires parent_plan_hash")
     if parent_plan_hash is not None:
         _normalise_digest(parent_plan_hash, "parent_plan_hash")
+
+    if project_bpm is not None and (
+        not math.isfinite(project_bpm) or not 60.0 <= project_bpm <= 200.0
+    ):
+        raise ValueError(f"Invalid project BPM: {project_bpm!r}")
+    warp_modes = dict(warp_modes or {})
 
     source_contracts: list[SourceContract] = []
     track_contracts: list[TrackInstanceContract] = []
@@ -185,6 +197,8 @@ def build_one_transition_mix_plan(
             raise ValueError(f"Missing certified source hash for '{track.name}'")
         if track.name not in section_map_hashes:
             raise ValueError(f"Missing section map hash for '{track.name}'")
+        if track.name not in warp_grid_contracts:
+            raise ValueError(f"Missing warp-grid contract for '{track.name}'")
 
         source_hash = _normalise_digest(
             source_hashes[track.name], f"source hash for '{track.name}'"
@@ -197,6 +211,14 @@ def build_one_transition_mix_plan(
             "trk", {"source_id": source_id, "sequence_index": index}
         )
         section_map_id = _semantic_id("sec", {"sha256": section_hash})
+        warp_grid = warp_grid_contracts[track.name]
+        warp_mode = warp_modes.get(track.name, "inherited")
+        if warp_mode not in ("inherited", "repitch", "complex_pro"):
+            raise ValueError(f"Unsupported warp mode for '{track.name}': {warp_mode!r}")
+        if project_bpm is None and warp_mode != "inherited":
+            raise ValueError("Explicit track warp modes require project_bpm")
+        if project_bpm is not None and warp_mode == "inherited":
+            raise ValueError(f"Missing explicit warp mode for '{track.name}'")
 
         if not any(source.source_id == source_id for source in source_contracts):
             source_contracts.append(SourceContract(source_id, track.name, source_hash))
@@ -206,53 +228,67 @@ def build_one_transition_mix_plan(
             section_map_id=section_map_id,
             sequence_index=index,
             display_name=track.name,
+            warp_marker_count=int(warp_grid.marker_count),
+            warp_grid_sha256=_normalise_digest(
+                warp_grid.grid_sha256, f"warp grid for '{track.name}'"
+            ),
+            source_grid_bpm=float(warp_grid.source_grid_bpm),
+            warp_mode=warp_mode,
             arrangement_start_beat=float(track.arr_start),
             arrangement_end_beat=float(track.arr_end),
         ))
         extra_hashes[f"source:{source_id}"] = source_hash
         extra_hashes[f"section_map:{track_instance_id}"] = section_hash
 
-    out_track, in_track = track_contracts
-    transition_id = _semantic_id("trn", {
-        "out_track_instance_id": out_track.track_instance_id,
-        "in_track_instance_id": in_track.track_instance_id,
-    })
     track_id_by_name = {
         track.display_name: track.track_instance_id for track in track_contracts
     }
 
     loop_contracts: list[LoopContract] = []
-    for spec in arrangement_plan.loops:
-        track_instance_id = track_id_by_name.get(spec.track_name)
-        if track_instance_id is None:
-            raise ValueError(
-                f"Loop target '{spec.track_name}' is not a transition participant"
-            )
-        loop_value = {
-            "transition_id": transition_id,
-            "track_instance_id": track_instance_id,
-            "source_beat_start": float(spec.source_beat_start),
-            "source_beat_end": float(spec.source_beat_end),
-            "repeat_count": spec.count,
-            "partial_beats": float(spec.tail_partial_beats),
-            "insert_at_beat": float(spec.insert_at_beat),
-        }
-        loop_contracts.append(LoopContract(
-            loop_id=_semantic_id("lop", loop_value),
-            **loop_value,
+    transition_contracts: list[TransitionContract] = []
+    seen_loop_objects: set[int] = set()
+    for index, overlap in enumerate(arrangement_plan.overlaps):
+        out_track = track_contracts[index]
+        in_track = track_contracts[index + 1]
+        transition_id = _semantic_id("trn", {
+            "out_track_instance_id": out_track.track_instance_id,
+            "in_track_instance_id": in_track.track_instance_id,
+        })
+        transition_loops: list[LoopContract] = []
+        for spec in (overlap.out_tail_loop, overlap.in_intro_loop):
+            if spec is None:
+                continue
+            seen_loop_objects.add(id(spec))
+            track_instance_id = track_id_by_name.get(spec.track_name)
+            if track_instance_id is None:
+                raise ValueError(f"Loop target '{spec.track_name}' is unknown")
+            loop_value = {
+                "transition_id": transition_id,
+                "track_instance_id": track_instance_id,
+                "source_beat_start": float(spec.source_beat_start),
+                "source_beat_end": float(spec.source_beat_end),
+                "repeat_count": spec.count,
+                "partial_beats": float(spec.tail_partial_beats),
+                "insert_at_beat": float(spec.insert_at_beat),
+            }
+            transition_loops.append(LoopContract(
+                loop_id=_semantic_id("lop", loop_value),
+                **loop_value,
+            ))
+        loop_contracts.extend(transition_loops)
+        transition_contracts.append(TransitionContract(
+            transition_id=transition_id,
+            transition_index=index,
+            out_track_instance_id=out_track.track_instance_id,
+            in_track_instance_id=in_track.track_instance_id,
+            overlap_start_beat=float(overlap.overlap_start),
+            overlap_end_beat=float(overlap.overlap_end),
+            overlap_beats=float(overlap.overlap_beats),
+            loop_ids=tuple(loop.loop_id for loop in transition_loops),
+            overlap_policy=getattr(overlap, "overlap_policy", "standard_48"),
         ))
-
-    overlap = arrangement_plan.overlaps[0]
-    transition = TransitionContract(
-        transition_id=transition_id,
-        transition_index=0,
-        out_track_instance_id=out_track.track_instance_id,
-        in_track_instance_id=in_track.track_instance_id,
-        overlap_start_beat=float(overlap.overlap_start),
-        overlap_end_beat=float(overlap.overlap_end),
-        overlap_beats=float(overlap.overlap_beats),
-        loop_ids=tuple(loop.loop_id for loop in loop_contracts),
-    )
+    if seen_loop_objects != {id(spec) for spec in arrangement_plan.loops}:
+        raise ValueError("Arrangement contains a loop not owned by a transition")
 
     policies = {"loop_safety": "safety_v1", "overlap_safety": "safety_v1"}
     policies.update(policy_versions or {})
@@ -264,13 +300,14 @@ def build_one_transition_mix_plan(
         production_scope=PRODUCTION_SCOPE,
         plan_version=plan_version,
         parent_plan_hash=parent_plan_hash,
+        project_bpm=float(project_bpm) if project_bpm is not None else None,
         main_track_sequence=tuple(
             track.track_instance_id for track in track_contracts
         ),
         sources=tuple(source_contracts),
         tracks=tuple(track_contracts),
         loops=tuple(loop_contracts),
-        transitions=(transition,),
+        transitions=tuple(transition_contracts),
         input_hashes=_artifact_hashes(extra_hashes),
         policy_versions=_metadata_entries(policies),
         tool_versions=_metadata_entries(tools),
@@ -280,6 +317,13 @@ def build_one_transition_mix_plan(
     plan = replace(provisional, plan_hash=_compute_plan_hash(provisional))
     validate_mix_plan(plan)
     return plan
+
+
+def build_one_transition_mix_plan(arrangement_plan, **kwargs) -> MixPlan:
+    """Backward-compatible entry point for the original two-track scope."""
+    if len(arrangement_plan.tracks) != 2 or len(arrangement_plan.overlaps) != 1:
+        raise ValueError("One-transition MixPlan requires exactly two tracks")
+    return build_mix_plan(arrangement_plan, **kwargs)
 
 
 def validate_mix_plan(plan: MixPlan) -> None:
@@ -294,8 +338,12 @@ def validate_mix_plan(plan: MixPlan) -> None:
     if plan.parent_plan_hash is not None:
         _normalise_digest(plan.parent_plan_hash, "parent_plan_hash")
 
-    if len(plan.tracks) != 2 or len(plan.transitions) != 1:
-        raise ValueError("MixPlan V1 requires exactly two tracks and one transition")
+    if len(plan.tracks) < 2 or len(plan.transitions) != len(plan.tracks) - 1:
+        raise ValueError("MixPlan requires one transition per adjacent track pair")
+    if plan.project_bpm is not None and (
+        not math.isfinite(plan.project_bpm) or not 60.0 <= plan.project_bpm <= 200.0
+    ):
+        raise ValueError(f"Invalid project BPM: {plan.project_bpm!r}")
     if len(plan.main_track_sequence) != len(plan.tracks):
         raise ValueError("main_track_sequence must contain every main track exactly once")
 
@@ -312,7 +360,7 @@ def validate_mix_plan(plan: MixPlan) -> None:
     for item in plan.input_hashes:
         _normalise_digest(item.sha256, f"input hash '{item.name}'")
 
-    for track in plan.tracks:
+    for expected_index, track in enumerate(plan.tracks):
         source = source_by_id.get(track.source_id)
         if source is None:
             raise ValueError(f"Track {track.track_instance_id} has no source contract")
@@ -326,11 +374,27 @@ def validate_mix_plan(plan: MixPlan) -> None:
         )
         if track.track_instance_id != expected_track_id:
             raise ValueError(f"Track instance ID {track.track_instance_id} is stale")
+        if track.sequence_index != expected_index:
+            raise ValueError(f"Track {track.track_instance_id} has stale sequence_index")
         section_hash = hashes.get(f"section_map:{track.track_instance_id}")
         if section_hash is None:
             raise ValueError(f"Track {track.track_instance_id} has no section map hash")
         if track.section_map_id != _semantic_id("sec", {"sha256": section_hash}):
             raise ValueError(f"Section map ID {track.section_map_id} is stale")
+        if track.warp_marker_count < 2:
+            raise ValueError(f"Track {track.track_instance_id} has too few warp markers")
+        _normalise_digest(
+            track.warp_grid_sha256, f"warp grid for '{track.display_name}'"
+        )
+        if (not math.isfinite(track.source_grid_bpm)
+                or not 40.0 <= track.source_grid_bpm <= 300.0):
+            raise ValueError(f"Track {track.track_instance_id} has invalid source-grid BPM")
+        if track.warp_mode not in ("inherited", "repitch", "complex_pro"):
+            raise ValueError(f"Track {track.track_instance_id} has invalid warp mode")
+        if plan.project_bpm is None and track.warp_mode != "inherited":
+            raise ValueError("Explicit track warp modes require project_bpm")
+        if plan.project_bpm is not None and track.warp_mode == "inherited":
+            raise ValueError(f"Track {track.track_instance_id} has no explicit warp mode")
         if not all(math.isfinite(value) for value in (
                 track.arrangement_start_beat, track.arrangement_end_beat)):
             raise ValueError(f"Track {track.track_instance_id} has non-finite geometry")
@@ -338,42 +402,62 @@ def validate_mix_plan(plan: MixPlan) -> None:
                 or track.arrangement_end_beat <= track.arrangement_start_beat):
             raise ValueError(f"Track {track.track_instance_id} has invalid geometry")
 
-    transition = plan.transitions[0]
-    out_track, in_track = plan.tracks
-    expected_transition_id = _semantic_id("trn", {
-        "out_track_instance_id": out_track.track_instance_id,
-        "in_track_instance_id": in_track.track_instance_id,
-    })
-    if transition.transition_id != expected_transition_id:
-        raise ValueError("Transition ID does not match the adjacent track instances")
-    if (transition.transition_index != 0
-            or transition.out_track_instance_id != out_track.track_instance_id
-            or transition.in_track_instance_id != in_track.track_instance_id):
-        raise ValueError("Transition does not match main_track_sequence adjacency")
-    overlap_beats = out_track.arrangement_end_beat - in_track.arrangement_start_beat
-    if not MIN_OVERLAP_BEATS <= overlap_beats <= MAX_OVERLAP_BEATS:
-        raise ValueError("Transition overlap is outside the 16-48 bar safety window")
-    expected_geometry = (
-        in_track.arrangement_start_beat,
-        out_track.arrangement_end_beat,
-        overlap_beats,
-    )
-    actual_geometry = (
-        transition.overlap_start_beat,
-        transition.overlap_end_beat,
-        transition.overlap_beats,
-    )
-    if any(not math.isclose(actual, expected, abs_tol=1e-6)
-           for actual, expected in zip(actual_geometry, expected_geometry)):
-        raise ValueError("Transition carries stale overlap geometry")
+    loops_by_id = {loop.loop_id: loop for loop in plan.loops}
+    if len(loops_by_id) != len(plan.loops):
+        raise ValueError("MixPlan contains duplicate loop IDs")
+    claimed_loop_ids: list[str] = []
+    transition_by_id: dict[str, TransitionContract] = {}
+    for index, transition in enumerate(plan.transitions):
+        out_track = plan.tracks[index]
+        in_track = plan.tracks[index + 1]
+        expected_transition_id = _semantic_id("trn", {
+            "out_track_instance_id": out_track.track_instance_id,
+            "in_track_instance_id": in_track.track_instance_id,
+        })
+        if transition.transition_id != expected_transition_id:
+            raise ValueError("Transition ID does not match adjacent track instances")
+        if (transition.transition_index != index
+                or transition.out_track_instance_id != out_track.track_instance_id
+                or transition.in_track_instance_id != in_track.track_instance_id):
+            raise ValueError("Transition does not match main_track_sequence adjacency")
+        overlap_beats = out_track.arrangement_end_beat - in_track.arrangement_start_beat
+        max_overlap = (MAX_LANDMARK_OVERLAP_BEATS
+                       if transition.overlap_policy == "named_landmark_64"
+                       else MAX_OVERLAP_BEATS)
+        if transition.overlap_policy not in ("standard_48", "named_landmark_64"):
+            raise ValueError("Transition has an unknown overlap policy")
+        if not MIN_OVERLAP_BEATS <= overlap_beats <= max_overlap:
+            raise ValueError(
+                f"Transition overlap is outside its 16-{max_overlap / 4:g} bar safety window"
+            )
+        expected_geometry = (
+            in_track.arrangement_start_beat,
+            out_track.arrangement_end_beat,
+            overlap_beats,
+        )
+        actual_geometry = (
+            transition.overlap_start_beat,
+            transition.overlap_end_beat,
+            transition.overlap_beats,
+        )
+        if any(not math.isclose(actual, expected, abs_tol=1e-6)
+               for actual, expected in zip(actual_geometry, expected_geometry)):
+            raise ValueError("Transition carries stale overlap geometry")
+        if len(set(transition.loop_ids)) != len(transition.loop_ids):
+            raise ValueError("Transition contains duplicate loop IDs")
+        claimed_loop_ids.extend(transition.loop_ids)
+        transition_by_id[transition.transition_id] = transition
 
-    loop_ids = tuple(loop.loop_id for loop in plan.loops)
-    if transition.loop_ids != loop_ids or len(set(loop_ids)) != len(loop_ids):
+    if set(claimed_loop_ids) != set(loops_by_id) or len(claimed_loop_ids) != len(loops_by_id):
         raise ValueError("Transition loop IDs do not match unique loop contracts")
-    participant_ids = {out_track.track_instance_id, in_track.track_instance_id}
     for loop in plan.loops:
-        if loop.transition_id != transition.transition_id:
+        transition = transition_by_id.get(loop.transition_id)
+        if transition is None or loop.loop_id not in transition.loop_ids:
             raise ValueError(f"Loop {loop.loop_id} belongs to another transition")
+        participant_ids = {
+            transition.out_track_instance_id,
+            transition.in_track_instance_id,
+        }
         if loop.track_instance_id not in participant_ids:
             raise ValueError(f"Loop {loop.loop_id} targets a non-participant track")
         if not all(math.isfinite(value) for value in (

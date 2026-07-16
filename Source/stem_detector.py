@@ -42,6 +42,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from stem_section_probe import _separate_envelopes, _load_stats, _seccol
+from automated_dj_mixes.musical_landmarks import extract_kick_dropout_landmarks
+from automated_dj_mixes.display_sections import refine_intro_drop_boundary
 
 STEMS = ("drums", "bass", "vocals", "other")
 STEM_COLORS = {"drums": "#e4572e", "bass": "#2e86ab", "vocals": "#8e44ad", "other": "#3a3a3a"}
@@ -152,9 +154,9 @@ def _kick_on_per_beat(drums_env, hop_t, bpm, downbeat, n_bars):
     return on, peaks, ref
 
 
-def _model_kick_on_per_beat(wav, bpm, downbeat, n_beats, kick_model_path=None,
-                            kick_model_device="auto", kick_provider=None,
-                            drums_mono=None, drums_sr=None):
+def _model_kick_presence_per_beat(wav, bpm, downbeat, n_beats, kick_model_path=None,
+                                  kick_model_device="auto", kick_provider=None,
+                                  drums_mono=None, drums_sr=None):
     """Optional learned kick-presence path.
 
     The provider/model returns beat-level kick IN/OUT only. The caller keeps the
@@ -165,23 +167,37 @@ def _model_kick_on_per_beat(wav, bpm, downbeat, n_beats, kick_model_path=None,
     if provider is None:
         from kick_model_adapter import get_provider
         provider = get_provider(model_path=kick_model_path, device=kick_model_device)
-    if drums_mono is not None and hasattr(provider, "on_per_beat_from_drums"):
-        on = np.asarray(provider.on_per_beat_from_drums(
-            np.asarray(drums_mono, dtype=np.float32),
-            int(drums_sr),
-            bpm=float(bpm),
-            downbeat=float(downbeat),
-            n_beats=int(n_beats),
+    if drums_mono is not None and hasattr(provider, "presence_per_beat_from_drums"):
+        readout = provider.presence_per_beat_from_drums(
+            np.asarray(drums_mono, dtype=np.float32), int(drums_sr),
+            bpm=float(bpm), downbeat=float(downbeat), n_beats=int(n_beats),
+        )
+        section_on = np.asarray(readout.section, dtype=bool)
+        landmark_on = np.asarray(readout.raw, dtype=bool)
+    elif hasattr(provider, "presence_per_beat"):
+        readout = provider.presence_per_beat(
+            Path(wav), bpm=float(bpm), downbeat=float(downbeat), n_beats=int(n_beats)
+        )
+        section_on = np.asarray(readout.section, dtype=bool)
+        landmark_on = np.asarray(readout.raw, dtype=bool)
+    elif drums_mono is not None and hasattr(provider, "on_per_beat_from_drums"):
+        section_on = np.asarray(provider.on_per_beat_from_drums(
+            np.asarray(drums_mono, dtype=np.float32), int(drums_sr),
+            bpm=float(bpm), downbeat=float(downbeat), n_beats=int(n_beats),
         ), dtype=bool)
+        landmark_on = section_on.copy()
     else:
-        on = np.asarray(provider.on_per_beat(
+        section_on = np.asarray(provider.on_per_beat(
             Path(wav), bpm=float(bpm), downbeat=float(downbeat), n_beats=int(n_beats)
         ), dtype=bool)
-    if len(on) < n_beats:
-        on = np.pad(on, (0, n_beats - len(on)), constant_values=False)
-    elif len(on) > n_beats:
-        on = on[:n_beats]
-    return on
+        landmark_on = section_on.copy()
+
+    def fit(values):
+        if len(values) < n_beats:
+            return np.pad(values, (0, n_beats - len(values)), constant_values=False)
+        return values[:n_beats]
+
+    return fit(section_on), fit(landmark_on)
 
 
 def _kick_cues(kick_on, bpm, downbeat):
@@ -406,9 +422,10 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     # learned V3 presence readout; kick_peaks/ref stay energy-based so fills and
     # the visual threshold line remain unchanged.
     kick_on, kick_peaks, kick_ref = _kick_on_per_beat(envs["drums"], hop_t, bpm, downbeat, n_bars)
+    landmark_kick_on = kick_on.copy()
     kick_source = "stem-energy-threshold"
     if kick_model or kick_provider is not None:
-        kick_on = _model_kick_on_per_beat(
+        kick_on, landmark_kick_on = _model_kick_presence_per_beat(
             wav, bpm, downbeat, n_bars * 4,
             kick_model_path=kick_model_path,
             kick_model_device=kick_model_device,
@@ -516,6 +533,43 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     bass_in_sec = round(downbeat + int(bass_on[0]) * sec_per_bar, 2) if len(bass_on) else None
     bass_out_sec = round(downbeat + (int(bass_on[-1]) + 1) * sec_per_bar, 2) if len(bass_on) else None
 
+    musical_landmarks = extract_kick_dropout_landmarks(
+        landmark_kick_on,
+        kick_on,
+        sections,
+        bpm=bpm,
+        downbeat=downbeat,
+        kick_peaks=kick_peaks,
+        kick_reference=kick_ref,
+        source=("kick-detector-v3-raw" if kick_source == "kick-detector-v3"
+                else "stem-energy-threshold"),
+    )
+    sections, intro_refinement = refine_intro_drop_boundary(
+        sections,
+        musical_landmarks,
+        bpm=bpm,
+        downbeat=downbeat,
+    )
+    if intro_refinement is not None:
+        musical_landmarks = extract_kick_dropout_landmarks(
+            landmark_kick_on,
+            kick_on,
+            sections,
+            bpm=bpm,
+            downbeat=downbeat,
+            kick_peaks=kick_peaks,
+            kick_reference=kick_ref,
+            source=("kick-detector-v3-raw" if kick_source == "kick-detector-v3"
+                    else "stem-energy-threshold"),
+        )
+        boundaries_sec = [s["start_sec"] for s in sections] + [sections[-1]["end_sec"]]
+        if dur_real > 130:
+            major_cues = [
+                {"type": "one_min_in", "sec": _nearest(60.0), "guide": 60.0},
+                {"type": "one_min_to_end", "sec": _nearest(dur_real - 60.0),
+                 "guide": round(dur_real - 60.0, 2)},
+            ]
+
     signals = {
         "bass_in": bass_in_sec,
         "bass_out": bass_out_sec,
@@ -524,6 +578,10 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
         "vocal_regions": to_sec(_regions(presence["vocals"], MIN_VOCAL_BARS)),
         "kick_cues": kick_cues,
         "kick_presence_source": kick_source,
+        "musical_landmarks": musical_landmarks,
+        "section_refinements": (
+            [intro_refinement] if intro_refinement is not None else []
+        ),
         "fills": fills,
         "major_cues": major_cues,
     }
@@ -541,7 +599,8 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     n_drop = sum(1 for c in kick_cues if c["type"] == "kick_dropout")
     old_n = f"old {len(stats['sections']):2d} -> " if stats else ""
     print(f"  {wav.stem[:46]:46}  {old_n}stem {len(sections):2d} secs | "
-          f"kick-drops {n_drop} loops {len(signals['loop_windows'])} vocals {len(signals['vocal_regions'])}")
+          f"kick-drops {n_drop} landmarks {len(musical_landmarks)} "
+          f"loops {len(signals['loop_windows'])} vocals {len(signals['vocal_regions'])}")
     return result
 
 
@@ -555,6 +614,7 @@ def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, section
     kick_out = [c["start_sec"] for c in signals.get("kick_cues", []) if c["type"] == "kick_dropout"]
     kick_in = [c["start_sec"] for c in signals.get("kick_cues", []) if c["type"] == "kick_return"]
     major = signals.get("major_cues", [])
+    landmarks = signals.get("musical_landmarks", [])
 
     fig, axes = plt.subplots(len(order) + 1, 1, figsize=(20, 10), sharex=True,
                              gridspec_kw={"height_ratios": [2.6] + [1] * len(order)})
@@ -595,6 +655,14 @@ def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, section
         axes[0].axvspan(a, b, color="#ff8c00", alpha=0.6, lw=0, zorder=6)
         axes[0].text(0.5 * (a + b), 0.5, "fill", rotation=90, fontsize=6, color="#a65300",
                      ha="center", va="center", fontweight="bold", zorder=7)
+    for landmark in landmarks:
+        a, b = landmark["start_sec"], landmark["end_sec"]
+        colour = "#c2185b" if landmark["type"] == "pre_drop_kick_gap" else "#6a1b9a"
+        axes[0].axvspan(a, b, ymin=0.82, ymax=0.94, color=colour, alpha=0.8, lw=0, zorder=7)
+        label = "pre-drop" if landmark["type"] == "pre_drop_kick_gap" else "kick gap"
+        axes[0].text(0.5 * (a + b), 0.87, f"{label} {landmark['duration_beats']}b",
+                     fontsize=6, color="white", ha="center", va="center",
+                     fontweight="bold", zorder=8)
     for mc in major:
         lab = "~1:00 in" if mc["type"] == "one_min_in" else "~1:00 to end"
         axes[0].text(mc["sec"], 1.07, lab, fontsize=7, color="#d6006d", ha="center", va="bottom", fontweight="bold")
@@ -624,6 +692,7 @@ def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, section
     axes[-1].set_xticklabels([mmss(x) for x in xt], fontsize=8)
     axes[-1].set_xlabel("time (mm:ss)   ·   orange=fill (kick out→in)   ·   gold=kick OUT   ·   teal=kick IN   ·   "
                         "magenta=~1min in/out   ·   green=loop window   ·   purple=vocals   ·   "
+                        "top strip=kick-gap landmark   ·   "
                         f"dotted line on drums = {KICK_ON_FRAC} kick threshold")
     fig.tight_layout()
     fig.savefig(project / "_Stem Analysis" / f"DETECT_{wav.stem}.png", dpi=95)

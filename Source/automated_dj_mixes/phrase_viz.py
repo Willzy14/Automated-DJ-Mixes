@@ -33,6 +33,7 @@ COLOR_BREAK = 50   # blue — main break / long low-bass section in the body
 COLOR_DROP  = 12   # yellow — sustained high-bass drop / chorus
 COLOR_OUTRO = 14   # red — outro
 COLOR_FILL  = 9    # orange — short drop in energy within the body (middle-8 / 1-4 bar fill)
+COLOR_BEAT_DROPOUT = 55  # purple — short raw-kick gap inside a coarse section
 COLOR_UNKNOWN = 7  # neutral gray
 
 LABEL_TO_COLOR = {
@@ -42,6 +43,7 @@ LABEL_TO_COLOR = {
     "drop":  COLOR_DROP,
     "outro": COLOR_OUTRO,
     "fill":  COLOR_FILL,
+    "beat_dropout": COLOR_BEAT_DROPOUT,
     "unknown": COLOR_UNKNOWN,
 }
 
