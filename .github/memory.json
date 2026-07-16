@@ -114,6 +114,12 @@
     }
   },
   "standalone_scripts": {
+    "analyze_correction_diff": {
+      "path": "Source/analyze_correction_diff.py",
+      "purpose": "Source-aware full-mix correction diff: reconstructs clip/source clocks, proves warp preservation, remaps stale corrected clip names through baseline sections, detects repeated phrases, and compares entry/swap/exit plus Utility/bass automation",
+      "status": "working (correction_diff_v1; validated on Fresh Mix Final V2 vs Sam's Tweaks)",
+      "added": "2026-07-16"
+    },
     "validate_mix_plan_als": {
       "path": "Source/validate_mix_plan_als.py",
       "purpose": "Post-mutation N-track reconciliation: plan hash, sequence, geometry, full/partial loops, tempo, per-track WarpMode, exact grids, every swap and automation; emits hash-backed JSON",
@@ -192,6 +198,23 @@
     "samwillsmixing.com"
   ],
   "sessions": [
+    {
+      "date": "2026-07-16",
+      "focus": "Extracted source-aware lessons from Fresh Mix Final V2 Sam's Tweaks",
+      "key_changes": [
+        "Proved all eight numeric warp grids, marker counts, warp modes, project tempo and static LUFS gains were preserved",
+        "Reconstructed seven corrected transitions in source and arrangement time instead of treating track movement as automation-only edits",
+        "Found repeated evidence for earlier low-level incoming intro loops, independent entry/swap/exit anchors and cue-dependent extended transitions",
+        "Separated raw dropout evidence from structural promotion after Roadblock was consolidated to five musical clips while Seein' You gained a missed 16-beat dropout",
+        "Added analyze_correction_diff.py plus a machine-readable correction_diff_v1 artifact and a reviewed Mix Patterns report"
+      ],
+      "validation": "Sam ALS validate_als PASS; correction analyzer focused tests 2 passed; eight warp grids numerically identical; generated diff JSON parses",
+      "open_items": [
+        "Replay the high-confidence rules on a fresh or held-out mix before changing production defaults",
+        "Confirm whether T3's 12-beat loop, T4's two-beat gap/volume ride and non-integer tail edits were deliberate",
+        "Implement independent transition anchors, protected dropout windows and evidence-backed extended transition mode"
+      ]
+    },
     {
       "date": "2026-07-16",
       "focus": "Rebuilt Fresh Mix Final V2 and cleared the catastrophic beatmatching correctness gate",

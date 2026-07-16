@@ -81,6 +81,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+**NOTE (2026-07-16): Sam's corrected set is now analysed at `Documentation/Mix Patterns Library/Fresh Mix V2 Sam Tweaks.md`. All eight numeric warp grids, warp modes, 121 BPM tempo and static LUFS gains were preserved. Sam changed five transitions materially and left two bass handovers unchanged. The corrected overlap mean/median rose from 37/34 to 46.54/42 bars, with three evidence-backed transitions above 48 bars, but one 58-bar transition was shortened to 37: duration is cue-dependent. Repeated lessons are earlier low-level/bass-killed incoming intro loops, independent entry/swap/exit anchors, source-aware loop selection, and protected silence over an outgoing dropout. Roadblock was consolidated from 30 visual fragments to five musical clips while a missed 16-beat dropout was manually added to Seein' You, proving raw dropout evidence must not automatically become structural clips. `Source/analyze_correction_diff.py` now extracts these facts without trusting stale clip names. No production defaults have been changed from this N=1 correction.**
+
 **NOTE (2026-07-16): Sam rejected Fresh Mix Final V1 after transition review exposed a cropped Roadblock head beat, one-sided cue alignment, arbitrary loop placement, unmarked mini-breaks, and four-beat section mismatches. `Output/16.07.26 Fresh Mix Final V2.als` is the corrected candidate: Roadblock now has 396 owned-grid markers with beat/downbeat zero at sample zero; every short Kick V3 gap up to 16 beats is a color-55 `beat_dropout` clip; all seven swaps use `paired_landmarks_v2` and land on clip boundaries on both tracks; named outgoing loops target later section/dropout cues; and T4's four-bar loop boundaries preserve the incoming drop before finishing at its later eight-beat mini-break. Project tempo remains fixed at 121 BPM with three Re-Pitch and five Complex Pro tracks. `RECONCILIATION_V2.json` passes 58 intent-to-ALS checks; 14 V2 transition images were generated and T1/T4/T6 were visually inspected; the suite is 131 passed/4 skipped and the ALS gate passes. Sam's listening verdict is a strong provisional musical pass: every transition is beatmatched, there is no helicoptering or repeated snare-downbeat failure, some transitions are impressively accurate, and there are no painful basic errors. Expert-level arrangement choices still need correction. Preserve Final V2 untouched; Sam plans to make a manually amended copy later, which becomes the next correction ground truth. No bounce exists.**
 
 **NOTE (2026-07-16): Canonical `/mix` is explicitly Rekordbox-free and the clean `Test Project/16.07.26 Fresh Mix` has now run through the full owned path. Four of 12 candidates failed their own stem-grid quality gate and were excluded without override; the remaining eight passed at 1.6-8.7 ms grid-vs-kick. Kick V3 sections, raw dropout landmarks, refined color-55 `beat_dropout` clips, 30/30 hint/section checks, a fixed 121 BPM arrangement, per-track Re-Pitch/Complex Pro policy, seven 26-48-bar transitions, LUFS offsets, volume/bass automation, and a hash-backed MixPlan all landed in `Output/16.07.26 Fresh Mix Final V1.als`. `RECONCILIATION_V1.json` passes 47 intent-to-ALS checks. Transition review is now clip/loop-aware rather than using one false linear source clock. Validation: 120 passed, 4 skipped; ALS gate PASS. Final Ableton clean-open/listen is deferred because Live currently has unrelated unsaved work (`LeAnn Rimes - One Way Ticket*`).**
@@ -185,7 +187,21 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-07-16 (Latest Session) - Fresh Mix V2 correctness breakthrough
+### 2026-07-16 (Latest Session) - Learned from Sam's Fresh Mix V2 correction
+
+**Focus**: Compare the untouched generated Final V2 with `Final V2 Sam's Tweaks` and extract reusable musical decisions without learning accidental edits.
+
+**Completed**:
+- Added `Source/analyze_correction_diff.py`, which reconstructs clip/source clocks, remaps stale copied clip names through baseline sections, compares transition geometry and automation, and proves warp preservation.
+- Produced `SAM_TWEAKS_DIFF_V1.json` plus `Documentation/Mix Patterns Library/Fresh Mix V2 Sam Tweaks.md` covering all eight tracks and seven transitions.
+- Proved all numeric warp grids/modes, project tempo and static gains survived; isolated high-confidence arrangement lessons and quarantined ambiguous edits.
+
+**Key Learnings**:
+- Entry, bass ownership and exit require independent paired-source anchors; earlier low-level incoming loops can extend a mix without moving ownership by the same amount.
+- Important dropouts may need protected silence inside a transition, while raw kick gaps inside already kickless material should remain evidence rather than structural clips.
+- Corrected clip names are not reliable after manual copying; source-coordinate remapping is mandatory before learning.
+
+### 2026-07-16 (Prior Session) - Fresh Mix V2 correctness breakthrough
 
 **Focus**: Repair the fresh mix's downbeat, section, cue-pairing and loop-placement failures, then test whether the owned analysis path could produce a musically credible full mix.
 
@@ -684,7 +700,7 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
-> **TOP (2026-07-16) - capture and learn from Sam's manual Fresh Mix V2 correction.** Preserve `Test Project/16.07.26 Fresh Mix/Output/16.07.26 Fresh Mix Final V2.als` untouched. Sam will save his corrected mix as a clearly versioned amended ALS. Then run `learn_from_correction.py` or an equivalent structured arrangement diff and classify every edit as section boundary, entry, loop phrase, bass swap, exit, or automation. Convert only repeatable corrections into rules and re-run the focused transition gates. Render/freeze only after the amended ALS and learned-rule replay are reviewed; no bounce currently exists.
+> **TOP (2026-07-16) - replay the strongest Sam-Tweaks lessons without overfitting.** The source-aware diff and report are complete. Next implementation slice: model independent transition entry/protected-window/swap/exit anchors; add evidence-backed extended transitions and incoming intro loops; separate raw dropout overlays from structural promotion; and score loop sources across the full late-track region. Rebuild a fresh or held-out mix and compare blind before changing production defaults. Keep the 12-beat T3 loop, T4 two-beat gap/volume ride and non-integer tail edits out of learned rules until Sam confirms they were deliberate.
 
 > **Kick Detector V3 follow-up (2026-07-15):** the Car Mix control batch is complete: 125 -> 45 kick cues across 11 tracks; 9/11 label/count sequences unchanged. Keep the model opt-in until `Back in the Days`, `Beautiful Mess`, and `Blues` receive paired DETECT-picture + ear verdicts. Promotion requires no unapproved regression, not just fewer cues.
 

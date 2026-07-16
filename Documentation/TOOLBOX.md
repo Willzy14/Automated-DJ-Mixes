@@ -175,6 +175,11 @@ Automated diff tool for PROPOSE-LEARN cycle. Extracts automation envelopes from 
 Key types: `TrackAutomation`, `ParamDiff`, `TransitionDiff` (with `classified_style`).
 Key functions: `extract_track_automation()`, `analyse_transitions()`, `_classify_style()` (sneak level + bass kill depth + instant swap detection), `diff_to_jsonl_entry()`, `print_report()`, `main()`.
 
+### `Source/analyze_correction_diff.py`
+**Added 2026-07-16.** Read-only, source-aware comparison for a generated full-mix ALS and Sam's manually corrected copy. Reconstructs actual clip geometry and source ranges, proves warp-grid/mode preservation, remaps stale corrected clip names through the baseline section map, detects repeated source phrases, rebuilds each corrected overlap, and compares entry/swap/exit cues plus Utility/bass automation. Writes a machine-readable `correction_diff_v1` JSON. Use this before `learn_from_correction.py` whenever arrangement positions or loops changed; the older learner assumes one fixed arrangement and otherwise confuses movement with automation correction.
+
+Key functions: `load_snapshot()`, `analyse()`, `_transition_snapshot()`, `_repeat_groups()`, `_source_at()`.
+
 ### `Source/stem_detector.py`
 **2026-07-16 update:** model mode uses smoothed V3 presence for coarse sections/cues and raw V3 presence for `signals.musical_landmarks`; dedicated dropout spans no longer disappear when short gaps are bridged for section stability. DETECT images show the raw pre-drop/dropout strip. Default OFF and bass/vocal/loop/fill behavior remain unchanged. Orchestrator model use requires `--sections-layout --stem-sections --kick-model`.
 
