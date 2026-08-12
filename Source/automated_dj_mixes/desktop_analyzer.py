@@ -36,16 +36,22 @@ from pywinauto.application import Application
 
 # ---------- Paths ----------
 
-MIK_SHORTCUT = Path("C:/Users/Carillon/Desktop/Mixed In Key 11.lnk")
-MIK_EXE = Path(
-    "C:/Users/Carillon/AppData/Local/Programs/Mixed In Key/Mixed in Key 11/MixedInKey.exe"
+# Home-relative, never a hardcoded user name: the studio box is "Carillon",
+# the home PC "Carillon AC-1". The Desktop shortcut is also optional - it can be
+# deleted by the user at any time, so the installed .exe is the real target and
+# the shortcut is only a preference (see _launch_mik).
+MIK_SHORTCUT = Path.home() / "Desktop" / "Mixed In Key 11.lnk"
+MIK_EXE = (
+    Path.home()
+    / "AppData/Local/Programs/Mixed In Key/Mixed in Key 11/MixedInKey.exe"
 )
-MIK_USER_CONFIG = Path(
-    "C:/Users/Carillon/AppData/Local/Mixed_In_Key_LLC/"
-    "MixedInKey.exe_Url_cx00oimrmmmuepp4wmlrv3xpklukfe3q/11.1.0.846/user.config"
+MIK_USER_CONFIG = (
+    Path.home()
+    / "AppData/Local/Mixed_In_Key_LLC"
+    / "MixedInKey.exe_Url_cx00oimrmmmuepp4wmlrv3xpklukfe3q/11.1.0.846/user.config"
 )
-MIK_STORE_DB = Path(
-    "C:/Users/Carillon/AppData/Local/Mixed In Key/Mixed In Key/11.0/MIKStore.db"
+MIK_STORE_DB = (
+    Path.home() / "AppData/Local/Mixed In Key/Mixed In Key/11.0/MIKStore.db"
 )
 
 RB_EXE = Path("C:/Program Files/rekordbox/rekordbox.exe")  # fallback
@@ -960,6 +966,26 @@ def _remove_staging_folder(staging: Path):
         print(f"  WARNING: staging cleanup failed: {e}")
 
 
+def _launch_mik() -> None:
+    """Start Mixed In Key, preferring the Desktop shortcut but never needing it.
+
+    The shortcut is user-owned and disappears (deleted, or never recreated after
+    a reinstall). Launching it blind produces a Windows "cannot find" dialog,
+    after which the caller only sees "MIK window did not appear" - or worse, the
+    outer handler downgrades it to a warning and the pipeline silently proceeds
+    with 0/N analysed tracks. Resolve a real target up front and fail loudly.
+    """
+    for target in (MIK_SHORTCUT, MIK_EXE):
+        if target.exists():
+            subprocess.Popen(["cmd", "/c", "start", "", str(target)], shell=False)
+            return
+    raise FileNotFoundError(
+        "Mixed In Key could not be launched: neither the Desktop shortcut "
+        f"({MIK_SHORTCUT}) nor the installed executable ({MIK_EXE}) exists. "
+        "Install MIK or correct MIK_EXE."
+    )
+
+
 def analyze_folder_with_mik(
     audio_folder: Path,
     expected_tracks: list[Path] | None = None,
@@ -997,7 +1023,7 @@ def analyze_folder_with_mik(
     try:
         # 3. Close any existing instance, launch fresh
         _close_process("MixedInKey")
-        subprocess.Popen(["cmd", "/c", "start", "", str(MIK_SHORTCUT)], shell=False)
+        _launch_mik()
 
         # 4. Wait for main window
         mik = _wait_for_window("Mixed In Key", timeout=WINDOW_TIMEOUT_SEC)
