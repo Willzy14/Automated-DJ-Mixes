@@ -81,6 +81,26 @@ class TransitionPolicy:
     # examples is exactly the overfitting the correction report warns against.
     prefer_intro_swap_with_drop_payoff: bool = False
 
+    # Bring the incoming in EARLIER, at low level with its bass killed, by
+    # looping a clean intro phrase backwards to an outgoing cue. The bass swap
+    # does not move - only the entry does.
+    #
+    # This is the best-evidenced lesson in the correction: T2, T3 and T6 all
+    # extend the incoming's entry the same way, and Sam's note is that the
+    # arranger "starts useful incoming material too late". The mechanism already
+    # existed but was switched off in the active landmark path, so in production
+    # it never fired at all.
+    extend_incoming_entry: bool = False
+
+    # Phrase lengths (BARS) allowed for that entry loop, best first. Sam used
+    # 4-bar and 8-bar phrases; 3-bar (12-beat) is deliberately absent - his note
+    # says a 12-beat loop happened to work once and should not become a rule.
+    entry_phrase_bars: tuple[int, ...] = (8, 4)
+
+    # Never extend by less than this - a token 1-2 bar entry is not the
+    # technique, it is noise.
+    min_entry_extension_bars: int = 4
+
     def cap_for(self, overlap_policy: str) -> float:
         """Beat ceiling for one transition's declared overlap policy."""
         if overlap_policy == "evidence_extended_80":
@@ -132,6 +152,7 @@ SAM_V1 = TransitionPolicy(
     # Deliberately OFF - see the field comment. Anchor availability ships;
     # the selection rule has not earned it.
     prefer_intro_swap_with_drop_payoff=False,
+    extend_incoming_entry=True,
 )
 
 POLICIES: dict[str, TransitionPolicy] = {

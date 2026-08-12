@@ -753,7 +753,61 @@ def _resolve_break_to_break(o, i, al):
                             f"({skip_bars:.0f}b), pull drop onto swap")
 
 
-def plan_fill_or_cut(o, i, al):
+def _plan_incoming_entry_extension(o, i, al, intro_end, loop_budget, policy):
+    """Start the incoming earlier by looping a clean intro phrase backwards.
+
+    Sam's most consistent correction (T2, T3, T6): the incoming enters well
+    before the handover and plays quietly with its bass killed until ownership
+    passes. The bass swap itself does NOT move - `al.arr_offset_bars` and
+    `al.swap_beats` are untouched, exactly as this module's contract requires;
+    only the entry reaches further back.
+
+    The extension lands on an OUTGOING cue rather than a fixed number of bars,
+    because entry is a coincidence point in Sam's model. Anchoring to the
+    outgoing's last drop (as the legacy path did) does not fit the corrections -
+    T5 and T6 enter ahead of an outro or dropout, not a drop.
+
+    Returns (spec, bars_used) or (None, 0.0).
+    """
+    if intro_end <= 0 or loop_budget < policy.min_entry_extension_bars:
+        return None, 0.0
+
+    arr = al.arr_offset_bars
+    outgoing_cues = _mix_cues(o)
+
+    # Nearest usable cue first: extend enough to matter, never past the budget.
+    targets = sorted((bar for bar in outgoing_cues if bar < arr), reverse=True)
+    for target in targets:
+        gap = arr - target
+        if gap < policy.min_entry_extension_bars or gap > loop_budget:
+            continue
+        for phrase in policy.entry_phrase_bars:
+            if gap % phrase:
+                continue                      # must land exactly on the cue
+            reps = int(gap // phrase)
+            if not 1 <= reps <= policy.max_loop_repeats:
+                continue
+            chunk = pick_clean_drum_loop(i, 0, intro_end, pref=phrase)
+            if chunk is None:
+                continue
+            if round(chunk[1] - chunk[0]) != phrase:
+                continue
+            labels = outgoing_cues[target]["labels"]
+            return FillCutSpec(
+                kind="incoming_intro",
+                reps=reps,
+                source_start_bar=chunk[0],
+                source_end_bar=chunk[1],
+                target_marker_bar=float(target),
+                target_marker_name=labels[0] if labels else "",
+                note=(f"entry extension {phrase}bx{reps} ({gap:.0f}b) back to "
+                      f"outgoing {labels[0] if labels else 'cue'} - low level, "
+                      f"bass killed until the swap"),
+            ), float(gap)
+    return None, 0.0
+
+
+def plan_fill_or_cut(o, i, al, policy=None):
     """Decide loops / cuts / break-skips around the LOCKED swap (Sam's CONFIRMED
     model, 2026-06-09 — derived from his hand-edited 'Intro Loops' ALS). NEVER alters
     al.arr_offset_bars / al.swap_beats. Returns a LIST of FillCutSpec (a transition can
@@ -780,9 +834,22 @@ def plan_fill_or_cut(o, i, al):
     intro_end = (i.sections[0]["end_bar"]
                  if i.sections and i.sections[0]["label"] == "intro" else 0.0)
 
+    policy = policy or _DEFAULT_POLICY
+    intro_loop = False
+
+    # (1a) ENTRY EXTENSION (policy-gated) — the landmark path is the production
+    # path and block (1) below is switched off in it, so until now nothing could
+    # bring the incoming in early. This is the mechanism for Sam's T2/T3/T6.
+    if landmark_mode and policy.extend_incoming_entry:
+        entry_spec, entry_bars = _plan_incoming_entry_extension(
+            o, i, al, intro_end, loop_budget, policy)
+        if entry_spec is not None:
+            specs.append(entry_spec)
+            loop_budget -= entry_bars
+            intro_loop = True
+
     # (1) INCOMING-INTRO LOOP — enter at the outgoing's last drop; loop clean drums back.
     last_drop_o = _last_drop_start(o)
-    intro_loop = False
     if not landmark_mode and last_drop_o is not None and intro_end > 0:
         fill_bars = round((arr - last_drop_o) / SNAP_BARS) * SNAP_BARS
         if fill_bars >= SNAP_BARS:
