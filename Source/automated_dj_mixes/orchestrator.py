@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import traceback
 from pathlib import Path
 
 from automated_dj_mixes.config import load_config
@@ -403,8 +405,16 @@ def run_pipeline(
                 ticks = ableton_onsets_sec(a.path)       # Ableton's transients if analysed
                 bg = detect_beat_grid(a.path, asd_ticks=ticks)
             except Exception as e:
+                # Print the message, not just the class. A bare "(TypeError)"
+                # is undiagnosable after the fact, and these failures are
+                # state-dependent: two tracks failed inside a 14-track batch on
+                # 2026-08-12 and then gridded cleanly on their own, so the
+                # detail is only ever available at the moment it happens.
+                # The owned-grid coverage gate below still fails closed.
                 print(f"  [stem-grid] {a.path.name[:46]}: detection failed "
-                      f"({type(e).__name__}) — keeping existing grid")
+                      f"({type(e).__name__}: {e}) — keeping existing grid")
+                if os.environ.get("DJ_MIX_TRACEBACKS"):
+                    traceback.print_exc()
                 continue
             existing = rb_matches.get(str(a.path))
             has_rb = existing is not None and len(getattr(existing, "beat_times_ms", [])) >= 8
