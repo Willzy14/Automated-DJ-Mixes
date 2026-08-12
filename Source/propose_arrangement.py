@@ -53,7 +53,7 @@ from apply_loops import (
     shift_track_clips,
     validate_loop_spec,
 )
-from automated_dj_mixes.transition_policy import INTERIM_V1
+from automated_dj_mixes.transition_policy import INTERIM_V1, get_policy
 
 
 # -- Constants ----------------------------------------------------------------
@@ -995,7 +995,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                         mix_plan_path: Path | None = None,
                         project_bpm: float | None = None,
                         warp_mode: int | str | None = None,
-                        dry_run: bool = False) -> ArrangementPlan:
+                        dry_run: bool = False,
+                        transition_policy: str = "interim_v1") -> ArrangementPlan:
     """Propose and optionally apply a full arrangement.
 
     Steps:
@@ -1104,7 +1105,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                   f"(set on {len(skipped)} track(s)) — positions ignore that trim. "
                   f"Use USE_ALIGN_ENGINE=False for hinted intro-skips until cuts land.")
         positions, alignments = compute_aligned_positions(
-            tracks, stem_dir, order=[t.name for t in tracks])
+            tracks, stem_dir, order=[t.name for t in tracks],
+            policy=get_policy(transition_policy))
     else:
         print("\n--- Natural-fill alignment (legacy) ---")
         positions = compute_natural_positions(tracks)
@@ -1664,6 +1666,12 @@ def main():
                         help="Freeze per-track auto modes or one explicit Ableton warp mode")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print plan without modifying ALS")
+    parser.add_argument("--transition-policy", default="interim_v1",
+                        choices=("interim_v1", "sam_v1"),
+                        help="Transition geometry policy. interim_v1 is the "
+                             "production default; sam_v1 is the experimental "
+                             "lane under held-out test (see Heldout Replay "
+                             "Plan V2)")
 
     args = parser.parse_args()
 
@@ -1682,6 +1690,7 @@ def main():
             else None
         ),
         dry_run=args.dry_run,
+        transition_policy=args.transition_policy,
     )
 
     # Generate report

@@ -474,13 +474,13 @@ def _search_anchors(anchor_bars, o, i, outgoing, incoming, window_start,
     return None
 
 
-def align_pair(o: Track, i: Track) -> Alignment:
+def align_pair(o: Track, i: Track, policy=None) -> Alignment:
     """Slide the incoming so its bass-in lands on an outgoing natural marker, and
     pick the marker that maximises section-boundary lineup (energy-matched). The
     bass switch happens there — faked early on the outgoing if it's before the
     outgoing's natural bass-out. Marker-coincidence BEATS literal bass-to-bass."""
     if o.musical_landmarks or i.musical_landmarks:
-        return _align_pair_landmark_aware(o, i)
+        return _align_pair_landmark_aware(o, i, policy)
 
     bass_in = i.bass_in_bar if i.bass_in_bar is not None else 0.0
     # Anchor on the bass-in OR the intro-end (start of the first NON-intro
@@ -995,7 +995,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
     return specs
 
 
-def compute_aligned_positions(tracks, stem_dir, order=None):
+def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
     """Bass-to-bass ABSOLUTE arrangement positions for the whole mix — a drop-in
     replacement for propose_arrangement.compute_natural_positions().
 
@@ -1037,7 +1037,7 @@ def compute_aligned_positions(tracks, stem_dir, order=None):
     contraction = 0.0       # left-shift owed to a break-skip at the PREVIOUS pair (beats)
     for k in range(1, len(tracks)):
         o, i = stems[resolved[k - 1]], stems[resolved[k]]
-        al = align_pair(o, i)
+        al = align_pair(o, i, policy)
         prev = arr_pos[k - 1]
         # A break-skip at an earlier pair tightened the timeline (its incoming lost a
         # break), so THIS track + the swap into it move left by `contraction`. The
@@ -1049,7 +1049,7 @@ def compute_aligned_positions(tracks, stem_dir, order=None):
         arr_pos[k] = new
         al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
         al.landmark_candidates = report_landmark_candidates(o, i, al, prev, new)
-        al.fills_cuts = plan_fill_or_cut(o, i, al)           # loops/cuts around the swap
+        al.fills_cuts = plan_fill_or_cut(o, i, al, policy)   # loops/cuts around the swap
         bskip = next((f for f in al.fills_cuts if f.kind == "break_skip"), None)
         contraction = bskip.skip_bars * 4.0 if bskip else 0.0
         alignments.append(al)
