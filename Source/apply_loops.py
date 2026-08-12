@@ -34,8 +34,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-MAX_LOOP_REPEATS = 8
-MAX_LOOP_EXTENSION_BEATS = 128.0  # 32 bars at 4/4
+# Loop budget comes from the shared policy (transition_policy.py) so it can no
+# longer drift from the overlap caps declared elsewhere. Values unchanged:
+# 8 repeats, 128 beats (32 bars at 4/4).
+from automated_dj_mixes.transition_policy import INTERIM_V1 as _DEFAULT_POLICY
+
+MAX_LOOP_REPEATS = _DEFAULT_POLICY.max_loop_repeats
+MAX_LOOP_EXTENSION_BEATS = _DEFAULT_POLICY.max_loop_extension_beats
 
 
 # ── ALS read / write ─────────────────────────────────────────────────────────

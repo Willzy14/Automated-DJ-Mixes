@@ -34,12 +34,22 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 from stem_section_probe import _seccol  # shared section colour map
+from automated_dj_mixes.transition_policy import INTERIM_V1, beats_to_bars
 
 PHRASE_GRID = 16          # 16-bar phrase grid (viz gridlines)
-MAX_OVERLAP_BARS = 48     # hard production ceiling, including loop extensions
-MAX_LANDMARK_OVERLAP_BARS = 64  # only when a named cue justifies the extension
-MAX_LOOP_REPEATS = 8
-MAX_LOOP_EXTENSION_BARS = MAX_OVERLAP_BARS - PHRASE_GRID
+
+# Geometry now comes from the shared policy (transition_policy.py) instead of
+# being declared here, in propose_arrangement and in mix_plan independently.
+# The loop-extension budget in particular used to be MAX_OVERLAP_BARS -
+# PHRASE_GRID, so raising the overlap cap silently raised the loop budget too;
+# it is now an explicit policy field. Values are unchanged: 48 / 64 / 32 bars.
+_DEFAULT_POLICY = INTERIM_V1
+MAX_OVERLAP_BARS = beats_to_bars(_DEFAULT_POLICY.max_overlap_beats)
+MAX_LANDMARK_OVERLAP_BARS = beats_to_bars(
+    _DEFAULT_POLICY.max_landmark_overlap_beats)
+MAX_LOOP_REPEATS = _DEFAULT_POLICY.max_loop_repeats
+MAX_LOOP_EXTENSION_BARS = beats_to_bars(
+    _DEFAULT_POLICY.max_loop_extension_beats)
 SNAP_BARS = 1             # preserve bar phase without rounding odd-bar section cuts away
 HANDOFF_WINDOW_BARS = 8   # allow a hand-off marker this far before the last-minute line
 COINCIDE_TOL_BARS = 2     # two section boundaries "line up" if within this many bars

@@ -53,7 +53,22 @@ BOUNDARY_MARGIN = 64  # 16 bars — must have this much room after swap
 
 # ── ID allocation ─────────────────────────────────────────────────────────────
 
-_NEXT_ID = 50000
+_ID_BASE = 50000
+_NEXT_ID = _ID_BASE
+
+
+def reset_automation_ids() -> None:
+    """Return the envelope/event ID counter to its base.
+
+    The counter is module state, so two ALS builds in ONE Python process share
+    it: the second build starts wherever the first stopped. That is harmless for
+    Ableton (IDs only have to be unique within a set) but it makes two runs
+    non-comparable - the A/B experiment needs `interim_v1` to produce the same
+    bytes whether or not a `sam_v1` build ran before it in the same process.
+    Call this at the start of every build.
+    """
+    global _NEXT_ID
+    _NEXT_ID = _ID_BASE
 
 
 def _alloc_id() -> int:
@@ -871,6 +886,9 @@ def main() -> None:
     json_path = Path(sys.argv[2])
     output_path = Path(sys.argv[3])
     arrangement_report_path = Path(sys.argv[4]) if len(sys.argv) >= 5 else None
+
+    # Deterministic IDs regardless of what ran before us in this process.
+    reset_automation_ids()
 
     # ── read inputs ───────────────────────────────────────────────────
     print(f"Reading {als_path.name} ...")

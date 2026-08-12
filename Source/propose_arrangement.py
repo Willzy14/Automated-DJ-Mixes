@@ -53,14 +53,21 @@ from apply_loops import (
     shift_track_clips,
     validate_loop_spec,
 )
+from automated_dj_mixes.transition_policy import INTERIM_V1
 
 
 # -- Constants ----------------------------------------------------------------
 
-# Overlap constraints (beats)
-MIN_OVERLAP_BEATS = 64   # 16 bars - minimum for a usable transition
-MAX_OVERLAP_BEATS = 192  # 48 bars - longer than this is unusual
-MAX_LANDMARK_OVERLAP_BEATS = 256  # 64 bars, only with a named-cue extension
+# Default policy for module-level constants. A run that uses a non-default
+# policy must thread it explicitly rather than rebinding these names - two
+# policies have to be runnable in one process without leaking into each other.
+_DEFAULT_POLICY = INTERIM_V1
+
+# Overlap constraints (beats) - shared with align_engine and mix_plan via
+# transition_policy, which is the single source of truth. Values unchanged.
+MIN_OVERLAP_BEATS = _DEFAULT_POLICY.min_overlap_beats            # 16 bars
+MAX_OVERLAP_BEATS = _DEFAULT_POLICY.max_overlap_beats            # 48 bars
+MAX_LANDMARK_OVERLAP_BEATS = _DEFAULT_POLICY.max_landmark_overlap_beats  # 64
 
 # Position source: True = bass-to-bass align_engine (Sam's model); False = legacy
 # single-anchor compute_natural_positions (kept as a one-line revert if needed).

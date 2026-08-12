@@ -11,14 +11,20 @@ from pathlib import Path
 from typing import Mapping
 
 from apply_loops import MAX_LOOP_EXTENSION_BEATS, MAX_LOOP_REPEATS
+from automated_dj_mixes.transition_policy import INTERIM_V1
 from automated_dj_mixes.warp_contract import WarpGridSummary
 
 
 SCHEMA_VERSION = "1.3"
 PRODUCTION_SCOPE = "multi_transition_arrangement_v1"
-MIN_OVERLAP_BEATS = 64.0
-MAX_OVERLAP_BEATS = 192.0
-MAX_LANDMARK_OVERLAP_BEATS = 256.0
+
+# Single source of truth: transition_policy.py. These names are kept so the
+# rest of the contract reads unchanged; the values are identical to the three
+# independent declarations they replace.
+_DEFAULT_POLICY = INTERIM_V1
+MIN_OVERLAP_BEATS = _DEFAULT_POLICY.min_overlap_beats
+MAX_OVERLAP_BEATS = _DEFAULT_POLICY.max_overlap_beats
+MAX_LANDMARK_OVERLAP_BEATS = _DEFAULT_POLICY.max_landmark_overlap_beats
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
