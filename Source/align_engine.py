@@ -282,28 +282,139 @@ def _mix_cues(track: Track) -> dict[int, dict]:
     return cues
 
 
+MIXABLE_HEAD_BARS = 64.0
+INTRO_SWAP_PHRASE_BARS = (8, 16)
+
+
 def _incoming_drop_anchors(track: Track) -> list[int]:
     """Drop ownership points in source order, limited to the mixable head."""
     return sorted({
         int(round(float(section["start_bar"])))
         for section in track.sections
-        if section["label"] == "drop" and float(section["start_bar"]) <= 64.0
+        if section["label"] == "drop"
+        and float(section["start_bar"]) <= MIXABLE_HEAD_BARS
     })
 
 
-def _align_pair_landmark_aware(o: Track, i: Track) -> Alignment:
-    """Pair a named incoming drop with outgoing section/dropout cuts.
+def _incoming_intro_phrase_anchors(track: Track) -> list[int]:
+    """Phrase boundaries INSIDE an intro where bass ownership can pass.
 
-    The earliest incoming drop that yields a valid 16-48 bar blend wins. This
-    prevents a later drop from gaming the score while still allowing a second drop
-    when the first would force an immediate bass swap (Fresh Mix T1).
+    Sam's corrections handed the bass over part-way through a long incoming
+    intro rather than waiting for its drop: Making Shapes at bar 16 of a 32-bar
+    intro, Natural Child at bar 8 of a 16-bar intro. Both are the intro's
+    midpoint and both sit on the phrase grid, but neither is a section boundary,
+    so a drop-only anchor list cannot express either of them.
+
+    Only interior phrase points are emitted. Bar 0 would mean swapping before
+    the incoming has established itself, and the intro's end is the following
+    drop, which `_incoming_drop_anchors` already covers.
     """
+    anchors: set[int] = set()
+    for section in track.sections:
+        if section["label"] != "intro":
+            continue
+        start = float(section["start_bar"])
+        end = float(section["end_bar"])
+        for phrase in INTRO_SWAP_PHRASE_BARS:
+            bar = start + phrase
+            while bar < end:
+                if bar <= MIXABLE_HEAD_BARS:
+                    anchors.add(int(round(bar)))
+                bar += phrase
+    return sorted(anchors)
+
+
+def _incoming_swap_anchors(track: Track, policy=None) -> list[int]:
+    """Candidate bass-ownership points on the incoming, earliest first.
+
+    Under the production default this is drop starts only - exactly the previous
+    behaviour. `allow_intro_phrase_swaps` additionally offers interior intro
+    phrase points, which is what makes the measured T4/T5 corrections
+    proposable at all.
+    """
+    policy = policy or _DEFAULT_POLICY
+    anchors = set(_incoming_drop_anchors(track))
+    if policy.allow_intro_phrase_swaps:
+        anchors.update(_incoming_intro_phrase_anchors(track))
+    return sorted(anchors)
+
+
+def _align_pair_landmark_aware(o: Track, i: Track, policy=None) -> Alignment:
+    """Pair a named incoming ownership point with outgoing section/dropout cuts.
+
+    Default policy: the earliest incoming DROP that yields a valid 16-48 bar
+    blend wins. This prevents a later drop from gaming the score while still
+    allowing a second drop when the first would force an immediate bass swap
+    (Fresh Mix T1).
+
+    `allow_intro_phrase_swaps` adds interior intro phrase points as a RESCUE
+    pass, tried only when no drop anchor yields a valid blend. That ordering is
+    deliberate. Pooling intro and drop anchors together and ranking them was
+    measured against the correction mix and moved T3 from bar 24 - which the
+    default already gets right, matching Sam - to bar 16. Reproducing Sam's
+    earlier T4/T5 swaps needs a selection rule that distinguishes "wait for the
+    drop after a 24-bar intro" from "take the midpoint of a 32-bar intro", and
+    two examples are not enough to fit one. Until then these anchors may only
+    rescue a transition that would otherwise fail outright; they may never
+    re-decide one the default already handles.
+    """
+    policy = policy or _DEFAULT_POLICY
     outgoing = _mix_cues(o)
     incoming = _mix_cues(i)
     window_start = o.n_bars - o.last_min_bars - HANDOFF_WINDOW_BARS
+    drop_anchors = _incoming_drop_anchors(i)
+    first_drop_bar = float(drop_anchors[0]) if drop_anchors else None
     chosen = None
 
-    for incoming_anchor in _incoming_drop_anchors(i):
+    rescue_anchors = [
+        bar for bar in _incoming_swap_anchors(i, policy)
+        if bar not in set(drop_anchors)
+    ]
+    chosen = _search_anchors(
+        drop_anchors, o, i, outgoing, incoming, window_start,
+        first_drop_bar, policy, rank_all=False,
+    )
+    if chosen is None and rescue_anchors:
+        chosen = _search_anchors(
+            rescue_anchors, o, i, outgoing, incoming, window_start,
+            first_drop_bar, policy, rank_all=True,
+        )
+
+    if chosen is None:
+        raise ValueError(
+            f"No paired section/dropout alignment for '{o.name}' -> '{i.name}' "
+            f"inside the {PHRASE_GRID}-{MAX_OVERLAP_BARS} bar window"
+        )
+
+    (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+     progress, pairs, weighted_score) = chosen
+    return Alignment(
+        out_name=o.name,
+        in_name=i.name,
+        handoff_bar_out=float(outgoing_anchor),
+        handoff_kind=f"paired/{outgoing_cue['labels'][0]}->drop",
+        anchor_bar_in=float(outgoing_anchor - arr_offset),
+        arr_offset_bars=float(arr_offset),
+        overlap_bars=float(overlap),
+        score=len(pairs),
+        alignment_policy="paired_landmarks_v2",
+        paired_cues=pairs,
+        swap_progress=progress,
+        notes=[f"paired cue score {weighted_score}; swap {progress:.0%} through overlap"],
+    )
+
+
+def _search_anchors(anchor_bars, o, i, outgoing, incoming, window_start,
+                    first_drop_bar, policy, rank_all: bool):
+    """Best candidate over `anchor_bars`, or None.
+
+    `rank_all=False` reproduces the historical behaviour exactly: the earliest
+    anchor that yields any valid blend wins. `rank_all=True` pools every
+    anchor's candidates and takes the best rank, which is only appropriate for
+    the rescue pass where anchor order carries no musical meaning.
+    """
+    pooled: list = []
+    for incoming_anchor in anchor_bars:
         candidates = []
         for outgoing_anchor, outgoing_cue in outgoing.items():
             if outgoing_anchor < window_start:
@@ -334,7 +445,18 @@ def _align_pair_landmark_aware(o: Track, i: Track) -> Alignment:
                 continue
             entry_paired = arr_offset in outgoing
             exit_paired = (o.n_bars - arr_offset) in incoming
+
+            # Ownership passed during the incoming's intro, with its first drop
+            # still to come inside the blend. Ranked above cue-coincidence
+            # because coincidence alone always re-selects the drop itself.
+            drop_payoff = 0
+            if (policy.prefer_intro_swap_with_drop_payoff
+                    and first_drop_bar is not None
+                    and incoming_anchor < first_drop_bar < overlap):
+                drop_payoff = 1
+
             rank = (
+                drop_payoff,
                 weighted_score,
                 int(entry_paired) + int(exit_paired),
                 -abs(progress - 0.65),
@@ -343,31 +465,13 @@ def _align_pair_landmark_aware(o: Track, i: Track) -> Alignment:
             candidates.append((rank, arr_offset, overlap, outgoing_anchor,
                                outgoing_cue, progress, pairs, weighted_score))
         if candidates:
-            chosen = max(candidates, key=lambda item: item[0])
-            break
+            if not rank_all:
+                return max(candidates, key=lambda item: item[0])
+            pooled.extend(candidates)
 
-    if chosen is None:
-        raise ValueError(
-            f"No paired section/dropout alignment for '{o.name}' -> '{i.name}' "
-            f"inside the {PHRASE_GRID}-{MAX_OVERLAP_BARS} bar window"
-        )
-
-    (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
-     progress, pairs, weighted_score) = chosen
-    return Alignment(
-        out_name=o.name,
-        in_name=i.name,
-        handoff_bar_out=float(outgoing_anchor),
-        handoff_kind=f"paired/{outgoing_cue['labels'][0]}->drop",
-        anchor_bar_in=float(outgoing_anchor - arr_offset),
-        arr_offset_bars=float(arr_offset),
-        overlap_bars=float(overlap),
-        score=len(pairs),
-        alignment_policy="paired_landmarks_v2",
-        paired_cues=pairs,
-        swap_progress=progress,
-        notes=[f"paired cue score {weighted_score}; swap {progress:.0%} through overlap"],
-    )
+    if pooled:
+        return max(pooled, key=lambda item: item[0])
+    return None
 
 
 def align_pair(o: Track, i: Track) -> Alignment:

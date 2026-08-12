@@ -53,6 +53,34 @@ class TransitionPolicy:
     # independently revalidated. A policy string alone must never unlock it.
     max_extended_overlap_beats: float | None = None
 
+    # Bass ownership may pass on a phrase boundary INSIDE the incoming's intro,
+    # not only at a drop start. Measured from the Sam-Tweaks correction: on
+    # Making Shapes he swapped at source beat 64 of a 0-128 intro (bar 16 of 32)
+    # and on Natural Child at beat 32 of a 0-64 intro (bar 8 of 16) - both the
+    # intro midpoint, both on the phrase grid, neither a section boundary. The
+    # corrected clips were *named* intro_2/intro_1, but names are stale after a
+    # manual split; the source clock is the truth.
+    allow_intro_phrase_swaps: bool = False
+
+    # Prefer an intro-phrase swap when the incoming's first drop then lands
+    # INSIDE the remaining overlap - i.e. ownership passes during the intro and
+    # the drop arrives afterwards as the payoff, rather than being the swap
+    # point itself. Merely offering intro anchors is not enough: cue-coincidence
+    # scoring still picks the drop, so the preference has to be explicit.
+    #
+    # MEASURED AND REJECTED (2026-08-12) - kept switchable, but OFF everywhere.
+    # Replayed against the correction mix's own section maps it scored 1 better,
+    # 1 worse: T4 moved 32 -> 16 (matching Sam), but T3 moved 24 -> 16 when Sam
+    # swapped at 24, and T5 stayed at 16 against Sam's 8 because
+    # MIN_SWAP_PROGRESS=0.25 rejects a swap 13% into a 58-bar blend.
+    #
+    # Regressing a transition on the data it was fitted to is disqualifying, so
+    # it must not reach the held-out listen. The open question is the SELECTION
+    # rule, not anchor availability: Sam took the midpoint of a 32-bar intro but
+    # waited for the drop after a 24-bar one, and a threshold fitted to two
+    # examples is exactly the overfitting the correction report warns against.
+    prefer_intro_swap_with_drop_payoff: bool = False
+
     def cap_for(self, overlap_policy: str) -> float:
         """Beat ceiling for one transition's declared overlap policy."""
         if overlap_policy == "evidence_extended_80":
@@ -100,6 +128,10 @@ SAM_V1 = TransitionPolicy(
     max_loop_extension_beats=128.0,
     max_loop_repeats=8,
     max_extended_overlap_beats=320.0,  # 80 bars
+    allow_intro_phrase_swaps=True,
+    # Deliberately OFF - see the field comment. Anchor availability ships;
+    # the selection rule has not earned it.
+    prefer_intro_swap_with_drop_payoff=False,
 )
 
 POLICIES: dict[str, TransitionPolicy] = {
