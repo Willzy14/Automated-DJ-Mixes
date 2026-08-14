@@ -916,25 +916,50 @@ def plan_fill_or_cut(o, i, al, policy=None):
     outro = next((s for s in o.sections if s["label"] == "outro"), None)
     chunk = None
     if landmark_mode and outro is not None:
+        locked_swap_gap = max(
+            0.0,
+            float(al.handoff_bar_out) - float(outro["start_bar"]),
+        )
+        required_boundary_bars = int(round(locked_swap_gap))
+        short_swap_candidate = None
         for target_source_bar, candidate_name in sorted(set(landmark_targets)):
             candidate_nxt = arr + target_source_bar
             candidate_gap = candidate_nxt - o.n_bars
             if candidate_gap > loop_budget + 1e-6:
                 continue
-            boundary_gap = max(
-                0,
-                int(round(float(al.handoff_bar_out) - float(outro["start_bar"]))),
-            )
             candidate_chunk = pick_cue_bounded_drum_loop(
                 o,
                 int(candidate_gap),
-                required_boundary_bars=boundary_gap or None,
+                required_boundary_bars=required_boundary_bars or None,
             )
             if candidate_chunk is not None:
+                chunk_length = candidate_chunk[1] - candidate_chunk[0]
+                # Dividing the handoff offset is not enough: the inserted loop
+                # interval must be long enough to reach that locked handoff.
+                if candidate_gap + 1e-6 < locked_swap_gap:
+                    short_swap_candidate = (
+                        candidate_name,
+                        locked_swap_gap - candidate_gap,
+                        int(candidate_gap // chunk_length),
+                        chunk_length,
+                        int(math.ceil(locked_swap_gap / chunk_length)),
+                    )
+                    continue
                 nxt = candidate_nxt
                 target_name = candidate_name
                 chunk = candidate_chunk
                 break
+        if chunk is None and short_swap_candidate is not None:
+            candidate_name, shortfall, repeats, chunk_length, required_repeats = (
+                short_swap_candidate
+            )
+            raise ValueError(
+                f"Cannot plan outgoing tail loop for '{o.name}' -> '{i.name}': "
+                f"cue '{candidate_name}' would end {shortfall:g} bars before locked "
+                f"swap ({repeats} repeats at {chunk_length:g} bars; "
+                f"{required_repeats} required), and no later named cue fits the "
+                f"{MAX_LOOP_REPEATS}-repeat/{loop_budget:g}-bar safety limits"
+            )
     if nxt is not None and outro is not None:
         gap = nxt - o.n_bars                                   # exact bars to the marker
         if gap >= 2:
@@ -975,6 +1000,13 @@ def plan_fill_or_cut(o, i, al, policy=None):
                     raise ValueError(
                         f"Cannot reach named cue '{target_name}' for '{o.name}' -> "
                         f"'{i.name}' inside loop safety limits"
+                    )
+                if (landmark_mode
+                        and float(outro["start_bar"]) + used + partial
+                        < float(al.handoff_bar_out) - 1e-6):
+                    raise ValueError(
+                        f"Outgoing tail loop for '{o.name}' -> '{i.name}' would end "
+                        f"before locked swap at outgoing bar {al.handoff_bar_out:g}"
                     )
                 if reps >= 1 or partial > 0:
                     loop_budget -= used + partial

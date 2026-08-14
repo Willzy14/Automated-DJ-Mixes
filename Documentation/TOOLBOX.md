@@ -195,7 +195,7 @@ Extracts two-beat-or-longer raw Kick Detector V3 dropout spans, classifies short
 Safe standalone landmark refresh for certified stem JSONs. Hashes section geometry before/after persistence, refuses any section mutation, runs one V3 inference per track, and writes dedicated `LANDMARKS_*.png` views.
 
 ### `Source/align_engine.py`
-**Added 2026-06-08; paired-landmark V2 2026-07-16.** Bass-to-bass alignment engine used by `propose_arrangement`. `paired_landmarks_v2` preserves odd-bar cues, requires paired incoming/outgoing landmarks, suppresses arbitrary incoming-intro loops, and can extend to a named cue up to 64 bars. Cue-bounded tail loops select a clean phrase length that preserves an intermediate swap boundary as well as the final target. Legacy selection retains the 16-48 bar safety gate. Reads `SECTIONS_STEM_*.json` and retains the transition visualizer.
+**Added 2026-06-08; paired-landmark V2 2026-07-16; tail-loop swap gate 2026-08-14.** Bass-to-bass alignment engine used by `propose_arrangement`. `paired_landmarks_v2` preserves odd-bar cues, requires paired incoming/outgoing landmarks, suppresses arbitrary incoming-intro loops, and can extend to a named cue up to 64 bars. Cue-bounded tail loops select a clean phrase length that preserves an intermediate swap boundary as well as the final target; candidates whose actual loop interval ends before the locked swap are skipped, with a clear failure if no later named cue fits the repeat/extension caps. Legacy selection retains the 16-48 bar safety gate. Reads `SECTIONS_STEM_*.json` and retains the transition visualizer.
 
 ### Diagnostic / Research Scripts
 

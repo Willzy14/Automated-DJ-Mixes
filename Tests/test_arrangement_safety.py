@@ -130,6 +130,77 @@ def test_landmark_loop_reaches_named_cue_without_random_intro_loop():
     assert alignment.overlap_bars + 21.0 == 58.0
 
 
+def test_landmark_tail_loop_fails_when_repeat_cap_stops_before_swap():
+    from align_engine import Alignment, plan_fill_or_cut
+
+    outgoing = _track(
+        "out",
+        n_bars=194,
+        sections=[
+            {"name": "drop_1", "label": "drop", "start_bar": 0.0, "end_bar": 168.0},
+            {"name": "outro_1", "label": "outro", "start_bar": 168.0, "end_bar": 194.0},
+        ],
+        loop_windows=[(168.0, 170.0)],
+    )
+    incoming = _track(
+        "in",
+        n_bars=152,
+        sections=[
+            {"name": "intro_1", "label": "intro", "start_bar": 0.0, "end_bar": 12.0},
+            {"name": "drop_1", "label": "drop", "start_bar": 12.0, "end_bar": 32.0},
+            {"name": "break_1", "label": "break", "start_bar": 32.0, "end_bar": 48.0},
+            {"name": "drop_2", "label": "drop", "start_bar": 48.0, "end_bar": 152.0},
+        ],
+    )
+    alignment = Alignment(
+        "out", "in", 190.0, "paired", 12.0,
+        178.0, 16.0, 0, alignment_policy="paired_landmarks_v2",
+    )
+
+    with pytest.raises(ValueError, match=r"6 bars before locked swap.*11 required"):
+        plan_fill_or_cut(outgoing, incoming, alignment)
+
+
+def test_landmark_tail_loop_skips_near_cue_that_ends_before_swap():
+    from align_engine import Alignment, plan_fill_or_cut
+
+    outgoing = _track(
+        "out",
+        n_bars=100,
+        sections=[
+            {"name": "drop_1", "label": "drop", "start_bar": 0.0, "end_bar": 80.0},
+            {"name": "outro_1", "label": "outro", "start_bar": 80.0, "end_bar": 100.0},
+        ],
+        loop_windows=[(80.0, 84.0)],
+    )
+    incoming = _track(
+        "in",
+        n_bars=96,
+        sections=[
+            {"name": "intro_1", "label": "intro", "start_bar": 0.0, "end_bar": 24.0},
+            {"name": "break_1", "label": "break", "start_bar": 24.0, "end_bar": 32.0},
+            {"name": "drop_1", "label": "drop", "start_bar": 32.0, "end_bar": 96.0},
+        ],
+    )
+    alignment = Alignment(
+        "out", "in", 92.0, "paired", 8.0,
+        84.0, 16.0, 0, alignment_policy="paired_landmarks_v2",
+    )
+
+    tail = next(
+        spec for spec in plan_fill_or_cut(outgoing, incoming, alignment)
+        if spec.kind == "outgoing_tail"
+    )
+    extension = (
+        tail.reps * (tail.source_end_bar - tail.source_start_bar)
+        + tail.partial_bars
+    )
+
+    assert tail.target_marker_name == "section:drop_1"
+    assert extension == 16.0
+    assert outgoing.sections[-1]["start_bar"] + extension >= alignment.handoff_bar_out
+
+
 def test_intro_and_outro_loops_share_remaining_overlap_budget():
     from align_engine import Alignment, MAX_OVERLAP_BARS, plan_fill_or_cut
 
