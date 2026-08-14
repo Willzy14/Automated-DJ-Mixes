@@ -81,6 +81,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+**[Codex, 2026-08-14]:** The paired-landmark outgoing-tail planner now rejects cues whose loop region would end before the locked bass swap. The held-out Saison & Miss Yankey -> Benny Mussa transition proved the bug: the ascending cue search accepted a 2-bar chunk x8 to an earlier break, ending 6 bars/24 beats before the swap; its old guard only checked the extension against that wrongly selected cue. The planner now tries later safe cues, independently checks the loop end against `handoff_bar_out`, and raises with the exact shortfall/repeat requirement when no valid later cue fits. `arr_offset_bars` and `swap_beats` remain untouched; `propose_arrangement.py` was not changed.
+
 **NOTE (2026-07-16): Sam's corrected set is now analysed at `Documentation/Mix Patterns Library/Fresh Mix V2 Sam Tweaks.md`. All eight numeric warp grids, warp modes, 121 BPM tempo and static LUFS gains were preserved. Sam changed five transitions materially and left two bass handovers unchanged. The corrected overlap mean/median rose from 37/34 to 46.54/42 bars, with three evidence-backed transitions above 48 bars, but one 58-bar transition was shortened to 37: duration is cue-dependent. Repeated lessons are earlier low-level/bass-killed incoming intro loops, independent entry/swap/exit anchors, source-aware loop selection, and protected silence over an outgoing dropout. Sam confirmed T3/T4/T5 all use an outgoing hat/percussion hit and its long delay/reverb tail as transition punctuation: the hit onset aligns with a dropout/fill/change, while the non-integer clip end only marks where the inaudible tail is safely trimmed and is not a phrase boundary. T4's two-beat gap/ride deliberately removes masking percussion before the accent return. T3's 12-beat loop was incidental and should normally have been 4 or 8 beats. Roadblock was consolidated from 30 visual fragments to five musical clips while a missed 16-beat dropout was manually added to Seein' You, proving raw dropout evidence must not automatically become structural clips. `Source/analyze_correction_diff.py` now extracts these facts without trusting stale clip names. All intent ambiguities in this correction are resolved; no production defaults have been changed before held-out replay.**
 
 **NOTE (2026-07-16): Sam rejected Fresh Mix Final V1 after transition review exposed a cropped Roadblock head beat, one-sided cue alignment, arbitrary loop placement, unmarked mini-breaks, and four-beat section mismatches. `Output/16.07.26 Fresh Mix Final V2.als` is the corrected candidate: Roadblock now has 396 owned-grid markers with beat/downbeat zero at sample zero; every short Kick V3 gap up to 16 beats is a color-55 `beat_dropout` clip; all seven swaps use `paired_landmarks_v2` and land on clip boundaries on both tracks; named outgoing loops target later section/dropout cues; and T4's four-bar loop boundaries preserve the incoming drop before finishing at its later eight-beat mini-break. Project tempo remains fixed at 121 BPM with three Re-Pitch and five Complex Pro tracks. `RECONCILIATION_V2.json` passes 58 intent-to-ALS checks; 14 V2 transition images were generated and T1/T4/T6 were visually inspected; the suite is 131 passed/4 skipped and the ALS gate passes. Sam's listening verdict is a strong provisional musical pass: every transition is beatmatched, there is no helicoptering or repeated snare-downbeat failure, some transitions are impressively accurate, and there are no painful basic errors. Expert-level arrangement choices still need correction. Preserve Final V2 untouched; Sam plans to make a manually amended copy later, which becomes the next correction ground truth. No bounce exists.**
@@ -187,7 +189,22 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-14 (Latest Session) - the warping bug Sam heard, and a tempo arc
+### 2026-08-14 (Latest Session) - tail-loop repeat-cap reconciliation
+**Brain:** Codex
+
+**Focus**: Reproduce and close the held-out outgoing-tail loop that stopped 24 beats before the locked swap.
+
+**Completed**:
+- Replayed the saved Saison & Miss Yankey -> Benny Mussa transition and a synthetic equivalent: earlier `section:break_1` selected, 2-bar chunk x8, loop bar 168 -> 184 against locked swap bar 190.
+- Confirmed Hypothesis B: the ascending cue search accepted a target before the swap-reach boundary. Hypothesis A's cap-mismatch guard did not fire because 16 extension bars exactly matched the wrongly selected 16-bar cue gap; no caller swallowed an exception.
+- Made cue selection skip pre-swap loop endings, try later candidates, and fail loudly with the independent locked-swap shortfall when safety caps make every later cue impossible.
+- Added positive later-cue selection coverage and the exact repeat-cap fail-closed regression. `propose_arrangement.py` was not touched.
+- Validation: 18 focused tests pass; full suite 213 passed / 25 skipped / 1 unchanged worktree-path failure (baseline 211 passed / 25 skipped / the same 1 failure); excluding that pre-existing Kick Detector sibling-path test gives exit 0.
+
+**Key Learnings**:
+- Divisibility at a boundary does not prove the generated loop interval reaches that boundary. Validate the actual loop end against the independently locked handoff.
+
+### 2026-08-14 - the warping bug Sam heard, and a tempo arc
 **Brain:** Claude
 
 **Focus**: Sam heard "helicopter crush" on two tracks in the car. Diagnosis ran
@@ -745,6 +762,8 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 **Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation. V1-V8.
 
 ## What's Next
+
+> **TAIL LOOP CAP CLOSED FAIL-CLOSED (Codex, 2026-08-14):** paired-landmark tail loops now reach past the locked swap to an exact named cue or raise with the repeat/budget shortfall. The separate `intro_trim` / `in_track.arr_start` reconciliation blocker remains owned by the parallel workstream.
 
 > **TOP (2026-07-16) - replay the strongest Sam-Tweaks lessons without overfitting.** The source-aware diff and report are complete, and all intent ambiguities are resolved. Next implementation slice: model independent transition entry/protected-window/transition-accent/swap/exit anchors; detect useful outgoing percussion hits plus audible decay tails; add evidence-backed extended transitions and incoming intro loops; separate raw dropout overlays from structural promotion; and score loop sources across the full late-track region. Rebuild a fresh or held-out mix and compare blind before changing production defaults. Exclude T3's incidental 12-beat loop in favour of 4/8-beat short-loop candidates; never treat a tail's non-integer clip end as a phrase anchor.
 
