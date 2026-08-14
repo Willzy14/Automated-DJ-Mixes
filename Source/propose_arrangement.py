@@ -1008,7 +1008,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                         project_bpm: float | None = None,
                         warp_mode: int | str | None = None,
                         dry_run: bool = False,
-                        transition_policy: str = "interim_v1") -> ArrangementPlan:
+                        transition_policy: str = "interim_v1",
+                        tempo_arc: bool = False) -> ArrangementPlan:
     """Propose and optionally apply a full arrangement.
 
     Steps:
@@ -1208,9 +1209,64 @@ def propose_arrangement(als_path: Path, sections_path: Path,
     )
     validate_arrangement_plan(plan)
 
-    if (project_bpm is None) != (warp_mode is None):
+    # --- tempo arc -----------------------------------------------------------
+    # Computed HERE deliberately: geometry is final and has just been proven so
+    # by the gate above, and nothing has touched the ALS yet. Both reviewers
+    # independently landed on this point; earlier is tempting (that is where BPM
+    # lives) but loops and cuts have not been applied yet, so the ramp windows
+    # would be stale - the failure that got a previous release rejected.
+    tempo_contract = None
+    if tempo_arc:
+        from automated_dj_mixes.tempo_curve import (
+            DEFAULT_EXPOSURE_TOLERANCE, DEFAULT_MAX_STEP_BPM, DEFAULT_SMOOTHING,
+            build_tempo_points, ramp_exposure, slowest_ramp_bpm_per_bar,
+            solve_track_tempos, span_stretch_percent)
+        from automated_dj_mixes.mix_plan import TempoContract
+
+        native = [float(t.bpm) for t in plan.tracks]
+        if any(not b for b in native):
+            raise ValueError("tempo arc needs a certified BPM for every track")
+        held = solve_track_tempos(native)
+        windows = [(o.overlap_start, o.overlap_end) for o in plan.overlaps]
+        points = build_tempo_points(held, windows)
+        exposures = [
+            ramp_exposure(start, end,
+                          [(plan.tracks[i].arr_start, plan.tracks[i].arr_end)],
+                          [(plan.tracks[i + 1].arr_start, plan.tracks[i + 1].arr_end)])
+            for i, (start, end) in enumerate(windows)
+        ]
+        spans = span_stretch_percent(native, held)
+        worst = max(abs(x) for x in spans)
+        slope = slowest_ramp_bpm_per_bar(points)
+        tempo_contract = TempoContract(
+            strategy="tempo_arc_v1",
+            points=tuple((float(pt.beat), float(pt.bpm)) for pt in points),
+            held_bpms=tuple(held), native_bpms=tuple(native),
+            solver="tempo_curve.solve_track_tempos/1",
+            smoothing=DEFAULT_SMOOTHING, max_step_bpm=DEFAULT_MAX_STEP_BPM,
+            max_span_stretch_pct=worst, max_ramp_bpm_per_bar=slope,
+            ramp_exposures=tuple(exposures))
+        project_bpm = held[0]
+        print("\n--- Tempo arc ---")
+        for track, n, h, sp in zip(plan.tracks, native, held, spans):
+            print("  {:<38} {:.2f} -> {:.2f} BPM ({:+.2f}%)".format(
+                track.name[:36], n, h, sp))
+        print("  worst full-span stretch {:.2f}%  |  steepest ramp {:.3f} BPM/bar"
+              .format(worst, slope))
+        exposed = [i + 1 for i, e in enumerate(exposures)
+                   if e > DEFAULT_EXPOSURE_TOLERANCE]
+        if exposed:
+            print("  NOTE: transitions {} ramp partly with one track audible"
+                  .format(exposed))
+
+    # Under a tempo arc the project BPM is DERIVED from the curve and warp modes
+    # are chosen per track from the worst tempo each meets, so the old pairing
+    # requirement no longer applies. Codex flagged this invariant would break
+    # before it did. The replacement rule: explicit warp modes still require an
+    # explicit project BPM, but a complete tempo contract supplies both.
+    if tempo_contract is None and (project_bpm is None) != (warp_mode is None):
         raise ValueError("project_bpm and warp_mode must be supplied together")
-    if warp_mode not in (None, 4, 6, "auto"):
+    if warp_mode not in (None, WARP_MODE_REPITCH, WARP_MODE_COMPLEX_PRO, "auto"):
         raise ValueError(f"Unsupported warp mode policy: {warp_mode!r}")
 
     warp_grid_contracts = None
@@ -1227,7 +1283,26 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         )
 
     effective_warp_modes: dict[str, int] = {}
-    if warp_mode == "auto":
+    if tempo_contract is not None:
+        # Under a moving tempo, a track's mode cannot be judged from one project
+        # BPM. It plays through the ramp into it and the ramp out of it, so pick
+        # from the WORST tempo it actually meets across its span - the same
+        # reasoning as the full-span stretch metric. Choosing from the held
+        # tempo alone would under-report and hand a stretched track Re-Pitch.
+        from automated_dj_mixes.warping import choose_dj_mix_warp_mode
+
+        held = list(tempo_contract.held_bpms)
+        for index, track in enumerate(tracks):
+            seen = [held[index]]
+            if index > 0:
+                seen.append(held[index - 1])
+            if index + 1 < len(held):
+                seen.append(held[index + 1])
+            native_bpm = tempo_contract.native_bpms[index]
+            worst_tempo = max(seen, key=lambda t: abs(t - native_bpm))
+            effective_warp_modes[track.name] = choose_dj_mix_warp_mode(
+                native_bpm, worst_tempo)
+    elif warp_mode == "auto":
         from automated_dj_mixes.warping import choose_dj_mix_warp_mode
 
         effective_warp_modes = {
@@ -1265,6 +1340,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
 
         plan.mix_plan = build_mix_plan(
             plan,
+            tempo=tempo_contract,
             source_hashes=source_hashes,
             section_map_hashes=original_section_hashes,
             warp_grid_contracts=warp_grid_contracts,
@@ -1309,6 +1385,22 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                     ),
                 )
             )
+
+        if tempo_contract is not None:
+            # MUST come after apply_playback_policy: that calls _set_project_bpm,
+            # which deliberately REMOVES any tempo envelope (the July hardening
+            # against a stale envelope silently overriding the static value).
+            # Writing the arc before it simply had the arc deleted - the first
+            # build produced a mix with the static tempo and no curve at all.
+            from automated_dj_mixes.als_generator import (
+                _insert_main_track_tempo_envelope)
+            written = _insert_main_track_tempo_envelope(
+                lines, [(beat, bpm) for beat, bpm in tempo_contract.points])
+            if not written:
+                raise ValueError("tempo envelope was not written to the ALS")
+            print("  Tempo arc: {} points written, {:.2f} -> {:.2f} BPM".format(
+                len(tempo_contract.points), tempo_contract.points[0][1],
+                tempo_contract.points[-1][1]))
 
         # Step 0: Remove clips for intro-skipped sections so the trimmed
         # intro doesn't play (intro_skip_bars). Done before shifts so only the
@@ -1679,6 +1771,11 @@ def main():
                         help="Freeze per-track auto modes or one explicit Ableton warp mode")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print plan without modifying ALS")
+    parser.add_argument("--tempo-arc", action="store_true",
+                        help="Follow a smoothed tempo arc through the mix "
+                             "instead of freezing one project BPM. Holds each "
+                             "track's tempo and ramps across transitions; "
+                             "outliers are absorbed rather than chased.")
     parser.add_argument("--transition-policy", default="interim_v1",
                         choices=("interim_v1", "sam_v1"),
                         help="Transition geometry policy. interim_v1 is the "
@@ -1704,6 +1801,7 @@ def main():
         ),
         dry_run=args.dry_run,
         transition_policy=args.transition_policy,
+        tempo_arc=args.tempo_arc,
     )
 
     # Generate report

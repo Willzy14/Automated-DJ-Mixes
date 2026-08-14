@@ -104,6 +104,12 @@ def test_writer_and_validator_agree_on_every_mode():
                 continue
             if "warp_mode_" in low or line.strip().startswith("#"):
                 continue
+            # Membership tests too: `warp_mode not in (None, 4, 6, "auto")`
+            # would have rejected a genuinely re-pitched track (now 3), so
+            # --warp-mode repitch failed. The `==` sweep alone missed it.
+            assert not re.search(r"None\s*,\s*4\s*,\s*6", line), (
+                f"{rel}:{lineno} membership test uses bare warp literals: "
+                f"{line.strip()}")
             assert not re.search(r"==\s*[46]", line), (
                 f"{rel}:{lineno} compares a bare warp literal: {line.strip()}")
 
