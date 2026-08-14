@@ -239,6 +239,21 @@ def _find_main_track_envelopes_line(lines: list[str]) -> int | None:
 def _remove_existing_envelope_for_target(lines: list[str], target_id: str) -> int:
     """Remove any AutomationEnvelope with the given PointeeId. Returns lines removed."""
     pointee_match = f'PointeeId Value="{target_id}"'
+    total = 0
+    while True:
+        removed_this_pass = _remove_first_envelope_for_target(lines, pointee_match)
+        if not removed_this_pass:
+            return total
+        total += removed_this_pass
+
+
+def _remove_first_envelope_for_target(lines: list[str], pointee_match: str) -> int:
+    """Remove ONE envelope. `_remove_existing_envelope_for_target` loops on this.
+
+    It used to return after the first match, so a second envelope for the same
+    target survived and Live obeyed the leftover - the failure that once made a
+    mix play at 123 BPM while the static value read 120.49.
+    """
     for i, line in enumerate(lines):
         if pointee_match in line:
             # Walk backwards to find <AutomationEnvelope opening

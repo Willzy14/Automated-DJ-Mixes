@@ -64,7 +64,14 @@ def _matches_clip_boundary(clips: list[ET.Element], beat: float) -> bool:
     return any(math.isclose(beat, boundary, abs_tol=1e-6) for boundary in boundaries)
 
 
-def _main_tempo_state(root: ET.Element) -> tuple[float | None, list[float]]:
+def _main_tempo_state(root: ET.Element) -> tuple[float | None, list[tuple[float, float]]]:
+    """(static tempo, [(beat, bpm), ...]) for the MainTrack.
+
+    The times used to be discarded, so a caller could only ask "does a tempo
+    envelope exist" - never "is it the envelope we planned". Verifying a tempo
+    arc needs the positions: the right BPMs in the wrong places is exactly the
+    failure worth catching.
+    """
     main_track = next(root.iter("MainTrack"), None)
     if main_track is None:
         return None, []
@@ -80,11 +87,15 @@ def _main_tempo_state(root: ET.Element) -> tuple[float | None, list[float]]:
             pointee = envelope.find(".//PointeeId")
             if pointee is None or pointee.get("Value") != target_id:
                 continue
-            events.extend(
-                float(event.get("Value"))
-                for event in envelope.iter("FloatEvent")
-                if event.get("Value") is not None
-            )
+            for event in envelope.iter("FloatEvent"):
+                value = event.get("Value")
+                if value is None:
+                    continue
+                # Ableton writes a large negative sentinel time for the
+                # "before all time" anchor point; keep it as-is so a caller
+                # comparing against planned points sees exactly what Live has.
+                events.append((float(event.get("Time", 0.0)), float(value)))
+            events.sort()
     return manual, events
 
 
