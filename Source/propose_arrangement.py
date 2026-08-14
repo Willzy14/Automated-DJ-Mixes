@@ -898,6 +898,17 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                 if outro_o is not None:
                     analysis.outro_split = (out_track.name, outro_o.get("name", "outro_1"),
                                             skip_beats, 4.0)
+                    # The ALS trim (split_clip_skip_before_end, applied later)
+                    # genuinely SHORTENS the outgoing by skip_beats. Without the
+                    # matching in-memory update the plan freezes an arr_end that
+                    # is too long: reconciliation compares the contract against
+                    # the real clip ends and fails, and any consumer using
+                    # arr_end - the tempo arc's ramp windows, downstream overlap
+                    # geometry - is computed from a track that does not exist.
+                    # validate_arrangement_plan cannot catch it because it
+                    # compares the overlap against this same stale value, so it
+                    # is self-consistently wrong. (MiniMax, 2026-08-13.)
+                    out_track.arr_end -= skip_beats
                 analysis.notes += "; break->break: dropped {} ({:.0f}b), drop pulled onto swap".format(
                     brk.get("name", fc.clip_name), fc.skip_bars)
 
