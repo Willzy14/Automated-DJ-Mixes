@@ -229,3 +229,14 @@ Safe standalone landmark refresh for certified stem JSONs. Hashes section geomet
 | pywinauto | Desktop UI automation (MIK + RB) via Windows messages |
 | pyautogui | Mouse/keyboard fallback for non-message-responsive controls |
 | pyperclip | Clipboard support for `desktop_analyzer.py` path pasting |
+
+## Added 2026-08-14
+
+| Module | What it does |
+|---|---|
+| `Source/automated_dj_mixes/tempo_curve.py` | Smoothed tempo arc: per-track held tempos, ramps across transitions, outliers absorbed not chased. Also `span_stretch_percent` (the honest full-span metric), `ramp_exposure`, and `suggest_resequence`. |
+| `Source/automated_dj_mixes/transition_policy.py` | Single source of truth for overlap/loop caps + frozen `TransitionPolicy` (interim_v1 / sam_v1). Replaces three independent declarations. |
+| `Source/alignment_feasibility.py` | Pairwise "can these two tracks align" matrix + longest BPM-ascending chain. Pick a workable running order BEFORE building. |
+| `Source/build_ab_comparison.py` | Builds two policy sides from one input, separate dirs and subprocesses so neither can contaminate the other. |
+| `Source/seal_listening_test.py` | Randomised blind clips + sealed mapping + an A-vs-A noise twin. |
+| `Source/setup_heldout_replay.py` | Stages verified held-out tracks (copies, never moves). |

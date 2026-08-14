@@ -1,6 +1,6 @@
 {
   "project": "Automated DJ Mixes",
-  "description": "Automated DJ mix pipeline — owned stem grids, Demucs sections and Kick Detector V3 evidence feeding template-based Ableton arrangement and automation",
+  "description": "Automated DJ mix pipeline \u2014 owned stem grids, Demucs sections and Kick Detector V3 evidence feeding template-based Ableton arrangement and automation",
   "tech_stack": [
     "Python 3.x",
     "Librosa",
@@ -56,7 +56,7 @@
     },
     "rekordbox_waveform": {
       "path": "Source/automated_dj_mixes/rekordbox_waveform.py",
-      "purpose": "PWV5/PWV4 parser — 3-bit RGB + 5-bit height per pixel (LSB-first 16-bit words)",
+      "purpose": "PWV5/PWV4 parser \u2014 3-bit RGB + 5-bit height per pixel (LSB-first 16-bit words)",
       "status": "working",
       "added": "2026-05-17"
     },
@@ -85,7 +85,7 @@
     },
     "mik_reader": {
       "path": "Source/automated_dj_mixes/mik_reader.py",
-      "purpose": "Mixed In Key 11 GEOB tag + SQLite (MIKStore.db) reader — cues, beat grid, energy segments. Tag-only fallback if DB fails",
+      "purpose": "Mixed In Key 11 GEOB tag + SQLite (MIKStore.db) reader \u2014 cues, beat grid, energy segments. Tag-only fallback if DB fails",
       "status": "working",
       "added": "2026-05-18"
     },
@@ -140,7 +140,7 @@
     },
     "apply_section_corrections": {
       "path": "Source/apply_section_corrections.py",
-      "purpose": "Patches .als chop boundaries via XML — 8 attributes per correction",
+      "purpose": "Patches .als chop boundaries via XML \u2014 8 attributes per correction",
       "status": "working",
       "added": "2026-05-20"
     },
@@ -198,6 +198,16 @@
     "samwillsmixing.com"
   ],
   "sessions": [
+    {
+      "date": "2026-08-14",
+      "brain": "Claude",
+      "focus": "grid phase bug (click-search saturation), WarpMode enum correction, break-skip geometry, tempo arc + MixPlan 1.4",
+      "outputs": [
+        "Deep Soulful Mix V3.als",
+        "Heldout Replay Result 01"
+      ],
+      "tests": "231 passed / 6 skipped"
+    },
     {
       "date": "2026-07-16",
       "focus": "Extracted source-aware lessons from Fresh Mix Final V2 Sam's Tweaks",
@@ -359,7 +369,7 @@
     },
     {
       "date": "2026-05-21",
-      "focus": "Automation proposal for V20 — Claude adds volume crossfades + EQ bass kills, Sam corrects, diff = first Mix Patterns Library training data",
+      "focus": "Automation proposal for V20 \u2014 Claude adds volume crossfades + EQ bass kills, Sam corrects, diff = first Mix Patterns Library training data",
       "outputs": [
         "Sections V21.als (V20 + automation: 20 envelopes, 175 FloatEvents, 9 transitions with section-driven bass swap)",
         "Source/apply_automation.py (standalone automation patcher for Sections .als files)"
@@ -369,7 +379,7 @@
       ],
       "modules_modified": [],
       "key_fixes": [
-        "Bass swap at overlap boundary edge case: min(swap, ov_e-16) floor ensures ≥4 bars fade-out even when incoming drop_1 lands at overlap end",
+        "Bass swap at overlap boundary edge case: min(swap, ov_e-16) floor ensures \u22654 bars fade-out even when incoming drop_1 lands at overlap end",
         "PowerShell string escaping: chr(34) workaround for nested quotes in Python one-liners"
       ],
       "validation": "V21.als: 10 tracks matched, 9 transitions planned, 20 envelopes inserted, 175 FloatEvents, \\r\\n line endings verified. Awaiting Sam's manual correction in Ableton.",
@@ -383,9 +393,9 @@
     },
     {
       "date": "2026-05-20",
-      "focus": "Section-detection pipeline LOCKED IN (V13→V19) + arrangement principle from Sam's V20 + /arrange-mix planned",
+      "focus": "Section-detection pipeline LOCKED IN (V13\u2192V19) + arrangement principle from Sam's V20 + /arrange-mix planned",
       "outputs": [
-        "Sections V13.als through V19.als (Black Book V2 — locked-in chops + first arrangement pass)",
+        "Sections V13.als through V19.als (Black Book V2 \u2014 locked-in chops + first arrangement pass)",
         "BLIND_VALIDATION_V13.md (107-row per-chop verdict table)",
         "TUNING_NOTES_V14.md, TUNING_NOTES_V16.md (algorithm tuning round documentation)",
         "VISUAL_PASS_V12_VERDICT.md + VISUAL_PASS_V12_BLIND.md (initial visual-pass diff vs blind)",
@@ -396,29 +406,29 @@
         "Source/extract_sections_als.py (parse .als clip boundaries to JSON)",
         "Source/diff_sections.py (JSON diff between section versions)",
         "Source/sections_blind_viz.py (8-quarter blind PNG renderer, default 8 since 4 missed 1-bar fills)",
-        "Source/sections_compare_viz.py (V<N> vs V7 comparison — FORBIDDEN by skill but kept for ad-hoc diagnostic)",
-        "Source/apply_section_corrections.py (patches .als chop boundaries via XML — 8 attributes per correction)",
+        "Source/sections_compare_viz.py (V<N> vs V7 comparison \u2014 FORBIDDEN by skill but kept for ad-hoc diagnostic)",
+        "Source/apply_section_corrections.py (patches .als chop boundaries via XML \u2014 8 attributes per correction)",
         "Source/arrange_sections.py (repositions tracks by shifting all clips; natural-fill alignment computed from sections)"
       ],
       "modules_modified": [
         "Source/automated_dj_mixes/orchestrator.py (version counter fix for V<N>.als matching; --sections-layout already existed)",
-        "Source/automated_dj_mixes/phrase_viz.py (added Fix G `_absorb_short_segments_before_outro` — catches Marco-style spurious fill+drop+outro chains)"
+        "Source/automated_dj_mixes/phrase_viz.py (added Fix G `_absorb_short_segments_before_outro` \u2014 catches Marco-style spurious fill+drop+outro chains)"
       ],
       "key_fixes": [
-        "Fix G works on STRUCTURE not bass thresholds (V14/V15 thresholds proved non-convex — fixing one track broke another)",
+        "Fix G works on STRUCTURE not bass thresholds (V14/V15 thresholds proved non-convex \u2014 fixing one track broke another)",
         "8-PNG zoom default catches 1-2 bar fills 4-PNG missed",
         "Direct .als XML patching for chop corrections faster than algorithm tuning (V17 fixed 3 errors in seconds, V14/V15 failed to fix any)",
         "Pipeline LOCKED IN across 5 surfaces: skill (+2 mirrors) + AI_CONTEXT + copilot-instructions"
       ],
       "reverted": [
-        "V15 attempt — `mean()` instead of `all()` in Fix C plus walk-back logic — regressed Savana and Sapian outros. Reverted all changes back to V13 baseline + Fix G."
+        "V15 attempt \u2014 `mean()` instead of `all()` in Fix C plus walk-back logic \u2014 regressed Savana and Sapian outros. Reverted all changes back to V13 baseline + Fix G."
       ],
-      "validation": "V19 = V18 chops (Sam's truth) + recomputed natural-fill arrangement. Last 3 tracks (Marco, Crusy, Sapian) shifted +16 beats to track Sam's Marco drop_1 edit (bar 40→36 in V18). All other tracks unchanged from V18 positions. V20 (Sam-built basic mix with loops) introduces the next-phase arrangement principle.",
+      "validation": "V19 = V18 chops (Sam's truth) + recomputed natural-fill arrangement. Last 3 tracks (Marco, Crusy, Sapian) shifted +16 beats to track Sam's Marco drop_1 edit (bar 40\u219236 in V18). All other tracks unchanged from V18 positions. V20 (Sam-built basic mix with loops) introduces the next-phase arrangement principle.",
       "key_learnings": [
-        "Algorithm has a ceiling — visual validation by Claude IS the deliverable, not algorithm refinement",
-        "The chops are the lineup points (Sam's framing) — 2-3 alignment moments per transition (entry / optional bass-swap / exit); loops are mechanical glue, not creative choices",
+        "Algorithm has a ceiling \u2014 visual validation by Claude IS the deliverable, not algorithm refinement",
+        "The chops are the lineup points (Sam's framing) \u2014 2-3 alignment moments per transition (entry / optional bass-swap / exit); loops are mechanical glue, not creative choices",
         "Anti-patterns explicitly documented and forbidden: matches-V7 framing, X/Y near perfect without evidence, reading some PNGs and extrapolating",
-        "sections_compare_viz.py FORBIDDEN by skill (V7-diff trap) — exists in codebase for ad-hoc diagnostic only"
+        "sections_compare_viz.py FORBIDDEN by skill (V7-diff trap) \u2014 exists in codebase for ad-hoc diagnostic only"
       ],
       "open_items": [
         "Tomorrow: extract V20's 9 transitions as initial Mix Patterns Library training data",
@@ -427,7 +437,7 @@
         "Similarity matching: BPM + section structure shape (Sam's choice)",
         "Learn from rejections: yes (record Claude's pick AND Sam's correction)",
         "Auto-detect Sam edits on every invocation: yes",
-        "Test by re-running on Black Book V18 → see how close my V20-pattern-driven proposal gets"
+        "Test by re-running on Black Book V18 \u2192 see how close my V20-pattern-driven proposal gets"
       ]
     },
     {
@@ -437,7 +447,7 @@
         "Mix V13 (via /mix workflow with last_bass_drop)",
         "~/.claude/commands/mix.md (+ Codex + Antigravity mirrors)",
         "Documentation/ABLETON_INTERACTION.md (17-section portable reference)",
-        "Test Project/Black Book x Defected V2/Hints/track_hints.json (10 tracks × 4 fields)"
+        "Test Project/Black Book x Defected V2/Hints/track_hints.json (10 tracks \u00d7 4 fields)"
       ],
       "modules_added": [
         "desktop_analyzer (drives MIK + RB UIs)",
@@ -451,27 +461,27 @@
         "cue_candidates (HINT_TO_CUE_TYPE last_bass_drop)"
       ],
       "key_fixes": [
-        "mouse-stealing → message-based pywinauto",
+        "mouse-stealing \u2192 message-based pywinauto",
         "Library Protection silent no-op (Sam toggled padlock)",
         "JUCE AttachThreadInput for focus (not Alt trick)",
         "MIK MIKStore.db SQLite read for WAV (no GEOB)",
         "constant-tempo grid drift exposed bad auto_analyze approach"
       ],
       "reverted": [
-        "auto_analyze.py programmatic key+grid+phrase (reverted via git checkout HEAD — unlistenable warp drift)"
+        "auto_analyze.py programmatic key+grid+phrase (reverted via git checkout HEAD \u2014 unlistenable warp drift)"
       ],
-      "validation": "ALL PASS on V13 — 16-beat HARD phrase + 16-80 bar overlap. bass_swap lands within 1-2 bars of last_bass_drop on every transition.",
+      "validation": "ALL PASS on V13 \u2014 16-beat HARD phrase + 16-80 bar overlap. bass_swap lands within 1-2 bars of last_bass_drop on every transition.",
       "open_items": [
         "Sam to listen to V13 in Ableton, refine hint timestamps (current values are visual estimates from preview PNGs)",
-        "T1 Adam Ten → Savana — Sam's manual mix at last_bass_drop differs from my hint at 240s; refine",
+        "T1 Adam Ten \u2192 Savana \u2014 Sam's manual mix at last_bass_drop differs from my hint at 240s; refine",
         "Test desktop_analyzer on a fresh project with NO prior MIK/RB analysis (end-to-end UI driving)",
-        "Wren mirror of /mix skill skipped — ~/.hermes/reference/ not on this machine",
+        "Wren mirror of /mix skill skipped \u2014 ~/.hermes/reference/ not on this machine",
         "Bargrooves T2 'edited incoming intro' technique not implemented (deferred per Sam)"
       ]
     },
     {
       "date": "2026-05-19",
-      "focus": "Housekeeping — merged V46 worktree branch into main",
+      "focus": "Housekeeping \u2014 merged V46 worktree branch into main",
       "commits": [
         "d7ab342"
       ]
@@ -506,7 +516,7 @@
         "hint precedence over algorithms",
         "per-track phrase grid alignment"
       ],
-      "validation": "ALL PASS on V46 — including new per-track bar alignment HARD check (was 3/11 in V42, now 11/11)",
+      "validation": "ALL PASS on V46 \u2014 including new per-track bar alignment HARD check (was 3/11 in V42, now 11/11)",
       "open_items": [
         "Sapian (T5) bass placement at 45s may need hint adjustment",
         "off-by-one beat verification in Ableton",

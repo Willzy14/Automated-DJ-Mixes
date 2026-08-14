@@ -187,6 +187,52 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
+### 2026-08-14 (Latest Session) - the warping bug Sam heard, and a tempo arc
+**Brain:** Claude
+
+**Focus**: Sam heard "helicopter crush" on two tracks in the car. Diagnosis ran
+through four wrong hypotheses before an independent ruler settled it, then the
+fixes cascaded into the warp enum, arrangement geometry and a new tempo model.
+
+**Completed**:
+- **Grid phase bug FIXED.** `refine_to_click` capped its search at 35ms; Really
+  Nice's beater transient sits 68ms behind its sub onset, so 95% of kicks
+  stopped on the window wall and the correction was silently halved, leaving the
+  grid 34ms late end to end. Now retries saturated kicks with a caller-capped
+  reach (period/6, inside a 16th) and returns a wall-hit RATE. Verified against
+  Ableton's own transients: -33.9ms -> -1.6ms, healthy tracks unmoved.
+- **WarpMode enum was wrong** - Re-Pitch was 6, Complex Pro 4. Live reads 4 as
+  plain Complex and 6 as Complex Pro (verified live through Producer Pal). So
+  Re-Pitch had NEVER been applied in any mix, and every stretched track used the
+  older algorithm. Six consumers held the old literals; all now use constants.
+- **Break-skip did not shorten the outgoing** - the ALS trimmed its outro while
+  `arr_end` stayed long, so the plan froze a track longer than the file.
+- **Tempo arc** replaces one frozen project BPM: held per-track tempos from a
+  smoothing solve, ramping only across transitions, outliers ABSORBED not chased
+  (Sam's 130-among-125s peaks at 126.77). Worst full-span stretch 5.6% -> 1.73%.
+  Frozen in MixPlan schema 1.4 and reconciled point-by-point against the ALS.
+- **Held-out replay result 01**: earlier/quieter incoming entry validated by
+  blind A/B with a noise twin. Sam: both work - recorded as validated, NOT
+  superior.
+- Tooling: `tempo_curve`, `transition_policy`, `alignment_feasibility`,
+  `build_ab_comparison`, `seal_listening_test`, `setup_heldout_replay`.
+  Audio Analysis Toolkit now has its own private GitHub repo.
+- Suite 133 -> 231 passed / 6 skipped, across 12 commits.
+
+**Key Learnings**:
+- **Three separate bugs today were checks comparing a value against itself.**
+  `grid_vs_kick` scored the grid against the onsets that built it and reported
+  1.11ms on a 34ms-wrong track; `validate_arrangement_plan` checked the overlap
+  against the same stale `arr_end`; the tempo envelope was written and then
+  deleted with nothing verifying it. Look for this shape specifically.
+- **Sam's ear and his screenshots beat every automated gate.** My own
+  "verification" of the grid reused the fitter's code and was worthless. When
+  the expert and the measurement disagree, suspect the measurement.
+- A status label that lies is how a bug survives: the enum error persisted partly
+  because console output printed "Re-Pitch" for Complex Pro tracks.
+- Ableton anchors every envelope with a Time=-63072000 event; it is the writer's
+  and must be excluded when comparing against a plan.
+
 ### 2026-07-16 (Latest Session) - Learned from Sam's Fresh Mix V2 correction
 
 **Focus**: Compare the untouched generated Final V2 with `Final V2 Sam's Tweaks` and extract reusable musical decisions without learning accidental edits.
