@@ -101,3 +101,68 @@ def test_ramp_is_gradual_enough_to_be_inaudible():
 @pytest.mark.parametrize("bpms", [[], [123.0]])
 def test_degenerate_inputs(bpms):
     assert solve_track_tempos(bpms) == [float(b) for b in bpms]
+
+
+# --- resequencing: an outlier is only an outlier where it sits ---------------
+#
+# Sam, 2026-08-13: "let's say dissection of the mix tracks one to five, it would
+# be an outlier if you put it there, but maybe at the end of the mix we're
+# getting up to 128 BPM, so if you put it after the 128 track it's fine. So both
+# things work in this scenario."
+#
+# Resequencing and the smoothed arc COMPOSE. Codex proposed refusing or
+# resequencing a transition above ~3 BPM; Sam's answer is to do both - move the
+# track somewhere it fits, and still soften what remains.
+
+CLIMBING_WITH_EARLY_OUTLIER = [130.0, 120.0, 121.0, 122.0, 123.0,
+                               124.0, 125.0, 126.0, 127.0, 128.0]
+
+
+def test_outlier_early_in_a_climbing_mix_is_flagged():
+    from automated_dj_mixes.tempo_curve import outliers, tempo_cost
+    assert 0 in outliers(CLIMBING_WITH_EARLY_OUTLIER)
+    assert tempo_cost(CLIMBING_WITH_EARLY_OUTLIER) > 3.0
+
+
+def test_moving_the_outlier_to_the_end_fixes_it():
+    """The 130 belongs after the 128, where the arc has already climbed."""
+    from automated_dj_mixes.tempo_curve import suggest_resequence, tempo_cost
+    order = suggest_resequence(CLIMBING_WITH_EARLY_OUTLIER)
+    assert order is not None
+    assert order[-1] == 0, "the 130 should end up last, after the 128"
+    reordered = [CLIMBING_WITH_EARLY_OUTLIER[i] for i in order]
+    assert tempo_cost(reordered) < tempo_cost(CLIMBING_WITH_EARLY_OUTLIER) / 2
+
+
+def test_resequence_returns_a_valid_permutation():
+    from automated_dj_mixes.tempo_curve import suggest_resequence
+    order = suggest_resequence(CLIMBING_WITH_EARLY_OUTLIER)
+    assert sorted(order) == list(range(len(CLIMBING_WITH_EARLY_OUTLIER)))
+
+
+def test_no_suggestion_when_nothing_is_suffering():
+    """Must not churn a running order that is already fine - sequencing also
+    answers to harmony and energy, which this module knows nothing about."""
+    from automated_dj_mixes.tempo_curve import suggest_resequence
+    assert suggest_resequence(REAL_MIX) is None
+    assert suggest_resequence([124.0] * 5) is None
+
+
+def test_best_position_for_reports_where_it_belongs():
+    from automated_dj_mixes.tempo_curve import best_position_for
+    pos, cost = best_position_for(CLIMBING_WITH_EARLY_OUTLIER, 0)
+    assert pos == len(CLIMBING_WITH_EARLY_OUTLIER) - 1
+    assert cost < 2.0
+
+
+def test_both_mechanisms_beat_either_alone():
+    """Sam's point that they compose. Against a single frozen tempo, the arc
+    alone helps, and the arc plus repositioning helps considerably more."""
+    from automated_dj_mixes.tempo_curve import suggest_resequence, tempo_cost
+    bpms = CLIMBING_WITH_EARLY_OUTLIER
+    frozen = max(abs((124.0 / n - 1) * 100) for n in bpms)   # one fixed tempo
+    arc_only = tempo_cost(bpms)
+    order = suggest_resequence(bpms)
+    both = tempo_cost([bpms[i] for i in order])
+    assert arc_only < frozen
+    assert both < arc_only

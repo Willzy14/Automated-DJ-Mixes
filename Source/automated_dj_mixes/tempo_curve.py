@@ -119,3 +119,74 @@ def slowest_ramp_bpm_per_bar(points) -> float:
         if bars > 0:
             worst = max(worst, abs(b.bpm - a.bpm) / bars)
     return worst
+
+
+#: A track stretched beyond this is worth trying to reposition before accepting
+#: the compromise. Sam tolerates a small pitch glide through a transition but
+#: not a track carrying a heavy stretch all the way through.
+DEFAULT_STRETCH_TOLERANCE_PCT = 2.0
+
+
+def tempo_cost(native_bpms, **kw) -> float:
+    """Worst-case stretch for one candidate running order. Lower is better."""
+    if len(native_bpms) < 2:
+        return 0.0
+    tempos = solve_track_tempos(native_bpms, **kw)
+    return max(abs(s) for s in max_stretch_percent(native_bpms, tempos))
+
+
+def outliers(native_bpms, tolerance_pct: float = DEFAULT_STRETCH_TOLERANCE_PCT,
+             **kw) -> list[int]:
+    """Positions whose track is taking more stretch than we would like."""
+    if len(native_bpms) < 2:
+        return []
+    tempos = solve_track_tempos(native_bpms, **kw)
+    stretch = max_stretch_percent(native_bpms, tempos)
+    return [i for i, s in enumerate(stretch) if abs(s) > tolerance_pct]
+
+
+def best_position_for(native_bpms, index: int, **kw) -> tuple[int, float]:
+    """Where this track would suffer least, and the resulting worst-case cost.
+
+    Sam's point: a track is only an outlier RELATIVE TO WHERE IT SITS. A 130 in
+    the middle of a 125 mix is an outlier, but if the mix climbs to 128 by the
+    end then the same track is comfortable at the end. Repositioning and the
+    smoothed arc compose - do both, rather than choosing.
+    """
+    rest = [b for i, b in enumerate(native_bpms) if i != index]
+    track = native_bpms[index]
+    best, best_cost = index, float("inf")
+    for pos in range(len(rest) + 1):
+        cost = tempo_cost(rest[:pos] + [track] + rest[pos:], **kw)
+        if cost < best_cost - 1e-9:
+            best, best_cost = pos, cost
+    return best, best_cost
+
+
+def suggest_resequence(native_bpms,
+                       tolerance_pct: float = DEFAULT_STRETCH_TOLERANCE_PCT,
+                       **kw) -> list[int] | None:
+    """A running order that eases the outliers, as index positions, or None.
+
+    Returns ONLY a suggestion. Sequencing also has to satisfy harmonic and
+    energy constraints that this module knows nothing about, so the caller
+    decides whether the tempo gain is worth any harmonic cost.
+    """
+    problem = outliers(native_bpms, tolerance_pct, **kw)
+    if not problem:
+        return None
+    order = list(range(len(native_bpms)))
+    current = tempo_cost(native_bpms, **kw)
+    for index in sorted(problem, key=lambda i: -abs(native_bpms[i])):
+        pos_in_order = order.index(index)
+        rest = [i for i in order if i != index]
+        best, best_cost = pos_in_order, current
+        for pos in range(len(rest) + 1):
+            candidate = rest[:pos] + [index] + rest[pos:]
+            cost = tempo_cost([native_bpms[i] for i in candidate], **kw)
+            if cost < best_cost - 1e-9:
+                best, best_cost = pos, cost
+        if best_cost < current - 1e-9:
+            order = rest[:best] + [index] + rest[best:]
+            current = best_cost
+    return order if order != list(range(len(native_bpms))) else None
