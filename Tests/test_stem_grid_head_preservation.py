@@ -73,7 +73,15 @@ def test_asd_timing_path_still_loads_mix_for_head_resolution(monkeypatch):
     drums = np.ones(sr * 8)
     loaded_mix = np.arange(sr * 8, dtype=float)
     monkeypatch.setattr(stem_grid, "band_onsets", lambda *_args: np.arange(0.5, 7.5, 0.5))
-    monkeypatch.setattr(stem_grid, "refine_to_click", lambda _d, _s, onsets: onsets)
+    monkeypatch.setattr(
+        stem_grid, "refine_to_click",
+        # mirrors the real signature: optional kwargs, and a (times, stats)
+        # pair when return_stats is set
+        lambda _d, _s, onsets, **_kw: (
+            (onsets, {"saturated": 0, "total": len(onsets), "rate": 0.0})
+            if _kw.get("return_stats") else onsets
+        ),
+    )
     monkeypatch.setattr(stem_grid, "estimate_period", lambda _k: (0.5, 1.0))
     monkeypatch.setattr(
         stem_grid,
