@@ -15,6 +15,8 @@ argument for the post-build check that reads the generated set back through
 Live rather than trusting the XML we just wrote.
 """
 
+from pathlib import Path
+
 from automated_dj_mixes.warping import (
     WARP_MODE_BEATS,
     WARP_MODE_COMPLEX,
@@ -62,3 +64,46 @@ def test_small_move_actually_repitches():
     assert choose_dj_mix_warp_mode(121.0, 121.0) == WARP_MODE_REPITCH
     assert choose_warp_mode(126.0, 126.0) == WARP_MODE_REPITCH
     assert choose_warp_mode(126.0, 126.0) != WARP_MODE_COMPLEX_PRO
+
+
+def test_writer_and_validator_agree_on_every_mode():
+    """The half-migration that actually happened: warping.py was corrected but
+    the MixPlan labeller and the reconciliation validator kept the OLD literals,
+    so a Complex Pro track would have been frozen as "repitch" and then failed
+    its own reconciliation. Symbol-only greps missed it because those sites used
+    bare numbers.
+
+    Pins the round trip: number -> label -> expected number.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path("Source")
+
+    # The labeller in propose_arrangement and the expectation in
+    # validate_mix_plan_als must both key off the constants, not literals.
+    for rel, needle in [
+        ("propose_arrangement.py", 'if mode == WARP_MODE_REPITCH else "complex_pro"'),
+        ("validate_mix_plan_als.py", '"repitch": WARP_MODE_REPITCH'),
+        ("validate_mix_plan_als.py", '"complex_pro": WARP_MODE_COMPLEX_PRO'),
+    ]:
+        text = (src / rel).read_text(encoding="utf-8")
+        assert needle in text, f"{rel} no longer keys off the constants: {needle}"
+
+    # And no consumer may re-introduce a bare warp-mode literal.
+    banned = [
+        ("propose_arrangement.py", r"warp_mode not in \(4, 6\)"),
+        ("propose_arrangement.py", r'"repitch": 6'),
+        ("validate_mix_plan_als.py", r'\{"repitch": 6, "complex_pro": 4\}'),
+    ]
+    for rel, pattern in banned:
+        text = (src / rel).read_text(encoding="utf-8")
+        assert not re.search(pattern, text), f"{rel} re-introduced a bare literal: {pattern}"
+
+
+def test_playback_policy_accepts_repitch():
+    """apply_playback_policy rejected anything outside (4, 6), so a genuinely
+    re-pitched track (now 3) would have raised the moment a MixPlan was used.
+    The 12.08.26 mix only escaped because it was built without one."""
+    text = (Path(__file__).parent.parent / "Source" / "propose_arrangement.py").read_text(encoding="utf-8")
+    assert "if warp_mode not in (WARP_MODE_REPITCH, WARP_MODE_COMPLEX_PRO):" in text

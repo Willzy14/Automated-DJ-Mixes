@@ -11,7 +11,7 @@ from pathlib import Path
 from automated_dj_mixes.config import load_config
 from automated_dj_mixes.analysis import analyse_folder, enrich_from_rekordbox
 from automated_dj_mixes.sequencer import build_harmonic_path, key_to_camelot, apply_energy_arc
-from automated_dj_mixes.warping import calculate_warp_markers, calculate_warp_markers_from_beat_grid, choose_warp_mode
+from automated_dj_mixes.warping import (calculate_warp_markers, calculate_warp_markers_from_beat_grid, choose_warp_mode, WARP_MODE_REPITCH)
 from automated_dj_mixes.automation import calculate_gain_offsets, AutomationPoint
 from automated_dj_mixes.als_generator import TrackPatch, generate_session
 from automated_dj_mixes.phrase_viz import build_intervals, segments_from_intervals
@@ -664,7 +664,7 @@ def run_pipeline(
         warp_markers_all.append(markers)
         mode = choose_warp_mode(a.bpm, project_bpm)
         warp_modes.append(mode)
-        mode_name = "Repitch" if mode == 6 else "Complex Pro"
+        mode_name = "Repitch" if mode == WARP_MODE_REPITCH else "Complex Pro"
         if rb_match and hasattr(rb_match, "beat_times_ms") and len(rb_match.beat_times_ms) >= 8:
             grid_label = "stem-grid" if (stem_grid and not getattr(rb_match, "phrases", None)) else "beat grid"
             warp_src = f"{grid_label} ({len(markers)} markers)"

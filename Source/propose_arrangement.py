@@ -54,6 +54,7 @@ from apply_loops import (
     validate_loop_spec,
 )
 from automated_dj_mixes.transition_policy import INTERIM_V1, get_policy
+from automated_dj_mixes.warping import WARP_MODE_COMPLEX_PRO, WARP_MODE_REPITCH
 
 
 # -- Constants ----------------------------------------------------------------
@@ -247,7 +248,7 @@ def apply_playback_policy(lines: list[str], tracks: list[TrackInfo],
     _set_project_bpm(lines, project_bpm)
     for track in tracks:
         warp_mode = normalised_modes.get(_normalise(track.name))
-        if warp_mode not in (4, 6):
+        if warp_mode not in (WARP_MODE_REPITCH, WARP_MODE_COMPLEX_PRO):
             raise ValueError(
                 f"Missing or unsupported warp mode for '{track.name}': {warp_mode!r}"
             )
@@ -1258,7 +1259,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             warp_grid_contracts=warp_grid_contracts,
             project_bpm=project_bpm,
             warp_modes={
-                name: "repitch" if mode == 6 else "complex_pro"
+                name: "repitch" if mode == WARP_MODE_REPITCH else "complex_pro"
                 for name, mode in effective_warp_modes.items()
             },
             input_hashes=input_hashes,
@@ -1685,8 +1686,8 @@ def main():
         project_bpm=args.project_bpm,
         warp_mode=(
             "auto" if args.warp_mode == "auto"
-            else 6 if args.warp_mode == "repitch"
-            else 4 if args.warp_mode == "complex-pro"
+            else WARP_MODE_REPITCH if args.warp_mode == "repitch"
+            else WARP_MODE_COMPLEX_PRO if args.warp_mode == "complex-pro"
             else None
         ),
         dry_run=args.dry_run,

@@ -8,6 +8,9 @@ import hashlib
 import html
 import json
 import math
+
+from automated_dj_mixes.warping import (
+    WARP_MODE_COMPLEX_PRO, WARP_MODE_REPITCH)
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -144,7 +147,8 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
         if not math.isclose(max(ends), contract["arrangement_end_beat"], abs_tol=1e-6):
             errors.append(f"{name}: arrangement end mismatch")
         modes = {_float(clip.find("WarpMode")) for clip in clips}
-        expected_warp = {"repitch": 6, "complex_pro": 4}.get(contract.get("warp_mode"))
+        expected_warp = {"repitch": WARP_MODE_REPITCH,
+                         "complex_pro": WARP_MODE_COMPLEX_PRO}.get(contract.get("warp_mode"))
         if expected_warp is None or modes != {float(expected_warp)}:
             errors.append(f"{name}: WarpMode mismatch {modes} != {expected_warp}")
         else:
