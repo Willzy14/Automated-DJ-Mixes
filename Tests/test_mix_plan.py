@@ -113,7 +113,7 @@ def test_mix_plan_freezes_named_landmark_overlap_policy():
 
     plan = _build(arrangement)
 
-    assert plan.schema_version == "1.3"
+    assert plan.schema_version == "1.4"   # 1.4 added TempoContract
     assert plan.transitions[0].overlap_beats == 224.0
     assert plan.transitions[0].overlap_policy == "named_landmark_64"
 

@@ -15,7 +15,7 @@ from automated_dj_mixes.transition_policy import INTERIM_V1
 from automated_dj_mixes.warp_contract import WarpGridSummary
 
 
-SCHEMA_VERSION = "1.3"
+SCHEMA_VERSION = "1.4"          # 1.4 adds TempoContract (the tempo arc)
 PRODUCTION_SCOPE = "multi_transition_arrangement_v1"
 
 # Single source of truth: transition_policy.py. These names are kept so the
@@ -75,6 +75,32 @@ class LoopContract:
 
 
 @dataclass(frozen=True)
+class TempoContract:
+    """The frozen tempo curve. Absolute points are the executable authority.
+
+    Deliberately brittle: the points are absolute arrangement beats, so ANY
+    later geometry change invalidates the contract rather than letting the
+    curve quietly describe a mix that no longer exists. That brittleness is the
+    feature - it is what makes reconciliation meaningful.
+
+    The remaining fields are audit evidence. A consumer may use them to prove
+    the same points derive from the same inputs; it must NEVER re-run the solver
+    during replay, or the contract stops being a contract.
+    """
+
+    strategy: str                                  # e.g. "tempo_arc_v1"
+    points: tuple[tuple[float, float], ...]        # (arrangement_beat, bpm)
+    held_bpms: tuple[float, ...]                   # per track, in mix order
+    native_bpms: tuple[float, ...]                 # certified source-grid BPMs
+    solver: str                                    # solver identity + version
+    smoothing: float
+    max_step_bpm: float
+    max_span_stretch_pct: float                    # budget the curve must meet
+    max_ramp_bpm_per_bar: float                    # audibility budget
+    ramp_exposures: tuple[float, ...]              # per transition, 0 = covered
+
+
+@dataclass(frozen=True)
 class TransitionContract:
     transition_id: str
     transition_index: int
@@ -99,6 +125,7 @@ class MixPlan:
     tracks: tuple[TrackInstanceContract, ...]
     loops: tuple[LoopContract, ...]
     transitions: tuple[TransitionContract, ...]
+    tempo: TempoContract | None
     input_hashes: tuple[ArtifactHash, ...]
     policy_versions: tuple[MetadataEntry, ...]
     tool_versions: tuple[MetadataEntry, ...]
@@ -160,6 +187,50 @@ def _compute_plan_hash(plan: MixPlan) -> str:
     ).hexdigest()
 
 
+def _validated_tempo(tempo: TempoContract | None, arrangement_plan):
+    """Refuse a tempo contract that does not describe THIS arrangement.
+
+    The points are absolute arrangement beats, so they are only meaningful
+    against the geometry they were computed from. Checking them here - before
+    the hash is taken - is what stops a curve for a different mix, or a curve
+    built from stale geometry, being frozen as though it were intent.
+    """
+    if tempo is None:
+        return None
+
+    tracks = arrangement_plan.tracks
+    if len(tempo.held_bpms) != len(tracks):
+        raise ValueError(
+            f"tempo contract covers {len(tempo.held_bpms)} tracks, "
+            f"arrangement has {len(tracks)}")
+    if len(tempo.native_bpms) != len(tracks):
+        raise ValueError("tempo contract native_bpms must cover every track")
+    if len(tempo.ramp_exposures) != max(0, len(tracks) - 1):
+        raise ValueError("tempo contract needs one exposure per transition")
+    if len(tempo.points) < 2:
+        raise ValueError("tempo contract needs at least two points")
+
+    times = [beat for beat, _bpm in tempo.points]
+    if any(b < a for a, b in zip(times, times[1:])):
+        raise ValueError(f"tempo points are not monotonic in time: {times}")
+    for beat, bpm in tempo.points:
+        if not math.isfinite(beat) or beat < 0:
+            raise ValueError(f"invalid tempo point beat: {beat!r}")
+        if not (20.0 < bpm < 300.0):
+            raise ValueError(f"implausible tempo point: {bpm!r}")
+
+    # Every ramp must sit inside a real transition window, or the curve moves
+    # tempo while a track plays alone - the thing the arc exists to avoid.
+    windows = [(o.overlap_start, o.overlap_end) for o in arrangement_plan.overlaps]
+    for beat, _bpm in tempo.points[1:]:
+        if beat == 0.0:
+            continue
+        if not any(start - 1e-6 <= beat <= end + 1e-6 for start, end in windows):
+            raise ValueError(
+                f"tempo point at beat {beat} is outside every transition window")
+    return tempo
+
+
 def build_mix_plan(
     arrangement_plan,
     *,
@@ -174,6 +245,7 @@ def build_mix_plan(
     human_overrides: Mapping[str, str] | None = None,
     plan_version: int = 1,
     parent_plan_hash: str | None = None,
+    tempo: TempoContract | None = None,
 ) -> MixPlan:
     """Convert a validated N-track ArrangementPlan into canonical intent."""
     from propose_arrangement import validate_arrangement_plan
@@ -314,6 +386,7 @@ def build_mix_plan(
         tracks=tuple(track_contracts),
         loops=tuple(loop_contracts),
         transitions=tuple(transition_contracts),
+        tempo=_validated_tempo(tempo, arrangement_plan),
         input_hashes=_artifact_hashes(extra_hashes),
         policy_versions=_metadata_entries(policies),
         tool_versions=_metadata_entries(tools),
