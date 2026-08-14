@@ -843,6 +843,15 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                 trim_beats = fc.cut_to_bar * 4.0
                 analysis.intro_trim = (in_track.name, intro.get("name", "intro_1"),
                                        trim_beats)
+                # The physical trim moves the intro clip forward by trim_beats in
+                # the ALS (trim_named_clip_front: arrangement Time + LoopStart),
+                # so the track's actual arrangement start is now old_start +
+                # trim_beats. Mirror that here, like the sibling incoming_intro
+                # branch does after its own position change — otherwise the
+                # in-memory arr_start stays at the pre-trim value and the frozen
+                # MixPlan contract (and the tempo arc's ramp_exposure windows)
+                # describe a track starting trim_beats too early.
+                in_track.arr_start += trim_beats
                 analysis.notes += "; intro front trimmed {:.0f}b to marker".format(
                     fc.cut_to_bar)
         elif fc.kind == "incoming_intro" and fc.reps >= 1:
