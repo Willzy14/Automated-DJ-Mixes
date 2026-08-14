@@ -141,6 +141,42 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
             "Fixed project tempo is overridden by a MainTrack tempo envelope: "
             f"{tempo_events}"
         )
+    elif tempo_strategy == "tempo_arc_v1":
+        # The frozen curve is the authority. Compare the ALS against it point by
+        # point; never re-derive a curve here, or the contract stops constraining
+        # anything. A missing envelope is a FAILURE, not a default - the first
+        # arc build silently lost its envelope and still validated, because
+        # nothing was checking.
+        tempo = plan.get("tempo") or {}
+        planned = [(float(b), float(v)) for b, v in tempo.get("points", [])]
+        # Ableton anchors every envelope with a "before all time" event at
+        # Time=-63072000 carrying the default value. It is the writer's, not
+        # part of our curve, so it must not be compared against the plan.
+        tempo_events = [(t, v) for t, v in tempo_events if t > -1e6]
+        if not planned:
+            errors.append("tempo_arc_v1 plan carries no tempo points")
+        elif not tempo_events:
+            errors.append(
+                "tempo_arc_v1 plan but the ALS has NO MainTrack tempo envelope")
+        elif len(tempo_events) != len(planned):
+            errors.append(
+                f"Tempo envelope has {len(tempo_events)} points, "
+                f"plan froze {len(planned)}")
+        else:
+            bad = [
+                (i, got, want)
+                for i, (got, want) in enumerate(zip(tempo_events, planned))
+                if not (math.isclose(got[0], want[0], abs_tol=1e-3)
+                        and math.isclose(got[1], want[1], abs_tol=1e-3))
+            ]
+            if bad:
+                errors.append(f"Tempo envelope differs from the plan at {bad[:3]}")
+            elif not math.isclose(manual_tempo, planned[0][1], abs_tol=1e-3):
+                errors.append(
+                    f"Static tempo {manual_tempo} does not match the arc's "
+                    f"opening value {planned[0][1]}")
+            else:
+                checks.append(f"tempo_arc:{len(planned)}pts")
     else:
         checks.append("project_tempo")
 

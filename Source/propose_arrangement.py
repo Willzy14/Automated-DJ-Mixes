@@ -1353,7 +1353,11 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             policy_versions={
                 "alignment": "bounded_alignment_v1",
                 "loop_budget": "shared_loop_budget_v1",
-                "tempo_strategy": "fixed_center_v1" if project_bpm is not None else "inherited_v1",
+                "tempo_strategy": (
+                    tempo_contract.strategy if tempo_contract is not None
+                    else "fixed_center_v1" if project_bpm is not None
+                    else "inherited_v1"
+                ),
                 "warp_assignment": "per_track_explicit_v1" if warp_mode is not None else "inherited_v1",
             },
             tool_versions={"propose_arrangement": "mix_plan_v1"},
