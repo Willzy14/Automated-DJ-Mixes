@@ -5,8 +5,29 @@ from __future__ import annotations
 import bisect
 from dataclasses import dataclass
 
-WARP_MODE_REPITCH = 6
-WARP_MODE_COMPLEX_PRO = 4
+# Ableton's WarpMode enum, corrected 2026-08-13. These were 6 and 4, which are
+# BOTH WRONG: Live reads 4 as plain Complex and 6 as Complex Pro. Verified live
+# through Producer Pal against Sam's open session - a clip written as 4 reported
+# warpMode "complex", one written as 6 reported "pro".
+#
+# Two silent consequences, in every mix ever produced by this pipeline:
+#   - Re-Pitch was never applied. Tracks the policy chose to re-pitch (Sam's
+#     +/-1 BPM DJ rule) were handed Complex Pro instead, so they time-stretched
+#     when they were meant to change pitch.
+#   - Stretched tracks got Complex, not Complex Pro - the older, lower-quality
+#     algorithm, precisely where quality matters most (up to -5.6% on the
+#     12.08.26 mix).
+#
+# 4 and 6 are directly measured. 3 follows from the enum being contiguous in UI
+# order (Beats, Tones, Texture, Re-Pitch, Complex, [REX], Complex Pro) with two
+# verified anchors either side of it; it has not itself been round-tripped
+# through Live, so treat a Re-Pitch regression as the first thing to re-check.
+WARP_MODE_BEATS = 0
+WARP_MODE_TONES = 1
+WARP_MODE_TEXTURE = 2
+WARP_MODE_REPITCH = 3
+WARP_MODE_COMPLEX = 4
+WARP_MODE_COMPLEX_PRO = 6
 DJ_MIX_REPITCH_LIMIT_BPM = 1.0
 GRID_BPM_TOLERANCE = 0.05
 
