@@ -86,6 +86,41 @@ def solve_track_tempos(native_bpms, smoothing: float = DEFAULT_SMOOTHING,
     return [float(x) for x in solved]
 
 
+#: How much of a ramp may play with only ONE track audible before it is worth
+#: reporting. Sam's ruling (2026-08-13): "if there's a small section where the
+#: tempo is still moving but the tail end of a mix has faded out, it's not the
+#: end of the world" - so this warns rather than refuses, unlike the reviewer's
+#: proposal to reject any ramp without continuous two-track coverage.
+DEFAULT_EXPOSURE_TOLERANCE = 0.25
+
+
+def _covered_fraction(start: float, end: float, intervals) -> float:
+    """Fraction of [start, end) covered by `intervals` (list of (a, b))."""
+    span = end - start
+    if span <= 0:
+        return 1.0
+    covered = 0.0
+    for a, b in sorted(intervals):
+        lo, hi = max(a, start), min(b, end)
+        if hi > lo:
+            covered += hi - lo
+    return min(1.0, covered / span)
+
+
+def ramp_exposure(ramp_start: float, ramp_end: float,
+                  out_intervals, in_intervals) -> float:
+    """Fraction of a ramp where the two tracks are NOT both playing.
+
+    Overlap bounds alone do not prove continuous two-track audio: a clip gap or
+    a dropout inside the window leaves tempo moving with one track exposed,
+    which is the thing that makes a tempo change audible. Pass each track's
+    actual clip intervals to measure it honestly.
+    """
+    both = min(_covered_fraction(ramp_start, ramp_end, out_intervals),
+               _covered_fraction(ramp_start, ramp_end, in_intervals))
+    return max(0.0, 1.0 - both)
+
+
 def build_tempo_points(track_tempos, transitions) -> list[TempoPoint]:
     """Hold each track's tempo, ramp across each transition.
 
@@ -97,12 +132,40 @@ def build_tempo_points(track_tempos, transitions) -> list[TempoPoint]:
     """
     if not track_tempos:
         return []
+
+    # Fail loudly rather than truncate. The previous version silently dropped
+    # mismatched transitions and could emit non-monotonic points when adjacent
+    # overlaps intersected - a malformed curve that would still have been
+    # written to the ALS and frozen into the contract.
+    transitions = [(float(a), float(b)) for a, b in transitions]
+    expected = len(track_tempos) - 1
+    if len(transitions) != expected:
+        raise ValueError(
+            f"{len(track_tempos)} tracks need exactly {expected} transitions, "
+            f"got {len(transitions)}")
+    for bpm in track_tempos:
+        if not (isinstance(bpm, (int, float)) and 20.0 < float(bpm) < 300.0):
+            raise ValueError(f"implausible held tempo: {bpm!r}")
+    previous_end = None
+    for index, (start, end) in enumerate(transitions):
+        if not (start < end):
+            raise ValueError(
+                f"transition {index}: start {start} must precede end {end}")
+        if previous_end is not None and start < previous_end:
+            raise ValueError(
+                f"transition {index} starts at {start} before the previous ramp "
+                f"ends at {previous_end}; overlapping ramps (triple overlap) are "
+                "not supported")
+        previous_end = end
+
     points = [TempoPoint(0.0, track_tempos[0])]
     for i, (start, end) in enumerate(transitions):
-        if i + 1 >= len(track_tempos):
-            break
-        points.append(TempoPoint(float(start), track_tempos[i]))
-        points.append(TempoPoint(float(end), track_tempos[i + 1]))
+        points.append(TempoPoint(start, track_tempos[i]))
+        points.append(TempoPoint(end, track_tempos[i + 1]))
+
+    times = [p.beat for p in points]
+    if any(b < a for a, b in zip(times, times[1:])):
+        raise ValueError(f"tempo points are not monotonic in time: {times}")
     return points
 
 

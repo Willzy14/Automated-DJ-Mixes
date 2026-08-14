@@ -182,3 +182,74 @@ def test_both_mechanisms_beat_either_alone():
     both = tempo_cost([bpms[i] for i in order])
     assert arc_only < frozen
     assert both < arc_only
+
+
+# --- hardening: a malformed curve must not reach the contract ---------------
+#
+# The first version silently truncated mismatched transitions and could emit
+# non-monotonic points when adjacent overlaps intersected. A malformed curve
+# would still have been written to the ALS and frozen into the hash. Codex
+# flagged it; these pin the refusals.
+
+def test_transition_count_must_match_track_count():
+    from automated_dj_mixes.tempo_curve import build_tempo_points
+    with pytest.raises(ValueError, match="exactly 2 transitions"):
+        build_tempo_points([120.0, 121.0, 122.0], [(100.0, 200.0)])
+
+
+def test_backwards_transition_is_rejected():
+    from automated_dj_mixes.tempo_curve import build_tempo_points
+    with pytest.raises(ValueError, match="must precede"):
+        build_tempo_points([120.0, 121.0], [(400.0, 300.0)])
+
+
+def test_overlapping_ramps_are_rejected():
+    """Triple overlap - a ramp starting before the previous one ends - would
+    produce a curve that goes backwards in time."""
+    from automated_dj_mixes.tempo_curve import build_tempo_points
+    with pytest.raises(ValueError, match="triple overlap"):
+        build_tempo_points([120.0, 121.0, 122.0],
+                           [(100.0, 500.0), (400.0, 800.0)])
+
+
+def test_implausible_tempo_is_rejected():
+    from automated_dj_mixes.tempo_curve import build_tempo_points
+    with pytest.raises(ValueError, match="implausible held tempo"):
+        build_tempo_points([120.0, 0.0], [(100.0, 200.0)])
+
+
+def test_points_are_monotonic_in_time():
+    from automated_dj_mixes.tempo_curve import build_tempo_points
+    points = build_tempo_points([120.0, 122.0, 124.0],
+                                [(400.0, 560.0), (900.0, 1100.0)])
+    times = [p.beat for p in points]
+    assert times == sorted(times)
+
+
+# --- exposure: a ramp with only one track playing ---------------------------
+#
+# Sam's ruling: a small exposed section - e.g. over a fade-out - "is not the end
+# of the world", so this MEASURES rather than refuses. The reviewer wanted any
+# ramp without continuous two-track coverage rejected outright.
+
+def test_fully_covered_ramp_has_no_exposure():
+    from automated_dj_mixes.tempo_curve import ramp_exposure
+    assert ramp_exposure(400.0, 560.0, [(0.0, 600.0)], [(400.0, 900.0)]) == 0.0
+
+
+def test_gap_inside_a_track_is_measured_as_exposure():
+    """A clip gap mid-ramp leaves tempo moving with one track audible - which
+    overlap bounds alone cannot reveal."""
+    from automated_dj_mixes.tempo_curve import ramp_exposure
+    exposure = ramp_exposure(400.0, 560.0,
+                             [(0.0, 440.0), (500.0, 600.0)],   # 60-beat hole
+                             [(400.0, 900.0)])
+    assert exposure == pytest.approx(60.0 / 160.0)
+
+
+def test_outgoing_finishing_early_shows_as_exposure():
+    from automated_dj_mixes.tempo_curve import ramp_exposure
+    exposure = ramp_exposure(400.0, 560.0, [(0.0, 520.0)], [(400.0, 900.0)])
+    assert exposure == pytest.approx(40.0 / 160.0)
+    from automated_dj_mixes.tempo_curve import DEFAULT_EXPOSURE_TOLERANCE
+    assert exposure <= DEFAULT_EXPOSURE_TOLERANCE, "a short tail is tolerated"
