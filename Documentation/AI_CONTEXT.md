@@ -189,7 +189,129 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-14 (Latest Session) - tail-loop repeat-cap reconciliation
+### 2026-08-14 (Latest Session) - first live /mix run on the updated skill, paused mid-arrangement
+**Brain:** Claude
+
+**Focus**: Run `/mix` end-to-end on `Test Project/14.08.26` (21 tracks) as the first real test of
+today's earlier skill update. Sam had to leave before it finished.
+
+**Completed**:
+- Phase 0/1: 20/21 tracks passed the beatgrid gate clean (Marshall Weinstein - Slot Machine excluded,
+  Sam's call, genuinely syncopated/off-4-to-floor, 98ms off its own kicks). All 20 DETECT pictures
+  visually reviewed against stems - zero chop corrections needed. `track_hints.json` authored and
+  passed the hint-consistency gate (41/41 checks) after two rounds of correction (see Key Learnings).
+- Found a real bug in the skill's own path convention (fixed live): Phase 1a's actual output is FLAT
+  (`Output/Sections V1.als`), not the nested `.../Sections V1 Project/...` the skill claimed - that
+  claim was never verified against a live run, only against another project's stale docstring example.
+- Phase 2a (arrangement) hit a genuine `align_engine` failure: no valid landmark alignment for
+  `Nic Fanciulli - Revoloution -> Harry Romero - Renegades` inside the 16-48 bar window. Traced to
+  root cause (see below) and started a reordered re-run (BUTCH & Santos, early 8-bar drop, swapped to
+  follow Revoloution instead) as a workaround. **That re-run was still in progress when Sam had to
+  leave - not yet confirmed to pass.**
+
+**OPEN - pick up here next session**:
+1. **Reorder workaround CONFIRMED DEAD END (tested after Sam left):** the reordered Phase 1a re-run
+   completed clean (20/20 beatgrid gate, `Sections V2.als`), but Phase 2a on it hit the IDENTICAL
+   failure one track over - `Revoloution -> BUTCH & Santos` now fails the same way
+   `Revoloution -> Harry Romero` did. Confirms this isn't a one-off bad pairing: Revoloution's total
+   lack of an outro/late break makes it a bad OUTGOING track against nearly any incoming neighbor whose
+   first drop isn't very early. Do not try further reorder-and-hope iterations - go straight to a real
+   fix. Two candidate approaches, either is legitimate:
+   (a) **Sam's fix (preferred, see below)** - teach `align_engine` to anchor a sustained-to-the-end
+   outgoing track's swap on the incoming's first drop near `track_end`.
+   (b) **Structural workaround** - put Revoloution LAST in the running order instead, since the last
+   track in a mix never needs an outgoing role at all (sidesteps the whole failure class without
+   touching align_engine). Untested; would need its own harmonic-continuity check for the whole
+   sequence (Revoloution is 9A; the current last track, Alaia & Gallo, is 9B - a valid "key change"
+   move per this project's Camelot model, not a clash) and a fresh Phase 1a re-run to verify.
+2. **Sam's proposed real fix (his words, cleaned up from dictation): "Revoloution has full energy all
+   the way [no outro] - just put the end of the track up to the first drop of Harry Romero."** i.e.
+   for an outgoing track with no outro/late break (sustained full energy right to the file's end), the
+   swap should be allowed to anchor near the outgoing's literal `track_end` using the INCOMING's first
+   drop as the pairing anchor, without needing an intermediate break/dropout landmark on the outgoing
+   side. Root cause confirmed by reading `_search_anchors`/`_align_pair_landmark_aware`
+   (`Source/align_engine.py`): `track_end` (bar 164 for Revoloution) IS a valid outgoing cue and DOES
+   pair with Harry Romero's drop_1 (bar 32, giving a 32-bar overlap - inside the 16-48 window) - the
+   candidate is rejected because `progress = incoming_anchor / overlap = 32/32 = 1.0`, which fails
+   `MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS` (the ceiling rejects a swap landing exactly at
+   the outgoing's last bar). This is a real gap, not unique to this pair: ANY outgoing track with no
+   outro and no break within its final ~30-40 bars will hit the same rejection. Fix direction: either
+   raise `MAX_SWAP_PROGRESS` specifically when the only candidate outgoing anchor is `track_end` and
+   the track has no break/outro in its tail, or add a dedicated fallback path for "sustained-to-the-end
+   outgoing, anchor on the incoming's own first drop" that doesn't route through the general
+   progress-ceiling check at all. Needs its own held-out replay before becoming a policy default (same
+   discipline as `sam_v1`) - this is a NEW proposed rule, not yet validated against a corpus.
+3. `MIX_PLAN.json` / `ARRANGEMENT_REPORT.json` do not exist yet for this project - Phase 2 never
+   completed. Do not skip straight to Phase 3 assuming they're there.
+4. Two other tracks in this mix also have weak/no outro material (Harry Romero - Renegades: 1-bar
+   outro; Cevin Fisher - Emotions, Sam Leagas - Double Dutch, Nic Fanciulli - Revoloution: no outro at
+   all) - once the align_engine fix lands, re-check whether any of THEIR outgoing transitions also
+   need it, not just the one that happened to hard-fail first.
+
+**Key Learnings**:
+- Don't trust a skill's own documented output path without running it once against a live project -
+  static peer review (checking prose against other prose/docstrings) caught internal consistency, not
+  ground truth. Confirmed and fixed live this session (see AI_CONTEXT's Codex/MiniMax session entries
+  above for what was already fixed vs. this new one).
+- `first_drop_sec` hints should point at the FIRST section literally labeled "drop", even a brief
+  teaser one, not a later "more sustained" drop after a build - the hint-consistency gate anchors to
+  the algorithm's own first-drop candidate, and overriding it by more than 8 bars fails the gate. Two
+  tracks needed this correction (A Studio - SOS, Nic Fanciulli - Vente).
+- `last_bass_drop_sec` isn't "any earlier break" - the gate requires it inside a specific pre-outro
+  window near the actual `outro_start`. Six tracks needed correction after the first pass picked an
+  earlier, musically-reasonable-looking break that was too far from the outro to satisfy the gate.
+- A missing outro isn't just a hint-authoring inconvenience - it's a real, previously-undiscovered
+  align_engine failure mode once that track needs to be an OUTGOING track. First time this project has
+  hit it in production (the corpus of prior test mixes apparently never put a no-outro track in the
+  outgoing position against a late-first-drop incoming track).
+
+### 2026-08-14 (Prior Session) - merge, brain protocol, and /mix skill catch-up
+**Brain:** Claude (with Codex + MiniMax as parallel workers, not just reviewers)
+
+**Focus**: Close out both open reconciliation blockers, then bring the `/mix` skill up to
+date with everything the last two sessions built (tempo arc, WarpMode fix, MixPlan
+reconciliation, paired-landmark alignment, held-out replay workflow) - none of which had
+been documented in the skill an operator actually follows.
+
+**Completed**:
+- Merged Codex's tail-loop fix and MiniMax's `intro_trim`/`arr_start` fix (each built
+  concurrently in its own isolated git worktree) into `main`; re-ran the full suite on the
+  merged result (235 passed / 6 skipped, up from 231/6). Codex's sandbox could edit files
+  but not `git commit` inside a worktree (metadata lives outside the worktree's write-scope
+  tree) - committed its validated diff myself once reviewed.
+- Codified **Parallel Worktree Execution** as a standing pattern in Claude Code Brain
+  (`commands/orchestrate.md` + a `CLAUDE.md` pointer + memory) at Sam's explicit direction
+  ("this is how I want the team to work all the time"), then amended it the same session to
+  a **mandatory two-brain-minimum review** on every piece of work regardless of stakes -
+  Codex's work reviewed by MiniMax, MiniMax's by Codex, Claude's own work by BOTH.
+- Fanned the `/mix` skill catch-up three ways under that pattern: Codex drafted the tempo
+  arc/WarpMode/MixPlan-reconciliation section, MiniMax drafted the held-out replay/`sam_v1`
+  A-B workflow, Claude drafted the paired-landmark alignment + swap-reach-invariant update.
+  Integrated into one document, then both peers cross-reviewed the WHOLE thing - and found
+  real issues: a promotion/kill-criteria logic contradiction in the replay section (the
+  draft told an operator to promote when kill criteria "fired cleanly," which is backwards),
+  an unexecutable step sequence (Policy Replay skipped straight to feasibility/build without
+  running the held-out material through Phase 0/1 first), an overclaimed verification claim
+  about `setup_heldout_replay.py`, and a pre-existing Phase 4a bug (`Sections_V<N+1>.json`
+  never gets created) that both reviewers independently caught. All fixed.
+- Synced the updated skill to Codex Brain; confirmed byte-identical (frozen-sync intact).
+
+**Key Learnings**:
+- A git worktree's own metadata lives OUTSIDE its working-tree directory
+  (`<main-repo>/.git/worktrees/<name>/`), so a sandbox scoped to write only inside the
+  worktree can edit files cleanly but still fail to `git commit` - documented as a standing
+  gotcha rather than a failure.
+- Two-brain review on a documentation task caught the same class of bug it catches on code:
+  an internally-contradictory rule (kill vs. promotion criteria) that a single careful
+  author-review had already missed once (mine, drafting the neighbouring section, didn't
+  catch it either - cross-review is what caught it, not more solo care).
+- Deferred, not fixed: the wider `/mix` skill has a pre-existing inconsistency between
+  nested (`Sections V<N> Project/Sections V<N>.als`) and flat (`Sections V<N>.als`) output
+  path conventions across older sections not touched this session, plus one optional Phase
+  4b command (`ARRANGEMENT_REPORT_V<N+1>.json`) that doesn't match the naming this session
+  standardised on. Out of scope for a documentation catch-up; worth a dedicated pass.
+
+### 2026-08-14 (Prior Session) - tail-loop repeat-cap reconciliation
 **Brain:** Codex
 
 **Focus**: Reproduce and close the held-out outgoing-tail loop that stopped 24 beats before the locked swap.
@@ -762,6 +884,17 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 **Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation. V1-V8.
 
 ## What's Next
+
+> **TOP (2026-08-14) - resume the paused 14.08.26 mix; fix the no-outro align_engine gap.** `/mix` is
+> mid-Phase-2 on `Test Project/14.08.26`, paused because Sam had to leave. Check whether the reordered
+> Phase 1a re-run (BUTCH & Santos moved to follow Nic Fanciulli - Revoloution) completed and its
+> arrangement pass actually succeeds. Then implement Sam's proposed fix: outgoing tracks with no
+> outro/late break (sustained full energy to the file's end) should be able to swap anchored on the
+> INCOMING's first drop near the outgoing's literal `track_end`, without needing an intermediate
+> break/dropout landmark - currently rejected by the `MAX_SWAP_PROGRESS` ceiling in
+> `_search_anchors`/`_align_pair_landmark_aware` (`Source/align_engine.py`) because a track_end-anchored
+> swap always has `progress=1.0`. Full root-cause trace and fix direction in the 2026-08-14 session
+> entry above. Needs held-out validation before becoming a policy default, same discipline as `sam_v1`.
 
 > **TAIL LOOP CAP CLOSED FAIL-CLOSED (Codex, 2026-08-14):** paired-landmark tail loops now reach past the locked swap to an exact named cue or raise with the repeat/budget shortfall. The separate `intro_trim` / `in_track.arr_start` reconciliation blocker remains owned by the parallel workstream.
 

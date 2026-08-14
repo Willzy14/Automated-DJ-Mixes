@@ -201,6 +201,21 @@
     {
       "date": "2026-08-14",
       "brain": "Claude",
+      "focus": "merged Codex/MiniMax parallel-worktree fixes, codified the Parallel Worktree Execution + two-brain-review pattern in Claude Code Brain, baked tempo-arc/WarpMode/reconciliation/held-out-replay into the /mix skill, ran the first live /mix build on Test Project/14.08.26",
+      "outputs": [
+        "commands/orchestrate.md (Parallel Worktree Execution section, Claude Code Brain)",
+        "commands/mix.md (Phase 2c/3b/3.5 additions, synced to Codex Brain)",
+        "Test Project/14.08.26 (paused mid-build - Phase 0/1 complete, Phase 2 blocked)"
+      ],
+      "tests": "235 passed / 6 skipped (merged main); hint-consistency gate 41/41",
+      "pending": [
+        "align_engine has no way to swap onto a sustained-to-the-end outgoing track (no outro/late break) - rejected by the MAX_SWAP_PROGRESS ceiling when the only candidate anchor is track_end. Confirmed on Nic Fanciulli - Revoloution against two different incoming neighbors. Sam's proposed fix + an alternative (reorder to last position) are written up in AI_CONTEXT.md's 2026-08-14 entry and What's Next.",
+        "Resume Test Project/14.08.26 /mix build once the align_engine fix lands - Phase 1 (sections + hints) is done and gated clean, do not redo it."
+      ]
+    },
+    {
+      "date": "2026-08-14",
+      "brain": "Claude",
       "focus": "grid phase bug (click-search saturation), WarpMode enum correction, break-skip geometry, tempo arc + MixPlan 1.4",
       "outputs": [
         "Deep Soulful Mix V3.als",
