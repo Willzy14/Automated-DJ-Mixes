@@ -190,3 +190,33 @@ def suggest_resequence(native_bpms,
             order = rest[:best] + [index] + rest[best:]
             current = best_cost
     return order if order != list(range(len(native_bpms))) else None
+
+
+def span_stretch_percent(native_bpms, track_tempos) -> list[float]:
+    """Worst stretch each track sees across its whole AUDIBLE span, signed.
+
+    `max_stretch_percent` reports only the held tempo, which understates the
+    truth: a track is still playing during the ramp into it and the ramp out of
+    it, so it also experiences its neighbours' held tempos. Codex caught this -
+    the 12.08.26 arc reads 0.94% held but 1.73% across full spans.
+
+    This is the number any stretch budget must be judged against.
+    """
+    worst = []
+    for i, native in enumerate(native_bpms):
+        seen = [track_tempos[i]]
+        if i > 0:
+            seen.append(track_tempos[i - 1])
+        if i + 1 < len(track_tempos):
+            seen.append(track_tempos[i + 1])
+        worst.append(max(((t / native - 1.0) * 100.0 for t in seen),
+                         key=abs))
+    return worst
+
+
+def span_tempo_cost(native_bpms, **kw) -> float:
+    """Worst full-span stretch for a running order. The honest ranking metric."""
+    if len(native_bpms) < 2:
+        return 0.0
+    tempos = solve_track_tempos(native_bpms, **kw)
+    return max(abs(s) for s in span_stretch_percent(native_bpms, tempos))

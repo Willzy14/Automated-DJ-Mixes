@@ -90,6 +90,23 @@ def test_writer_and_validator_agree_on_every_mode():
         text = (src / rel).read_text(encoding="utf-8")
         assert needle in text, f"{rel} no longer keys off the constants: {needle}"
 
+    # Broad sweep: no bare 4/6 anywhere in a warp context. The first version of
+    # this test banned specific strings and so missed a console label reading
+    # `== 6` -> "Re-Pitch", which printed the WRONG mode for every Complex Pro
+    # track. A label that lies is exactly how the original bug survived.
+    import itertools
+    for rel in ("propose_arrangement.py", "validate_mix_plan_als.py",
+                "automated_dj_mixes/orchestrator.py"):
+        for lineno, line in enumerate(
+                (src / rel).read_text(encoding="utf-8").splitlines(), 1):
+            low = line.lower()
+            if not any(k in low for k in ("warp", "repitch", "complex")):
+                continue
+            if "warp_mode_" in low or line.strip().startswith("#"):
+                continue
+            assert not re.search(r"==\s*[46]", line), (
+                f"{rel}:{lineno} compares a bare warp literal: {line.strip()}")
+
     # And no consumer may re-introduce a bare warp-mode literal.
     banned = [
         ("propose_arrangement.py", r"warp_mode not in \(4, 6\)"),

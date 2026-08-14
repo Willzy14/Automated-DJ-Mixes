@@ -1292,7 +1292,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                 "  Playback policy: {:.3f} BPM, {}".format(
                     project_bpm,
                     ", ".join(
-                        f"{track.name[:18]}={'Re-Pitch' if effective_warp_modes[track.name] == 6 else 'Complex Pro'}"
+                        f"{track.name[:18]}="
+                        f"{'Re-Pitch' if effective_warp_modes[track.name] == WARP_MODE_REPITCH else 'Complex Pro'}"
                         for track in tracks
                     ),
                 )

@@ -56,12 +56,28 @@ def test_uniform_tempo_mix_does_not_move():
 
 def test_real_mix_is_far_better_than_one_frozen_tempo():
     """12.08.26: the mode rule froze 118 - the SLOWEST track - stretching
-    everything else by up to -5.6%, which Sam heard in the car."""
+    everything else by up to -5.6%, which Sam heard in the car.
+
+    Judged on FULL-SPAN stretch, not held tempo. Codex caught that the held
+    number understates the truth: a track keeps playing through the ramps at
+    either end, so it also experiences its neighbours' tempos. Held reads
+    0.94% here; the honest figure is 1.73%."""
+    from automated_dj_mixes.tempo_curve import span_stretch_percent
     tempos = solve_track_tempos(REAL_MIX)
-    worst = max(abs(s) for s in max_stretch_percent(REAL_MIX, tempos))
-    assert worst < 1.5, f"worst stretch {worst:.2f}% should beat the 5.6% baseline"
+    worst = max(abs(s) for s in span_stretch_percent(REAL_MIX, tempos))
+    assert worst < 2.0, f"full-span worst {worst:.2f}% should beat the 5.6% baseline"
     frozen_worst = max(abs((118.0 / n - 1) * 100) for n in REAL_MIX)
     assert worst < frozen_worst / 3
+
+
+def test_held_stretch_understates_the_truth():
+    """Pins the trap itself, so nobody reports the flattering number again."""
+    from automated_dj_mixes.tempo_curve import span_stretch_percent
+    tempos = solve_track_tempos(REAL_MIX)
+    held = max(abs(s) for s in max_stretch_percent(REAL_MIX, tempos))
+    span = max(abs(s) for s in span_stretch_percent(REAL_MIX, tempos))
+    assert span > held, "full-span must be >= held, and here it is strictly worse"
+    assert span > 1.5 > held
 
 
 def test_arc_follows_the_general_direction():
