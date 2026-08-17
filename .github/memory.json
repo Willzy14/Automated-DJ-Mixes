@@ -199,6 +199,35 @@
   ],
   "sessions": [
     {
+      "date": "2026-08-17",
+      "brain": "Claude",
+      "focus": "wiring audit (the analysis layer was locked out of the swap decision) + same-day rebuild of swap selection from Sam's hand-corrections",
+      "key_changes": [
+        "Found _mix_cues is the sole door into the swap decision and read only 4 signals; bass_out ablation changed 0/380 decisions",
+        "NEW Tests/test_alignment_baseline.py - 380-pair regression net pinning swap/overlap/progress/handoff_kind/paired_cues (the pre-existing golden test SKIPS on this machine)",
+        "Six signals wired behind CueConfig flags + --cue-signals: fills, phrase, deep, bassout, introloop, matched",
+        "Sam's matched tail/head rule: swap placed where outgoing's one-phrase-from-end meets incoming's one-phrase-from-start; wins 11/19 transitions",
+        "Intro loop resurrected - block (1) was gated 'not landmark_mode' and landmark mode is production, so it had never run",
+        "Outro/intro loop source fix - short sections never register as loop_windows, so loops were built from the wrong part of the track",
+        "Stale-sections root cause: ALS built 14:47 vs analysis re-run 15:24; rebuilt as Sections V3.als, mismatch 2/20 -> 0/20"
+      ],
+      "validation": "239 passed / 6 skipped; unalignable pairs 135 -> 11 of 380; handoff kinds 4 -> 6; median overlap 32 bars; median progress 0.50",
+      "outputs": [
+        "Test Project/14.08.26/Output/14.08.26 Mix V7.als (bounced by Sam)",
+        "Test Project/14.08.26/Output/14.08.26 Mix V8.als (rebuilt sections)",
+        "Documentation/Reviews/2026-08-17 Wiring Audit.md",
+        "Documentation/Plans/arranger-signal-rewiring/"
+      ],
+      "pending": [
+        "BINDING: Codex adversarial pass on ALL of today's work, Thursday 2026-08-21 (Codex + Kimi both out of quota today, so this shipped on one independent brain)",
+        "Sam's ear on Mix V7/V8 - overlaps run long (several at 64 bars vs his ~25-bar median); listen to T2/T5/T7/T9",
+        "Intro-loop partial lands LAST ([4][4][4][1]); Sam hand-built it LEADING ([1][2x6]) - same total and entry, different internal phrase grid",
+        "Double Dutch missing break - detector gap, measured 16-bar drum-energy dip the classifier did not act on",
+        "The 5 remaining unwired signals: kick_cues, major_cues, bass_regions, the 4 hint fields, loop_windows-as-anchor",
+        "Learning loop is a closed circuit (pair_history/genre_priors/ground-truth YAML change zero output); regress_section_detection returns PASS on an empty dir; nothing observes rendered audio"
+      ]
+    },
+    {
       "date": "2026-08-14",
       "brain": "Claude",
       "focus": "merged Codex/MiniMax parallel-worktree fixes, codified the Parallel Worktree Execution + two-brain-review pattern in Claude Code Brain, baked tempo-arc/WarpMode/reconciliation/held-out-replay into the /mix skill, ran the first live /mix build on Test Project/14.08.26",

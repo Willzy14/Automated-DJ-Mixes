@@ -189,6 +189,79 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
+### 2026-08-17 (Latest Session) - the wiring audit, and the day the analysis layer got connected
+**Brain:** Claude (Opus 5 + Sonnet 5), with MiniMax as parallel builder/reviewer; Codex and Kimi both out of quota
+
+**Focus**: Started as "fix the align_engine gap blocking the 14.08.26 mix". Became a whole-project
+wiring audit after Sam asked why so much built analysis was doing nothing - then a same-day rebuild
+of how the swap point is chosen, driven by his hand-corrections.
+
+**THE HEADLINE FINDING.** `_mix_cues()` (`align_engine.py`) is the ONLY door into the swap decision,
+and it read four things: `track_start`, `track_end`, section bounds, `musical_landmarks`. Everything
+else the analysis layer produces - bass regions, loop windows, 191 fills, 136 kick cues, the four
+mandated hint fields, last-kick - was computed, validated, drawn on review pictures, and locked out.
+**Measured by ablation: deleting `bass_in`/`bass_out`/`bass_out_is_end` changed 0 of 380 pair
+decisions.** Sam's named core model (the bass swap IS the mix point) had no influence at all; it
+LOOKED like it worked because `section:drop:end` is a decent proxy for bass-out (~50% of pairs).
+
+**Completed** (all flag-gated, defaults byte-identical to before):
+- `Documentation/Reviews/2026-08-17 Wiring Audit.md` - full signal inventory from 4 parallel audit
+  agents. Also found: `_handoff_candidates`/`_score_lineup`/`LIKE_ENERGY` never execute in
+  production; the learning loop (`pair_history`, `genre_priors`, ground-truth YAML) changes zero
+  output values; `regress_section_detection.py` returns PASS on an empty directory; a NEW
+  self-referential metric in the beatgrid gate (the independent `.asd` tick ruler is computed then
+  discarded); the pipeline never renders, so nothing observes the actual audio.
+- `Tests/test_alignment_baseline.py` - NEW regression net over all 380 ordered pairs, pinning
+  `handoff_bar_out`/`arr_offset_bars`/`overlap_bars`/`swap_progress`/`handoff_kind`/
+  `alignment_policy`/`paired_cues`. Proven able to fail. The pre-existing golden test SKIPS on this
+  machine (its 08.06.26 fixtures are absent), so there was effectively no net before this.
+- Six signals wired into the decision, each its own `CueConfig` flag + `--cue-signals` CLI token:
+  `fills`, `phrase` (any marker on a phrase line in the incoming head), `deep` (computed anchor for
+  a featureless long intro), `bassout` (Tier-1, weight 7), `introloop`, `matched`.
+- **Sam's matched tail/head rule** (`_search_matched_tail_head`) - the day's biggest change. The
+  swap is placed where the outgoing's one-phrase-from-END point MEETS the incoming's
+  one-phrase-from-START point, positioning the incoming so they coincide, instead of hunting for
+  cues that happen to line up. Reproduces his hand-correction exactly on the transition he
+  photographed: swap bar 137 -> 148, overlap 43 -> 32, outgoing tail after swap 51s -> 30s,
+  progress 0.37 -> 0.50. Chooses the swap on 11 of 19 transitions in the real mix.
+- Intro loop resurrected: `plan_fill_or_cut` block (1) was gated `if not landmark_mode` and landmark
+  mode IS production, so despite being written and correct it had NEVER run. Now fires at the
+  outgoing's last drop (5 of Sam's 6 reworked transitions land exactly there), with partial-bar fill
+  so a 13-bar gap fills as 13 not 12 (MiniMax, own worktree, reviewed).
+- Outro loop source fix: `pick_cue_bounded_drum_loop` only searched `loop_windows`, which upstream
+  never registers for a SHORT outro - so Nappp built its tail loop from INTRO material. Now
+  synthesizes a candidate from the outro section itself (MiniMax, own worktree, reviewed).
+  Same class of bug then found and fixed for the intro side.
+- Bass swap snapped onto exact section boundaries (`apply_automation.snap_to_section_boundary`) -
+  the "you're a bar out" Sam spotted on the timeline.
+- **Stale-sections root cause found and fixed.** `Sections V1.als` was built 14:47; the stem analysis
+  was re-run at 15:24. Every alignment decision was computed from the NEW 7-section analysis while
+  the clips came from the OLD 5-section one - they disagreed by a bar on exactly the tracks whose
+  analysis changed. NOT a logic bug. Rebuilt as `Sections V3.als`: ALS-vs-analysis mismatches 2/20 -> 0/20.
+
+**Measured outcome (rebuilt analysis, all flags on):** unalignable pairs **135 -> 11** of 380;
+distinct handoff kinds 4 -> 6; median overlap 32 bars; median swap progress 0.50. Suite 239 passed /
+6 skipped. Deliverable: `Test Project/14.08.26/Output/14.08.26 Mix V8.als` (V7 is the same logic on
+the pre-rebuild sections, which Sam took to bounce).
+
+**Key Learnings**:
+- **Sam's ear beat the measurements three times.** (1) A "musical end" detector built on a
+  body-relative threshold was really a KICK detector - it read BUTCH's 15s kick-less drum outro as
+  17.6s of tail; he caught it from the waveform. (2) A premise test that said "the rewiring cannot
+  rescue Revoloution" was too narrow - it only added OUTGOING cues, and the fix came from the
+  INCOMING side. (3) "The hints file is live" was wrong; `intro_skip_bars`/`loop_source_sec` are
+  dead behind `USE_ALIGN_ENGINE` too. Verify against audio, not just against code.
+- **A capability being referenced is not the same as it reaching a decision.** `loop_windows` and
+  `fills` were both genuinely "used" - as loop-material and as an exclusion mask - while being
+  structurally unable to influence the swap. `stem_detector.py:441` literally comments Sam's rule
+  ("kick dropouts mark changes and are good points to mix") above a value used only to AVOID those bars.
+- **`track_end` can never be a valid outgoing swap anchor.** Algebra forces `progress = 1.0`; across
+  245 alignments it had been chosen zero times. It sits in every track's cue set as dead weight.
+- Hand-corrections are the highest-value input available. Diffing `SW Tweaks` against the generated
+  ALS yielded the entry rule, the loop-source rule, and the matched tail/head rule - none of which
+  came out of analysis alone.
+
+
 ### 2026-08-14 (Latest Session) - first live /mix run on the updated skill, paused mid-arrangement
 **Brain:** Claude
 

@@ -395,6 +395,45 @@ def _inside_overlap(t: float, ov_start: float, ov_end: float) -> bool:
     return ov_start <= t <= ov_end - BOUNDARY_MARGIN
 
 
+#: How far a swap may be nudged to land exactly on a section boundary.
+#: One bar - the error Sam spotted by eye was consistently 1-4 beats.
+SECTION_SNAP_BEATS = 4.0
+
+
+def snap_to_section_boundary(beat: float, *tracks,
+                             tol: float = SECTION_SNAP_BEATS) -> float:
+    """Pull *beat* onto the nearest section boundary of any given track.
+
+    Sam, 2026-08-17, reading the Soulsearcher/Andrea Oliva transition off the
+    Ableton timeline: "for some reason the sections haven't lined up, and you're
+    like a bar out... if this had been nudged, drop_1 lined up with the outro,
+    that would have been a perfect mix. It's happened in lots of places."
+
+    Confirmed in his own hand-correction: every bass in/out he placed sits
+    EXACTLY on a section boundary - Revoloution's bass in at drop_1's start,
+    Ritmo's bass out at outro_1's start, Christoph's bass in at drop_1's start.
+    The generated versions were consistently 1-4 beats off the same boundaries,
+    which is audible as the section "being a bar out" against the other track.
+
+    Boundaries from BOTH tracks are candidates, because a transition is judged on
+    whether the two arrangements line up with each other, not on either alone.
+    Nudges at most one bar, so a swap deliberately placed away from a boundary is
+    left where it is.
+    """
+    best, best_dist = beat, tol + 1e-9
+    for track in tracks:
+        if track is None:
+            continue
+        for sec in track.sections:
+            for edge in (sec.get("arr_time"), sec.get("arr_end")):
+                if edge is None:
+                    continue
+                dist = abs(float(edge) - beat)
+                if dist < best_dist:
+                    best, best_dist = float(edge), dist
+    return best
+
+
 def find_bass_swap(out: TrackInfo, inc: TrackInfo,
                    ov_start: float, ov_end: float) -> tuple[float, str]:
     """Pick the bass-swap beat — the dual-cut point.
@@ -559,6 +598,15 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             swap, reason = clamped, f"align_engine {rep.get('handoff_kind', 'swap')}"
         else:
             swap, reason = find_bass_swap(out_t, in_t, ov_start, ov_end)
+
+        # Land the swap exactly on a section boundary of either track (Sam's
+        # "you're like a bar out" - see snap_to_section_boundary). The clamp
+        # above can leave it a few beats short of the boundary align_engine
+        # actually chose, and the margin arithmetic never re-checks structure.
+        snapped = snap_to_section_boundary(swap, out_t, in_t)
+        if snapped != swap and _inside_overlap(snapped, ov_start, ov_end):
+            print(f"  swap {swap:.0f} -> {snapped:.0f} (snapped onto section boundary)")
+            swap = snapped
         plan = TransitionPlan(out_t, in_t, ov_start, ov_end, swap, reason)
 
         # ── Rule 2: two-stage bass ───────────────────────────────────

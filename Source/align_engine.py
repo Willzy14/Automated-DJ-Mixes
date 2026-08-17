@@ -66,6 +66,61 @@ MAX_SKIP_BREAK_BARS = 8       # only skip a SHORT pre-drop break (Sam 2026-06-09
 LIKE_ENERGY = {"drop": "high", "build": "high", "break": "low", "fill": "low",
                "intro": "low", "outro": "low"}
 
+# --- signal wiring (2026-08-17) ------------------------------------------------
+# The 2026-08-17 audit found that `_mix_cues` is the ONLY door into the swap
+# decision, and that it reads just four things: track_start, track_end, section
+# bounds and musical_landmarks. Everything else the analysis layer produces was
+# loaded, drawn on review pictures, and locked out of the decision.
+#
+# Each newly-wired signal sits behind its own flag so exactly one can be enabled
+# per step and its effect diffed against Tests/test_alignment_baseline.py. That
+# per-signal attribution is a hard requirement of the plan, not a convenience:
+# wiring two at once makes a diff unreadable.
+FILL_CUE_WEIGHT = 3       # TIER 3 (event marker) - deliberately below a section
+                          # boundary (3-6) and below a landmark end (5). Fills are
+                          # numerous (191 across 20 tracks); they must be able to
+                          # corroborate and break ties, never outvote structure.
+BASS_OUT_CUE_WEIGHT = 7   # TIER 1 (bass ownership change) - ABOVE every section
+                          # boundary and landmark (max 6). "If there is a bass
+                          # switch, that's a perfect time to do the bass crossover
+                          # ... the bass switch is a basic mixing skill" (Sam,
+                          # 2026-08-17). Sparse by construction (at most one bar per
+                          # track), so there is no density risk to cap against —
+                          # unlike fills/kick_cues, this can never inflate a score
+                          # by count.
+
+
+@dataclass(frozen=True)
+class CueConfig:
+    """Which analysis signals are allowed to become alignment anchors.
+
+    Defaults reproduce pre-2026-08-17 behaviour exactly, so importing this module
+    changes nothing until a flag is flipped.
+    """
+    emit_fills: bool = False
+    #: Accept ANY marker sitting on a phrase line in the incoming's head as a swap
+    #: anchor, not only `drop` starts. Sam's "intro anchor" (2026-08-17).
+    incoming_phrase_anchors: bool = False
+    #: For a track whose intro carries no marker at all, compute an anchor one
+    #: phrase before its first real cue. Without this such a track cannot be mixed
+    #: into by anything. Sam's rule (2026-08-17).
+    deep_intro_anchor: bool = False
+    #: Wire the outgoing's real bass-out point as a Tier-1 swap anchor. Restores
+    #: Sam's core mixing model, which had zero influence on the live path before
+    #: this (measured: 0/380 decisions changed by ablating bass_out). 2026-08-17.
+    emit_bass_out: bool = False
+    #: Let the INCOMING-INTRO loop run on the landmark (production) path, bringing
+    #: the incoming in at the outgoing's LAST DROP start and looping its opening
+    #: bars to fill. Derived from Sam's SW Tweaks correction, 2026-08-17.
+    incoming_intro_loop: bool = False
+    #: Position the incoming so the outgoing's one-phrase-from-END point meets the
+    #: incoming's one-phrase-from-START point, instead of hunting for coinciding
+    #: cues. Sam's rule, 2026-08-17. Tried FIRST; falls through to the cue search.
+    matched_tail_head_swap: bool = False
+
+
+CUE_CONFIG = CueConfig()
+
 
 @dataclass
 class Track:
@@ -279,6 +334,26 @@ def _mix_cues(track: Track) -> dict[int, dict]:
         kind = landmark["type"]
         add(start, f"landmark:{kind}:start", 4)
         add(end, f"landmark:{kind}:end", 5)
+    if CUE_CONFIG.emit_fills:
+        # stem_detector records these as "kick dropouts mark changes and are good
+        # points to mix" — and until 2026-08-17 they reached ONLY the loop-exclusion
+        # mask below, i.e. the engine used Sam's own mix-point rule exclusively to
+        # AVOID those bars. 191 detected across the 14.08.26 corpus, 0 reachable.
+        # Both roles now coexist and do not conflict: anchor AT a fill boundary,
+        # never loop THROUGH one (the exclusion mask is untouched).
+        for start_bar, end_bar in track.fills:
+            add(math.floor(float(start_bar)), "fill:start", FILL_CUE_WEIGHT)
+            add(math.ceil(float(end_bar)), "fill:end", FILL_CUE_WEIGHT)
+    if CUE_CONFIG.emit_bass_out and track.bass_out_bar is not None and not track.bass_out_is_end:
+        # Sam's core model: the bass swap IS the mix point. Ablation-tested 2026-08-17
+        # to change 0 of 380 decisions before this — bass_out was loaded and never
+        # reached the swap decision. Weight ABOVE every section boundary (max 6) so a
+        # real bass-out wins both the anchor search and any tie with a coinciding
+        # section edge, rather than being silently absorbed by max(weight) as before.
+        # Excluded when bass_out_is_end (bass runs to the file's end): that bar is
+        # already track_end, which can never be a valid swap (progress always hits
+        # 1.0) — promoting its weight would not create a usable anchor, only noise.
+        add(round(float(track.bass_out_bar)), "bass_out", BASS_OUT_CUE_WEIGHT)
     return cues
 
 
@@ -324,6 +399,97 @@ def _incoming_intro_phrase_anchors(track: Track) -> list[int]:
     return sorted(anchors)
 
 
+PHRASE_POSITIONS = (8, 16, 32, 48)   # bars into the head where a natural cue normally sits
+PHRASE_ANCHOR_TOL = 2                # a marker this close to a phrase line counts as being on it
+
+
+def _phrase_anchors(cues: dict[int, dict], positions, limit_bar: float,
+                    tol: int = PHRASE_ANCHOR_TOL) -> list[int]:
+    """Bars where a REAL marker sits on (or beside) a phrase line.
+
+    Sam's rule, 2026-08-17: "not all tracks are gonna have bass switches at thirty
+    seconds in the intro... but you need to find a musical anchor, like sixteen or
+    thirty two bars — almost all tracks have a cue point there. One of them is gonna
+    be a break. One of them is gonna be... maybe it's just a fill at sixteen."
+
+    The KIND of marker is not what matters — its position is. The engine previously
+    accepted only `drop` starts as incoming anchors, which made it blind to a
+    perfectly good intro cue on any track whose bar-16/32 marker happens to be a
+    fill or a break start. Measured on the 14.08.26 corpus: 18/20 tracks carry a
+    marker within 2 bars of bar 16 or 32, and on six of them that marker is NOT a
+    drop, so the engine could not use it.
+
+    Returns the bar of the marker itself, not the idealised phrase line, so the
+    anchor stays on real musical evidence.
+    """
+    found: set[int] = set()
+    for position in positions:
+        if position > limit_bar:
+            continue
+        near = [bar for bar in cues if abs(bar - position) <= tol and 0 < bar <= limit_bar]
+        if near:
+            # closest to the phrase line wins; ties resolve to the earlier bar
+            found.add(min(near, key=lambda bar: (abs(bar - position), bar)))
+    return sorted(found)
+
+
+def _incoming_phrase_anchors(track: Track) -> list[int]:
+    """Natural intro cues at phrase positions — Sam's 'intro anchor'."""
+    return _phrase_anchors(_mix_cues(track), PHRASE_POSITIONS, MIXABLE_HEAD_BARS)
+
+
+#: One phrase back from a reference cue. ~30 s at 128 BPM, which is where Sam's
+#: rule came from, but expressed in BARS so it stays on the grid at any tempo
+#: (30 s is 17.5 bars at 140 BPM — his own correction, 2026-08-17).
+PHRASE_BACKSTEP_BARS = 16
+#: An intro is "deep" when its first usable anchor is further in than this.
+DEEP_INTRO_BARS = 32
+
+
+def _deep_intro_anchor(track: Track) -> int | None:
+    """A computed anchor one phrase before a long intro's first real cue.
+
+    Sam, 2026-08-17, on a track whose first 48 bars carry no detected marker:
+    "at 1:04 it has some hi-hats that come in, that would be a good mix point...
+    we can use the same theory we used for the start and end anchors — counting
+    back 30 seconds from the first break gets you to that mix point. So if there
+    is a huge intro with no cue points, find the first cue point and count back
+    from there."
+
+    Worked case, Andrea Oliva feat. Morchebba (120 BPM, 2.0 s/bar): first cue at
+    bar 48 = 1:36; one phrase back is bar 32 = 1:04 — exactly where he hears the
+    hats enter. The detector sees nothing there, so this anchor is COMPUTED, the
+    same way the outgoing tail fallback is, and for the same reason: the music
+    has a usable entry the analysis layer did not mark.
+
+    Without it such a track is not merely awkward but unmixable: with a first
+    anchor at bar 48 every overlap is >= 48 bars, and it only equals 48 at the
+    outgoing's own end where progress is 1.0 and always rejected. Measured on the
+    14.08.26 corpus: 0 of 19 tracks could mix into Morchebba.
+
+    Returns None when the intro is not deep, so normal tracks are untouched.
+    """
+    real = _incoming_phrase_anchors(track) or _incoming_drop_anchors(track)
+    if not real:
+        return None
+    first = min(real)
+    if first <= DEEP_INTRO_BARS:
+        return None
+    candidate = first - PHRASE_BACKSTEP_BARS
+    if candidate < PHRASE_BACKSTEP_BARS:
+        # Too close to the head to leave the incoming any establishing bars.
+        return None
+    # Prefer a real marker within a phrase of the computed point, exactly as the
+    # outgoing tail rule does — Sam: "there might be a kick dropout or a fill even
+    # if the bass stays in, that is still a marker and would probably line up."
+    cues = _mix_cues(track)
+    near = [bar for bar in cues
+            if abs(bar - candidate) <= PHRASE_ANCHOR_TOL and 0 < bar < first]
+    if near:
+        return min(near, key=lambda bar: (abs(bar - candidate), bar))
+    return int(candidate)
+
+
 def _incoming_swap_anchors(track: Track, policy=None) -> list[int]:
     """Candidate bass-ownership points on the incoming, earliest first.
 
@@ -334,6 +500,12 @@ def _incoming_swap_anchors(track: Track, policy=None) -> list[int]:
     """
     policy = policy or _DEFAULT_POLICY
     anchors = set(_incoming_drop_anchors(track))
+    if CUE_CONFIG.incoming_phrase_anchors:
+        anchors.update(_incoming_phrase_anchors(track))
+    if CUE_CONFIG.deep_intro_anchor:
+        deep = _deep_intro_anchor(track)
+        if deep is not None:
+            anchors.add(deep)
     if policy.allow_intro_phrase_swaps:
         anchors.update(_incoming_intro_phrase_anchors(track))
     return sorted(anchors)
@@ -370,10 +542,14 @@ def _align_pair_landmark_aware(o: Track, i: Track, policy=None) -> Alignment:
         bar for bar in _incoming_swap_anchors(i, policy)
         if bar not in set(drop_anchors)
     ]
-    chosen = _search_anchors(
-        drop_anchors, o, i, outgoing, incoming, window_start,
-        first_drop_bar, policy, rank_all=False,
-    )
+    if CUE_CONFIG.matched_tail_head_swap:
+        chosen = _search_matched_tail_head(
+            o, i, outgoing, incoming, window_start, first_drop_bar, policy)
+    if chosen is None:
+        chosen = _search_anchors(
+            drop_anchors, o, i, outgoing, incoming, window_start,
+            first_drop_bar, policy, rank_all=False,
+        )
     if chosen is None and rescue_anchors:
         chosen = _search_anchors(
             rescue_anchors, o, i, outgoing, incoming, window_start,
@@ -402,6 +578,102 @@ def _align_pair_landmark_aware(o: Track, i: Track, policy=None) -> Alignment:
         swap_progress=progress,
         notes=[f"paired cue score {weighted_score}; swap {progress:.0%} through overlap"],
     )
+
+
+def _search_matched_tail_head(o, i, outgoing, incoming, window_start,
+                              first_drop_bar, policy):
+    """Place the swap where the outgoing's TAIL point meets the incoming's HEAD point.
+
+    Sam's rule, 2026-08-17, reading Revoloution -> Harry Romero off the timeline:
+    "the bass move in Nic Fanciulli should be like thirty seconds from the end, and
+    the bass move in Harry Romero is in the correct place - thirty seconds from the
+    start - and then those should have aligned. The track should be starting way
+    later."
+
+    Every other path here works the opposite way round: it hunts for cues that happen
+    to COINCIDE and lets the track position fall out of whichever pair scores best.
+    That is too weak a signal when both tracks are long and sustained - there are many
+    plausible coincidences, and the engine took one that left 51 s of Revoloution
+    running bass-down after the swap. This computes the two points INDEPENDENTLY, one
+    per track, and positions the incoming so they meet.
+
+    Measured on that transition: swap moves bar 137 -> 148, overlap 43 -> 32 bars,
+    outgoing tail after the swap 51 s -> 30 s, progress 0.37 -> 0.50.
+
+    PHRASE_BACKSTEP_BARS is used for both sides - the same one-phrase constant the
+    outgoing tail anchor already uses, expressed in BARS so it stays on the grid at
+    any tempo (Sam's own correction: 30 s is 17.5 bars at 140 BPM).
+
+    Returns a candidate tuple in `_search_anchors`' shape, or None to fall through to
+    the existing search.
+    """
+    out_pt = int(round(o.n_bars - PHRASE_BACKSTEP_BARS))
+    in_pt = int(PHRASE_BACKSTEP_BARS)
+    if out_pt < window_start or out_pt <= 0 or in_pt <= 0:
+        return None
+
+    arr_offset = out_pt - in_pt
+    overlap = o.n_bars - arr_offset
+    if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+        return None
+    progress = in_pt / overlap if overlap else 1.0
+    if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
+        return None
+
+    # Prefer a real marker within a phrase of each computed point, exactly as the
+    # tail anchor does - Sam: a kick dropout or fill near the point "is still a
+    # marker and would probably line up". Falls back to the computed bar.
+    out_anchor = _nearest_cue(outgoing, out_pt, window_start, o.n_bars)
+    if out_anchor is None:
+        return None
+    arr_offset = out_anchor - in_pt
+    overlap = o.n_bars - arr_offset
+    if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+        return None
+    progress = in_pt / overlap if overlap else 1.0
+    if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
+        return None
+
+    # The computed point usually has NO cue sitting on it - that is the whole
+    # reason this rule exists (Revoloution has cues at 128/129/135/137/164 and
+    # nothing at 148). Synthesize the anchor into a COPY of the cue dict, never
+    # mutating the caller's: `_mix_cues.add()` merges by max(weight), so writing
+    # into the shared dict would silently promote a real cue elsewhere.
+    outgoing = dict(outgoing)
+    outgoing_cue = outgoing.get(out_anchor)
+    if outgoing_cue is None:
+        outgoing_cue = {"weight": BASS_OUT_CUE_WEIGHT,
+                        "labels": ["matched_tail"]}
+        outgoing[out_anchor] = outgoing_cue
+
+    pairs = []
+    weighted_score = 0
+    for incoming_bar, incoming_cue in incoming.items():
+        arrangement_bar = arr_offset + incoming_bar
+        match = outgoing.get(arrangement_bar)
+        if match is None:
+            continue
+        weighted_score += incoming_cue["weight"] + match["weight"]
+        pairs.append({
+            "arrangement_bar": arrangement_bar,
+            "outgoing_labels": match["labels"],
+            "incoming_source_bar": incoming_bar,
+            "incoming_labels": incoming_cue["labels"],
+        })
+    if not pairs:
+        return None
+
+    rank = (1, weighted_score, 2, -abs(progress - 0.65), overlap)
+    return (rank, arr_offset, overlap, out_anchor, outgoing_cue,
+            progress, pairs, weighted_score)
+
+
+def _nearest_cue(cues, target, lo, hi, tol=PHRASE_ANCHOR_TOL):
+    """The real cue bar closest to `target` within `tol`, else `target` itself."""
+    near = [bar for bar in cues if abs(bar - target) <= tol and lo <= bar <= hi]
+    if near:
+        return min(near, key=lambda bar: (abs(bar - target), bar))
+    return int(target) if lo <= target <= hi else None
 
 
 def _search_anchors(anchor_bars, o, i, outgoing, incoming, window_start,
@@ -650,10 +922,29 @@ def pick_clean_drum_loop(track, sec_start, sec_end, pref=4):
                 return True
         return False
     lengths = [pref] + [x for x in (4, 2) if x != pref]
+    # Same gap the outro fix closed (2026-08-17): upstream only emits a
+    # loop_window above its own minimum-length/cleanliness threshold, so a
+    # perfectly usable intro is often not registered at all. Christoph - The
+    # Rise carries windows at bars 56-61 and 89-96 and NOTHING in its 32-bar
+    # intro, so an intro-loop lookup found no material and the entry loop
+    # silently never fired. Sam's hand-correction looped that same intro's bars
+    # 0-2, so the audio was always fine - it was invisible to the search.
+    # Fall back to the requested span itself; vocal/fill blocking below still
+    # applies, so this only ever offers genuinely clean material.
+    windows = list(track.loop_windows)
+    if not any(ws < sec_end and we > sec_start for ws, we in windows):
+        windows.append((float(sec_start), float(sec_end)))
     for length in lengths:                           # prefer `pref` bars, then the other
-        for ws, we in track.loop_windows:
+        for ws, we in windows:
             lo, hi = max(ws, sec_start), min(we, sec_end)
-            for skip_first in (1, 0):                # skip the window's 1st bar first
+            # Skipping the window's first bar avoids the transient sitting on a
+            # mid-track window's edge — but at the very top of a track there is no
+            # preceding material to bleed in, and the opening bar IS the natural
+            # loop. Sam's hand-correction looped Christoph from bar 0 and
+            # Revoloution from bar 0; taking bar 1 instead put every entry exactly
+            # one bar late (measured: V5 entries 484/1304 vs his 480/1300).
+            skip_order = (0, 1) if lo <= 0 else (1, 0)
+            for skip_first in skip_order:
                 for s in range(int(lo) + skip_first, int(hi) - length + 1):
                     if not _blocked(s, s + length):
                         return (float(s), float(s + length))
@@ -689,7 +980,28 @@ def pick_cue_bounded_drum_loop(
         elif gap_bars % length != 0:
             continue
         lengths.append(length)
-    for start, end in sorted(track.loop_windows, key=lambda window: window[1],
+    # Synthesize a candidate window from the track's own outro SECTION (if any
+    # is recorded on track.sections). Upstream loop_window detection only emits
+    # windows above its minimum-length threshold, so a short outro is often
+    # missed entirely; without this the search falls back to the only
+    # registered window -- the intro -- and the loop ends up built from intro
+    # drums at the end of the track. Iterate track.sections in the same style
+    # as _last_drop_start / _pre_outro_label defined just below.
+    synthetic = None
+    for s in (getattr(track, "sections", None) or ()):
+        if s.get("label") != "outro":
+            continue
+        try:
+            ws, we = float(s["start_bar"]), float(s["end_bar"])
+        except (KeyError, TypeError, ValueError):
+            break
+        if ws < we and not blocked(ws, we):
+            cand = (ws, we)
+            if not any(ws == lw and we == le for lw, le in track.loop_windows):
+                synthetic = cand
+        break   # take the first outro section only
+    candidates_iter = list(track.loop_windows) + ([synthetic] if synthetic else [])
+    for start, end in sorted(candidates_iter, key=lambda window: window[1],
                              reverse=True):
         for length in lengths:
             candidates = [
@@ -849,8 +1161,22 @@ def plan_fill_or_cut(o, i, al, policy=None):
             intro_loop = True
 
     # (1) INCOMING-INTRO LOOP — enter at the outgoing's last drop; loop clean drums back.
+    #
+    # 2026-08-17: this block was gated `not landmark_mode`, and landmark mode IS the
+    # production path — so despite being written, commented and correct, it had never
+    # run in a real mix. Sam's hand-correction of V3 (`SW Tweaks`) reworked six
+    # transitions and five of them land the incoming on EXACTLY this target, the start
+    # of the outgoing's last drop:
+    #     T1 entry 480  = Nappp drop_3 start      T2 entry 1300 = Christoph drop_7 start
+    #     T3 entry 1896 = Revoloution drop_4      T4 entry 2380 = Harry Romero drop_4
+    #     T6 entry 3792 = Ritmo drop_3 start
+    # (T5 is the reasoned exception: BUTCH's last drop is 81 bars, so its start is far
+    # outside the overlap cap and he entered partway in instead — the existing
+    # loop_budget/overlap ceiling already expresses that constraint.)
+    # The flag lets landmark mode use it while keeping the default byte-identical.
     last_drop_o = _last_drop_start(o)
-    if not landmark_mode and last_drop_o is not None and intro_end > 0:
+    if ((not landmark_mode or CUE_CONFIG.incoming_intro_loop)
+            and last_drop_o is not None and intro_end > 0):
         fill_bars = round((arr - last_drop_o) / SNAP_BARS) * SNAP_BARS
         if fill_bars >= SNAP_BARS:
             chunk = pick_clean_drum_loop(i, 0, intro_end)            # intro drums (vocal-free)
@@ -863,21 +1189,33 @@ def plan_fill_or_cut(o, i, al, policy=None):
             if chunk:
                 clen = chunk[1] - chunk[0]
                 requested_reps = int(fill_bars // clen)
+                # Whole repeats alone can't span a gap that isn't a multiple of the
+                # chunk, so the incoming entered LATE by the remainder (Nappp ->
+                # Christoph: 13 bars needed, 4-bar chunk, 3 reps = 12b, 1 bar late).
+                # Sam filled that same transition EXACTLY by hand, so carry the
+                # remainder as a shorter final chunk — the sibling outgoing-tail loop
+                # below already does this via the same `partial_bars` field.
+                requested_partial = (fill_bars - requested_reps * clen
+                                     if CUE_CONFIG.incoming_intro_loop else 0.0)
                 reps = min(
                     requested_reps,
                     MAX_LOOP_REPEATS,
                     int(loop_budget // clen),
                 )
+                used = reps * clen
+                partial = min(requested_partial, max(0.0, loop_budget - used))
                 if reps >= 1:
-                    used = reps * clen
-                    loop_budget -= used
+                    loop_budget -= used + partial
                     intro_loop = True
                     specs.append(FillCutSpec(kind="incoming_intro", reps=reps,
                         source_start_bar=chunk[0], source_end_bar=chunk[1],
+                        partial_bars=float(partial),
                         target_marker_bar=float(last_drop_o),
-                        note=f"intro {src}-loop {clen:.0f}bx{reps} ({used:.0f}b) "
-                             f"back to outgoing last drop"
-                             + (" [safety-capped]" if reps < requested_reps else "")))
+                        note=f"intro {src}-loop {clen:.0f}bx{reps}"
+                             + (f"+{partial:.0f}b" if partial else "")
+                             + f" ({used + partial:.0f}b) back to outgoing last drop"
+                             + (" [safety-capped]" if (reps < requested_reps
+                                or partial < requested_partial) else "")))
 
     # (2) INTRO CUT — only if no intro loop and the intro lands in a low-energy break.
     if not intro_loop and first_drop_in and first_drop_in > 0 and intro_end > 0:

@@ -862,7 +862,11 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
             intro = in_track.sections[0] if in_track.sections else None
             if intro is not None:
                 chunk_beats = (fc.source_end_bar - fc.source_start_bar) * 4.0
-                fill = fc.reps * chunk_beats
+                # A gap that isn't a whole multiple of the chunk carries a shorter
+                # final chunk, exactly as the outgoing tail loop above does — without
+                # it the remainder is dropped and the incoming enters that late.
+                partial_beats = fc.partial_bars * 4.0
+                fill = fc.reps * chunk_beats + partial_beats
                 analysis.in_intro_loop = LoopSpec(
                     track_name=in_track.name,
                     source_beat_start=fc.source_start_bar * 4.0,
@@ -870,12 +874,24 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                     count=fc.reps,
                     insert_at_beat=float(intro["arr_time"] - fill),
                     clip_name="{}_intro_loop".format(intro.get("name", "intro")),
+                    tail_partial_beats=partial_beats,     # land exactly on the intro
                 )
                 in_track.arr_start = min(
                     in_track.arr_start, analysis.in_intro_loop.insert_at_beat
                 )
-                analysis.notes += "; intro loop {:.0f}bx{:d} (fill {:.0f}b before intro)".format(
-                    chunk_beats, fc.reps, fill)
+                # Entering early legitimately lengthens the overlap, so declare the
+                # named-cue lane exactly as the outgoing tail loop already does — the
+                # loop targets a NAMED cue (the outgoing's last drop), which is
+                # precisely what the 64-bar policy exists for. Without this the
+                # downstream validator rejects the result against the 48-bar standard
+                # cap even though the extension is the intended behaviour.
+                analysis.overlap_policy = "named_landmark_64"
+                if not analysis.loop_target_marker:
+                    analysis.loop_target_marker = "section:last_drop"
+                analysis.notes += "; intro loop {:.0f}bx{:d}{} (fill {:.0f}b before intro)".format(
+                    chunk_beats, fc.reps,
+                    "+{:.0f}b".format(partial_beats) if partial_beats else "",
+                    fill)
         elif fc.kind == "break_skip" and fc.skip_bars > 0:
             # Mix CHOICE (Sam 2026-06-09): the incoming enters on a short, no-kick
             # pre-drop break stacked on the outgoing's outro (a dead spot). Drop that
@@ -1796,7 +1812,31 @@ def main():
                              "lane under held-out test (see Heldout Replay "
                              "Plan V2)")
 
+    parser.add_argument("--cue-signals", default="",
+                        help="Comma-separated analysis signals to admit as alignment "
+                             "anchors, e.g. 'fills,phrase,deep,bassout,introloop,matched'. Default (empty) reproduces "
+                             "pre-2026-08-17 behaviour exactly. 'fills' emits detected "
+                             "drum fills as cues; 'phrase' accepts any marker on a "
+                             "phrase line in the incoming's head as a swap anchor, not "
+                             "only drop starts. Each is separately measurable against "
+                             "Tests/test_alignment_baseline.py")
+
     args = parser.parse_args()
+
+    if args.cue_signals.strip():
+        import align_engine
+        wanted = {s.strip() for s in args.cue_signals.split(",") if s.strip()}
+        known = {"fills": "emit_fills", "phrase": "incoming_phrase_anchors",
+                 "deep": "deep_intro_anchor", "bassout": "emit_bass_out",
+                 "introloop": "incoming_intro_loop",
+                 "matched": "matched_tail_head_swap"}
+        unknown = wanted - set(known)
+        if unknown:
+            parser.error(f"unknown cue signal(s): {', '.join(sorted(unknown))}; "
+                         f"known: {', '.join(sorted(known))}")
+        align_engine.CUE_CONFIG = align_engine.CueConfig(
+            **{known[name]: True for name in wanted})
+        print(f"[cue-signals] enabled: {', '.join(sorted(wanted))}")
 
     plan = propose_arrangement(
         als_path=args.als,
