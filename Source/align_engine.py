@@ -689,7 +689,28 @@ def pick_cue_bounded_drum_loop(
         elif gap_bars % length != 0:
             continue
         lengths.append(length)
-    for start, end in sorted(track.loop_windows, key=lambda window: window[1],
+    # Synthesize a candidate window from the track's own outro SECTION (if any
+    # is recorded on track.sections). Upstream loop_window detection only emits
+    # windows above its minimum-length threshold, so a short outro is often
+    # missed entirely; without this the search falls back to the only
+    # registered window -- the intro -- and the loop ends up built from intro
+    # drums at the end of the track. Iterate track.sections in the same style
+    # as _last_drop_start / _pre_outro_label defined just below.
+    synthetic = None
+    for s in (getattr(track, "sections", None) or ()):
+        if s.get("label") != "outro":
+            continue
+        try:
+            ws, we = float(s["start_bar"]), float(s["end_bar"])
+        except (KeyError, TypeError, ValueError):
+            break
+        if ws < we and not blocked(ws, we):
+            cand = (ws, we)
+            if not any(ws == lw and we == le for lw, le in track.loop_windows):
+                synthetic = cand
+        break   # take the first outro section only
+    candidates_iter = list(track.loop_windows) + ([synthetic] if synthetic else [])
+    for start, end in sorted(candidates_iter, key=lambda window: window[1],
                              reverse=True):
         for length in lengths:
             candidates = [

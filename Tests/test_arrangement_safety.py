@@ -324,6 +324,36 @@ def test_cue_bounded_loop_preserves_swap_and_later_target():
     assert chunk[1] - chunk[0] == 4
 
 
+def test_cue_bounded_loop_prefers_outro_section_when_no_window_registered():
+    """When the upstream loop_window detector only registered the intro (e.g.
+    the true short outro was below its minimum-length threshold), pick_cue_
+    bounded_drum_loop must still build its loop from the track's own outro
+    SECTION instead of silently falling back to intro drums at the end of the
+    track. Regression for the 2026-08-17 align_engine gap."""
+    from types import SimpleNamespace
+
+    from align_engine import pick_cue_bounded_drum_loop
+
+    track = SimpleNamespace(
+        loop_windows=[],                          # detector never registered the outro
+        vocal_regions=[],
+        fills=[],
+        sections=[
+            {"label": "intro", "start_bar": 0.0, "end_bar": 32.0},
+            {"label": "outro", "start_bar": 192.0, "end_bar": 208.0},
+        ],
+    )
+
+    chunk = pick_cue_bounded_drum_loop(track, gap_bars=16, required_boundary_bars=8)
+
+    assert chunk is not None
+    # The returned chunk must fall inside the outro's [start_bar, end_bar)
+    # span -- NOT inside the intro (bar 0..32).
+    assert chunk[0] >= 192.0 and chunk[1] <= 208.0, \
+        f"expected outro-anchored chunk, got {chunk}"
+    assert chunk[0] >= 32.0, "chunk must come from the outro, not the intro"
+
+
 def test_als_writer_fails_closed_when_post_write_validation_fails(tmp_path):
     from apply_loops import compress_als
 
