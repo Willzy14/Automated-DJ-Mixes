@@ -324,6 +324,36 @@ def test_cue_bounded_loop_preserves_swap_and_later_target():
     assert chunk[1] - chunk[0] == 4
 
 
+def test_cue_bounded_loop_prefers_outro_section_when_no_window_registered():
+    """When the upstream loop_window detector only registered the intro (e.g.
+    the true short outro was below its minimum-length threshold), pick_cue_
+    bounded_drum_loop must still build its loop from the track's own outro
+    SECTION instead of silently falling back to intro drums at the end of the
+    track. Regression for the 2026-08-17 align_engine gap."""
+    from types import SimpleNamespace
+
+    from align_engine import pick_cue_bounded_drum_loop
+
+    track = SimpleNamespace(
+        loop_windows=[],                          # detector never registered the outro
+        vocal_regions=[],
+        fills=[],
+        sections=[
+            {"label": "intro", "start_bar": 0.0, "end_bar": 32.0},
+            {"label": "outro", "start_bar": 192.0, "end_bar": 208.0},
+        ],
+    )
+
+    chunk = pick_cue_bounded_drum_loop(track, gap_bars=16, required_boundary_bars=8)
+
+    assert chunk is not None
+    # The returned chunk must fall inside the outro's [start_bar, end_bar)
+    # span -- NOT inside the intro (bar 0..32).
+    assert chunk[0] >= 192.0 and chunk[1] <= 208.0, \
+        f"expected outro-anchored chunk, got {chunk}"
+    assert chunk[0] >= 32.0, "chunk must come from the outro, not the intro"
+
+
 def test_als_writer_fails_closed_when_post_write_validation_fails(tmp_path):
     from apply_loops import compress_als
 
@@ -511,3 +541,68 @@ def test_report_landmark_geometry_moves_with_inserted_tail_loop():
     assert candidates[0]["arrangement_end_beat"] == 532.0
     assert candidates[0]["suggested_transition_finish_beat"] == 496.0
     assert candidates[0]["distance_from_current_swap_beats"] == 48.0
+
+
+def test_intro_loop_fills_a_fractional_remainder_exactly(monkeypatch):
+    """A gap that isn't a whole multiple of the chunk must still be filled EXACTLY.
+
+    Whole repeats alone leave the remainder unfilled, so the incoming enters that
+    many bars LATE (Nappp -> Christoph: 13 bars needed, 4-bar chunk, 3 reps = 12b,
+    1 bar late). The outgoing tail loop already carries the remainder as a shorter
+    final chunk via `partial_bars`; this pins the same for the intro loop, producer
+    (align_engine) through consumer (propose_arrangement).
+    """
+    import align_engine as AE
+    from types import SimpleNamespace
+    from propose_arrangement import OverlapAnalysis, TrackInfo, _plan_marker_loops
+
+    monkeypatch.setattr(AE, "CUE_CONFIG", AE.CueConfig(incoming_intro_loop=True))
+
+    outgoing = _track(
+        "out",
+        n_bars=128,
+        sections=[
+            {"name": "drop_1", "label": "drop", "start_bar": 0.0, "end_bar": 64.0},
+            {"name": "break_1", "label": "break", "start_bar": 64.0, "end_bar": 96.0},
+            {"name": "drop_2", "label": "drop", "start_bar": 96.0, "end_bar": 112.0},
+            {"name": "outro_1", "label": "outro", "start_bar": 112.0, "end_bar": 128.0},
+        ],
+    )
+    incoming = _track(
+        "in",
+        n_bars=128,
+        sections=[
+            {"name": "intro_1", "label": "intro", "start_bar": 0.0, "end_bar": 32.0},
+            {"name": "drop_1", "label": "drop", "start_bar": 32.0, "end_bar": 128.0},
+        ],
+        loop_windows=[(0.0, 32.0)],
+    )
+    # arr 109, last drop at 96 -> a 13-bar gap: 3 x 4b repeats + a 1-bar remainder.
+    alignment = AE.Alignment(
+        "out", "in", 109.0, "drop->drop", 0.0,
+        109.0, 19.0, 3, alignment_policy="paired_landmarks_v2",
+    )
+
+    spec = next(s for s in AE.plan_fill_or_cut(outgoing, incoming, alignment)
+                if s.kind == "incoming_intro")
+    chunk_bars = spec.source_end_bar - spec.source_start_bar
+    assert spec.reps * chunk_bars + spec.partial_bars == 13.0
+    assert spec.partial_bars > 0                      # the remainder is not dropped
+
+    # The consumer must place the incoming the FULL 13 bars early, and emit the
+    # partial as real audio rather than silently shortening the fill.
+    in_info = TrackInfo("in", [
+        {"name": "intro_1", "label": "intro", "arr_time": 436.0, "arr_end": 564.0,
+         "source_start_beats": 0.0, "source_end_beats": 128.0},
+    ], 436.0, 948.0)
+    analysis = OverlapAnalysis("out", "in", 1, 436.0, 512.0, 76.0, 19.0, "ok")
+    _plan_marker_loops(TrackInfo("out", [], 0.0, 512.0), in_info,
+                       SimpleNamespace(fills_cuts=[spec]), analysis)
+
+    loop = analysis.in_intro_loop
+    assert loop.tail_partial_beats == spec.partial_bars * 4.0
+    fill_beats = loop.count * (loop.source_beat_end - loop.source_beat_start) \
+        + loop.tail_partial_beats
+    assert fill_beats == 52.0                         # 13 bars, not 12
+    assert loop.insert_at_beat == 436.0 - 52.0        # enters on the outgoing's drop
+    assert in_info.arr_start == loop.insert_at_beat
