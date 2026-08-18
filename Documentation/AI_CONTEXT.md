@@ -189,7 +189,32 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-17 (Latest Session) - the wiring audit, and the day the analysis layer got connected
+### 2026-08-18 (Latest Session) - Double Dutch cache refresh closes the kick_cues property test
+**Brain:** Claude Sonnet 5.
+
+Regenerated the stale `SECTIONS_STEM`/`__stemenv` cache for `Sam Leagas - Double Dutch (Extended
+Mix) SW V1` under `Test Project/14.08.26/_Stem Analysis/` — it predated both `def5062` (raw not
+smoothed V3 kick presence) and `6a717f4` (mix-energy break detector), so `kick_cues` was still `[]`
+and the 32-48 break was still folded into `drop_1`, failing
+`Tests/test_kick_cues_property.py`'s Double Dutch parametrization. Re-ran `stem_detector.detect()`
+directly (`--kick-model`, `bpm=130.06`, `downbeat=0.02s` — unchanged, since neither fix touches grid
+detection) against the source WAV in `2.1. Finished Stem Mixes/Sam Leagas - Double Dutch [Sam
+Leagas] Project/MASTER RENDERS/`. Result: 6 sections with `break_1` at bars 32-48 (matches
+`6a717f4`'s corpus-sweep target exactly) and 2 `kick_cues` pairs (bars 47.5/48 and 95/96 — short raw
+V3 dropouts that were previously bridged away / report-only-landmark). This empirically confirms
+`538f4eb`'s correction is precise: `def5062` alone does not close the full 31-47 dip (raw V3
+confidence stays above threshold across that whole window), but it does surface the two shorter
+raw dropouts as real `kick_cues` — enough to satisfy the property test's `n_cues > 0`. All 20
+tracks in `test_kick_cues_property.py` pass. The two new candidate cue bars on Double Dutch's
+incoming side moved 6 pairs in the frozen alignment baseline (`test_alignment_baseline.py`'s own
+docstring: expected when a rewiring step lands) — read every diff, attributed each to the
+newly-surfaced `kick_dropout` landmark / break boundary, refreshed via its documented `--refresh`.
+Full suite: 265 passed, 6 skipped (was 1 failed pre-refresh). The regenerated `Test Project/`
+cache files themselves are gitignored (generated test data) and live only on disk / Dropbox — the
+only tracked-file change is `Documentation/Plans/arranger-signal-rewiring/baseline_alignments.json`.
+Files: `Documentation/Plans/arranger-signal-rewiring/baseline_alignments.json`. Commit `86faa6f`.
+
+### 2026-08-17 (Prior Session) - the wiring audit, and the day the analysis layer got connected
 **Brain:** Claude (Opus 5 + Sonnet 5), with MiniMax as parallel builder/reviewer; Codex and Kimi both out of quota
 
 **Focus**: Started as "fix the align_engine gap blocking the 14.08.26 mix". Became a whole-project
