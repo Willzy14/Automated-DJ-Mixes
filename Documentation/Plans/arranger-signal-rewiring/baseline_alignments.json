@@ -235,11 +235,12 @@
    "handoff_bar_out": 192.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "out": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
    "overlap_bars": 32.0,
    "paired_cue_bars": [
-    192
+    192,
+    208
    ],
    "status": "ok",
    "swap_progress": 0.5
@@ -516,19 +517,20 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 184.0,
-   "handoff_bar_out": 200.0,
+   "arr_offset_bars": 168.0,
+   "handoff_bar_out": 184.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "overlap_bars": 26.0,
+   "overlap_bars": 42.0,
    "paired_cue_bars": [
+    168,
     184,
     200
    ],
    "status": "ok",
-   "swap_progress": 0.615385
+   "swap_progress": 0.380952
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -1499,12 +1501,13 @@
    "handoff_bar_out": 184.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
    "paired_cue_bars": [
     168,
-    184
+    184,
+    200
    ],
    "status": "ok",
    "swap_progress": 0.457143
@@ -2500,19 +2503,20 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 168.0,
-   "handoff_bar_out": 184.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 152.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
+   "overlap_bars": 48.0,
    "paired_cue_bars": [
     168,
-    184
+    184,
+    200
    ],
    "status": "ok",
-   "swap_progress": 0.5
+   "swap_progress": 0.333333
   },
   {
    "error": "ValueError",
@@ -2785,12 +2789,13 @@
    "handoff_bar_out": 152.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
-   "n_paired_cues": 4,
+   "n_paired_cues": 5,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
    "paired_cue_bars": [
     136,
     152,
+    168,
     184,
     183
    ],
@@ -4501,12 +4506,13 @@
    "handoff_bar_out": 136.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
-   "n_paired_cues": 4,
+   "n_paired_cues": 5,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
    "paired_cue_bars": [
     120,
     136,
+    152,
     168,
     167
    ],
