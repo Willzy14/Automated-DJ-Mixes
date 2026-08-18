@@ -63,6 +63,14 @@ PHRASE_GRID = 4           # snap section boundaries to multiples of this many ba
 MIN_SECTION_BARS = 4      # merge sections shorter than this
 DROP_REL = 0.85           # a drop must reach this fraction of the track's FULLEST section energy
                           # (so a bass-heavy intro that isn't full-energy yet stays 'intro')
+MIX_ENERGY_BREAK_FRAC = 0.40   # a sustained, low-mix-energy stretch is a break/fill signal
+                                # (used both as a boundary-cue trigger and as a classification
+                                # trigger in _assign_labels' break/fill branch)
+MIN_ENERGY_RUN_BARS = 12  # sustained low-mix_energy stretches shorter than this aren't a real
+                          # break — they look like phrase-amplitude. 12 bars (~one phrase) was
+                          # the floor that cleanly separated the 16-bar break on Double Dutch
+                          # from the 1- and 8-bar mid-drop lulls; 4 bars was too aggressive
+                          # and re-cut those lulls as false breaks.
 OUTRO_LEAD_FRAC = 0.60    # outro starts where the LEAD (vocals+other) drops below this fraction
                           # of its body level near the end (kick+bass can keep running)
 MIN_OUTRO_BARS = 8        # don't push the outro start so late it leaves less than this
@@ -200,6 +208,25 @@ def _model_kick_presence_per_beat(wav, bpm, downbeat, n_beats, kick_model_path=N
     return fit(section_on), fit(landmark_on)
 
 
+def _energy_cues(mix_norm, downbeat, sec_per_bar):
+    """Sustained, low-mix-energy runs = boundary-worthy energy dips that the kick/bass
+    paths miss (e.g. a sub-EQ'd kick whose transient still reads 'on' -- the 31-47 dip on
+    Double Dutch). Per-bar run detection via _regions() with a MIN_ENERGY_RUN_BARS floor
+    so 1-3 bar phrase-amplitude lulls don't fire. Emits energy_drop/energy_return cue
+    pairs shaped like _kick_cues's kick_dropout/kick_return (so they drop straight into
+    the same raw_bounds list)."""
+    low = mix_norm < MIX_ENERGY_BREAK_FRAC
+    runs = _regions(low, min_len=MIN_ENERGY_RUN_BARS)
+    cues = []
+    for s, e in runs:
+        cues.append({"type": "energy_drop", "start_sec": round(downbeat + s * sec_per_bar, 2),
+                     "bar": float(s)})
+        if e < len(mix_norm):
+            cues.append({"type": "energy_return", "start_sec": round(downbeat + e * sec_per_bar, 2),
+                         "bar": float(e)})
+    return cues
+
+
 def _kick_cues(kick_on, bpm, downbeat):
     """Kick transitions = cue points, but only for kick-OUT runs of at least
     MIN_KICK_OUT_BEATS (a real drop, not syncopation). Each run yields a
@@ -293,15 +320,18 @@ def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start):
         elif first_drop is None:
             label = "intro" if i < n / 2 else "outro"
         elif i < first_drop:
-            # Pre-drop is intro — EXCEPT a long kick drop-out, which is a 'first
-            # break' (the drums all come out) even with no bass before it. A short
-            # kick-out stays a fill; an intro where the kick never drops stays intro.
+            # Pre-drop is intro — EXCEPT a long kick drop-out OR a sustained low-energy
+            # run, both of which are a 'first break' (the drums or whole mix come out)
+            # even with no bass before it. A short kick-out stays a fill; an intro where
+            # the kick never drops stays intro.
             is_long = (s["end_bar"] - s["start_bar"]) > FILL_MAX_BARS
-            label = "break" if (kf < 0.4 and is_long) else "intro"
+            label = "break" if ((kf < 0.4 or ef < MIX_ENERGY_BREAK_FRAC) and is_long) else "intro"
         elif is_drop(s):
             label = "drop"
-        elif bf < 0.4 or kf < 0.4:
-            # kick/bass out: short = fill, long = break (Sam's 6-bar rule of thumb)
+        elif bf < 0.4 or kf < 0.4 or ef < MIX_ENERGY_BREAK_FRAC:
+            # kick/bass out OR sustained low mix energy: short = fill, long = break
+            # (Sam's 6-bar rule of thumb). ef catches the EQ'd-kick case where the
+            # sub-band is gone but the click survives and kick_on stays True.
             label = "fill" if (s["end_bar"] - s["start_bar"]) <= FILL_MAX_BARS else "break"
         else:
             label = "build"
@@ -473,8 +503,10 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
             outro_start = cap
 
     # Boundaries: a kick drop-out + return marks a new 16-beat section (Sam's
-    # rule), plus bass on/off (bass-to-bass) and the outro lead-drop. Snapped to grid.
-    raw_bounds = [int(round(c["bar"])) for c in kick_cues]
+    # rule), plus bass on/off (bass-to-bass), sustained low-mix-energy runs
+    # (_energy_cues, per-bar), and the outro lead-drop. Snapped to grid.
+    energy_cues = _energy_cues(mix_norm, downbeat, sec_per_bar)
+    raw_bounds = [int(round(c["bar"])) for c in kick_cues + energy_cues]
     for b in range(1, n_bars):
         if presence["bass"][b] != presence["bass"][b - 1]:
             raw_bounds.append(b)
