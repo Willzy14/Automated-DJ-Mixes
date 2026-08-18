@@ -317,7 +317,29 @@ no visual verdict rendered.
   no, drop red-orange at alpha 0.15) covers bars 16-44 and therefore
   visually spans the entire dip.
 
-[VISUAL CHECK PENDING -- human to confirm from the actual rendered PNG]
+**Visual check (Claude, direct inspection of the rendered PNG,
+`Test Project/14.08.26/_Stem Analysis/DETECT_Sam Leagas - Double Dutch
+(Extended Mix) SW V1.png`):** the dip IS visible in the TRACK panel to
+the eye -- the grey `#222`/alpha-0.22 fill visibly compresses from a
+~0.6-1.0 envelope down to a ~0.15-0.4 band across bars 31-47/48, a
+clearly distinguishable shelf against the bars immediately before (16-30)
+and after (48+). So the raw signal a human would need is present in the
+picture. But nothing in the current rendering FLAGS it as notable: the
+dip sits entirely inside the alpha-0.15 red-orange "drop" background
+span that covers bars 16-44 (`drop_1`) and the amber "build" span at
+44-48 -- the same colour wash the strong bars 16-30 also get -- so
+visually the dip reads as "a slightly quieter patch of the same drop
+section," not as a distinct event. Contrast this with the fill_1 region
+at bars 92-96, which the picture DOES call out explicitly (opaque
+orange alpha-0.6 full-height span plus a "fill" text label): bars
+31-47 gets no equivalent callout -- no break-purple background, no
+orange fill span, no text label, no landmark strip. A careful viewer
+scanning the TRACK panel bar-by-bar could still notice the amplitude
+shelf, but the picture actively frames the region as an ordinary part
+of the drop rather than drawing attention to it, which matches Sam's
+point: the information is rendered, but only as raw amplitude, not as
+a flagged/labelled signal -- exactly the "computed but not used" gap
+this whole investigation is about.
 
 ---
 
