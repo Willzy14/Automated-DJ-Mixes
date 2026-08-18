@@ -425,7 +425,7 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     landmark_kick_on = kick_on.copy()
     kick_source = "stem-energy-threshold"
     if kick_model or kick_provider is not None:
-        kick_on, landmark_kick_on = _model_kick_presence_per_beat(
+        _section_kick_on, _raw_kick_on = _model_kick_presence_per_beat(
             wav, bpm, downbeat, n_bars * 4,
             kick_model_path=kick_model_path,
             kick_model_device=kick_model_device,
@@ -433,6 +433,11 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
             drums_mono=model_drums,
             drums_sr=model_drums_sr,
         )
+        kick_on = _raw_kick_on            # THE FIX -- was the smoothed/section signal.
+                                           # Classification/boundary-cutting now sees the
+                                           # same un-bridged signal the default stem-energy
+                                           # path already uses correctly.
+        landmark_kick_on = _raw_kick_on   # unchanged in effect -- was already raw before this fix
         kick_source = "kick-detector-v3"
     kick_on_bar = np.array([kick_on[b * 4:(b + 1) * 4].mean() >= 0.5 for b in range(n_bars)])
     kick_cues = _kick_cues(kick_on, bpm, downbeat)

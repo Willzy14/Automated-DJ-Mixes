@@ -53,6 +53,27 @@ class FakeKickProvider:
         return on
 
 
+class FakeRawVsSectionKickProvider:
+    """Provider whose raw and section signals differ.
+
+    `raw` carries a real 16-beat kick-out gap in the middle (beats 16-31 False,
+    the rest True) -- the signal classification SHOULD cut on. `section` is the
+    smoothed/debounced view that bridges that gap (all True) -- meant only as a
+    stable coarse clock, never for boundary-cutting. With the fix in place,
+    classification/boundary-cutting must read `raw`, so the gap survives as a
+    real kick_dropout/kick_return cue pair. Under the buggy wiring (section ->
+    kick_on) the gap is invisible and no cues are emitted.
+    """
+
+    def presence_per_beat(self, wav_path, bpm, downbeat, n_beats):
+        from kick_model_adapter import KickPresenceReadout
+
+        raw = np.ones(n_beats, dtype=bool)
+        raw[16:32] = False
+        section = np.ones(n_beats, dtype=bool)
+        return KickPresenceReadout(raw=raw, section=section)
+
+
 def test_flag_on_fake_provider_overrides_only_kick_presence(monkeypatch, tmp_path):
     monkeypatch.setattr(stem_detector, "_separate_envelopes", lambda *_args, **_kwargs: _fake_envs())
     sys.modules.pop("kick_model_adapter", None)
@@ -78,6 +99,33 @@ def test_flag_on_fake_provider_overrides_only_kick_presence(monkeypatch, tmp_pat
     assert res["signals"]["musical_landmarks"][0]["end_beat"] == 24
     assert res["signals"]["fills"] == []
     assert "kick_model_adapter" not in sys.modules
+
+
+def test_kick_classification_uses_raw_not_section_signal(monkeypatch, tmp_path):
+    monkeypatch.setattr(stem_detector, "_separate_envelopes", lambda *_args, **_kwargs: _fake_envs())
+    sys.modules.pop("kick_model_adapter", None)
+
+    wav = tmp_path / "Track.wav"
+    wav.write_bytes(b"placeholder")
+
+    res = stem_detector.detect(
+        wav,
+        tmp_path,
+        bpm=120.0,
+        downbeat=0.0,
+        make_viz=False,
+        write_json=False,
+        kick_provider=FakeRawVsSectionKickProvider(),
+    )
+
+    cues = [(c["type"], c["beat"]) for c in res["signals"]["kick_cues"]]
+    # Raw gap [16:32] -> kick_dropout at the start of the run (beat 16) and
+    # kick_return at the first True beat after it (beat 32). If the smoothed/
+    # section signal (all True) were being used instead, the gap would be
+    # invisible and neither cue would appear.
+    assert ("kick_dropout", 16) in cues
+    assert ("kick_return", 32) in cues
+    assert res["signals"]["kick_presence_source"] == "kick-detector-v3"
 
 
 def test_adapter_defaults_and_smoothing_do_not_import_torch():
