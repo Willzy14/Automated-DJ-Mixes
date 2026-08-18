@@ -612,60 +612,206 @@ def _search_matched_tail_head(o, i, outgoing, incoming, window_start,
     if out_pt < window_start or out_pt <= 0 or in_pt <= 0:
         return None
 
-    arr_offset = out_pt - in_pt
-    overlap = o.n_bars - arr_offset
-    if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
-        return None
-    progress = in_pt / overlap if overlap else 1.0
-    if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
-        return None
+    # Search for a REAL cross-track coincidence anywhere within a phrase of the
+    # computed point, using the same pairing mechanism `_search_anchors` uses:
+    # for every outgoing anchor in range, does any incoming cue land on a real
+    # outgoing cue once the incoming is shifted by arr_offset = out_anchor -
+    # in_pt? The original code looked at most PHRASE_ANCHOR_TOL (2) bars from
+    # the target and FABRICATED a synthetic cue if nothing real was there.
+    # Measured on the 14.08.26 corpus, this loses two real transitions:
+    #   * Cevin Fisher -> Vente: real kick-dropout/fill sits 8 bars from target.
+    #   * Christoph -> A Studio SOS: real doubly-confirmed break/drop pair is
+    #     12 bars from target.
+    # Sam, 2026-08-17: "widen that search... there should always be a section
+    # somewhere... sections always line up with each other."
+    SEARCH_RADIUS = 24  # bars either side of the phrase target. Wide enough to
+                        # catch both real cases above (8 and 12 bars away);
+                        # narrow enough to stay "roughly a phrase from each
+                        # end", not anywhere on the track.
 
-    # Prefer a real marker within a phrase of each computed point, exactly as the
-    # tail anchor does - Sam: a kick dropout or fill near the point "is still a
-    # marker and would probably line up". Falls back to the computed bar.
-    out_anchor = _nearest_cue(outgoing, out_pt, window_start, o.n_bars)
-    if out_anchor is None:
-        return None
-    arr_offset = out_anchor - in_pt
-    overlap = o.n_bars - arr_offset
-    if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
-        return None
-    progress = in_pt / overlap if overlap else 1.0
-    if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
-        return None
+    # Build a search-space outgoing dict that also includes a synthesized
+    # cue at the computed target point. The original code only searched
+    # out_anchors that already had cues; that loses the Cevin Fisher ->
+    # Vente case, where the real coincidence (kick-dropout/fill at bar 168)
+    # is 8 bars from the target and the only out_anchor that yields a valid
+    # arr_offset is the synthesized one at the target itself (176). The
+    # synthesized cue lets the search reach arrangement_bar 168 through a
+    # valid arr_offset (= 176 - 16 = 160, which makes incoming_bar 8 land on
+    # outgoing[168]).
+    search_outgoing = dict(outgoing)
+    if out_pt not in search_outgoing:
+        search_outgoing[out_pt] = {"weight": BASS_OUT_CUE_WEIGHT,
+                                   "labels": ["matched_tail"]}
 
-    # The computed point usually has NO cue sitting on it - that is the whole
-    # reason this rule exists (Revoloution has cues at 128/129/135/137/164 and
-    # nothing at 148). Synthesize the anchor into a COPY of the cue dict, never
-    # mutating the caller's: `_mix_cues.add()` merges by max(weight), so writing
-    # into the shared dict would silently promote a real cue elsewhere.
-    outgoing = dict(outgoing)
-    outgoing_cue = outgoing.get(out_anchor)
-    if outgoing_cue is None:
-        outgoing_cue = {"weight": BASS_OUT_CUE_WEIGHT,
-                        "labels": ["matched_tail"]}
-        outgoing[out_anchor] = outgoing_cue
-
-    pairs = []
-    weighted_score = 0
-    for incoming_bar, incoming_cue in incoming.items():
-        arrangement_bar = arr_offset + incoming_bar
-        match = outgoing.get(arrangement_bar)
-        if match is None:
+    candidates = []
+    for out_anchor in search_outgoing:
+        if out_anchor < window_start or out_anchor > o.n_bars:
             continue
-        weighted_score += incoming_cue["weight"] + match["weight"]
-        pairs.append({
-            "arrangement_bar": arrangement_bar,
-            "outgoing_labels": match["labels"],
-            "incoming_source_bar": incoming_bar,
-            "incoming_labels": incoming_cue["labels"],
-        })
-    if not pairs:
-        return None
+        if abs(out_anchor - out_pt) > SEARCH_RADIUS:
+            continue
+        arr_offset = out_anchor - in_pt
+        overlap = o.n_bars - arr_offset
+        if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+            continue
+        progress = in_pt / overlap if overlap else 1.0
+        if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
+            continue
+        # For each incoming cue that lands on a REAL outgoing cue (the
+        # arrangement_bar is the coincidence -- the bar in the outgoing's
+        # timeline where this incoming cue sits), emit a candidate whose swap
+        # bar is the arrangement_bar itself. The original code used the
+        # out_anchor as the swap bar and then checked for pairs as a
+        # side effect; that loses Cevin Fisher -> Vente, where the real
+        # coincidence (a kick-dropout/fill) sits at arrangement_bar 168 but
+        # the only out_anchor within range that yields a valid arr_offset is
+        # the synthesized target at 176.
+        #
+        # NOTE: match and pair-list lookups use the ORIGINAL outgoing dict,
+        # not search_outgoing. The synthesized cue is only a search starting
+        # point (an out_anchor to find valid arr_offsets); it must NOT be a
+        # match target itself, because the target is by construction NOT a
+        # real cross-track coincidence -- it is a computed point.
+        for incoming_bar, incoming_cue in incoming.items():
+            arrangement_bar = arr_offset + incoming_bar
+            match = outgoing.get(arrangement_bar)
+            if match is None:
+                continue
+            # track_end is the end of the outgoing file, not a real musical
+            # coincidence -- it always exists at n_bars and would otherwise
+            # dominate the ranking whenever a drop/incoming cue happens to
+            # land there. Skip it; the rule is "sections always line up with
+            # each other", not "the file end lines up with a drop".
+            if "track_end" in match["labels"]:
+                continue
+            swap_arr_offset = arrangement_bar - incoming_bar
+            swap_overlap = o.n_bars - swap_arr_offset
+            if not PHRASE_GRID <= swap_overlap <= MAX_OVERLAP_BARS:
+                continue
+            swap_progress = incoming_bar / swap_overlap if swap_overlap else 1.0
+            if not MIN_SWAP_PROGRESS <= swap_progress <= MAX_SWAP_PROGRESS:
+                continue
+            # Build the full pair list for THIS candidate (all incoming cues
+            # that land on a real outgoing cue given swap_arr_offset).
+            candidate_pairs = []
+            candidate_score = 0
+            for ib2, ic2 in incoming.items():
+                ab2 = swap_arr_offset + ib2
+                m2 = outgoing.get(ab2)
+                if m2 is None or "track_end" in m2["labels"]:
+                    continue
+                candidate_score += ic2["weight"] + m2["weight"]
+                candidate_pairs.append({
+                    "arrangement_bar": ab2,
+                    "outgoing_labels": m2["labels"],
+                    "incoming_source_bar": ib2,
+                    "incoming_labels": ic2["labels"],
+                })
+            if not candidate_pairs:
+                continue
+            dist_from_target = abs(arrangement_bar - out_pt)
+            # Rank by the highest weighted_score (a doubly-confirmed
+            # break/drop pair beats a single fill coincidence), then closest
+            # to the target, then smaller overlap. The fallback competes on
+            # the same axis (see below) so a real coincidence only wins when
+            # it actually scores higher than the fallback's synthesized cue.
+            rank = (candidate_score, -dist_from_target, swap_overlap)
+            candidates.append((rank, swap_arr_offset, swap_overlap,
+                               arrangement_bar, match, swap_progress,
+                               candidate_pairs, candidate_score))
 
-    rank = (1, weighted_score, 2, -abs(progress - 0.65), overlap)
-    return (rank, arr_offset, overlap, out_anchor, outgoing_cue,
-            progress, pairs, weighted_score)
+    # FALLBACK: nothing real anywhere in the search radius, OR every real
+    # candidate scores below the fallback. Synthesize a cue at the target
+    # (or use a real cue within PHRASE_ANCHOR_TOL of it) and include it as
+    # a candidate so the ranking can compare it against any real
+    # coincidences that were found. This is the ORIGINAL code's behaviour,
+    # unchanged in spirit: a real cue within PHRASE_ANCHOR_TOL of the
+    # target wins; otherwise we fabricate a `matched_tail` cue into a COPY
+    # of the outgoing dict (never the caller's: `_mix_cues.add()` merges by
+    # max(weight), so a mutation would silently promote a real cue
+    # elsewhere). track_end is excluded from the fallback's pair list to
+    # stay consistent with the new search loop above.
+    fb_out_anchor = _nearest_cue(outgoing, out_pt, window_start, o.n_bars)
+    if fb_out_anchor is not None:
+        fb_arr_offset = fb_out_anchor - in_pt
+        fb_overlap = o.n_bars - fb_arr_offset
+        fb_progress = in_pt / fb_overlap if fb_overlap else 1.0
+        if (PHRASE_GRID <= fb_overlap <= MAX_OVERLAP_BARS
+                and MIN_SWAP_PROGRESS <= fb_progress <= MAX_SWAP_PROGRESS):
+            fb_outgoing = dict(outgoing)
+            fb_out_cue = fb_outgoing.get(fb_out_anchor)
+            if fb_out_cue is None:
+                fb_out_cue = {"weight": BASS_OUT_CUE_WEIGHT,
+                              "labels": ["matched_tail"]}
+                fb_outgoing[fb_out_anchor] = fb_out_cue
+            fb_pairs = []
+            fb_score = 0
+            # The fallback's pair list counts ONLY the synthesized cue
+            # itself (incoming's in_pt landing on the target). If we let it
+            # also pick up real cues that happen to land near the target --
+            # e.g. arrangement_bar 168 for Cevin Fisher -> Vente -- it
+            # "steals" the real coincidence and inflates its score past
+            # the real candidate's, so the synthesized target wins over a
+            # real cross-track coincidence it should have lost to.
+            #
+            # fb_score is the synthesized cue's weight plus the incoming
+            # cue's weight at in_pt, capped at a fill-level weight (3).
+            # The cap prevents a high-weight incoming cue (e.g. a drop
+            # start at weight 6) from inflating the fallback past a real
+            # coincidence: Cevin -> Vente has no incoming cue at bar 16
+            # (fallback scores 7), Revoloution's incoming bar 16 is a
+            # fill (weight 3, fallback scores 10), and Christoph's
+            # incoming bar 16 is a drop start (weight 6, capped to 3,
+            # fallback scores 10). A real cross-track coincidence only
+            # needs to score above this to win:
+            #   Cevin 168 (score 10) > fb 176 (7)        -> 168 wins
+            #   Christoph 196 (score 12) > fb 184 (10)    -> 196 wins
+            #   Revoloution 137 (score 8) < fb 148 (10)   -> 148 wins
+            fb_score = BASS_OUT_CUE_WEIGHT
+            for ib, ic in incoming.items():
+                ab = fb_arr_offset + ib
+                if ab != fb_out_anchor:
+                    continue
+                m = fb_outgoing.get(ab)
+                if m is None or "track_end" in m["labels"]:
+                    continue
+                # Cap the incoming contribution at 3 (fill level). The
+                # fallback is a computed anchor, not a real coincidence;
+                # it should not get full credit for a high-weight
+                # incoming cue like a drop start. A real cross-track
+                # pair at the same swap bar would get that full credit.
+                fb_score += min(ic["weight"], 3)
+                fb_pairs.append({
+                    "arrangement_bar": ab,
+                    "outgoing_labels": m["labels"],
+                    "incoming_source_bar": ib,
+                    "incoming_labels": ic["labels"],
+                })
+            if not fb_pairs:
+                # No incoming cue lands on the synthesized target; the
+                # fallback is just a bare synthesized cue with no pairs.
+                # Still emit it as a candidate so the ranking can decide.
+                fb_pairs.append({
+                    "arrangement_bar": fb_out_anchor,
+                    "outgoing_labels": fb_out_cue["labels"],
+                    "incoming_source_bar": in_pt,
+                    "incoming_labels": ["synthesized_target"],
+                })
+            if fb_pairs:
+                # Rank on the same axis as the real-coincidence candidates
+                # so the two compete purely on score. The fallback's own
+                # swap bar is the target (dist_from_target = 0) so it wins
+                # any distance tie; weighted_score from the synthesized
+                # cue + any real cues that happen to land on it is what
+                # makes it viable.
+                fb_rank = (fb_score, 0, fb_overlap)
+                candidates.append((fb_rank, fb_arr_offset, fb_overlap,
+                                   fb_out_anchor, fb_out_cue, fb_progress,
+                                   fb_pairs, fb_score))
+
+    if candidates:
+        return max(candidates, key=lambda c: c[0])
+
+    return None
 
 
 def _nearest_cue(cues, target, lo, hi, tol=PHRASE_ANCHOR_TOL):

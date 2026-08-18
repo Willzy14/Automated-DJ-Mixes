@@ -606,3 +606,74 @@ def test_intro_loop_fills_a_fractional_remainder_exactly(monkeypatch):
     assert fill_beats == 52.0                         # 13 bars, not 12
     assert loop.insert_at_beat == 436.0 - 52.0        # enters on the outgoing's drop
     assert in_info.arr_start == loop.insert_at_beat
+
+
+def test_matched_tail_head_search_finds_real_coincidence_farther_than_tolerance(monkeypatch):
+    """Widened search for real cross-track coincidences near the phrase target.
+
+    Pre-fix `_search_matched_tail_head` snapped to the nearest real cue
+    within PHRASE_ANCHOR_TOL (2 bars) of the target and fabricated a
+    `matched_tail` cue there otherwise. The widened search should instead
+    reach a real cross-track coincidence up to SEARCH_RADIUS (24 bars)
+    away, as long as the same `arr_offset` makes some incoming cue land
+    on a real outgoing cue.
+
+    Constructed case: outgoing n_bars=200, PHRASE_BACKSTEP_BARS=16
+    -> target=184. A real landmark (kick-dropout:end, weight 5) sits
+    at bar 196, 12 bars from the target. The incoming has a drop:start
+    at bar 16 (weight 6) that lands on that landmark when the incoming
+    is shifted by arr_offset=180 (= 196 - 16). Nothing real sits
+    within 2 bars of the target itself, so the pre-fix code would
+    fabricate at 184; the widened search should instead pick 196.
+    """
+    import align_engine as AE
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        AE, "CUE_CONFIG",
+        AE.CueConfig(matched_tail_head_swap=True, emit_fills=True),
+    )
+
+    outgoing = _track(
+        "out",
+        n_bars=200,
+        sections=[
+            {"name": "drop_1", "label": "drop",
+             "start_bar": 0.0, "end_bar": 180.0},
+            {"name": "break_1", "label": "break",
+             "start_bar": 180.0, "end_bar": 200.0},
+        ],
+    )
+    # Real landmark at bar 196 -- the cross-track coincidence target.
+    outgoing.musical_landmarks = [{
+        "type": "kick_dropout",
+        "start_bar": 192.0,
+        "end_bar": 196.0,
+    }]
+    incoming = _track(
+        "in",
+        n_bars=200,
+        sections=[
+            {"name": "drop_1", "label": "drop",
+             "start_bar": 16.0, "end_bar": 200.0},
+        ],
+    )
+
+    alignment = AE.align_pair(outgoing, incoming)
+
+    # The widened search must reach the real coincidence at 196, not
+    # fabricate at the computed target (184).
+    assert abs(alignment.handoff_bar_out - 196.0) < 0.5, (
+        f"expected swap at 196 (real kick-dropout:end coincidence), "
+        f"got {alignment.handoff_bar_out:.1f}"
+    )
+    # The swap's outgoing cue must be the REAL landmark, not the
+    # fabricated matched_tail cue at the target.
+    assert "matched_tail" not in alignment.handoff_kind, (
+        f"swap kind should be a real coincidence, not the fabricated "
+        f"fallback; got {alignment.handoff_kind!r}"
+    )
+    assert "kick_dropout" in alignment.handoff_kind, (
+        f"expected handoff_kind to reference the real landmark; "
+        f"got {alignment.handoff_kind!r}"
+    )
