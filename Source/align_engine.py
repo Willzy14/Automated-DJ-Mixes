@@ -88,6 +88,13 @@ BASS_OUT_CUE_WEIGHT = 7   # TIER 1 (bass ownership change) - ABOVE every section
                           # track), so there is no density risk to cap against —
                           # unlike fills/kick_cues, this can never inflate a score
                           # by count.
+HINT_CUE_WEIGHT = 7        # TIER 1 (hand-authored beat-grid hint) - same tier as
+                          # BASS_OUT_CUE_WEIGHT. Sam's per-track DJ notes from
+                          # the visual pass (first_drop / first_break / outro_start
+                          # / last_bass_drop). Off by default — gated by CueConfig.emit_hint_fields.
+                          # Populated unconditionally from track_hints.json when
+                          # available (track_hints.json is gitignored and may be
+                          # absent), so an empty corpus is automatic no-op.
 
 
 @dataclass(frozen=True)
@@ -117,6 +124,13 @@ class CueConfig:
     #: incoming's one-phrase-from-START point, instead of hunting for coinciding
     #: cues. Sam's rule, 2026-08-17. Tried FIRST; falls through to the cue search.
     matched_tail_head_swap: bool = False
+    #: Wire Sam's hand-authored per-track hints (first_drop / first_break /
+    #: outro_start / last_bass_drop) as Tier-1 swap anchors. The Track fields
+    #: are ALWAYS populated when hint JSON data exists (off-default for every
+    #: corpus without a track_hints.json file), so this flag only gates
+    #: emission into the cue dict. Sparse by construction (4 cues per track max)
+    #: and independently attributable via Tests/test_alignment_baseline.py.
+    emit_hint_fields: bool = False
 
 
 CUE_CONFIG = CueConfig()
@@ -138,6 +152,14 @@ class Track:
     vocal_regions: list = field(default_factory=list)   # (start_bar,end_bar) vocals present
     fills: list = field(default_factory=list)           # (start_bar,end_bar) kick-out fills
     musical_landmarks: list = field(default_factory=list)
+    # Hand-authored hint points (sec→bar) from track_hints.json. Always populated
+    # when the JSON carries a value (populated by compute_aligned_positions
+    # bridging TrackInfo.first_drop_sec et al. through _sec_to_bar); default None
+    # for any track whose hint JSON omits a key, so an absent file is a no-op.
+    first_drop_bar: float | None = None
+    first_break_bar: float | None = None
+    outro_start_bar: float | None = None
+    last_bass_drop_bar: float | None = None
 
     def boundaries(self) -> list[tuple[float, str]]:
         """(bar, label) for every section start — the markers."""
@@ -354,6 +376,23 @@ def _mix_cues(track: Track) -> dict[int, dict]:
         # already track_end, which can never be a valid swap (progress always hits
         # 1.0) — promoting its weight would not create a usable anchor, only noise.
         add(round(float(track.bass_out_bar)), "bass_out", BASS_OUT_CUE_WEIGHT)
+    if CUE_CONFIG.emit_hint_fields:
+        # Hand-authored per-track DJ notes from the visual pass (track_hints.json,
+        # gitignored, may be absent). Populated unconditionally on Track when the
+        # JSON carries values (see compute_aligned_positions bridge below); the
+        # `emit_hint_fields` gate only decides whether the cue dict sees them.
+        # Same Tier-1 weight as bass_out so a hand-marked swap point wins both the
+        # anchor search and any tie with a coinciding section edge — they're on
+        # the same footing because Sam is the authority for both. Sparse (4 cues
+        # max per track), so no density cap is needed.
+        for position, label in (
+            (track.first_drop_bar, "first_drop"),
+            (track.first_break_bar, "first_break"),
+            (track.outro_start_bar, "outro_start"),
+            (track.last_bass_drop_bar, "last_bass_drop"),
+        ):
+            if position is not None:
+                add(round(float(position)), f"hint:{label}", HINT_CUE_WEIGHT)
     return cues
 
 
@@ -1397,6 +1436,26 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
                 f"align_engine.compute_aligned_positions: no stem JSON for track '{nm}' "
                 f"in {stem_dir}. Run the stem detector (--stem-sections) first.")
         resolved.append(key)
+
+    # Bridge TrackInfo hint fields (sec, set by propose_arrangement from
+    # track_hints.json) → Track hint fields (bar, via _sec_to_bar). Populated
+    # unconditionally: absence of hint data is encoded as None (Track defaults)
+    # and naturally no-ops in the emit-gated block above. Mirrors the bass_out
+    # pattern — Track.bass_out_bar is always set from the stem JSON when known,
+    # but only the CueConfig flag decides whether _mix_cues sees it.
+    for t in tracks:
+        key = _resolve_stem_key(t.name, stems)
+        if key is None:
+            continue
+        matched = stems[key]
+        matched.first_drop_bar = _sec_to_bar(
+            getattr(t, "first_drop_sec", None), matched.downbeat, matched.spb)
+        matched.first_break_bar = _sec_to_bar(
+            getattr(t, "first_break_sec", None), matched.downbeat, matched.spb)
+        matched.outro_start_bar = _sec_to_bar(
+            getattr(t, "outro_start_sec", None), matched.downbeat, matched.spb)
+        matched.last_bass_drop_bar = _sec_to_bar(
+            getattr(t, "last_bass_drop_sec", None), matched.downbeat, matched.spb)
 
     # The mix ALWAYS starts at the timeline origin. Seeding from tracks[0].arr_start
     # would let the orchestrator's baked (old natural-fill) position leak in as the

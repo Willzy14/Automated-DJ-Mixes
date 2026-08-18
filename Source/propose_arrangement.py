@@ -98,6 +98,14 @@ class TrackInfo:
     bpm: float | None = None
     energy: float | None = None
     intro_skip_bars: int = 0
+    # Hand-authored beat-grid hints from track_hints.json (gitignored, may be
+    # absent). Seconds — bridge to bar via align_engine._sec_to_bar using the
+    # matched stem Track's downbeat/spb. None when the JSON omits the key so an
+    # absent or partially-populated file is automatic no-op.
+    first_drop_sec: float | None = None
+    first_break_sec: float | None = None
+    outro_start_sec: float | None = None
+    last_bass_drop_sec: float | None = None
 
     @property
     def track_length(self) -> float:
@@ -1097,6 +1105,14 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         hint = hints.get(t.name) or hints.get(t.name + ".wav") or {}
         t.intro_skip_bars = hint.get("intro_skip_bars", 0)
         t.loop_source_sec = hint.get("loop_source_sec")
+        # Hand-authored DJ hints from the visual pass (track_hints.json). None
+        # when absent — the bridge in align_engine.compute_aligned_positions
+        # converts these to bars via _sec_to_bar(sec, downbeat, spb) and the
+        # CueConfig.emit_hint_fields flag gates whether they reach _mix_cues.
+        t.first_drop_sec = hint.get("first_drop_sec")
+        t.first_break_sec = hint.get("first_break_sec")
+        t.outro_start_sec = hint.get("outro_start_sec")
+        t.last_bass_drop_sec = hint.get("last_bass_drop_sec")
         # Only the LEGACY path pre-trims here. With align_engine on, intros are
         # handled by its intro_cut (which reads untrimmed stems) — pre-trimming
         # would desync the cut maths, so skip it (warned below).
@@ -1814,12 +1830,14 @@ def main():
 
     parser.add_argument("--cue-signals", default="",
                         help="Comma-separated analysis signals to admit as alignment "
-                             "anchors, e.g. 'fills,phrase,deep,bassout,introloop,matched'. Default (empty) reproduces "
+                             "anchors, e.g. 'fills,phrase,deep,bassout,introloop,matched,hints'. Default (empty) reproduces "
                              "pre-2026-08-17 behaviour exactly. 'fills' emits detected "
                              "drum fills as cues; 'phrase' accepts any marker on a "
                              "phrase line in the incoming's head as a swap anchor, not "
-                             "only drop starts. Each is separately measurable against "
-                             "Tests/test_alignment_baseline.py")
+                             "only drop starts. 'hints' admits the hand-authored "
+                             "first_drop/first_break/outro_start/last_bass_drop points "
+                             "from track_hints.json as Tier-1 anchors. Each is "
+                             "separately measurable against Tests/test_alignment_baseline.py")
 
     args = parser.parse_args()
 
@@ -1829,7 +1847,8 @@ def main():
         known = {"fills": "emit_fills", "phrase": "incoming_phrase_anchors",
                  "deep": "deep_intro_anchor", "bassout": "emit_bass_out",
                  "introloop": "incoming_intro_loop",
-                 "matched": "matched_tail_head_swap"}
+                 "matched": "matched_tail_head_swap",
+                 "hints": "emit_hint_fields"}
         unknown = wanted - set(known)
         if unknown:
             parser.error(f"unknown cue signal(s): {', '.join(sorted(unknown))}; "
