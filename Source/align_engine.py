@@ -131,6 +131,18 @@ class CueConfig:
     #: emission into the cue dict. Sparse by construction (4 cues per track max)
     #: and independently attributable via Tests/test_alignment_baseline.py.
     emit_hint_fields: bool = False
+    #: LAST-RESORT rescue for pairs where both normal search passes return
+    #: None — typically "sustained-to-end" outgoing tracks whose tail the
+    #: detector reads no cue on. When the rescue geometry falls inside the
+    #: existing PHRASE_GRID..MAX_OVERLAP_BARS / MIN_SWAP_PROGRESS..MAX_SWAP_PROGRESS
+    #: window, the swap is placed at (n_bars_out - 16, first_drop_in) per
+    #: Sam's 30-seconds-from-the-end rule. The rescue NEVER fabricates a cue:
+    #: if no real detected cue coincides with the computed outgoing bar, that
+    #: bar is labelled as grid-derived and paired_cues is an empty list (a
+    #: legitimate, reportable outcome — not papered over with a synthetic
+    #: pair). Default OFF; with the flag OFF behaviour is byte-identical to
+    #: pre-flag code. 2026-08-19.
+    tail_anchor_rescue: bool = False
 
 
 CUE_CONFIG = CueConfig()
@@ -595,27 +607,82 @@ def _align_pair_landmark_aware(o: Track, i: Track, policy=None) -> Alignment:
             first_drop_bar, policy, rank_all=True,
         )
 
+    if chosen is None and CUE_CONFIG.tail_anchor_rescue:
+        chosen = _search_tail_anchor_rescue(
+            o, i, outgoing, incoming, window_start, first_drop_bar, policy)
+
     if chosen is None:
         raise ValueError(
             f"No paired section/dropout alignment for '{o.name}' -> '{i.name}' "
             f"inside the {PHRASE_GRID}-{MAX_OVERLAP_BARS} bar window"
         )
 
+    # Two return shapes arrive here:
+    #   (a) _search_anchors / _search_matched_tail_head:
+    #         (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+    #          progress, pairs, weighted_score)
+    #       — outgoing_cue is the existing cue dict (possibly synthesised
+    #         by matched_tail_head into a local COPY, never the caller's).
+    #   (b) _search_tail_anchor_rescue:
+    #         (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+    #          progress, pairs, weighted_score, out_is_real_cue, in_is_real_cue)
+    #       — the extra flags tell the caller the anchor provenance so the
+    #         Alignment can be labelled honestly.
+    # Unpack the common prefix; the rescue's extra trailing fields are read
+    # back out of `chosen` below (length-checked) before being discarded.
+    # _search_anchors and _search_matched_tail_head return 8-tuples; the rescue
+    # returns a 10-tuple (8 common + 2 provenance booleans).
+    rescue_tail = chosen[8:] if len(chosen) > 8 else None
     (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
-     progress, pairs, weighted_score) = chosen
+     progress, pairs, weighted_score) = chosen[:8]
+    if rescue_tail is None:
+        return Alignment(
+            out_name=o.name,
+            in_name=i.name,
+            handoff_bar_out=float(outgoing_anchor),
+            handoff_kind=f"paired/{outgoing_cue['labels'][0]}->drop",
+            anchor_bar_in=float(outgoing_anchor - arr_offset),
+            arr_offset_bars=float(arr_offset),
+            overlap_bars=float(overlap),
+            score=len(pairs),
+            alignment_policy="paired_landmarks_v2",
+            paired_cues=pairs,
+            swap_progress=progress,
+            notes=[f"paired cue score {weighted_score}; swap {progress:.0%} through overlap"],
+        )
+
+    # Rescue path — build the honestly-labelled Alignment.
+    out_is_real_cue, in_is_real_cue = rescue_tail
+    out_label = (outgoing_cue["labels"][0]
+                 if out_is_real_cue and outgoing_cue is not None
+                 else "grid_tail")
+    in_label = "drop" if in_is_real_cue else "grid_head"
+    n_real_pairs = sum(
+        1 for p in pairs
+        if "outgoing_labels" in p and "incoming_labels" in p
+    )
+    out_kind = "detected cue" if out_is_real_cue else "grid-derived position (n_bars - 16)"
+    in_kind = "detected cue (first_drop_bar)" if in_is_real_cue \
+        else "grid-derived position (PHRASE_BACKSTEP_BARS fallback)"
     return Alignment(
         out_name=o.name,
         in_name=i.name,
         handoff_bar_out=float(outgoing_anchor),
-        handoff_kind=f"paired/{outgoing_cue['labels'][0]}->drop",
+        handoff_kind=f"rescue/{out_label}->{in_label}",
         anchor_bar_in=float(outgoing_anchor - arr_offset),
         arr_offset_bars=float(arr_offset),
         overlap_bars=float(overlap),
         score=len(pairs),
-        alignment_policy="paired_landmarks_v2",
+        alignment_policy="tail_anchor_rescue_v1",
         paired_cues=pairs,
         swap_progress=progress,
-        notes=[f"paired cue score {weighted_score}; swap {progress:.0%} through overlap"],
+        notes=[
+            f"tail-anchor rescue (Sam: run-back 16 from end, first drop in): "
+            f"outgoing anchor is a {out_kind}, incoming anchor is a {in_kind}; "
+            f"{n_real_pairs} REAL paired cue(s) coincided with the swap point "
+            f"(the rescue fires regardless, since {len(pairs) - n_real_pairs} "
+            f"pair(s) were not detected)."
+        ],
     )
 
 
@@ -705,6 +772,108 @@ def _search_matched_tail_head(o, i, outgoing, incoming, window_start,
     rank = (1, weighted_score, 2, -abs(progress - 0.65), overlap)
     return (rank, arr_offset, overlap, out_anchor, outgoing_cue,
             progress, pairs, weighted_score)
+
+
+def _search_tail_anchor_rescue(o, i, outgoing, incoming, window_start,
+                                first_drop_bar, policy):
+    """Last-resort rescue for pairs both normal search passes returned None on.
+
+    The classic failure mode is a "sustained-to-end" outgoing track: bass and
+    drums run to the very last bar, so the cue dict carries nothing inside the
+    last-minute handoff window. Sam's correction, 2026-08-19: "If there is no
+    anchor at the start or end, you run in 16 bars from the first beat, or run
+    back 16 bars from the last beat, and then you will get the anchor point
+    there." That is one phrase back from the outgoing's end and one phrase in
+    from the incoming's first drop (or one phrase from bar 0 if no drop exists).
+
+    The outgoing anchor is then a *real* cue if one lies within PHRASE_ANCHOR_TOL
+    of (n_bars - PHRASE_BACKSTEP_BARS), else it is a grid-derived position the
+    detector did not mark. We report the truth in both directions:
+
+      * If a real cue exists at the outgoing bar, the anchor takes that cue's
+        REAL labels and contributes it to paired_cues like any other match.
+      * If no real cue exists, the anchor is GRID-DERIVED. We do NOT synthesise
+        a fake cue with a fake weight (the previous unsupervised attempt did
+        exactly that; it is banned). The grid-derived bar is honestly labelled
+        in the Alignment, and paired_cues only contains entries for REAL
+        coinciding cues — possibly an empty list, which is a legitimate
+        outcome (the rescue still fires, because Sam's rule applies regardless
+        of whether the detector happened to mark the point).
+
+    The rescue returns None (preserves the existing raise) when the geometry
+    falls outside the existing PHRASE_GRID..MAX_OVERLAP_BARS /
+    MIN_SWAP_PROGRESS..MAX_SWAP_PROGRESS window. We do NOT relax those caps
+    globally — Q4 of the diagnostic showed relaxing the upper progress cap
+    regresses 47 currently-correct real-cue pairs to progress=1.0.
+
+    Returned tuple is the same shape as `_search_anchors` (8 fields) plus two
+    trailing booleans (out_is_real_cue, in_is_real_cue) so the caller can label
+    the Alignment honestly without re-deriving the provenance.
+    """
+    out_pt_raw = int(round(o.n_bars - PHRASE_BACKSTEP_BARS))
+    if out_pt_raw < window_start or out_pt_raw <= 0:
+        return None
+    # If a real cue sits on or within PHRASE_ANCHOR_TOL of the computed point,
+    # snap to it — exactly as the matched_tail_head and deep_intro_anchor
+    # paths do. Falls back to the raw grid bar when nothing real is in range.
+    out_anchor = _nearest_cue(outgoing, out_pt_raw, window_start, o.n_bars)
+    if out_anchor is None:
+        return None
+    out_is_real_cue = out_anchor in outgoing
+
+    in_pt_raw = (int(first_drop_bar) if first_drop_bar is not None
+                 else int(PHRASE_BACKSTEP_BARS))
+    if in_pt_raw <= 0 or in_pt_raw > i.n_bars:
+        return None
+    in_anchor = _nearest_cue(incoming, in_pt_raw, 0, i.n_bars)
+    if in_anchor is None:
+        return None
+    in_is_real_cue = in_anchor in incoming
+
+    arr_offset = out_anchor - in_anchor
+    overlap = o.n_bars - arr_offset
+    if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+        return None
+    progress = in_anchor / overlap if overlap else 1.0
+    if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
+        return None
+
+    # Build a LOCAL outgoing cue for the grid-derived case. It is used for the
+    # label ONLY — it is NOT added to the caller's dict, and it carries the
+    # BASS_OUT_CUE_WEIGHT only for the rank tuple (no synthetic pairing).
+    outgoing_cue = outgoing.get(out_anchor)
+    if outgoing_cue is None:
+        outgoing_cue = {"weight": 0, "labels": ["grid_tail"]}
+
+    # Count REAL paired cues — i.e. cues that REALLY EXIST in the cue dicts on
+    # BOTH sides at the arrangement-bar level. Empty list is legitimate.
+    pairs = []
+    weighted_score = 0
+    for incoming_bar, incoming_cue in incoming.items():
+        arrangement_bar = arr_offset + incoming_bar
+        outgoing_match = outgoing.get(arrangement_bar)
+        if outgoing_match is None:
+            continue
+        # Only count as a "real" pair when the outgoing bar is a real cue.
+        # Grid-derived outgoing anchors never pair with the incoming's cues
+        # here (no synthetic match) — those would have been synthesised.
+        if arrangement_bar not in outgoing:
+            continue
+        weighted_score += incoming_cue["weight"] + outgoing_match["weight"]
+        pairs.append({
+            "arrangement_bar": arrangement_bar,
+            "outgoing_labels": outgoing_match["labels"],
+            "incoming_source_bar": incoming_bar,
+            "incoming_labels": incoming_cue["labels"],
+        })
+
+    # Rank tuple: drop_payoff=0 (rescue is independent of intro-anchors),
+    # weighted_score=0 when no real pairs coincide (legitimate), then the same
+    # shape as the existing path so a single max(...) would compose cleanly.
+    rank = (0, weighted_score, 0, -abs(progress - 0.65), overlap)
+    return (rank, arr_offset, overlap, out_anchor, outgoing_cue,
+            progress, pairs, weighted_score,
+            out_is_real_cue, in_is_real_cue)
 
 
 def _nearest_cue(cues, target, lo, hi, tol=PHRASE_ANCHOR_TOL):
