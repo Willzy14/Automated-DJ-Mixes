@@ -212,7 +212,7 @@ def run_pipeline(
     skip_desktop_analyze: bool = False,
     previews_only: bool = False,
     no_hints_required: bool = False,
-    sections_layout: bool = False,
+    sections_layout: bool = True,
     allow_partial_rekordbox: bool = False,
     allow_bad_grids: bool = False,
     allow_non_master: bool = False,
@@ -837,13 +837,18 @@ def run_pipeline(
         print(f"Done: {result}")
         return result
 
-    # The single-command full-mix path (Path A) has been retired.
-    # Production mixes use the three-phase /mix pipeline: --sections-layout
-    # here, then propose_arrangement.py, then apply_automation.py.
+    # The single-command full-mix path (Path A) has been retired, and
+    # sections-layout (the only surviving mode) has been explicitly disabled
+    # by --no-sections-layout. There is no other path. Drop --no-sections-layout
+    # to run sections-layout (the default), or use the three-phase /mix skill:
+    # sections-layout -> propose_arrangement.py -> apply_automation.py.
     raise RuntimeError(
-        "Full-mix mode has been retired. Use the three-phase /mix "
-        "pipeline: --sections-layout, then propose_arrangement.py, "
-        "then apply_automation.py."
+        "Full-mix mode (the old single-command pipeline) has been retired, "
+        "and sections-layout mode (the only surviving mode) has been "
+        "explicitly disabled with --no-sections-layout. There is no other "
+        "mode to fall back to. Drop --no-sections-layout, or use the "
+        "three-phase /mix skill: sections-layout (now the default) -> "
+        "propose_arrangement.py -> apply_automation.py."
     )
 
 
@@ -875,11 +880,15 @@ def main():
                         help="Allow the pipeline to run without complete visual hints. "
                              "Production runs require hints (gated by /mix skill); use this "
                              "flag for debugging only.")
-    parser.add_argument("--sections-layout", action="store_true",
+    parser.add_argument("--sections-layout", action=argparse.BooleanOptionalAction,
+                        default=True,
                         help="Sections-layout mode: lay tracks SEQUENTIALLY in mix order, "
                              "colour-code each section by type (intro=green, break=blue, "
                              "drop=yellow, outro=red, fill=orange). No transitions, no "
-                             "automation, no hints required. Output is 'Sections V<N>.als'.")
+                             "automation, no hints required. Output is 'Sections V<N>.als'. "
+                             "This is the default (and only surviving) mode — pass "
+                             "--no-sections-layout to disable it, which raises since no other "
+                             "mode exists.")
     parser.add_argument("--stem-sections", action="store_true",
                         help="In --sections-layout mode, use the Demucs stem-based detector "
                              "(Source/stem_detector.py) as the section source instead of "
