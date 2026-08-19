@@ -79,6 +79,37 @@ OUTRO_CAP_BARS = 32       # Sam's rule (24.06.26): an outro is never more than 3
 MIN_LOOP_BARS = 4
 MIN_VOCAL_BARS = 2
 
+# --- Soft intro/outro rules (R2, R3, R4 in the section-detector spec) ----------
+# Sam's mental model for intro/outro/head-cascade classification. Default OFF.
+# Threaded through detect() as soft_intro_outro=False; flag ON introduces bias
+# toward kick-presence signals when the existing bass/lead-based detection is
+# silent or weak. Must NOT silently undo 25625f8 (a long kick-less pre-drop
+# section is a break, not intro — James Poole anomaly). Implementation choices
+# (verified against the 14.08.26 corpus — see Tools/section_soft_rules_sweep.py):
+#   - R2 (kick-less head = probably intro): fires when the first
+#     INTRO_KICKLESS_BARS bars have kick presence below KICKLESS_FRAC and
+#     walks forward through contiguous kick-less pre-drop sections to extend
+#     the intro. Stops at the first kick-IN section so it never undoes 25625f8
+#     (a kick-less pre-drop section that's NOT contiguous with the head is a
+#     body break, not an intro extension). Inert on the current corpus — every
+#     kick-less head is already absorbed into sections[0].
+#   - R3 (kick-less tail = probably outro): fires upstream in detect() when
+#     the existing bass-finish detector returns None AND the last
+#     OUTRO_KICKLESS_BARS have kick presence below KICKLESS_FRAC. Respects
+#     OUTRO_CAP_BARS. Inert on the current corpus — every track has a body bar
+#     so the existing bass-finish outro_start always fires first.
+#   - R4 (kick-in head + pre-first_drop break = intro extends to that break):
+#     fires when the head has kick in and the FIRST pre-first_drop section is
+#     a break/fill; relabels ONLY that one section. Subsequent pre-first_drop
+#     sections stay under their existing labels — the contiguous-intro
+#     cascade is gated on _r2_r4_touched markers so it never drags the intro
+#     through body build/drop material. Active on the corpus: Alaia & Gallo
+#     and Christoph Reachin (both have a kick-out fill immediately before the
+#     first drop section).
+INTRO_KICKLESS_BARS = 16       # R2 head window
+OUTRO_KICKLESS_BARS = 16       # R3 tail window
+KICKLESS_FRAC = 0.5            # bar fraction with kick ON below this = "kick-less"
+
 
 def _per_bar(env, hop_t, downbeat, sec_per_bar, n_bars):
     out = np.zeros(n_bars)
@@ -292,10 +323,34 @@ def _find_outro_start(pb, n_bars):
     return int(round(i / PHRASE_GRID) * PHRASE_GRID)
 
 
-def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start):
+def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start,
+                   soft_intro_outro=False):
     """Label by song position: intro before the first drop; outro from the lead
     drop-off near the end; drop/break/build in the body. A bass / no-bass split
-    inside the intro stays INTRO. Every track is guaranteed an intro and outro."""
+    inside the intro stays INTRO. Every track is guaranteed an intro and outro.
+
+    soft_intro_outro (default False) activates Sam's R2/R4 soft rules:
+
+      R2 (kick-less head = probably intro): when the first INTRO_KICKLESS_BARS
+      bars have kick presence below KICKLESS_FRAC, walk forward through pre-drop
+      sections while each section stays below KICKLESS_FRAC and relabel them
+      'intro'. Resolves Sam's hypothetical "intro8 break8" case (16-bar kick-less
+      head split by some non-kick boundary cue). Stops at the first kick-IN
+      section — once the kick enters, any subsequent pre-drop kick-OUT is the
+      25625f8 body break (James Poole anomaly), NOT an intro extension.
+
+      R4 (kick-in head + pre-first_drop break = intro extends to that break):
+      when the head has kick in, find the first pre-first_drop section that is
+      a break/fill (the 'intro fill' / pre-drop kick-OUT) and relabel it intro.
+      Only the FIRST pre-first_drop break — Sam's "first fill/break point with
+      everything before it being intro." Subsequent pre-first_drop sections
+      stay under their existing labels (drop/build); we don't drag the intro
+      through the body.
+
+      R3 (kick-less tail = outro) runs upstream in detect() — it sets
+      outro_start before bound-cutting. R2 and R4 here never relabel a DROP
+      section; they only touch break/fill and kick-less sections.
+    """
     def stat(s):
         s0, s1 = s["start_bar"], s["end_bar"]
         kf = kick_on_bar[s0:s1].mean() if s1 > s0 else 0.0
@@ -337,6 +392,48 @@ def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start):
             label = "build"
         s["label"] = label
 
+    # R2 / R4 soft rules (inert when soft_intro_outro is False).
+    # R2 only fires when the HEAD is kick-less — it walks forward through
+    # contiguous kick-less pre-drop sections and relabels them 'intro', then
+    # stops at the first kick-IN section (so it never undoes 25625f8: a
+    # kick-less pre-drop section that's NOT contiguous with the head is a
+    # body break, not an intro extension).
+    # R4 only fires when the HEAD is kick-IN — it relabels the FIRST
+    # pre-first_drop break/fill section to intro (the 'intro fill' / pre-drop
+    # kick-OUT). It does NOT relabel body drop/build sections — Sam's R4 is
+    # specifically about the first fill/break point in the head, not the
+    # full body.
+    # We mark each R2/R4-relabelled section with _r2_r4_touched=True so the
+    # top-only rule can exempt ONLY those (not other pre-label intro sections
+    # that should still fall back to 'build' — otherwise the contiguous-intro
+    # cascade relabels body build/drop material back to intro, e.g. Christoph
+    # Reachin where sections[2-7] are pre-label 'intro' but musically drop).
+    if soft_intro_outro and first_drop is not None and n > 1:
+        head_end = min(INTRO_KICKLESS_BARS, len(kick_on_bar))
+        head_kf = float(kick_on_bar[:head_end].mean()) if head_end > 0 else 1.0
+        if head_kf < KICKLESS_FRAC:
+            # R2: extend intro through contiguous kick-less pre-drop sections.
+            for i in range(1, first_drop):
+                s = sections[i]
+                s0, s1 = s["start_bar"], s["end_bar"]
+                if s1 <= s0:
+                    continue
+                s_kf = float(kick_on_bar[s0:s1].mean())
+                if s_kf < KICKLESS_FRAC:
+                    if s["label"] != "intro":
+                        s["_r2_r4_touched"] = True
+                    s["label"] = "intro"
+                else:
+                    break  # kick has come in -> stop, don't undo 25625f8
+        else:
+            # R4: extend intro through the FIRST pre-first_drop break/fill.
+            for i in range(1, first_drop):
+                s = sections[i]
+                if s["label"] in ("break", "fill"):
+                    s["label"] = "intro"
+                    s["_r2_r4_touched"] = True
+                    break  # only the first pre-first_drop break/fill
+
     # Hard rule: every track has an intro AND an outro.
     if n:
         if sections[0]["label"] != "intro":
@@ -348,12 +445,30 @@ def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start):
         # Intro is TOP-ONLY: a later section relabelled 'intro' (a breakdown inside a long
         # intro, before the first drop) is a BUILD into the drop, not a second intro — Sam's
         # corpus flagged "All Parties" reading intro16 break12 intro4 drop32. Keep the first.
-        intro_seen = False
+        #
+        # Exemption (soft_intro_outro=True): sections that R2/R4 *explicitly* relabelled
+        # to 'intro' (marked with _r2_r4_touched) stay as intro, contiguous with
+        # sections[0]. Other pre-label 'intro' sections still fall back to 'build'.
+        # This means the contiguous-intro cascade only walks through R2/R4-touched
+        # sections, NOT through pre-label intro sections that should remain build
+        # (e.g. Christoph Reachin sections[2-7] are pre-label 'intro' but musically
+        # drop material that the old top-only rule correctly relabels to 'build').
+        intro_block_seen = False
+        intro_block_end_bar = 0
         for s in sections:
             if s["label"] == "intro":
-                if intro_seen:
+                if not intro_block_seen:
+                    intro_block_seen = True
+                    intro_block_end_bar = s["end_bar"]
+                elif s.get("_r2_r4_touched") and s["start_bar"] == intro_block_end_bar:
+                    # R2/R4 explicitly relabelled this and it's contiguous with the
+                    # intro block — keep as intro.
+                    intro_block_end_bar = s["end_bar"]
+                else:
+                    # Discontiguous second intro, or a pre-label intro under OFF,
+                    # or a non-contiguous R2/R4 extension — a build into the drop,
+                    # not a real second intro.
                     s["label"] = "build"
-                intro_seen = True
 
 
 def _merge_same_label(sections):
@@ -401,12 +516,16 @@ def _merge_same_label(sections):
 
 def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True,
            kick_model=False, kick_model_path=None, kick_model_device="auto",
-           kick_provider=None):
+           kick_provider=None, soft_intro_outro=False):
     """Detect sections + mix signals for one track.
 
     bpm/downbeat may be passed in (pipeline use — they come from Rekordbox/analysis);
     if omitted they're read from the Blind_V stats JSON (standalone CLI). make_viz /
     write_json let a caller skip the PNG / JSON side-artifacts.
+
+    soft_intro_outro (default False): when True, bias intro/outro classification
+    toward explicit kick-presence signals (R2/R3/R4). Default OFF keeps the
+    existing bass-finish outro + lead-drop intro detection unchanged.
     """
     stats = None
     if bpm is None or downbeat is None:
@@ -502,6 +621,22 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
         if cap > 0 and outro_start < cap:
             outro_start = cap
 
+    # R3 (soft): "No kick in the last 16 bars = probably an outro." Fires ONLY
+    # when the existing bass-finish and lead-drop detectors BOTH failed to set an
+    # outro AND the last OUTRO_KICKLESS_BARS have a below-threshold kick-presence
+    # fraction. Respects OUTRO_CAP_BARS (32-bar cap) for symmetry with the hard
+    # rule. Inert when soft_intro_outro is False (default) so OFF==main.
+    if soft_intro_outro and outro_start is None:
+        tail_start = max(0, n_bars - OUTRO_KICKLESS_BARS)
+        tail_kf = float(kick_on_bar[tail_start:].mean()) if tail_start < n_bars else 1.0
+        if tail_kf < KICKLESS_FRAC:
+            soft_outro = n_bars - OUTRO_KICKLESS_BARS
+            cap = n_bars - OUTRO_CAP_BARS
+            if cap > 0 and soft_outro < cap:
+                soft_outro = cap
+            if soft_outro > 0:
+                outro_start = soft_outro
+
     # Boundaries: a kick drop-out + return marks a new 16-beat section (Sam's
     # rule), plus bass on/off (bass-to-bass), sustained low-mix-energy runs
     # (_energy_cues, per-bar), and the outro lead-drop. Snapped to grid.
@@ -528,7 +663,11 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
             "end_sec": round(downbeat + s1 * sec_per_bar, 2),
             "stems_on": [s for s in STEMS if presence[s][s0:s1].mean() > 0.5],
         })
-    _assign_labels(sections, kick_on_bar, presence["bass"], mix_norm, outro_start)
+    _assign_labels(sections, kick_on_bar, presence["bass"], mix_norm, outro_start,
+                   soft_intro_outro=soft_intro_outro)
+    # Strip internal R2/R4 marker before downstream sees the section dicts.
+    for s in sections:
+        s.pop("_r2_r4_touched", None)
     sections = _merge_same_label(sections)
 
     # A tiny drop fragment (<= one phrase) right before the outro is the last
@@ -607,6 +746,86 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
                  "guide": round(dur_real - 60.0, 2)},
             ]
 
+    # --- R2/R3/R4 soft-rule hints (diagnostic; inert when soft_intro_outro=False)
+    # Sam's per-track signal strengths, exposed so downstream consumers
+    # (orchestrator, aligner) can read the kick-presence facts without
+    # re-deriving them. None when the flag is off, so the JSON shape matches
+    # main @ 88f15c4 byte-for-byte when soft_intro_outro=False (key is OMITTED
+    # entirely when off, not emitted as null — see _compare_off_to_main.py).
+    soft_hints = None
+    if soft_intro_outro:
+        head_end = min(INTRO_KICKLESS_BARS, len(kick_on_bar))
+        head_kf = float(kick_on_bar[:head_end].mean()) if head_end else 1.0
+        tail_start = max(0, len(kick_on_bar) - OUTRO_KICKLESS_BARS)
+        tail_kf = float(kick_on_bar[tail_start:].mean()) if tail_start < len(kick_on_bar) else 1.0
+        # Find the first drop section for R4 trigger reporting.
+        first_drop_bar = None
+        full = max(
+            (float(mix_norm[s["start_bar"]:s["end_bar"]].mean())
+             for s in sections if s["end_bar"] > s["start_bar"]),
+            default=1.0,
+        )
+        drop_thr = DROP_REL * full
+        for s in sections:
+            s0, s1 = s["start_bar"], s["end_bar"]
+            if s1 <= s0:
+                continue
+            kf = float(kick_on_bar[s0:s1].mean())
+            bf = float(presence["bass"][s0:s1].mean())
+            ef = float(mix_norm[s0:s1].mean())
+            if kf > 0.6 and bf > 0.5 and ef >= drop_thr:
+                first_drop_bar = s0
+                break
+        # R4 trigger = the first pre-first_drop break/fill section, IF head is kick-in.
+        # (Same condition _assign_labels uses; reported as a hint bar so downstream
+        # code can see the boundary that R4 just extended intro to.)
+        r4_break_bar = None
+        if head_kf >= KICKLESS_FRAC and first_drop_bar is not None:
+            for s in sections:
+                if s["start_bar"] >= first_drop_bar:
+                    break
+                if s["label"] in ("break", "fill"):
+                    r4_break_bar = int(s["start_bar"])
+                    break
+        # R2 trigger = contiguous kick-less run from sections[0]; reported as the
+        # bar where R2 stopped extending (or None if R2 didn't fire / didn't extend).
+        r2_extended_through = None
+        if head_kf < KICKLESS_FRAC and first_drop_bar is not None:
+            for s in sections[1:first_drop_bar]:
+                s0, s1 = s["start_bar"], s["end_bar"]
+                if s1 <= s0:
+                    continue
+                if float(kick_on_bar[s0:s1].mean()) < KICKLESS_FRAC:
+                    r2_extended_through = int(s1)
+                else:
+                    break
+        soft_hints = {
+            "head_kick_frac": round(head_kf, 4),
+            "tail_kick_frac": round(tail_kf, 4),
+            "head_kickless": bool(head_kf < KICKLESS_FRAC),
+            "tail_kickless": bool(tail_kf < KICKLESS_FRAC),
+            "starts_with_kick": bool(head_kf >= KICKLESS_FRAC),
+            # R2 fires when the head is kick-less. r2_extended_through is the
+            # bar where the contiguous kick-less run from sections[0] ends
+            # (None on the current corpus — every kick-less head is one intro
+            # section — but implemented for the split-head case Sam described).
+            "r2_extended_through_bar": r2_extended_through,
+            # R3 is ACTIVE only when the soft outro_start fired (i.e. the
+            # existing bass-finish and lead-drop detectors BOTH returned None
+            # AND the tail was kick-less). outros set by the existing hard
+            # path do NOT count as R3 firings.
+            "r3_outro_active": bool(
+                outro_start is not None
+                and outro_start >= n_bars - OUTRO_KICKLESS_BARS
+                and outro_start < n_bars
+                and tail_kf < KICKLESS_FRAC
+            ),
+            # R4 trigger = the first pre-first_drop break/fill bar, when head
+            # is kick-in. None if R4 didn't fire (no pre-first_drop break, or
+            # head was kick-less).
+            "r4_first_pre_drop_break_bar": r4_break_bar,
+        }
+
     signals = {
         "bass_in": bass_in_sec,
         "bass_out": bass_out_sec,
@@ -622,6 +841,11 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
         "fills": fills,
         "major_cues": major_cues,
     }
+    # Only attach the soft-rule hints when the flag is on. Omitting the key
+    # entirely keeps the OFF JSON shape byte-identical to main @ 88f15c4
+    # (proven by `_verify_finding1.py` + diff vs the cached SECTIONS_STEM_*.json).
+    if soft_hints is not None:
+        signals["soft_intro_outro_hints"] = soft_hints
 
     result = {"track": wav.stem, "bpm": round(bpm, 2), "n_bars": n_bars,
               "sections": sections, "signals": signals}
