@@ -2,8 +2,8 @@
  "corpus": "Test Project/14.08.26",
  "n_pairs": 380,
  "n_tracks": 20,
- "ok": 243,
- "raised": 137,
+ "ok": 268,
+ "raised": 112,
  "rows": [
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -207,11 +207,20 @@
    "swap_progress": 0.333333
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 176.0,
+   "handoff_bar_out": 192.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MAST",
+   "n_paired_cues": 2,
    "out": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 32.0,
+   "paired_cue_bars": [
+    192,
+    208
+   ],
+   "status": "ok",
+   "swap_progress": 0.5
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -466,11 +475,12 @@
    "handoff_bar_out": 206.0,
    "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 44.0,
    "paired_cue_bars": [
-    206
+    206,
+    200
    ],
    "status": "ok",
    "swap_progress": 0.909091
@@ -492,11 +502,22 @@
    "swap_progress": 0.285714
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 168.0,
+   "handoff_bar_out": 184.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 1",
+   "n_paired_cues": 4,
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 42.0,
+   "paired_cue_bars": [
+    168,
+    184,
+    200,
+    199
+   ],
+   "status": "ok",
+   "swap_progress": 0.380952
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -761,11 +782,19 @@
    "swap_progress": 0.888889
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 149.0,
+   "handoff_bar_out": 165.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Andrea Oliva & Bensy - Nappp 24 BIt MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 16-48.0 bar",
+   "n_paired_cues": 1,
    "out": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
-   "status": "raise"
+   "overlap_bars": 19.0,
+   "paired_cue_bars": [
+    165
+   ],
+   "status": "ok",
+   "swap_progress": 0.842105
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -942,11 +971,19 @@
    "status": "raise"
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 208.0,
+   "handoff_bar_out": 224.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit M",
+   "n_paired_cues": 1,
    "out": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 17.0,
+   "paired_cue_bars": [
+    224
+   ],
+   "status": "ok",
+   "swap_progress": 0.941176
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -1198,11 +1235,19 @@
    "swap_progress": 0.4
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 217.0,
+   "handoff_bar_out": 233.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'BUTCH & Santos -  Come Get Up 24 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 16-48.0 ba",
+   "n_paired_cues": 1,
    "out": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 28.0,
+   "paired_cue_bars": [
+    233
+   ],
+   "status": "ok",
+   "swap_progress": 0.571429
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -1472,11 +1517,21 @@
    "swap_progress": 0.296296
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 168.0,
+   "handoff_bar_out": 184.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MAS",
+   "n_paired_cues": 3,
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 35.0,
+   "paired_cue_bars": [
+    168,
+    184,
+    200
+   ],
+   "status": "ok",
+   "swap_progress": 0.457143
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -1677,11 +1732,19 @@
    "swap_progress": 0.25
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 152.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Cevin Fisher - Emotions 24 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 16-48.0 bar wind",
+   "n_paired_cues": 1,
    "out": "Cevin Fisher - Emotions 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 40.0,
+   "paired_cue_bars": [
+    168
+   ],
+   "status": "ok",
+   "swap_progress": 0.4
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -1939,11 +2002,19 @@
    "swap_progress": 0.25
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 180.0,
+   "handoff_bar_out": 196.0,
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Christoph - Reachin 16 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 16-48.0 bar window",
+   "n_paired_cues": 1,
    "out": "Christoph - Reachin 16 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 20.0,
+   "paired_cue_bars": [
+    196
+   ],
+   "status": "ok",
+   "swap_progress": 0.8
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2200,11 +2271,19 @@
    "swap_progress": 0.888889
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 237.0,
+   "handoff_bar_out": 253.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Christoph - The Rise 16 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 16-48.0 bar window",
+   "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 19.0,
+   "paired_cue_bars": [
+    253
+   ],
+   "status": "ok",
+   "swap_progress": 0.842105
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2478,11 +2557,21 @@
    "swap_progress": 0.333333
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 168.0,
+   "handoff_bar_out": 184.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER'",
+   "n_paired_cues": 3,
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "status": "raise"
+   "overlap_bars": 32.0,
+   "paired_cue_bars": [
+    168,
+    184,
+    200
+   ],
+   "status": "ok",
+   "swap_progress": 0.5
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2759,11 +2848,22 @@
    "swap_progress": 0.333333
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 152.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED' -> 'Ritmo Da Rua - Harry Romero Remix 24 ",
+   "n_paired_cues": 4,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "status": "raise"
+   "overlap_bars": 32.0,
+   "paired_cue_bars": [
+    152,
+    168,
+    184,
+    183
+   ],
+   "status": "ok",
+   "swap_progress": 0.5
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2844,18 +2944,34 @@
    "swap_progress": 0.4
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 134.0,
+   "handoff_bar_out": 166.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' inside the 16-48.0 bar window",
+   "n_paired_cues": 1,
    "out": "Harry Romero - Renegades SW V1",
-   "status": "raise"
+   "overlap_bars": 34.0,
+   "paired_cue_bars": [
+    166
+   ],
+   "status": "ok",
+   "swap_progress": 0.941176
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 134.0,
+   "handoff_bar_out": 166.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
-   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Andrea Oliva & Bensy - Nappp 24 BIt MASTER' inside the 16-48.0 bar window",
+   "n_paired_cues": 1,
    "out": "Harry Romero - Renegades SW V1",
-   "status": "raise"
+   "overlap_bars": 34.0,
+   "paired_cue_bars": [
+    166
+   ],
+   "status": "ok",
+   "swap_progress": 0.941176
   },
   {
    "error": "ValueError",
@@ -2880,11 +2996,19 @@
    "swap_progress": 0.25
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 134.0,
+   "handoff_bar_out": 166.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER' inside the 1",
+   "n_paired_cues": 1,
    "out": "Harry Romero - Renegades SW V1",
-   "status": "raise"
+   "overlap_bars": 34.0,
+   "paired_cue_bars": [
+    166
+   ],
+   "status": "ok",
+   "swap_progress": 0.941176
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2903,32 +3027,64 @@
    "swap_progress": 0.4
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 134.0,
+   "handoff_bar_out": 166.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Christoph - Reachin 16 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Christoph - Reachin 16 Bit MASTER' inside the 16-48.0 bar window",
+   "n_paired_cues": 1,
    "out": "Harry Romero - Renegades SW V1",
-   "status": "raise"
+   "overlap_bars": 34.0,
+   "paired_cue_bars": [
+    166
+   ],
+   "status": "ok",
+   "swap_progress": 0.941176
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 134.0,
+   "handoff_bar_out": 166.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Christoph - The Rise 16 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Christoph - The Rise 16 Bit MASTER' inside the 16-48.0 bar window",
+   "n_paired_cues": 1,
    "out": "Harry Romero - Renegades SW V1",
-   "status": "raise"
+   "overlap_bars": 34.0,
+   "paired_cue_bars": [
+    166
+   ],
+   "status": "ok",
+   "swap_progress": 0.941176
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 134.0,
+   "handoff_bar_out": 166.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED' inside the 16-48",
+   "n_paired_cues": 1,
    "out": "Harry Romero - Renegades SW V1",
-   "status": "raise"
+   "overlap_bars": 34.0,
+   "paired_cue_bars": [
+    166
+   ],
+   "status": "ok",
+   "swap_progress": 0.941176
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 134.0,
+   "handoff_bar_out": 166.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED' insid",
+   "n_paired_cues": 1,
    "out": "Harry Romero - Renegades SW V1",
-   "status": "raise"
+   "overlap_bars": 34.0,
+   "paired_cue_bars": [
+    166
+   ],
+   "status": "ok",
+   "swap_progress": 0.941176
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2969,11 +3125,20 @@
    "swap_progress": 0.25
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 128.0,
+   "handoff_bar_out": 144.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 16-48.0 bar window",
+   "n_paired_cues": 2,
    "out": "Harry Romero - Renegades SW V1",
-   "status": "raise"
+   "overlap_bars": 40.0,
+   "paired_cue_bars": [
+    128,
+    144
+   ],
+   "status": "ok",
+   "swap_progress": 0.4
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -3217,11 +3382,19 @@
    "swap_progress": 0.923077
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 247.0,
+   "handoff_bar_out": 263.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit M",
+   "n_paired_cues": 1,
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "status": "raise"
+   "overlap_bars": 18.0,
+   "paired_cue_bars": [
+    263
+   ],
+   "status": "ok",
+   "swap_progress": 0.888889
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -3390,11 +3563,19 @@
    "status": "raise"
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 121.0,
+   "handoff_bar_out": 137.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside t",
+   "n_paired_cues": 1,
    "out": "Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 43.0,
+   "paired_cue_bars": [
+    137
+   ],
+   "status": "ok",
+   "swap_progress": 0.372093
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -3671,11 +3852,21 @@
    "status": "raise"
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 144.0,
+   "handoff_bar_out": 160.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 16-",
+   "n_paired_cues": 3,
    "out": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 32.0,
+   "paired_cue_bars": [
+    160,
+    176,
+    175
+   ],
+   "status": "ok",
+   "swap_progress": 0.5
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -3738,7 +3929,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 144.0,
    "handoff_bar_out": 160.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
@@ -3789,7 +3980,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 144.0,
    "handoff_bar_out": 160.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Cevin Fisher - Emotions 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
@@ -3861,7 +4052,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 144.0,
    "handoff_bar_out": 160.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
    "n_paired_cues": 2,
    "out": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
@@ -3877,7 +4068,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 144.0,
    "handoff_bar_out": 160.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
    "n_paired_cues": 2,
    "out": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
@@ -3900,7 +4091,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 144.0,
    "handoff_bar_out": 160.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
@@ -4058,11 +4249,19 @@
    "swap_progress": 0.32
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 119.0,
+   "handoff_bar_out": 135.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Sam Leagas - Bad Behaviours (Extended Mix) SW V2' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' inside the 16-48",
+   "n_paired_cues": 1,
    "out": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
-   "status": "raise"
+   "overlap_bars": 33.0,
+   "paired_cue_bars": [
+    135
+   ],
+   "status": "ok",
+   "swap_progress": 0.484848
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -4476,11 +4675,22 @@
    "swap_progress": 0.333333
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 136.0,
+   "handoff_bar_out": 152.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED' -> 'Ritmo Da Rua - H",
+   "n_paired_cues": 4,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "status": "raise"
+   "overlap_bars": 32.0,
+   "paired_cue_bars": [
+    136,
+    152,
+    168,
+    167
+   ],
+   "status": "ok",
+   "swap_progress": 0.5
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -4762,11 +4972,20 @@
    "swap_progress": 0.5
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 104.0,
+   "handoff_bar_out": 120.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER' -> 'Ritmo Da Rua - Harry Romero Remix 24 Bit MAST",
+   "n_paired_cues": 2,
    "out": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 48.0,
+   "paired_cue_bars": [
+    104,
+    120
+   ],
+   "status": "ok",
+   "swap_progress": 0.333333
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -4808,11 +5027,12 @@
    "handoff_bar_out": 144.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 3,
+   "n_paired_cues": 4,
    "out": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
    "overlap_bars": 48.0,
    "paired_cue_bars": [
     104,
+    120,
     144,
     152
    ],
