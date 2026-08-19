@@ -2,8 +2,8 @@
  "corpus": "Test Project/14.08.26",
  "n_pairs": 380,
  "n_tracks": 20,
- "ok": 268,
- "raised": 112,
+ "ok": 264,
+ "raised": 116,
  "rows": [
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -138,19 +138,18 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 160.0,
+   "arr_offset_bars": 184.0,
    "handoff_bar_out": 192.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 2,
+   "n_paired_cues": 1,
    "out": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "overlap_bars": 48.0,
+   "overlap_bars": 24.0,
    "paired_cue_bars": [
-    192,
-    208
+    192
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.333333
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -418,23 +417,21 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 168.0,
-   "handoff_bar_out": 200.0,
+   "arr_offset_bars": 184.0,
+   "handoff_bar_out": 192.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 6,
+   "n_paired_cues": 4,
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "overlap_bars": 42.0,
+   "overlap_bars": 26.0,
    "paired_cue_bars": [
-    168,
     184,
+    192,
     200,
-    176,
-    183,
     199
    ],
    "status": "ok",
-   "swap_progress": 0.761905
+   "swap_progress": 0.307692
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -1168,18 +1165,18 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 201.0,
+   "arr_offset_bars": 225.0,
    "handoff_bar_out": 233.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "n_paired_cues": 1,
    "out": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
-   "overlap_bars": 44.0,
+   "overlap_bars": 20.0,
    "paired_cue_bars": [
     233
    ],
    "status": "ok",
-   "swap_progress": 0.727273
+   "swap_progress": 0.4
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -1438,20 +1435,18 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 168.0,
-   "handoff_bar_out": 200.0,
-   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
+   "arr_offset_bars": 176.0,
+   "handoff_bar_out": 184.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 3,
+   "n_paired_cues": 1,
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
-   "overlap_bars": 35.0,
+   "overlap_bars": 27.0,
    "paired_cue_bars": [
-    168,
-    184,
-    200
+    184
    ],
    "status": "ok",
-   "swap_progress": 0.914286
+   "swap_progress": 0.296296
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -1680,11 +1675,20 @@
    "status": "raise"
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 160.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "msg": "No paired section/dropout alignment for 'Cevin Fisher - Emotions 24 Bit MASTER' -> 'Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
+   "n_paired_cues": 2,
    "out": "Cevin Fisher - Emotions 24 Bit MASTER",
-   "status": "raise"
+   "overlap_bars": 32.0,
+   "paired_cue_bars": [
+    168,
+    192
+   ],
+   "status": "ok",
+   "swap_progress": 0.25
   },
   {
    "error": "ValueError",
@@ -1927,18 +1931,19 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 164.0,
-   "handoff_bar_out": 196.0,
-   "handoff_kind": "paired/section:break:end->drop",
+   "arr_offset_bars": 168.0,
+   "handoff_bar_out": 176.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "out": "Christoph - Reachin 16 Bit MASTER",
-   "overlap_bars": 36.0,
+   "overlap_bars": 32.0,
    "paired_cue_bars": [
-    196
+    176,
+    200
    ],
    "status": "ok",
-   "swap_progress": 0.888889
+   "swap_progress": 0.25
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2482,22 +2487,23 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 184.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 168.0,
+   "handoff_bar_out": 176.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 5,
+   "n_paired_cues": 6,
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
+   "overlap_bars": 32.0,
    "paired_cue_bars": [
     168,
+    176,
     184,
     200,
-    183,
-    191
+    175,
+    183
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.25
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2637,7 +2643,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 152.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2653,7 +2659,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "n_paired_cues": 3,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2670,7 +2676,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "n_paired_cues": 3,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2692,24 +2698,24 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 160.0,
-   "handoff_bar_out": 168.0,
+   "arr_offset_bars": 159.0,
+   "handoff_bar_out": 167.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 24.0,
+   "overlap_bars": 25.0,
    "paired_cue_bars": [
-    168
+    167
    ],
    "status": "ok",
-   "swap_progress": 0.333333
+   "swap_progress": 0.32
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 3,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2726,7 +2732,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 152.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Cevin Fisher - Emotions 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2742,7 +2748,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Christoph - Reachin 16 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2758,7 +2764,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Christoph - The Rise 16 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2774,7 +2780,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
    "n_paired_cues": 7,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2795,7 +2801,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Harry Romero - Renegades SW V1",
    "n_paired_cues": 4,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2811,18 +2817,18 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 160.0,
-   "handoff_bar_out": 168.0,
+   "arr_offset_bars": 159.0,
+   "handoff_bar_out": 167.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
    "n_paired_cues": 1,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 24.0,
+   "overlap_bars": 25.0,
    "paired_cue_bars": [
-    168
+    167
    ],
    "status": "ok",
-   "swap_progress": 0.333333
+   "swap_progress": 0.32
   },
   {
    "error": "ValueError",
@@ -2835,7 +2841,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 160.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -2849,21 +2855,21 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 136.0,
+   "handoff_bar_out": 152.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
    "n_paired_cues": 4,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
+   "overlap_bars": 48.0,
    "paired_cue_bars": [
+    136,
     152,
     168,
-    184,
-    183
+    167
    ],
    "status": "ok",
-   "swap_progress": 0.5
+   "swap_progress": 0.333333
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2911,21 +2917,21 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 136.0,
+   "handoff_bar_out": 152.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
    "n_paired_cues": 4,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
+   "overlap_bars": 48.0,
    "paired_cue_bars": [
+    136,
     152,
     168,
-    184,
-    183
+    167
    ],
    "status": "ok",
-   "swap_progress": 0.5
+   "swap_progress": 0.333333
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -2944,34 +2950,18 @@
    "swap_progress": 0.4
   },
   {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 134.0,
-   "handoff_bar_out": 166.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "error": "ValueError",
    "in": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "n_paired_cues": 1,
+   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' inside the 16-48.0 bar window",
    "out": "Harry Romero - Renegades SW V1",
-   "overlap_bars": 34.0,
-   "paired_cue_bars": [
-    166
-   ],
-   "status": "ok",
-   "swap_progress": 0.941176
+   "status": "raise"
   },
   {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 134.0,
-   "handoff_bar_out": 166.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "error": "ValueError",
    "in": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
-   "n_paired_cues": 1,
+   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Andrea Oliva & Bensy - Nappp 24 BIt MASTER' inside the 16-48.0 bar window",
    "out": "Harry Romero - Renegades SW V1",
-   "overlap_bars": 34.0,
-   "paired_cue_bars": [
-    166
-   ],
-   "status": "ok",
-   "swap_progress": 0.941176
+   "status": "raise"
   },
   {
    "error": "ValueError",
@@ -2996,19 +2986,11 @@
    "swap_progress": 0.25
   },
   {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 134.0,
-   "handoff_bar_out": 166.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "error": "ValueError",
    "in": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
-   "n_paired_cues": 1,
+   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER' inside the 1",
    "out": "Harry Romero - Renegades SW V1",
-   "overlap_bars": 34.0,
-   "paired_cue_bars": [
-    166
-   ],
-   "status": "ok",
-   "swap_progress": 0.941176
+   "status": "raise"
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -3027,64 +3009,42 @@
    "swap_progress": 0.4
   },
   {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 134.0,
-   "handoff_bar_out": 166.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "error": "ValueError",
    "in": "Christoph - Reachin 16 Bit MASTER",
-   "n_paired_cues": 1,
+   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Christoph - Reachin 16 Bit MASTER' inside the 16-48.0 bar window",
    "out": "Harry Romero - Renegades SW V1",
-   "overlap_bars": 34.0,
-   "paired_cue_bars": [
-    166
-   ],
-   "status": "ok",
-   "swap_progress": 0.941176
+   "status": "raise"
   },
   {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 134.0,
-   "handoff_bar_out": 166.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "error": "ValueError",
    "in": "Christoph - The Rise 16 Bit MASTER",
-   "n_paired_cues": 1,
+   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Christoph - The Rise 16 Bit MASTER' inside the 16-48.0 bar window",
    "out": "Harry Romero - Renegades SW V1",
-   "overlap_bars": 34.0,
-   "paired_cue_bars": [
-    166
-   ],
-   "status": "ok",
-   "swap_progress": 0.941176
+   "status": "raise"
   },
   {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 134.0,
-   "handoff_bar_out": 166.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "error": "ValueError",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "n_paired_cues": 1,
+   "msg": "No paired section/dropout alignment for 'Harry Romero - Renegades SW V1' -> 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED' inside the 16-48",
    "out": "Harry Romero - Renegades SW V1",
-   "overlap_bars": 34.0,
-   "paired_cue_bars": [
-    166
-   ],
-   "status": "ok",
-   "swap_progress": 0.941176
+   "status": "raise"
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 134.0,
-   "handoff_bar_out": 166.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 136.0,
+   "handoff_bar_out": 144.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 1,
+   "n_paired_cues": 3,
    "out": "Harry Romero - Renegades SW V1",
-   "overlap_bars": 34.0,
+   "overlap_bars": 32.0,
    "paired_cue_bars": [
-    166
+    144,
+    168,
+    143
    ],
    "status": "ok",
-   "swap_progress": 0.941176
+   "swap_progress": 0.25
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -3792,23 +3752,23 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 128.0,
-   "handoff_bar_out": 160.0,
+   "arr_offset_bars": 144.0,
+   "handoff_bar_out": 152.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "n_paired_cues": 6,
    "out": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
-   "overlap_bars": 48.0,
+   "overlap_bars": 32.0,
    "paired_cue_bars": [
-    128,
+    152,
     160,
     176,
-    136,
+    151,
     159,
     175
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.25
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -4198,11 +4158,19 @@
    "status": "raise"
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 127.0,
+   "handoff_bar_out": 135.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "msg": "No paired section/dropout alignment for 'Sam Leagas - Bad Behaviours (Extended Mix) SW V2' -> 'Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MAS",
+   "n_paired_cues": 1,
    "out": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
-   "status": "raise"
+   "overlap_bars": 25.0,
+   "paired_cue_bars": [
+    135
+   ],
+   "status": "ok",
+   "swap_progress": 0.32
   },
   {
    "error": "ValueError",
@@ -4435,53 +4403,49 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 136.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 151.0,
+   "handoff_bar_out": 167.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
+   "overlap_bars": 17.0,
    "paired_cue_bars": [
-    136,
-    152
+    151,
+    167
    ],
    "status": "ok",
-   "swap_progress": 0.5
+   "swap_progress": 0.941176
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 120.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 133.0,
+   "handoff_bar_out": 165.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "n_paired_cues": 3,
+   "n_paired_cues": 1,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
+   "overlap_bars": 35.0,
    "paired_cue_bars": [
-    120,
-    152,
-    168
+    165
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.914286
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 120.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 133.0,
+   "handoff_bar_out": 165.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
-   "n_paired_cues": 3,
+   "n_paired_cues": 1,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
+   "overlap_bars": 35.0,
    "paired_cue_bars": [
-    120,
-    152,
-    168
+    165
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.914286
   },
   {
    "error": "ValueError",
@@ -4492,156 +4456,139 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 144.0,
-   "handoff_bar_out": 152.0,
+   "arr_offset_bars": 143.0,
+   "handoff_bar_out": 151.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 24.0,
+   "overlap_bars": 25.0,
    "paired_cue_bars": [
-    152
+    151
    ],
    "status": "ok",
-   "swap_progress": 0.333333
+   "swap_progress": 0.32
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 120.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 133.0,
+   "handoff_bar_out": 165.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
-   "n_paired_cues": 3,
+   "n_paired_cues": 1,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
+   "overlap_bars": 35.0,
    "paired_cue_bars": [
-    120,
-    152,
-    168
+    165
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.914286
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 136.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 151.0,
+   "handoff_bar_out": 167.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Cevin Fisher - Emotions 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
+   "overlap_bars": 17.0,
    "paired_cue_bars": [
-    136,
-    152
-   ],
-   "status": "ok",
-   "swap_progress": 0.5
-  },
-  {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 120.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
-   "in": "Christoph - Reachin 16 Bit MASTER",
-   "n_paired_cues": 2,
-   "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "paired_cue_bars": [
-    120,
-    152
-   ],
-   "status": "ok",
-   "swap_progress": 0.666667
-  },
-  {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 120.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
-   "in": "Christoph - The Rise 16 Bit MASTER",
-   "n_paired_cues": 2,
-   "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "paired_cue_bars": [
-    120,
-    152
-   ],
-   "status": "ok",
-   "swap_progress": 0.666667
-  },
-  {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 120.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
-   "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "n_paired_cues": 6,
-   "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "paired_cue_bars": [
-    120,
-    152,
-    168,
-    135,
-    136,
+    151,
     167
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.941176
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 120.0,
-   "handoff_bar_out": 152.0,
+   "arr_offset_bars": 133.0,
+   "handoff_bar_out": 165.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
+   "in": "Christoph - Reachin 16 Bit MASTER",
+   "n_paired_cues": 1,
+   "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
+   "overlap_bars": 35.0,
+   "paired_cue_bars": [
+    165
+   ],
+   "status": "ok",
+   "swap_progress": 0.914286
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 133.0,
+   "handoff_bar_out": 165.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
+   "in": "Christoph - The Rise 16 Bit MASTER",
+   "n_paired_cues": 1,
+   "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
+   "overlap_bars": 35.0,
+   "paired_cue_bars": [
+    165
+   ],
+   "status": "ok",
+   "swap_progress": 0.914286
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 133.0,
+   "handoff_bar_out": 165.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
+   "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
+   "n_paired_cues": 1,
+   "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
+   "overlap_bars": 35.0,
+   "paired_cue_bars": [
+    165
+   ],
+   "status": "ok",
+   "swap_progress": 0.914286
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 143.0,
+   "handoff_bar_out": 151.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 6,
+   "n_paired_cues": 1,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
+   "overlap_bars": 25.0,
    "paired_cue_bars": [
-    120,
-    136,
-    152,
-    168,
-    135,
-    167
+    151
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.32
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 120.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 133.0,
+   "handoff_bar_out": 165.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Harry Romero - Renegades SW V1",
-   "n_paired_cues": 4,
+   "n_paired_cues": 1,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
+   "overlap_bars": 35.0,
    "paired_cue_bars": [
-    120,
-    152,
-    167,
-    168
+    165
    ],
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.914286
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 144.0,
-   "handoff_bar_out": 152.0,
+   "arr_offset_bars": 143.0,
+   "handoff_bar_out": 151.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
    "n_paired_cues": 1,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 24.0,
+   "overlap_bars": 25.0,
    "paired_cue_bars": [
-    152
+    151
    ],
    "status": "ok",
-   "swap_progress": 0.333333
+   "swap_progress": 0.32
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -4660,37 +4607,36 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 144.0,
-   "handoff_bar_out": 152.0,
+   "arr_offset_bars": 143.0,
+   "handoff_bar_out": 151.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 2,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 24.0,
+   "overlap_bars": 25.0,
    "paired_cue_bars": [
-    152,
-    168
-   ],
-   "status": "ok",
-   "swap_progress": 0.333333
-  },
-  {
-   "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 136.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
-   "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "n_paired_cues": 4,
-   "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
-   "paired_cue_bars": [
-    136,
-    152,
-    168,
+    151,
     167
    ],
    "status": "ok",
-   "swap_progress": 0.5
+   "swap_progress": 0.32
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "arr_offset_bars": 135.0,
+   "handoff_bar_out": 151.0,
+   "handoff_kind": "paired/section:drop:end->drop",
+   "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
+   "n_paired_cues": 3,
+   "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
+   "overlap_bars": 33.0,
+   "paired_cue_bars": [
+    135,
+    151,
+    167
+   ],
+   "status": "ok",
+   "swap_progress": 0.484848
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -4698,13 +4644,12 @@
    "handoff_bar_out": 136.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
-   "n_paired_cues": 4,
+   "n_paired_cues": 3,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
    "paired_cue_bars": [
     120,
     136,
-    152,
     168
    ],
    "status": "ok",
@@ -4716,13 +4661,12 @@
    "handoff_bar_out": 136.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
-   "n_paired_cues": 5,
+   "n_paired_cues": 4,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
    "paired_cue_bars": [
     120,
     136,
-    152,
     168,
     167
    ],
@@ -4731,21 +4675,20 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 136.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 120.0,
+   "handoff_bar_out": 136.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
-   "n_paired_cues": 4,
+   "n_paired_cues": 3,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
+   "overlap_bars": 48.0,
    "paired_cue_bars": [
+    120,
     136,
-    152,
-    168,
-    167
+    151
    ],
    "status": "ok",
-   "swap_progress": 0.5
+   "swap_progress": 0.333333
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -4895,20 +4838,19 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 112.0,
+   "arr_offset_bars": 136.0,
    "handoff_bar_out": 144.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 3,
+   "n_paired_cues": 2,
    "out": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
-   "overlap_bars": 40.0,
+   "overlap_bars": 16.0,
    "paired_cue_bars": [
     144,
-    120,
     152
    ],
    "status": "ok",
-   "swap_progress": 0.8
+   "swap_progress": 0.5
   },
   {
    "alignment_policy": "paired_landmarks_v2",
