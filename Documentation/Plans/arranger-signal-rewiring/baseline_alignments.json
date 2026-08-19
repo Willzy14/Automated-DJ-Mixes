@@ -278,20 +278,21 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 176.0,
-   "handoff_bar_out": 192.0,
+   "arr_offset_bars": 168.0,
+   "handoff_bar_out": 184.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 3,
+   "n_paired_cues": 4,
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "overlap_bars": 34.0,
+   "overlap_bars": 42.0,
    "paired_cue_bars": [
-    176,
+    168,
+    184,
     192,
     200
    ],
    "status": "ok",
-   "swap_progress": 0.470588
+   "swap_progress": 0.380952
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -407,9 +408,9 @@
    "overlap_bars": 42.0,
    "paired_cue_bars": [
     168,
+    184,
     200,
     183,
-    184,
     199
    ],
    "status": "ok",
@@ -1040,12 +1041,11 @@
    "handoff_bar_out": 233.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 2,
+   "n_paired_cues": 1,
    "out": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
    "overlap_bars": 28.0,
    "paired_cue_bars": [
-    233,
-    245
+    233
    ],
    "status": "ok",
    "swap_progress": 0.571429
@@ -1304,12 +1304,13 @@
    "handoff_bar_out": 184.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
    "paired_cue_bars": [
     168,
-    184
+    184,
+    200
    ],
    "status": "ok",
    "swap_progress": 0.457143
@@ -1427,8 +1428,8 @@
    "overlap_bars": 35.0,
    "paired_cue_bars": [
     168,
-    200,
-    184
+    184,
+    200
    ],
    "status": "ok",
    "swap_progress": 0.914286
@@ -2085,7 +2086,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 237.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2100,7 +2101,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 221.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2115,7 +2116,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 221.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2144,7 +2145,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 221.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2159,7 +2160,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 237.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Cevin Fisher - Emotions 24 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2174,7 +2175,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 221.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Christoph - Reachin 16 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2189,13 +2190,14 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 221.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 35.0,
    "paired_cue_bars": [
-    253
+    253,
+    252
    ],
    "status": "ok",
    "swap_progress": 0.914286
@@ -2204,13 +2206,14 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 221.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 35.0,
    "paired_cue_bars": [
-    253
+    253,
+    252
    ],
    "status": "ok",
    "swap_progress": 0.914286
@@ -2219,7 +2222,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 221.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Harry Romero - Renegades SW V1",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2234,7 +2237,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 213.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2249,13 +2252,14 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 213.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 43.0,
    "paired_cue_bars": [
-    253
+    253,
+    252
    ],
    "status": "ok",
    "swap_progress": 0.930233
@@ -2264,7 +2268,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 229.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2279,7 +2283,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 237.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2294,7 +2298,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 237.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2309,7 +2313,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 237.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2324,13 +2328,14 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 213.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 43.0,
    "paired_cue_bars": [
-    253
+    253,
+    252
    ],
    "status": "ok",
    "swap_progress": 0.930233
@@ -2339,7 +2344,7 @@
    "alignment_policy": "paired_landmarks_v2",
    "arr_offset_bars": 237.0,
    "handoff_bar_out": 253.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:fill:end->drop",
    "in": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
    "n_paired_cues": 1,
    "out": "Christoph - The Rise 16 Bit MASTER",
@@ -2356,12 +2361,13 @@
    "handoff_bar_out": 184.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
    "overlap_bars": 32.0,
    "paired_cue_bars": [
     168,
-    184
+    184,
+    200
    ],
    "status": "ok",
    "swap_progress": 0.5
@@ -2645,12 +2651,13 @@
    "handoff_bar_out": 168.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 32.0,
    "paired_cue_bars": [
     152,
-    168
+    168,
+    184
    ],
    "status": "ok",
    "swap_progress": 0.5
@@ -2787,10 +2794,10 @@
    "overlap_bars": 48.0,
    "paired_cue_bars": [
     136,
+    152,
     168,
     184,
     151,
-    152,
     167,
     183
    ],
@@ -4403,19 +4410,20 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "arr_offset_bars": 151.0,
-   "handoff_bar_out": 167.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "arr_offset_bars": 135.0,
+   "handoff_bar_out": 151.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 17.0,
+   "overlap_bars": 33.0,
    "paired_cue_bars": [
+    135,
     151,
     167
    ],
    "status": "ok",
-   "swap_progress": 0.941176
+   "swap_progress": 0.484848
   },
   {
    "alignment_policy": "paired_landmarks_v2",
