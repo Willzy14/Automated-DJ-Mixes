@@ -927,13 +927,18 @@ def _apply_track_levelling(lines: list[str], tracks, audio_dir: Path) -> None:
 def main() -> None:
     if len(sys.argv) < 4:
         print("Usage: python apply_automation.py <sections.als> <sections.json> "
-              "<output.als> [arrangement_report.json]")
+              "<output.als> [arrangement_report.json] [mix_plan.json]")
         sys.exit(1)
 
     als_path = Path(sys.argv[1])
     json_path = Path(sys.argv[2])
     output_path = Path(sys.argv[3])
     arrangement_report_path = Path(sys.argv[4]) if len(sys.argv) >= 5 else None
+    # Optional 5th positional: MixPlan JSON (Phase 2c artefact). When
+    # present, the auto-reconcile gate fires after compress_als; when
+    # absent, behaviour is byte-for-byte unchanged (mix.md:344 — a run
+    # without Phase 2c has no MixPlan to reconcile, skip the gate).
+    mix_plan_path = Path(sys.argv[5]) if len(sys.argv) >= 6 else None
 
     # Deterministic IDs regardless of what ran before us in this process.
     reset_automation_ids()
@@ -1065,6 +1070,36 @@ def main() -> None:
     print(f"\nWriting {output_path.name} ...")
     compress_als(lines, output_path)
     print(f"Done -> {output_path}")
+
+    # ── MixPlan-to-ALS reconciliation (HARD GATE, optional) ───────────
+    # Only fires when Phase 2c produced a MixPlan (mix_plan_path supplied).
+    # reconcile() raises ValueError on any mismatch — we let it propagate so
+    # a stale / wrong plan stops the script (matching the "HARD GATE"
+    # framing in mix.md Phase 3b). The arrangement_report_path arg, if
+    # provided, is the SAME artefact reconcile() needs (its report_path
+    # reads `report["transitions"]` — the same schema _load_arrangement_report
+    # reads). If arrangement_report_path was not provided, fall back to
+    # the report alongside the ALS (same fallback _load_arrangement_report
+    # uses). No-MixPlan runs skip this block entirely — existing callers
+    # without --mix-plan see byte-for-byte identical behaviour.
+    if mix_plan_path is not None:
+        from validate_mix_plan_als import reconcile
+        report_for_reconcile = arrangement_report_path or (
+            output_path.parent / (output_path.stem + "_ARRANGEMENT_REPORT.json")
+        )
+        if not report_for_reconcile.is_file():
+            # Try the newest ARRANGEMENT_REPORT.json beside the output ALS
+            reps = sorted(
+                output_path.parent.glob("*ARRANGEMENT_REPORT.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            report_for_reconcile = reps[0] if reps else report_for_reconcile
+        print(f"\nReconciling MixPlan against {output_path.name} "
+              f"(plan={mix_plan_path.name}, "
+              f"report={report_for_reconcile.name}) ...")
+        reconcile(mix_plan_path, report_for_reconcile, output_path)
+        print(f"  [OK] MixPlan-to-ALS reconciliation passed")
 
 
 if __name__ == "__main__":

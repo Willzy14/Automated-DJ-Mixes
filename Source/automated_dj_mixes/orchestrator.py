@@ -29,6 +29,27 @@ from automated_dj_mixes.report import write_track_csv, write_transition_report
 from automated_dj_mixes.waveform_preview import PreviewContext, render_preview
 
 
+def _post_write_als_gate(path: Path) -> None:
+    """Explicit post-write corruption gate for the orchestrator's write path.
+
+    als_generator.compress_als (last line of generate_session) already runs
+    this same check transitively. This outer wrapper makes the gate visible
+    and auditable at the orchestrator call site, and survives any future
+    internal refactor of generate_session that might skip compress_als'
+    own check. Mirrors the identical pattern in apply_automation.py /
+    apply_loops.py / als_generator.py's compress_als.
+
+    Raises ValueError matching the canonical 'ALS validation failed for
+    <name>: <first-error>' format on any corruption.
+    """
+    from validate_als import report_als
+    errors = report_als(path)
+    if errors:
+        raise ValueError(
+            f"ALS validation failed for {path.name}: {errors[0]}"
+        )
+
+
 def _count_audio_tracks(als_path: Path) -> int:
     """Count the USABLE mix tracks in a template = <AudioTrack> elements minus the
     reserved first track (the 'Session Time' marker track that als_generator skips
@@ -834,6 +855,13 @@ def run_pipeline(
             transition_automation=None,
             tempo_automation=tempo_points,
         )
+        # Explicit post-write corruption gate. als_generator.compress_als (the
+        # last line of generate_session) already does this transitively, but
+        # this outer check makes the gate visible/auditable at the orchestrator
+        # call site too — and survives any future internal refactor that might
+        # skip compress_als' own check. Mirrors the identical pattern in
+        # apply_automation.py / apply_loops.py / als_generator.py's compress_als.
+        _post_write_als_gate(result)
         print(f"Done: {result}")
         return result
 

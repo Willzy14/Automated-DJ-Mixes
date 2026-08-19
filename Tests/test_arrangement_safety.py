@@ -606,3 +606,209 @@ def test_intro_loop_fills_a_fractional_remainder_exactly(monkeypatch):
     assert fill_beats == 52.0                         # 13 bars, not 12
     assert loop.insert_at_beat == 436.0 - 52.0        # enters on the outgoing's drop
     assert in_info.arr_start == loop.insert_at_beat
+
+# ALS-write corruption gates (validation audit item 6 / section 3.18,
+# mix.md Phase 3b "HARD GATE"): the orchestrator write path needs an
+# explicit outer gate (audit §3.18), and apply_automation.py's post-write
+# should auto-fire validate_mix_plan_als.reconcile() when a MixPlan was
+# produced (audit §3.5). Both gates must FAIL CLOSED and PASS through
+# when the file is clean.
+
+
+def test_orchestrator_post_write_als_gate_fails_closed(tmp_path):
+    """Mirror of the apply_loops / als_generator / apply_automation pattern:
+    a corrupt .als written to disk must raise ValueError matching the
+    canonical 'ALS validation failed for <name>: <first-error>' format
+    when the orchestrator's outer gate runs on it."""
+    from automated_dj_mixes.orchestrator import _post_write_als_gate
+
+    with pytest.raises(ValueError, match="ALS validation failed"):
+        _post_write_als_gate(tmp_path / "invalid.als")
+
+
+def test_orchestrator_post_write_gate_fires_even_if_internal_gate_passes(
+    tmp_path, monkeypatch
+):
+    """The outer gate is independent of als_generator.compress_als' internal
+    check. Proves it: stub validate_als.report_als to return a forced error
+    AFTER the file is written; the inner gate would have called validate_als
+    too, but here we are stubbing the module-level function so neither gate
+    'sees' a clean file. The outer gate must still raise. If anyone ever
+    removes the internal gate from compress_als, this test still passes --
+    exactly the resilience the explicit outer check was added for
+    (audit section 3.18 / item 6)."""
+    import validate_als
+    from automated_dj_mixes.orchestrator import _post_write_als_gate
+
+    good_path = tmp_path / "anything.als"  # path doesn't have to exist
+    forced = ["forced failure for test -- IntentionallyNotAnInt"]
+
+    def fake_report(path):
+        assert Path(path) == good_path
+        return forced
+
+    monkeypatch.setattr(validate_als, "report_als", fake_report)
+
+    with pytest.raises(ValueError, match=forced[0]):
+        _post_write_als_gate(good_path)
+
+
+def test_apply_automation_skips_reconcile_when_no_mix_plan(tmp_path, monkeypatch):
+    """No-MixPlan path must be byte-for-byte unchanged: the reconcile block
+    must not be entered. mix.md:344 -- a run without Phase 2c has no MixPlan
+    to reconcile against; rely on validate_als.py alone. We assert this by
+    spying on validate_mix_plan_als.reconcile and verifying it was never
+    called when sys.argv has no 5th positional."""
+    import sys
+    import validate_mix_plan_als
+    from apply_automation import main
+
+    called = {"n": 0}
+
+    def spy_reconcile(*args, **kwargs):
+        called["n"] += 1
+        return {}
+
+    monkeypatch.setattr(validate_mix_plan_als, "reconcile", spy_reconcile)
+
+    # Build the smallest valid .als + .json that lets main() complete to
+    # the "Done ->" print. Empty sections JSON -> plan_transitions gets no
+    # tracks -> main writes an essentially-empty ALS via decompress_als.
+    als_in = tmp_path / "in.als"
+    als_out = tmp_path / "out.als"
+    _write_minimal_valid_als(als_in)
+
+    sections_json = tmp_path / "sections.json"
+    sections_json.write_text("{}", encoding="utf-8")
+
+    # No 5th positional -> no reconcile call expected.
+    monkeypatch.setattr(sys, "argv", [
+        "apply_automation.py",
+        str(als_in),
+        str(sections_json),
+        str(als_out),
+    ])
+    main()
+
+    assert called["n"] == 0, (
+        "reconcile() must not run without a MixPlan path -- "
+        "no-MixPlan runs must remain byte-for-byte unchanged"
+    )
+    # The output .als must exist (script reached the end cleanly)
+    assert als_out.is_file()
+
+
+def test_apply_automation_calls_reconcile_when_mix_plan_provided(
+    tmp_path, monkeypatch
+):
+    """When a 5th positional MixPlan path is supplied, main() must call
+    validate_mix_plan_als.reconcile() exactly once with the three arguments
+    (plan, report, als) in that order, AFTER compress_als has written the
+    output .als."""
+    import sys
+    import validate_mix_plan_als
+    from apply_automation import main
+
+    received = []
+
+    def spy_reconcile(plan_path, report_path, als_path):
+        received.append((plan_path, report_path, als_path))
+        return {"status": "PASS", "checks": [], "errors": []}
+
+    monkeypatch.setattr(validate_mix_plan_als, "reconcile", spy_reconcile)
+
+    als_in = tmp_path / "in.als"
+    als_out = tmp_path / "out.als"
+    _write_minimal_valid_als(als_in)
+
+    sections_json = tmp_path / "sections.json"
+    sections_json.write_text("{}", encoding="utf-8")
+
+    mix_plan = tmp_path / "MIX_PLAN.json"
+    mix_plan.write_text("{}", encoding="utf-8")
+    arrangement_report = tmp_path / "ARRANGEMENT_REPORT.json"
+    arrangement_report.write_text('{"transitions": [{"out_track": "a", "in_track": "b", "swap_beats": 100.0}]}', encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [
+        "apply_automation.py",
+        str(als_in),
+        str(sections_json),
+        str(als_out),
+        str(arrangement_report),  # 4th positional -> report
+        str(mix_plan),            # 5th positional -> MixPlan
+    ])
+    main()
+
+    assert len(received) == 1, (
+        f"reconcile() should be called exactly once, got {len(received)}"
+    )
+    plan_arg, report_arg, als_arg = received[0]
+    assert Path(plan_arg) == mix_plan
+    assert Path(report_arg) == arrangement_report
+    assert Path(als_arg) == als_out
+
+
+def test_apply_automation_propagates_reconcile_failure_as_hard_gate(
+    tmp_path, monkeypatch
+):
+    """Hard gate: when reconcile() raises ValueError, main() must propagate
+    it (do not swallow, do not print 'Done ->'). Forced-FAIL recipe per the
+    task: monkeypatch reconcile() to raise with a representative MixPlan
+    hash mismatch error and confirm apply_automation.main() exits via the
+    raise rather than printing 'Done ->'."""
+    import sys
+    import validate_mix_plan_als
+    from apply_automation import main
+
+    def forced_fail(plan_path, report_path, als_path):
+        raise ValueError(
+            "MixPlan plan_hash is stale; "
+            "forced FAIL for hard-gate propagation test"
+        )
+
+    monkeypatch.setattr(validate_mix_plan_als, "reconcile", forced_fail)
+
+    als_in = tmp_path / "in.als"
+    als_out = tmp_path / "out.als"
+    _write_minimal_valid_als(als_in)
+
+    sections_json = tmp_path / "sections.json"
+    sections_json.write_text("{}", encoding="utf-8")
+
+    mix_plan = tmp_path / "MIX_PLAN.json"
+    mix_plan.write_text("{}", encoding="utf-8")
+    arrangement_report = tmp_path / "ARRANGEMENT_REPORT.json"
+    arrangement_report.write_text('{"transitions": [{"out_track": "a", "in_track": "b", "swap_beats": 100.0}]}', encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [
+        "apply_automation.py",
+        str(als_in),
+        str(sections_json),
+        str(als_out),
+        str(arrangement_report),
+        str(mix_plan),
+    ])
+
+    with pytest.raises(ValueError, match="forced FAIL for hard-gate"):
+        main()
+
+
+def _write_minimal_valid_als(path):
+    """Write the smallest gzipped XML .als that passes validate_als' four
+    layers (gzip, XML parse, known-int fields, no zero-length clips, track
+    ordering). One MainTrack, no AudioTracks. Enough to round-trip through
+    decompress_als/compress_als."""
+    import gzip
+
+    xml = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<Ableton MajorVersion="5" MinorVersion="0">\n'
+        '<MainTrack>\n'
+        '<Tempo>\n'
+        '<Manual Value="120.0" />\n'
+        '</Tempo>\n'
+        '</MainTrack>\n'
+        '</Ableton>\n'
+    )
+    with gzip.open(path, "wb") as f:
+        f.write(xml.encode("utf-8"))
