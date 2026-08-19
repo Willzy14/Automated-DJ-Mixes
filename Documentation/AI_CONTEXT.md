@@ -189,7 +189,53 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-19 evening (Latest Session) - Top-10 list executed, 9 WAVs recovered from G:, Mix V10 shipped
+### 2026-08-19 overnight (Latest Session) - final 7 stale caches re-analyzed, corpus fully current
+**Brain:** Claude (Fable 5, autonomous overnight courier — Sam back tomorrow).
+
+**Task**: re-analyze the last stale `_Stem Analysis` caches in `Test Project/14.08.26` (pre-`6a717f4`/
+`def5062`, mtime 2026-08-17) with fresh Demucs + Kick Detector V3, then refresh the alignment
+baseline. Same mechanism as the evening's `rerun_2_tonight.py`, adapted as
+`Output/_resweep_scripts/rerun_final_7_overnight.py` (bpm/downbeat reused from the stale JSONs —
+grid detection unchanged by the detector updates; stale caches backed up to scratch first).
+
+**Brief correction (trusted the mtimes, per the brief's own instruction)**: the overnight brief
+listed Fish Go Deep as the 7th target, but its cache was already fresh (2026-08-19 17:40, tonight's
+rerun); the actual 7th stale track by mtime was `Nic Fanciulli & Butch - I Want You` (2026-08-17
+16:49), which the brief omitted. Re-analyzed the true stale 7; Fish Go Deep + Vente verified fresh
+and skipped. **All 20/20 caches now post-date the mix-energy detector.**
+
+**Per-track old vs new** (7 tracks, all ✓real fresh Demucs+V3 on the RTX 3050, ~1 min/track):
+
+| Track | Status | Change |
+|---|---|---|
+| A Studio - SOS (Skylark Remix) | ✓real, CHANGED | `build_1` end 28→32 / `drop_2` start 28→32 (build now full 8 bars); kick_cues 2→2 |
+| Alaia & Gallo - Pushin' From The Walls | ✓real, sections unchanged | kick_cues 13→33 (raw V3 presence surfaces far more dropout/return pairs) |
+| Andrea Oliva feat. Morchebba - Dancing | ✓real, sections unchanged | kick_cues 11→13 |
+| Christoph - Reachin | ✓real, CHANGED | `drop_2` end 100→96 / `break_1` start 100→96 (break starts 4 bars earlier); kick_cues 2→4 |
+| Christoph - The Rise | ✓real, CHANGED | `drop_7` end 253→252, new `fill_3`[252-253] before outro — **confirms the earlier session's cache-only estimate exactly**; kick_cues 12→12 |
+| Doorly & Harry Choo Choo Romero - The Truth | ✓real, CHANGED | `intro_1`[0-32] split into `intro_1`[0-16]+`build_1`[16-32]; kick_cues 9→21 |
+| Nic Fanciulli & Butch - I Want You | ✓real, sections unchanged | kick_cues 11→13 |
+
+4/7 changed sections — the 2026-08-19 earlier session's cache-only reconstruction (which estimated
+1/7 of these changed) under-counted exactly as documented: it missed SOS, Reachin and Doorly.
+
+**Baseline refresh (attribution clean)**: `test_alignment_baseline.py` diff = **26 changed / 0
+newly-align / 0 newly-raise of 380 pairs, all 26 involving a re-analyzed track** (verified
+programmatically, 0 unattributed): 17 pairs are The Rise outgoing — its new tail `fill_3` flips
+`handoff_kind` `paired/section:drop:end->drop` → `fill:end->drop`; the rest are A Studio SOS
+incoming (extra paired cue bar 200, and the Alaia→SOS handoff moving 192→184 with overlap 34→42),
+Doorly incoming (cue additions/ordering) and Alaia/Fish-Go-Deep outgoing cue-order changes.
+Refreshed via the documented `--refresh` (380 pairs, 264 aligned, 116 raised). **Full suite: 286
+passed / 6 skipped / 0 failed.** `test_kick_cues_property.py`: all 20 tracks pass. Commits (local
+only, NOT pushed — Sam's /session-end is the shipping gate): `2805352` (baseline).
+
+Files: `Documentation/Plans/arranger-signal-rewiring/baseline_alignments.json`,
+`Documentation/AI_CONTEXT.md`, `.github/ai-activity-log.md`,
+`Test Project/14.08.26/Output/_resweep_scripts/rerun_final_7_overnight.py` (+ log; gitignored).
+No `Source/` files touched. Cache backups in the session scratchpad
+(`stale_backup_2026-08-19_final7/`).
+
+### 2026-08-19 evening - Top-10 list executed, 9 WAVs recovered from G:, Mix V10 shipped
 **Brain:** Claude (orchestrator) + MiniMax M3 (builder via couriers). Sam upgraded to the Max plan mid-session (usage pressure off).
 
 **Completed** (main advanced `a6e389e` -> `9920fea`, all merges verified against the suite before landing):
@@ -1093,8 +1139,9 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 > **RESOLVED (2026-08-19 evening): all 9 WAVs recovered from `G:\Everything` shortcut index** (see
 > latest session entry - `-LiteralPath` + "Cristoph" spelling gotchas). 2 of the 9 (Fish Go Deep,
-> Vente) re-analyzed same evening for Mix V10; **the remaining 7 still need fresh Demucs + Kick V3**
-> once the tail-anchor courier lands (corpus must not shift mid-validation).
+> Vente) re-analyzed same evening for Mix V10; ~~the remaining 7 still need fresh Demucs + Kick V3~~
+> **RESOLVED (2026-08-19 overnight): the final 7 stale caches re-analyzed with fresh Demucs + Kick
+> V3 — corpus fully current at 20/20, baseline refreshed `2805352`** (see overnight session entry).
 > ~~**TOP (2026-08-19) - re-source 9 missing 14.08.26 source WAVs, then finish the full re-sweep.**~~
 > `Test Project/14.08.26/Audio/` was cleaned off disk for space at some point; 11/20 master WAVs were
 > re-located and copied back (never moved) from `1./2./2.1. Stereo/Stem Masters`, `Defected Masters`,
