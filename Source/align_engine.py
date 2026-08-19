@@ -123,7 +123,14 @@ class CueConfig:
     #: Position the incoming so the outgoing's one-phrase-from-END point meets the
     #: incoming's one-phrase-from-START point, instead of hunting for coinciding
     #: cues. Sam's rule, 2026-08-17. Tried FIRST; falls through to the cue search.
-    matched_tail_head_swap: bool = False
+    matched_tail_head_swap: bool = True   # 2026-08-18: Sam — when no anchor at start or end,
+                                              # fall back 16 bars in from the first beat / 16 bars
+                                              # back from the last beat. Was opt-in (False);
+                                              # now default-on so the rule fires on the first
+                                              # search, not just the rescue. PHRASE_BACKSTEP_BARS
+                                              # = 16 is the constant; the rule only RETURNS a
+                                              # candidate if the resulting overlap fits 16-48
+                                              # bars, so existing valid pairs are unaffected.
     #: Wire Sam's hand-authored per-track hints (first_drop / first_break /
     #: outro_start / last_bass_drop) as Tier-1 swap anchors. The Track fields
     #: are ALWAYS populated when hint JSON data exists (off-default for every
@@ -699,8 +706,24 @@ def _search_matched_tail_head(o, i, outgoing, incoming, window_start,
             "incoming_source_bar": incoming_bar,
             "incoming_labels": incoming_cue["labels"],
         })
+    # Sam, 2026-08-18: "if there is no anchor at the start or end, you run in 16 bars
+    # from the first beat or run back 16 bars from the last beat and then you will
+    # get the anchor point there." The whole reason this rule exists is for tracks
+    # with NO real cue to line up at the chosen bar. If no real pairs landed, the
+    # synthesized (out_anchor, in_pt) pair IS the answer — count it. Without this,
+    # a track with full energy to the end + a track with no intro section both
+    # produce zero pairs and the rule returns None, defeating the rescue.
     if not pairs:
-        return None
+        in_cue_for_pt = incoming.get(in_pt) or {
+            "weight": 5, "labels": ["matched_head"]
+        }
+        pairs = [{
+            "arrangement_bar": arr_offset + in_pt,
+            "outgoing_labels": outgoing_cue["labels"],
+            "incoming_source_bar": in_pt,
+            "incoming_labels": in_cue_for_pt["labels"],
+        }]
+        weighted_score = outgoing_cue["weight"] + in_cue_for_pt["weight"]
 
     rank = (1, weighted_score, 2, -abs(progress - 0.65), overlap)
     return (rank, arr_offset, overlap, out_anchor, outgoing_cue,
