@@ -189,7 +189,94 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-18 (Latest Session) - Double Dutch cache refresh closes the kick_cues property test
+### 2026-08-19 (Latest Session) - 14.08.26 corpus re-sweep for the mix-energy detector, blocked on missing source audio
+**Brain:** Claude Sonnet 5 (autonomous run, Sam out of usage until 2026-08-21).
+
+**Task**: re-run the three-phase `/mix` pipeline on `Test Project/14.08.26` (20 tracks) against
+`main` (mix-energy break detector `6a717f4` + `def5062` merged), standard default invocation only
+(no `--cue-signals` extras), to isolate exactly what the new detector changes vs the last generated
+`14.08.26 Mix V8.als`.
+
+**Blocker found first**: `Test Project/14.08.26/Audio/` no longer exists on disk (cleaned up for
+space at some point — `C:` was at 91% used this session) and `Hints/` is also gone. Exhaustive
+search (`1. Stereo Masters`, `2. Ongoing Stem Mixes`, `2.1. Finished Stem Mixes`, `5. Drop Box
+MASTERS`, `6. Drop Box Pre MASTERS`, `Defected Masters`, `Odd One Out MASTERS`, `Downloads`,
+Recycle Bin, the `F:` 2025-now backup drive) recovered 11/20 master WAVs by exact filename match;
+**9/20 are genuinely unrecoverable on this machine** (list in `What's Next`). Per the hard
+never-move-originals rule, all 11 were COPIED (not moved) into a fresh `Audio/` folder.
+
+**What was actually verified (real, not estimated)**: ran fresh Demucs + Kick Detector V3 via
+`stem_detector.detect(..., kick_model=True)` for all 11 recovered tracks (GPU, RTX 3050, ~served
+from `Source/stem_detector.py` at HEAD `88f15c4`, which is unaffected by the `feat/validate-gates`
+merge that landed on `main` mid-session — see caveat below). This overwrote their
+`_Stem Analysis/SECTIONS_STEM_*.json` / `__stemenv.npz` / `DETECT_*.png` cache in place (stale
+copies backed up to a scratch dir first). **5/11 changed sections, 6/11 unchanged** — see table
+below. For the other 9 tracks (no audio), built a cache-only reconstruction (kick_on rebuilt from
+the OLD `kick_cues`, bass presence from `bass_regions`, `mix_norm` freshly computed from the cached
+`__stemenv.npz`, current `_energy_cues`/`_assign_labels` imported live from `stem_detector.py`) —
+validated against the 11 real tracks and found to **under-count real changes** (matched 3/5, missed
+2/5), so its result (1/9 changed — `Christoph - The Rise`, tail fill boundary) is a **lower bound,
+not authoritative**.
+
+**Per-track result** (20 tracks; ✓real = fresh Demucs+V3 this session, ~est = cache reconstruction
+only, unrecoverable audio):
+
+| Track | Status | Change |
+|---|---|---|
+| Sam Leagas - Double Dutch | ✓real (pre-existing, `86faa6f`) | new `break_1` bars 32-48 |
+| Andrea Oliva & Bensy - Nappp | ✓real, CHANGED | `break_2` end 120→116, new `build_1`[116-120] |
+| Cevin Fisher & Harry Romero - That Sound | ✓real, CHANGED | `break_1` 84-152 split into break/drop/fill/drop/break |
+| Harry Romero - Renegades | ✓real, CHANGED | `drop_4` end 167→166, outro starts 1 bar earlier |
+| Ritmo Da Rua - Harry Romero Remix | ✓real, CHANGED | old single `intro_1[0-56]` now `intro_1[0-16]`+`drop_1[16-32]`+`build_1[32-56]` |
+| Soulsearcher - Feelin Love | ✓real, CHANGED | intro split near start + mid-drop split (not edge-relevant) |
+| BUTCH & Santos, Cevin Fisher - Emotions, Nic Fanciulli - Revoloution, Sam Leagas - Bad Behaviours, Switch Disco | ✓real, unchanged | — |
+| Christoph - The Rise | ~est, CHANGED | tail `fill_3`[252-253] appears before outro (unverified) |
+| A Studio - SOS, Alaia & Gallo, Andrea Oliva feat. Morchebba, Christoph - Reachin, Doorly & Harry Choo Choo Romero, Fish Go Deep, Nic Fanciulli & Butch - I Want You, Nic Fanciulli - Vente | ~est, unchanged (lower bound — may under-count) | — |
+
+**Swap/handoff point test (the real question)**: loaded `align_engine.load_track` + `align_pair`
+(default policy, no `--cue-signals`) for both OLD (backed-up stale) and NEW (updated) section data,
+for every one of the 19 adjacent pairs in `14.08.26 Mix V8.als`'s actual running order. Result: **0
+transitions moved among pairs that align at all; 1 transition (`Harry Romero - Renegades ->
+Ritmo Da Rua`, T4) went from FAILING outright to SUCCEEDING** — the new boundaries gave it a valid
+`landmark:kick_dropout->drop` pairing (`handoff_bar_out=144`, `arr_offset_bars=128`,
+`overlap_bars=40`) where the old data had no valid 16-48-bar window at all. No transition regressed
+(0 newly-broken).
+
+**Second, independent finding — NOT caused by this session's work**: **5 of the 19 transitions in
+this exact running order fail `align_pair` under the standard-default policy on BOTH old and new
+data** (`Revoloution -> Renegades`, `Ritmo Da Rua -> BUTCH & Santos`, `Bad Behaviours -> That
+Sound`, `Fish Go Deep -> Soulsearcher`, `Soulsearcher -> Dancing`) — the same "no valid landmark
+alignment inside 16-48 bars" class documented as OPEN in the 2026-08-14 entry below (Revoloution
+has no outro). Since `14.08.26 Mix V8.als` exists and plays, its actual Phase 2 build must have used
+non-default `--cue-signals` extras (or the day's since-reverted `matched_tail_head_swap` WIP) — a
+literal standard-default-only Phase 2 run over this project's current running order **cannot
+complete end-to-end**, independent of the missing-audio blocker.
+
+**Not done, and why**: did not attempt a full Phase 1a/2/3 pipeline run or produce a new `Sections
+V4.als`/`Final V9.als`. Building one from a mix of real (11 tracks) and reconstructed (9 tracks)
+section data would silently misrepresent 9 tracks as regenerated when they aren't, and the
+standard-default Phase 2 blocker above means it couldn't complete anyway without the same
+non-default extras V8 used (which the task explicitly excluded, to isolate just the section-detector
+change). The regenerated cache for the 11 real tracks is left in place in
+`Test Project/14.08.26/_Stem Analysis/` (gitignored, not committed) — a future full run will pick it
+up directly. Full script trail (not committed, scratch): `resweep_14_08_26.py` (cache
+reconstruction), `real_rerun_11.py` (the real 11-track Demucs+V3 rerun), `swap_compare.py` (the
+align_pair old-vs-new test) — all read `Source/stem_detector.py` / `Source/align_engine.py` live,
+never reimplemented their logic.
+
+**Environment note**: `main` advanced from `a6e389e` (this session's starting point, matching the
+task's described `2d560b8` lineage) to `88f15c4` mid-session via another courier's
+`feat/validate-gates` merge (`orchestrator.py` sections-layout-default + validation auto-gate,
+`apply_automation.py` additions). Confirmed `stem_detector.py` and `align_engine.py` — the only two
+files this session's analysis depends on — were untouched by that merge, so the results above are
+unaffected; deliberately did NOT invoke the orchestrator or `apply_automation.py` given the moving
+target, to keep the comparison scoped to only the mix-energy detector as instructed.
+
+Files: `Documentation/AI_CONTEXT.md`, `.github/ai-activity-log.md`. No `Source/` files touched.
+`Test Project/14.08.26/Audio/` (11 WAVs, copied not moved) and `_Stem Analysis/*` (11 tracks
+refreshed) are gitignored, disk/Dropbox-only.
+
+### 2026-08-18 (Prior Session) - Double Dutch cache refresh closes the kick_cues property test
 **Brain:** Claude Sonnet 5.
 
 Regenerated the stale `SECTIONS_STEM`/`__stemenv` cache for `Sam Leagas - Double Dutch (Extended
@@ -982,6 +1069,30 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 **Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation. V1-V8.
 
 ## What's Next
+
+> **TOP (2026-08-19) - re-source 9 missing 14.08.26 source WAVs, then finish the full re-sweep.**
+> `Test Project/14.08.26/Audio/` was cleaned off disk for space at some point; 11/20 master WAVs were
+> re-located and copied back (never moved) from `1./2./2.1. Stereo/Stem Masters`, `Defected Masters`,
+> etc. and re-processed with fresh Demucs + Kick Detector V3 against the current mix-energy detector
+> (see the 2026-08-19 session entry above for the full result). **These 9 could not be found anywhere
+> on this machine (Dropbox, `F:` backup, Downloads, Recycle Bin) and need Sam to re-supply them**
+> before a full 20-track Phase 1a re-run can complete: `A Studio - SOS (Skylark Remix Nic Fanciulli
+> 2022 Edit) 24 Bit MASTER`, `Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER`, `Andrea Oliva
+> feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER`, `Christoph - Reachin 16 Bit MASTER`,
+> `Christoph - The Rise 16 Bit MASTER`, `Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER
+> AMENDED`, `Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED`, `Nic
+> Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED`, `Nic Fanciulli - Vente
+> (Extended Mix) 24 Bit MASTER`. Once restored, also worth pulling `feat/validate-gates`'s now-merged
+> sections-layout-default + validation-auto-gate changes into account before the next full run.
+> **Separately, and independent of the audio blocker:** the standard-default (no `--cue-signals`)
+> Phase 2 policy cannot complete this project's actual running order end-to-end — 5 of 19 transitions
+> hard-fail with "no valid landmark alignment inside 16-48 bars" on BOTH old and new section data
+> (`Revoloution -> Renegades`, `Ritmo Da Rua -> BUTCH & Santos`, `Bad Behaviours -> That Sound`,
+> `Fish Go Deep -> Soulsearcher`, `Soulsearcher -> Dancing`). `14.08.26 Mix V8.als` only exists because
+> its real build used non-default `--cue-signals` extras (or the day's since-reverted
+> `matched_tail_head_swap` WIP) — never confirmed which. This is the SAME root cause as the item
+> immediately below (missing-outro outgoing tracks), now confirmed to hit 5 pairs in this specific
+> project, not just the one Sam originally flagged.
 
 > **TOP (2026-08-14) - resume the paused 14.08.26 mix; fix the no-outro align_engine gap.** `/mix` is
 > mid-Phase-2 on `Test Project/14.08.26`, paused because Sam had to leave. Check whether the reordered
