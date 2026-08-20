@@ -1825,7 +1825,13 @@ def _apply_cue_signals(cue_signals: str, error=None) -> None:
              "deep": "deep_intro_anchor", "bassout": "emit_bass_out",
              "introloop": "incoming_intro_loop",
              "matched": "matched_tail_head_swap",
-             "hints": "emit_hint_fields"}
+             "hints": "emit_hint_fields",
+             # Added 2026-08-20: the rescue shipped merged, tested and validated
+             # (59/110 unalignable pairs rescued, 0/270 working pairs touched) but had
+             # no token here, so it was unreachable from the CLI -- built-but-unwired,
+             # the exact class this project keeps producing. Without it a 20-track
+             # 14.08.26 run hard-raises at the third transition.
+             "rescue": "tail_anchor_rescue"}
     unknown = wanted - set(known)
     if unknown:
         msg = (f"unknown cue signal(s): {', '.join(sorted(unknown))}; "
