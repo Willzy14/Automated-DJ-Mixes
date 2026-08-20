@@ -791,6 +791,7 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
 
     Source/target are in track-native bars; bars->beats is *4.
     """
+    from align_engine import LANDMARK_POLICIES
     for fc in getattr(al, "fills_cuts", None) or []:
         if fc.kind == "outgoing_tail" and (fc.reps >= 1 or fc.partial_bars > 0):
             outro = next((s for s in out_track.sections if _label(s) == "outro"), None)
@@ -803,7 +804,7 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
             source_end = fc.source_end_bar * 4.0
             outro_source_start = float(outro["source_start_beats"])
             if (source_start >= outro_source_start
-                    and getattr(al, "alignment_policy", "legacy_v1") != "paired_landmarks_v2"):
+                    and getattr(al, "alignment_policy", "legacy_v1") not in LANDMARK_POLICIES):
                 previous = pre_outro_section(out_track)
                 source_end = outro_source_start
                 source_start = source_end - chunk_beats
@@ -1567,6 +1568,18 @@ def propose_arrangement(als_path: Path, sections_path: Path,
 
 # -- Report generation --------------------------------------------------------
 
+def _landmark_policy_label(alignment_policy: str) -> str:
+    """Report whether the aligner SELECTED landmarks/cues for this pair's
+    arrangement, or the candidates are informational only. Every landmark-mode
+    policy (paired_landmarks_v2 AND tail_anchor_rescue_v1 — the rescue places
+    the pair from paired anchors too) reports selected; only the legacy
+    heuristic is report-only."""
+    from align_engine import LANDMARK_POLICIES
+    return ("selected_for_arrangement_v2"
+            if alignment_policy in LANDMARK_POLICIES
+            else "report_only_v1")
+
+
 def _final_landmark_candidates(plan: ArrangementPlan, alignment) -> list[dict]:
     """Map pre-loop landmark evidence onto final arrangement geometry."""
     final: list[dict] = []
@@ -1755,11 +1768,7 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
             t["alignment_policy"] = al.alignment_policy
             t["paired_cues"] = al.paired_cues
             t["swap_progress"] = al.swap_progress
-            t["landmark_policy"] = (
-                "selected_for_arrangement_v2"
-                if al.alignment_policy == "paired_landmarks_v2"
-                else "report_only_v1"
-            )
+            t["landmark_policy"] = _landmark_policy_label(al.alignment_policy)
             t["musical_landmark_candidates"] = [
                 candidate for candidate in _final_landmark_candidates(plan, al)
                 if (candidate["arrangement_end_beat"] >= ov.overlap_start

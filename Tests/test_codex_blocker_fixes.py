@@ -6,6 +6,10 @@
    plan_fill_or_cut -- their loops/cuts obey the same CueConfig flags.
 4. apply_automation never snaps an aligner-chosen swap; the arrangement
    report always ends up carrying the beat automation actually used.
+5. (follow-up sweep, same class as 3) Rescued alignments take the landmark
+   path at propose_arrangement's remaining literal policy comparisons: the
+   tail-loop source relocation in _plan_marker_loops, and the report's
+   landmark_policy field.
 """
 from __future__ import annotations
 
@@ -217,3 +221,83 @@ def test_final_beat_is_written_back_to_report(tmp_path):
 def test_resolve_report_path_explicit_missing_raises(tmp_path):
     with pytest.raises(ValueError, match="was not found"):
         _resolve_report_path(tmp_path / "mix.als", tmp_path / "missing.json")
+
+
+# --- Fix 5: rescue policy takes the landmark path in propose_arrangement ----
+
+def _relocation_fixture():
+    """Out-track with drop + outro; tail-loop FillCutSpec source already inside
+    the outro (source_start_bar 100 = beat 400 >= outro_source_start 384), so
+    the legacy relocation guard at the top of _plan_marker_loops is reached.
+    chunk = 16 beats. Fresh per test -- _plan_marker_loops mutates analysis
+    and the out-track sections."""
+    out_t = PA.TrackInfo(
+        name="OutT",
+        sections=[
+            {"name": "drop_1", "label": "drop",
+             "source_start_beats": 0.0, "arr_time": 0.0, "arr_end": 384.0},
+            {"name": "outro_1", "label": "outro",
+             "source_start_beats": 384.0, "arr_time": 384.0, "arr_end": 512.0},
+        ],
+        arr_start=0.0, arr_end=512.0,
+    )
+    fc = AE.FillCutSpec(
+        kind="outgoing_tail", reps=2,
+        source_start_bar=100.0, source_end_bar=104.0,
+    )
+    al = AE.Alignment(
+        out_name="OutT", in_name="InT",
+        handoff_bar_out=96.0, handoff_kind="rescue/grid_tail->drop",
+        anchor_bar_in=8.0, arr_offset_bars=88.0, overlap_bars=24.0,
+        score=0, alignment_policy="tail_anchor_rescue_v1",
+        fills_cuts=[fc],
+    )
+    analysis = PA.OverlapAnalysis(
+        out_track="OutT", in_track="InT", pair_index=1,
+        overlap_start=384.0, overlap_end=512.0,
+        overlap_beats=128.0, overlap_bars=32.0, status="ok",
+    )
+    in_t = PA.TrackInfo(name="InT", sections=[], arr_start=384.0, arr_end=1024.0)
+    return out_t, in_t, al, analysis
+
+
+def test_rescue_tail_loop_source_is_not_relocated():
+    out_t, in_t, al, analysis = _relocation_fixture()
+    PA._plan_marker_loops(out_t, in_t, al, analysis)
+    tail = analysis.out_tail_loop
+    assert tail is not None
+    assert tail.source_beat_start == 400.0
+    assert tail.source_beat_end == 416.0
+    assert "moved tail-loop source" not in analysis.notes
+
+
+def test_v2_tail_loop_source_is_not_relocated():
+    out_t, in_t, al, analysis = _relocation_fixture()
+    al = replace(al, alignment_policy="paired_landmarks_v2")
+    PA._plan_marker_loops(out_t, in_t, al, analysis)
+    tail = analysis.out_tail_loop
+    assert tail is not None
+    assert tail.source_beat_start == 400.0
+    assert tail.source_beat_end == 416.0
+    assert "moved tail-loop source" not in analysis.notes
+
+
+def test_fixture_is_potent_legacy_policy_does_relocate():
+    # Prove-the-test: under the legacy policy the relocation DOES fire, so the
+    # no-relocation results above are the classification at work, not a vacuous
+    # fixture. The source is pulled back to outro_source_start 384 - chunk 16
+    # = 368, and the marker note lands in analysis.notes.
+    out_t, in_t, al, analysis = _relocation_fixture()
+    al = replace(al, alignment_policy="legacy_v1", handoff_kind="drop->outro")
+    PA._plan_marker_loops(out_t, in_t, al, analysis)
+    tail = analysis.out_tail_loop
+    assert tail is not None
+    assert tail.source_beat_start == 368.0
+    assert tail.source_beat_end == 384.0
+    assert "moved tail-loop source" in analysis.notes
+
+
+def test_landmark_policy_label_mapping():
+    assert PA._landmark_policy_label("tail_anchor_rescue_v1") == "selected_for_arrangement_v2"
+    assert PA._landmark_policy_label("paired_landmarks_v2") == "selected_for_arrangement_v2"
+    assert PA._landmark_policy_label("legacy_v1") == "report_only_v1"

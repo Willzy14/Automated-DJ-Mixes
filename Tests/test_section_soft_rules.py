@@ -4,7 +4,9 @@ Style matches Tests/test_stem_detector_energy_cues.py: synthetic kick-presence
 arrays, deterministic, no corpus dependency.
 
 Covers:
-  - R2: kick-less head extends intro through contiguous kick-less pre-drop sections
+  - R2: kick-less head extends intro through contiguous kick-less pre-drop
+    sections (discriminating fixture: fails under OFF and under an
+    R2-branch-neutralised run -- only R2's walk produces the full extension)
   - R2 negative: kick-in head + later kick-out break is NOT relabeled by R2
   - R3: kick-less tail triggers the soft outro_start upstream in detect()
   - R4: kick-in head + pre-first_drop break extends intro through that break
@@ -115,28 +117,84 @@ def _section_summary(sections):
 # --- R2: kick-less head extends intro through contiguous kick-less pre-drop ---
 
 def test_r2_kickless_head_extends_intro_through_contiguous_kickless_break(monkeypatch, tmp_path):
-    """16-bar kick-less head split by a kick-less break into 2 sections.
-    R2 should merge them into one intro."""
-    # 32-bar kick-less head (no kick), then kick-in drop. The head gets a boundary
-    # at bar 8 from a sustained low-energy dip (kick-out break section is also
-    # kick-less). With R2 ON, both head sections merge into intro (0-32).
-    kick = np.array([0]*32 + [1]*48)  # 80 bars: kick-less 0-31, kick-in 32-79
-    bass = np.array([0]*32 + [1]*48)
-    res = _run_detect(
+    """Discriminating R2 fixture: a 32-bar kick-less head whose bass envelope
+    flips at bars 16/24/32 forces the detector to split the head into three
+    sections [0,16) [16,24) [24,32). The base labeler marks [16,24) and
+    [24,32) 'break' (kick-less + long), then _merge_same_label folds them into
+    one 16-bar break. The hard rule alone only forces sections[0]='intro' and
+    leaves that block as 'break'; only R2's contiguous kick-less walk can
+    relabel BOTH sections so the merged intro covers 0-32.
+
+    (The previous fixture here was vacuous: its kick-less head never split, so
+    the hard rule's sections[0]='intro' satisfied the assertion with R2 off.)
+
+    Two in-test negative controls prove the 0-32 extension is specifically R2:
+      1. OFF (soft_intro_outro=False): first intro end_bar == 16 and the
+         [16,32) block stays 'break' -- the hard rule does NOT already
+         capture the fixture (non-vacuous).
+      2. Flag ON but R2's branch neutralised (INTRO_KICKLESS_BARS=0 forces
+         head_kf=1.0 -> the R4 branch runs instead): R4 only relabels the
+         FIRST pre-first_drop break, so first intro end_bar == 24, not 32 --
+         the full extension is R2's walk, not R4 or the flag machinery.
+    """
+    kick = np.array([0]*32 + [1]*48)                  # kick-less 0-31, kick-in 32-79
+    bass = np.array([0]*16 + [1]*8 + [0]*8 + [1]*48)  # flips at 16/24/32 -> boundaries
+
+    # Negative control #1: OFF. The hard rule alone forces sections[0]='intro'
+    # but leaves the [16,32) kick-less block as 'break'. If this run produced
+    # end_bar==32, the fixture would be vacuous.
+    res_off = _run_detect(
+        kick_on_per_bar=kick, bass_on_per_bar=bass,
+        soft_intro_outro=False, monkeypatch=monkeypatch, tmp_path=tmp_path,
+    )
+    assert res_off is not None
+    off_summary = _section_summary(res_off["sections"])
+    off_intros = [s for s in res_off["sections"] if s["label"] == "intro"]
+    assert off_intros, f"expected an intro section; got {off_summary}"
+    assert off_intros[0]["end_bar"] == 16, (
+        f"OFF negative control: hard rule alone keeps first intro at 16; "
+        f"got end_bar={off_intros[0]['end_bar']}. Sections: {off_summary}"
+    )
+    assert any(s["start_bar"] == 16 and s["end_bar"] == 32
+               for s in res_off["sections"] if s["label"] == "break"), (
+        f"OFF negative control: the [16,32) kick-less block must stay 'break' "
+        f"to prove the fixture is non-vacuous. Sections: {off_summary}"
+    )
+
+    # R2 ON: walks through both contiguous kick-less pre-drop sections,
+    # relabelling them 'intro' so the merged intro spans 0-32.
+    res_on = _run_detect(
         kick_on_per_bar=kick, bass_on_per_bar=bass,
         soft_intro_outro=True, monkeypatch=monkeypatch, tmp_path=tmp_path,
     )
-    assert res is not None
-    # Find the first intro's end bar.
-    intros = [s for s in res["sections"] if s["label"] == "intro"]
-    assert intros, f"expected at least one intro section; got {_section_summary(res['sections'])}"
-    # Intro should cover the entire kick-less head (bars 0-32). At minimum,
-    # the FIRST intro section must extend past bar 16 (the original hard-rule
-    # length) into the contiguous kick-less break.
-    first_intro_end = intros[0]["end_bar"]
-    assert first_intro_end >= 32, (
-        f"R2 should extend intro through contiguous kick-less head (>=32 bars); "
-        f"first intro ended at {first_intro_end}. Sections: {_section_summary(res['sections'])}"
+    assert res_on is not None
+    on_summary = _section_summary(res_on["sections"])
+    on_intros = [s for s in res_on["sections"] if s["label"] == "intro"]
+    assert on_intros, f"expected an intro section; got {on_summary}"
+    assert on_intros[0]["end_bar"] == 32, (
+        f"R2 must extend intro through both contiguous kick-less breaks "
+        f"(first intro end_bar=32); got end_bar={on_intros[0]['end_bar']}. "
+        f"Sections: {on_summary}"
+    )
+
+    # Negative control #2: flag ON but R2's branch neutralised.
+    # INTRO_KICKLESS_BARS=0 makes head_kf=1.0, so _assign_labels takes the R4
+    # branch instead; R4 only relabels the FIRST pre-first_drop break. Scoped
+    # in monkeypatch.context() so the patch can't leak into other runs.
+    with monkeypatch.context() as mp:
+        mp.setattr(sd, "INTRO_KICKLESS_BARS", 0)
+        res_r4 = _run_detect(
+            kick_on_per_bar=kick, bass_on_per_bar=bass,
+            soft_intro_outro=True, monkeypatch=mp, tmp_path=tmp_path,
+        )
+    assert res_r4 is not None
+    r4_summary = _section_summary(res_r4["sections"])
+    r4_intros = [s for s in res_r4["sections"] if s["label"] == "intro"]
+    assert r4_intros, f"expected an intro section; got {r4_summary}"
+    assert r4_intros[0]["end_bar"] == 24, (
+        f"R2-branch-neutralised control: with INTRO_KICKLESS_BARS=0 the R4 "
+        f"branch only relabels the first break (first intro end_bar=24, not "
+        f"32); got end_bar={r4_intros[0]['end_bar']}. Sections: {r4_summary}"
     )
 
 
