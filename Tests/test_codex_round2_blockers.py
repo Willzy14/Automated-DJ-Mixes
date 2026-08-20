@@ -313,22 +313,17 @@ from test_mix_plan_reconcile_fixture import build_reconcile_fixture  # noqa: E40
 from validate_mix_plan_als import reconcile  # noqa: E402
 
 
-def test_rescue_good_fixture_checks_incoming_and_exempts_outgoing(tmp_path):
-    """A rescue-policy transition must NOT silently skip the boundary
-    proof: the incoming role is asserted (rescue places the incoming
-    anchor exactly on the swap, same landmark machinery as paired) and
-    the outgoing role is EXEMPTED VISIBLY - the grid-derived n_bars-16
-    anchor is deliberately mid-clip, so the fixture models it with NO
-    outgoing clip edge at the swap and must still pass."""
+def test_rescue_good_fixture_checks_both_roles(tmp_path):
+    """D5 gives rescue swaps real outgoing and incoming clip edges."""
     result = reconcile(*build_reconcile_fixture(
         tmp_path,
         alignment_policy="tail_anchor_rescue_v1",
         handoff_kind="rescue/grid_tail->drop",
-        outgoing_boundary_at_swap=False,
     ))
     assert result["status"] == "PASS"
     assert "rescue_boundary:t1:incoming" in result["checks"]
-    assert "rescue_boundary:t1:outgoing_exempt_grid_anchor" in result["checks"]
+    assert "rescue_boundary:t1:outgoing" in result["checks"]
+    assert not any("outgoing_exempt" in check for check in result["checks"])
     # The paired-named checks must NOT appear for a rescue transition.
     assert not any(c.startswith("paired_boundary:") for c in result["checks"])
 
@@ -344,6 +339,17 @@ def test_rescue_broken_incoming_boundary_fails(tmp_path):
             alignment_policy="tail_anchor_rescue_v1",
             handoff_kind="rescue/grid_tail->drop",
             incoming_boundary_at_swap=False,
+            outgoing_boundary_at_swap=False,
+        ))
+
+
+def test_rescue_broken_outgoing_boundary_fails(tmp_path):
+    """The former rescue outgoing exemption is gone."""
+    with pytest.raises(ValueError, match="outgoing track has no clip boundary"):
+        reconcile(*build_reconcile_fixture(
+            tmp_path,
+            alignment_policy="tail_anchor_rescue_v1",
+            handoff_kind="rescue/grid_tail->drop",
             outgoing_boundary_at_swap=False,
         ))
 

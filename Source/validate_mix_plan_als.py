@@ -288,39 +288,19 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
         else:
             checks.append(f"bass_swap:{transition['transition_id']}")
         # Clip-boundary proof for landmark-mode transitions (the check that
-        # exposed V9). Which roles carry the expectation depends on the
-        # policy — every landmark policy is handled EXPLICITLY here; a
-        # policy must never silently skip (Codex round-2 BLOCKER 3):
-        #
-        #   paired_landmarks_v2 — BOTH roles: the swap sits on a real cue
-        #     of each track, and the arranger's loop/split geometry is
-        #     expected to put a clip edge there on both sides.
-        #
-        #   tail_anchor_rescue_v1 — INCOMING only. The rescue places the
-        #     incoming's anchor (its first drop, or the grid-head fallback)
-        #     exactly on the swap with the same landmark-mode entry/loop
-        #     machinery as paired, so the incoming carries the identical
-        #     clip-boundary expectation. The OUTGOING anchor however is
-        #     grid-DERIVED (n_bars - 16 run-back from the end), deliberately
-        #     mid-clip: no arranger machinery splits the outgoing clip at a
-        #     grid position that corresponds to no cue, so demanding a clip
-        #     edge there would fail every honest rescue build. That side is
-        #     EXEMPTED, visibly, via an explicit check entry — never a
-        #     silent skip. (When the D5 "split clips at landmark swap
-        #     beats" arranger build lands, the exemption should be removed
-        #     and both roles asserted for every landmark policy.)
+        # exposed V9). The final ALS writer splits both tracks at every
+        # landmark-policy swap, including a rescue's grid-derived outgoing
+        # anchor, so BOTH roles carry the same real boundary requirement.
+        # Membership comes from align_engine.LANDMARK_POLICIES: a new
+        # landmark policy cannot silently bypass this assertion.
         policy = report_transition.get("alignment_policy")
         if policy in LANDMARK_POLICIES:
-            if policy == "tail_anchor_rescue_v1":
-                roles = (("incoming", "in_track"),)
-                checks.append(
-                    f"rescue_boundary:{transition['transition_id']}:"
-                    f"outgoing_exempt_grid_anchor"
-                )
-                prefix = "rescue_boundary"
-            else:
-                roles = (("outgoing", "out_track"), ("incoming", "in_track"))
-                prefix = "paired_boundary"
+            roles = (("outgoing", "out_track"), ("incoming", "in_track"))
+            prefix = (
+                "rescue_boundary"
+                if policy == "tail_anchor_rescue_v1"
+                else "paired_boundary"
+            )
             for role, key in roles:
                 name = html.unescape(report_transition[key])
                 clips = track_by_name.get(name, (None, []))[1]

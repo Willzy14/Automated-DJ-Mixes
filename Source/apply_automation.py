@@ -28,6 +28,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from align_engine import LANDMARK_POLICIES
+from automated_dj_mixes.als_generator import split_audio_clips_at_beats
+
 
 class TransitionStyle(Enum):
     STANDARD = "standard"
@@ -70,6 +73,17 @@ def reset_automation_ids() -> None:
     """
     global _NEXT_ID
     _NEXT_ID = _ID_BASE
+
+
+def _seed_automation_ids_from_document(lines: list[str]) -> None:
+    """Keep newly inserted envelope IDs above every existing document ID."""
+    global _NEXT_ID
+    highest = _NEXT_ID
+    for line in lines:
+        values = re.findall(r'\bId="(\d+)"', line)
+        if values:
+            highest = max(highest, *(int(value) for value in values))
+    _NEXT_ID = highest
 
 
 def _alloc_id() -> int:
@@ -435,13 +449,6 @@ def _inside_overlap(t: float, ov_start: float, ov_end: float) -> bool:
 #: One bar - the error Sam spotted by eye was consistently 1-4 beats.
 SECTION_SNAP_BEATS = 4.0
 
-#: Report alignment_policy values that mean align_engine itself chose the
-#: swap (it already sits on a real cue). Snapping those to a nearby section
-#: edge silently overrides the approved handoff -- only legacy/fallback
-#: swaps still get the snap.
-ALIGNER_POLICIES = ("paired_landmarks_v2", "tail_anchor_rescue_v1")
-
-
 def snap_to_section_boundary(beat: float, *tracks,
                              tol: float = SECTION_SNAP_BEATS) -> float:
     """Pull *beat* onto the nearest section boundary of any given track.
@@ -645,7 +652,7 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             # a margin so the outgoing fade has room to complete.
             swap = rep["swap_beats"]
             margin = 8.0
-            aligner_chosen = rep.get("alignment_policy") in ALIGNER_POLICIES
+            aligner_chosen = rep.get("alignment_policy") in LANDMARK_POLICIES
             clamped = min(max(swap, ov_start), ov_end - margin)
             if aligner_chosen:
                 # The clamp is a safety bound: it guarantees the swap sits
@@ -1124,10 +1131,8 @@ def main() -> None:
 
     # ── plan transitions ──────────────────────────────────────────────
     report_path = _resolve_report_path(als_path, arrangement_report_path)
-    plans = plan_transitions(
-        tracks,
-        _load_arrangement_report(als_path, arrangement_report_path),
-    )
+    report_swaps = _load_arrangement_report(als_path, arrangement_report_path)
+    plans = plan_transitions(tracks, report_swaps)
     print(f"\n{len(plans)} transitions planned:")
     for i, p in enumerate(plans):
         bars = (p.overlap_end - p.overlap_start) / 4
@@ -1142,6 +1147,41 @@ def main() -> None:
         print(f"  T{i + 1}: {_short(p.outgoing.name):18s} -> {_short(p.incoming.name):18s}"
               f"  overlap {p.overlap_start:.0f}-{p.overlap_end:.0f} ({bars:.0f} bars)"
               f"  swap@{p.bass_swap:.0f} ({p.reason}){rules_str}")
+
+    # The input is the final ARRANGED ALS, so every loop insertion and cut/shift
+    # has already landed. Split only now: the visible clip edges must describe
+    # the final landmark swap geometry that automation and reconcile will use.
+    landmark_beats_by_track: dict[str, list[float]] = {}
+    for plan in plans:
+        key = (_normalise(plan.outgoing.name), _normalise(plan.incoming.name))
+        report_swap = report_swaps.get(key)
+        if (report_swap is None
+                or report_swap.get("alignment_policy") not in LANDMARK_POLICIES):
+            continue
+        landmark_beats_by_track.setdefault(
+            _normalise(plan.outgoing.name), []
+        ).append(plan.bass_swap)
+        landmark_beats_by_track.setdefault(
+            _normalise(plan.incoming.name), []
+        ).append(plan.bass_swap)
+
+    split_count = 0
+    for track in sorted(tracks, key=lambda item: item.als_start, reverse=True):
+        beats = landmark_beats_by_track.get(_normalise(track.name), [])
+        if beats:
+            split_count += split_audio_clips_at_beats(
+                lines, track.als_start, track.als_end, beats
+            )
+    if landmark_beats_by_track:
+        print(f"\nLandmark geometry: split {split_count} clip(s) at swap beats")
+        # Splits add lines inside track blocks. Refresh every range before the
+        # envelope writer resolves device targets later in those same blocks.
+        match_tracks_to_als(tracks, find_track_line_ranges(lines))
+
+    if split_count:
+        # The clip splitter uses als_generator's allocator above the document's
+        # current maximum. Continue envelope allocation above those new IDs too.
+        _seed_automation_ids_from_document(lines)
 
     # NOTE: the final-swap write-back to the arrangement report happens AFTER
     # the output ALS is written and validated (below) — mutating the report

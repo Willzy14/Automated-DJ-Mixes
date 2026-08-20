@@ -10,6 +10,7 @@ ElementTree reformats the document and Ableton rejects it as corrupt.
 from __future__ import annotations
 
 import gzip
+import math
 import os
 import re
 from pathlib import Path
@@ -440,6 +441,211 @@ def _find_arranger_events_line(lines: list[str], start: int, end: int) -> int | 
         if in_arranger and "<Events" in lines[i]:
             return i
     return None
+
+
+_CLIP_BOUNDARY_ABS_TOL = 1e-6
+
+
+def _audio_clip_line_ranges(
+    lines: list[str], start: int, end: int,
+) -> list[tuple[int, int]]:
+    """Return complete AudioClip line ranges inside one track."""
+    ranges: list[tuple[int, int]] = []
+    clip_start: int | None = None
+    for index in range(start, min(end + 1, len(lines))):
+        if clip_start is None and "<AudioClip " in lines[index]:
+            clip_start = index
+        if clip_start is not None and "</AudioClip>" in lines[index]:
+            ranges.append((clip_start, index))
+            clip_start = None
+    return ranges
+
+
+def _xml_number(line: str, tag: str, attribute: str = "Value") -> float | None:
+    match = re.search(
+        rf'<{re.escape(tag)}\b[^>]*\b{re.escape(attribute)}="([^"]+)"',
+        line,
+    )
+    if match is None:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _clip_number(
+    lines: list[str], start: int, end: int, tag: str, attribute: str = "Value",
+) -> float | None:
+    for index in range(start, end + 1):
+        value = _xml_number(lines[index], tag, attribute)
+        if value is not None:
+            return value
+    return None
+
+
+def _replace_clip_value(
+    clip_lines: list[str], tag: str, value: float,
+) -> None:
+    pattern = rf'(<{re.escape(tag)}\b[^>]*\bValue=")[^"]+("[^>]*>)'
+    replacement = rf'\g<1>{float(value)}\g<2>'
+    for index, line in enumerate(clip_lines):
+        if re.search(pattern, line):
+            clip_lines[index] = re.sub(pattern, replacement, line, count=1)
+            return
+
+
+def _seed_id_allocator_from_document(lines: list[str]) -> None:
+    """Advance the shared allocator beyond every ID already in the ALS."""
+    global _NEXT_ID
+    highest = _NEXT_ID
+    for line in lines:
+        values = [
+            *(int(value) for value in re.findall(r'\bId="(\d+)"', line)),
+            *(int(value) for value in re.findall(
+                r'<TakeId\b[^>]*\bValue="(\d+)"', line
+            )),
+        ]
+        if values:
+            highest = max(highest, *values)
+    _NEXT_ID = highest
+
+
+def _reallocate_cloned_clip_ids(clip_lines: list[str]) -> None:
+    """Give every ID-bearing entity in a cloned clip a fresh document ID."""
+    for index, line in enumerate(clip_lines):
+        line = re.sub(
+            r'\bId="\d+"',
+            lambda _match: f'Id="{_alloc_id()}"',
+            line,
+        )
+        if "<TakeId " in line:
+            line = re.sub(
+                r'(\bValue=")\d+("[^>]*>)',
+                lambda match: f'{match.group(1)}{_alloc_id()}{match.group(2)}',
+                line,
+                count=1,
+            )
+        clip_lines[index] = line
+
+
+def split_audio_clip_at_beat(
+    lines: list[str], track_start: int, track_end: int, beat: float,
+) -> bool:
+    """Split the clip spanning *beat* without changing its playback.
+
+    The ALS is patched as lines, never serialized through an XML writer. The
+    outgoing half keeps the original clip identity; the incoming half is a
+    byte-for-byte clone apart from fresh IDs and the arrangement/source window
+    fields that must begin at the split. Both halves retain the complete warp
+    grid, fades, gain, colour, name, mute state, and all other clip metadata.
+
+    A beat already represented by any clip edge uses the same tolerance as
+    validate_mix_plan_als._matches_clip_boundary and is a strict no-op.
+    """
+    beat = float(beat)
+    ranges = _audio_clip_line_ranges(lines, track_start, track_end)
+    geometry: list[tuple[int, int, float, float]] = []
+    for clip_start, clip_end in ranges:
+        clip_time = _xml_number(lines[clip_start], "AudioClip", "Time")
+        current_end = _clip_number(
+            lines, clip_start, clip_end, "CurrentEnd"
+        )
+        if clip_time is None or current_end is None:
+            continue
+        geometry.append((clip_start, clip_end, clip_time, current_end))
+
+    boundaries = [
+        value
+        for _start, _end, clip_time, current_end in geometry
+        for value in (clip_time, current_end)
+    ]
+    if any(math.isclose(beat, boundary, abs_tol=_CLIP_BOUNDARY_ABS_TOL)
+           for boundary in boundaries):
+        return False
+
+    spanning = next(
+        (item for item in geometry if item[2] < beat < item[3]),
+        None,
+    )
+    if spanning is None:
+        return False
+
+    clip_start, clip_end, clip_time, current_end = spanning
+    current_start = _clip_number(
+        lines, clip_start, clip_end, "CurrentStart"
+    )
+    loop_start = _clip_number(lines, clip_start, clip_end, "LoopStart")
+    loop_end = _clip_number(lines, clip_start, clip_end, "LoopEnd")
+    if current_start is None or loop_start is None or loop_end is None:
+        raise ValueError(
+            f"AudioClip spanning beat {beat:g} has incomplete playback windows"
+        )
+    arrangement_span = current_end - current_start
+    source_span = loop_end - loop_start
+    if arrangement_span <= 0 or source_span <= 0:
+        raise ValueError(
+            f"AudioClip spanning beat {beat:g} has a non-positive playback span"
+        )
+    fraction = (beat - current_start) / arrangement_span
+    if not 0.0 < fraction < 1.0:
+        return False
+    source_split = loop_start + fraction * source_span
+
+    original = list(lines[clip_start:clip_end + 1])
+    outgoing = list(original)
+    incoming = list(original)
+
+    _replace_clip_value(outgoing, "CurrentEnd", beat)
+    for tag in ("LoopEnd", "OutMarker", "HiddenLoopEnd"):
+        _replace_clip_value(outgoing, tag, source_split)
+
+    incoming[0] = re.sub(
+        r'(\bTime=")[^"]+("[^>]*>)',
+        rf'\g<1>{beat}\g<2>',
+        incoming[0],
+        count=1,
+    )
+    _replace_clip_value(incoming, "CurrentStart", beat)
+    for tag in ("LoopStart", "HiddenLoopStart"):
+        _replace_clip_value(incoming, tag, source_split)
+
+    # Some Live schema variants carry an explicit sample window in addition
+    # to the beat-domain Loop window. Tile those fields by the same fraction;
+    # WarpMarker SecTime/BeatTime pairs remain complete and unchanged on both
+    # halves so the certified sample-to-beat mapping itself is preserved.
+    for sample_start_tag, sample_end_tag in (
+        ("SampleStart", "SampleEnd"),
+        ("SampleStartTime", "SampleEndTime"),
+        ("SampleStartFrame", "SampleEndFrame"),
+    ):
+        sample_start = _clip_number(
+            lines, clip_start, clip_end, sample_start_tag
+        )
+        sample_end = _clip_number(lines, clip_start, clip_end, sample_end_tag)
+        if sample_start is None or sample_end is None:
+            continue
+        sample_split = sample_start + fraction * (sample_end - sample_start)
+        _replace_clip_value(outgoing, sample_end_tag, sample_split)
+        _replace_clip_value(incoming, sample_start_tag, sample_split)
+
+    _seed_id_allocator_from_document(lines)
+    _reallocate_cloned_clip_ids(incoming)
+    lines[clip_start:clip_end + 1] = [*outgoing, *incoming]
+    return True
+
+
+def split_audio_clips_at_beats(
+    lines: list[str], track_start: int, track_end: int, beats: list[float],
+) -> int:
+    """Split one track at each requested beat, returning the split count."""
+    split_count = 0
+    for beat in sorted({float(value) for value in beats}, reverse=True):
+        before = len(lines)
+        if split_audio_clip_at_beat(lines, track_start, track_end, beat):
+            split_count += 1
+            track_end += len(lines) - before
+    return split_count
 
 
 def _find_track_envelopes_line(lines: list[str], start: int, end: int) -> int | None:
