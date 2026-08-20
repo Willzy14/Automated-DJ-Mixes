@@ -1033,6 +1033,17 @@ def find_similar_pairs(out_track: TrackInfo, in_track: TrackInfo,
 
 # -- Main orchestrator --------------------------------------------------------
 
+def _hint_for(hints: dict, raw_name: str) -> dict:
+    """Hint entry for an ALS track. ALS EffectiveNames keep XML entities
+    (&amp;, &apos; ...) while hint files are keyed by the real filename, so
+    try the unescaped name first (same bug class the MIK lookup already
+    fixes); keep the raw lookups for hint files keyed the old way."""
+    import html
+    clean = html.unescape(raw_name)
+    return (hints.get(clean) or hints.get(clean + ".wav")
+            or hints.get(raw_name) or hints.get(raw_name + ".wav") or {})
+
+
 def propose_arrangement(als_path: Path, sections_path: Path,
                         output_path: Path,
                         history_path: Path | None = None,
@@ -1102,7 +1113,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         pass
 
     for t in tracks:
-        hint = hints.get(t.name) or hints.get(t.name + ".wav") or {}
+        hint = _hint_for(hints, t.name)
         t.intro_skip_bars = hint.get("intro_skip_bars", 0)
         t.loop_source_sec = hint.get("loop_source_sec")
         # Hand-authored DJ hints from the visual pass (track_hints.json). None
@@ -1795,6 +1806,30 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
 
 # -- CLI ----------------------------------------------------------------------
 
+def _apply_cue_signals(cue_signals: str, error=None) -> None:
+    """CLI wiring for --cue-signals. ALWAYS installs a FRESH CueConfig --
+    defaults when no signals are named -- so one invocation can never
+    inherit flags mutated by an earlier run in the same process."""
+    import align_engine
+    wanted = {s.strip() for s in cue_signals.split(",") if s.strip()}
+    known = {"fills": "emit_fills", "phrase": "incoming_phrase_anchors",
+             "deep": "deep_intro_anchor", "bassout": "emit_bass_out",
+             "introloop": "incoming_intro_loop",
+             "matched": "matched_tail_head_swap",
+             "hints": "emit_hint_fields"}
+    unknown = wanted - set(known)
+    if unknown:
+        msg = (f"unknown cue signal(s): {', '.join(sorted(unknown))}; "
+               f"known: {', '.join(sorted(known))}")
+        if error is not None:
+            error(msg)
+        raise ValueError(msg)
+    align_engine.CUE_CONFIG = align_engine.CueConfig(
+        **{known[name]: True for name in wanted})
+    if wanted:
+        print(f"[cue-signals] enabled: {', '.join(sorted(wanted))}")
+
+
 def main():
     import argparse
 
@@ -1841,21 +1876,7 @@ def main():
 
     args = parser.parse_args()
 
-    if args.cue_signals.strip():
-        import align_engine
-        wanted = {s.strip() for s in args.cue_signals.split(",") if s.strip()}
-        known = {"fills": "emit_fills", "phrase": "incoming_phrase_anchors",
-                 "deep": "deep_intro_anchor", "bassout": "emit_bass_out",
-                 "introloop": "incoming_intro_loop",
-                 "matched": "matched_tail_head_swap",
-                 "hints": "emit_hint_fields"}
-        unknown = wanted - set(known)
-        if unknown:
-            parser.error(f"unknown cue signal(s): {', '.join(sorted(unknown))}; "
-                         f"known: {', '.join(sorted(known))}")
-        align_engine.CUE_CONFIG = align_engine.CueConfig(
-            **{known[name]: True for name in wanted})
-        print(f"[cue-signals] enabled: {', '.join(sorted(wanted))}")
+    _apply_cue_signals(args.cue_signals, error=parser.error)
 
     plan = propose_arrangement(
         als_path=args.als,

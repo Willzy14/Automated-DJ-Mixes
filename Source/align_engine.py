@@ -147,6 +147,13 @@ class CueConfig:
 
 CUE_CONFIG = CueConfig()
 
+#: Alignment policies produced by the landmark-aware aligner. plan_fill_or_cut
+#: must treat ALL of them as landmark-mode: a rescued pair
+#: (tail_anchor_rescue_v1) classified as legacy would re-enable intro
+#: loops/cuts that its CueConfig flags are supposed to gate (Codex review
+#: 2026-08-20: 31/65 rescued pairs acquired loop/cut specs with flags off).
+LANDMARK_POLICIES = ("paired_landmarks_v2", "tail_anchor_rescue_v1")
+
 
 @dataclass
 class Track:
@@ -1342,7 +1349,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
          break-into-break (soft; see _resolve_break_to_break)."""
     arr = al.arr_offset_bars
     specs = []
-    landmark_mode = al.alignment_policy == "paired_landmarks_v2"
+    landmark_mode = al.alignment_policy in LANDMARK_POLICIES
     overlap_ceiling = (
         MAX_LANDMARK_OVERLAP_BARS if landmark_mode else MAX_OVERLAP_BARS
     )
