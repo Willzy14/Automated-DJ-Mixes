@@ -807,19 +807,32 @@ def generate_session(
 
     available_tracks = track_ranges[1:]
 
+    # Codex B6: NEVER truncate. A job that needs more tracks than the template
+    # offers used to silently drop the tail of the mix with only a warning —
+    # and the shipped ALS validated clean. Smaller-than-template jobs are fine
+    # (unused template tracks simply stay empty); only genuine overflow raises.
     if len(patches) > len(available_tracks):
-        print(
-            f"WARNING: Template has {len(available_tracks)} audio tracks but "
-            f"{len(patches)} patches provided — using first {len(available_tracks)} tracks. "
-            f"Add more tracks to the template to fit the full mix."
+        raise ValueError(
+            f"Template '{template_path.name}' has only {len(available_tracks)} "
+            f"usable audio tracks (excluding Session Time) but the job needs "
+            f"{len(patches)} — refusing to truncate: track(s) "
+            f"{len(available_tracks) + 1}-{len(patches)} of the mix would be "
+            f"silently dropped. Use a template with at least {len(patches)} "
+            f"audio tracks."
         )
-        patches = patches[: len(available_tracks)]
+    out_of_range = sorted({p.track_index for p in patches
+                           if p.track_index >= len(available_tracks)})
+    if out_of_range:
+        raise ValueError(
+            f"Template '{template_path.name}' has only {len(available_tracks)} "
+            f"usable audio tracks but patch track_index(es) {out_of_range} "
+            f"point past the last template track — those tracks would be "
+            f"silently dropped from the mix. Use a bigger template or fix "
+            f"the patch indices."
+        )
 
     offset = 0
     for patch in patches:
-        if patch.track_index >= len(available_tracks):
-            continue
-
         start, end, _ = available_tracks[patch.track_index]
         start += offset
         end += offset
@@ -879,7 +892,26 @@ def generate_session(
         tempo_points = [(p.time_beats, p.value) for p in tempo_automation]
         _insert_main_track_tempo_envelope(lines, tempo_points)
 
-    return compress_als(lines, output_path)
+    result = compress_als(lines, output_path)
+
+    # Codex B6: job-aware expectation gate. compress_als already ran the
+    # generic corruption gate (layers 1-4); this generator KNOWS the job, so
+    # it also asserts the written ALS carries exactly len(patches) clip-bearing
+    # tracks, each with the mixer devices the automation stage later targets
+    # (Utility gain + Channel EQ low shelf). Catches a clip insertion that
+    # silently failed and a stripped/wrong template — before the file ships.
+    from validate_als import MIXER_AUTOMATION_DEVICES, validate_als
+    expectation_errors = validate_als(
+        output_path,
+        expected_track_count=len(patches),
+        expected_track_devices=MIXER_AUTOMATION_DEVICES,
+    )
+    if expectation_errors:
+        raise ValueError(
+            f"ALS expectation gate failed for {output_path.name}: "
+            f"{expectation_errors[0]}"
+        )
+    return result
 
 
 def _set_project_bpm(lines: list[str], bpm: float) -> None:
