@@ -77,6 +77,13 @@ def test_cue_signals_unknown_name_raises():
 # --- Fix 3: rescue policy is landmark-mode in plan_fill_or_cut --------------
 
 def _rescued_fixture():
+    import numpy as np
+
+    clean = np.full(2000, 0.1, dtype=float)
+    quality_context = AE.LoopQualityContext(
+        Path("synthetic__stemenv.npz"), 125.0, 0.0, 0.1,
+        {name: clean.copy() for name in ("drums", "bass", "other", "vocals", "mix")},
+    )
     o = AE.Track(
         name="OutTrack", bpm=125.0, spb=1.92, downbeat=0.0, n_bars=64,
         sections=[
@@ -93,6 +100,7 @@ def _rescued_fixture():
         ],
         bass_in_bar=8.0, bass_out_bar=None,
         loop_windows=[(0.0, 8.0)],
+        loop_quality_context=quality_context,
     )
     al = AE.Alignment(
         out_name="OutTrack", in_name="InTrack",

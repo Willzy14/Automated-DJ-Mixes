@@ -22,10 +22,13 @@ Usage:
 
 from __future__ import annotations
 
+import html
 import json
+import logging
 import math
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 import matplotlib
@@ -37,6 +40,30 @@ from stem_section_probe import _seccol  # shared section colour map
 from automated_dj_mixes.transition_policy import INTERIM_V1, beats_to_bars
 
 PHRASE_GRID = 16          # 16-bar phrase grid (viz gridlines)
+
+# Loop-window quality gate.  These names are intentionally explicit and
+# module-level: the V10 render review established them as production safety
+# thresholds, so future tuning must be visible in diffs and grep results.
+LOOP_ALLOWED_PERIOD_BEATS = frozenset({4, 8, 16, 32})
+LOOP_MAX_SILENCE_FRACTION = 0.05
+LOOP_SILENCE_RELATIVE_FLOOR_DB = -25.0
+LOOP_MIN_WORST_BEAT_DIP_DB = -12.0
+LOOP_MAX_INSERT_LEVEL_DROP_DB = 4.5
+# Vente passes the energy floors but changes texture sharply halfway through
+# its 8-beat window.  The cached multi-stem cosine term catches that separate
+# defect; it supplements rather than replaces the absolute energy terms.
+LOOP_MIN_SELF_SIMILARITY = 0.65
+LOOP_QUALITY_OVERRIDE_FILENAME = "loop_quality_overrides.json"
+
+LOOP_QUALITY_CHECKS = frozenset({
+    "period",
+    "silence_fraction",
+    "worst_beat_dip",
+    "insert_level_match",
+    "self_similarity",
+})
+
+_LOG = logging.getLogger(__name__)
 
 # Geometry now comes from the shared policy (transition_policy.py) instead of
 # being declared here, in propose_arrangement and in mix_plan independently.
@@ -156,6 +183,320 @@ LANDMARK_POLICIES = ("paired_landmarks_v2", "tail_anchor_rescue_v1")
 
 
 @dataclass
+class LoopQualityContext:
+    """Cached-only inputs needed to evaluate a source window."""
+    envelope_cache_path: Path
+    bpm: float
+    downbeat_sec: float
+    hop_sec: float
+    envelopes: dict[str, object]
+    beat_features: object | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class LoopQualityResult:
+    period_beats: float
+    silence_fraction: float | None
+    worst_beat_dip_db: float | None
+    insert_level_drop_db: float | None
+    self_similarity: float | None
+    failed_checks: tuple[str, ...]
+    waived_checks: tuple[str, ...] = ()
+    error: str | None = None
+
+    @property
+    def passed(self) -> bool:
+        return not self.failed_checks and self.error is None
+
+
+def _normalise_quality_track_name(name: str) -> str:
+    return html.unescape(name).replace("–", "-").replace("—", "-").lower().strip()
+
+
+@lru_cache(maxsize=128)
+def load_loop_quality_context(cache_path: str | Path) -> LoopQualityContext:
+    """Read only the existing ``__stemenv.npz`` and sibling section metadata."""
+    import numpy as np
+
+    path = Path(cache_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"cached stem envelope not found: {path}")
+    suffix = "__stemenv.npz"
+    if not path.name.endswith(suffix):
+        raise ValueError(f"not a stem-envelope cache: {path}")
+    track_stem = path.name[:-len(suffix)]
+    metadata_path = path.with_name(f"SECTIONS_STEM_{track_stem}.json")
+    if not metadata_path.is_file():
+        raise FileNotFoundError(f"stem section metadata not found: {metadata_path}")
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    bpm = float(metadata["bpm"])
+    sections = metadata.get("sections") or []
+    if not sections:
+        raise ValueError(f"stem section metadata has no sections: {metadata_path}")
+    first = sections[0]
+    spb = 4.0 * 60.0 / bpm
+    downbeat = float(first["start_sec"]) - float(first["start_bar"]) * spb
+    with np.load(path, allow_pickle=False) as data:
+        hop_sec = float(data["hop_t"])
+        envelopes = {
+            key: np.asarray(data[key], dtype=float).copy()
+            for key in data.files
+            if key != "hop_t"
+        }
+    if "mix" not in envelopes:
+        raise ValueError(f"cached stem envelope has no mix array: {path}")
+    return LoopQualityContext(path, bpm, downbeat, hop_sec, envelopes)
+
+
+def load_loop_quality_overrides(directory: str | Path) -> list[dict]:
+    """Load explicit, exact per-loop check waivers from the stem-analysis dir."""
+    path = Path(directory) / LOOP_QUALITY_OVERRIDE_FILENAME
+    if not path.is_file():
+        return []
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, dict) and "overrides" in raw:
+        rows = raw["overrides"]
+    elif isinstance(raw, list):
+        rows = raw
+    else:
+        raise ValueError(
+            f"{path} must be a list or an object containing an 'overrides' list"
+        )
+    if not isinstance(rows, list):
+        raise ValueError(f"{path}: overrides must be a list")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}: every override must be an object")
+        waived = set(row.get("waive_checks", row.get("waive", ())))
+        unknown = waived - LOOP_QUALITY_CHECKS
+        if unknown:
+            raise ValueError(f"{path}: unknown waived checks: {sorted(unknown)}")
+        required = {"track", "source_beat_start", "source_beat_end",
+                    "insert_source_beat"}
+        missing = required - row.keys()
+        if missing:
+            raise ValueError(f"{path}: override is missing {sorted(missing)}")
+        if not waived:
+            raise ValueError(f"{path}: override must waive at least one named check")
+    return rows
+
+
+def loop_quality_waivers(
+    overrides: list[dict],
+    track_name: str,
+    source_beat_start: float,
+    source_beat_end: float,
+    insert_source_beat: float,
+) -> frozenset[str]:
+    """Return waivers only for an exact track/window/insertion identity."""
+    wanted = _normalise_quality_track_name(track_name)
+    for row in overrides:
+        if _normalise_quality_track_name(str(row["track"])) != wanted:
+            continue
+        numeric_match = all(abs(float(row[key]) - value) <= 1e-6 for key, value in (
+            ("source_beat_start", source_beat_start),
+            ("source_beat_end", source_beat_end),
+            ("insert_source_beat", insert_source_beat),
+        ))
+        if numeric_match:
+            return frozenset(row.get("waive_checks", row.get("waive", ())))
+    return frozenset()
+
+
+def _rms_db(values) -> float:
+    import numpy as np
+
+    values = np.asarray(values, dtype=float)
+    if values.size == 0:
+        raise ValueError("empty envelope interval")
+    rms = float(np.sqrt(np.mean(values * values)))
+    return 20.0 * math.log10(max(rms, 1e-12))
+
+
+def _quality_frame_slice(context: LoopQualityContext, beat_start: float,
+                         beat_end: float, length: int | None = None):
+    import numpy as np
+
+    size = length if length is not None else len(context.envelopes["mix"])
+    times = np.arange(size, dtype=float) * context.hop_sec
+    start_sec = context.downbeat_sec + beat_start * 60.0 / context.bpm
+    end_sec = context.downbeat_sec + beat_end * 60.0 / context.bpm
+    return (times >= start_sec) & (times < end_sec)
+
+
+def _loop_self_similarity(context: LoopQualityContext, beat_start: float,
+                          beat_end: float) -> float:
+    """Mean pairwise beat cosine in whole-track z-score context."""
+    import numpy as np
+
+    energy_keys = [
+        key for key in (
+            "drums", "bass", "other", "vocals", "mix",
+            "tiera_band_low", "tiera_band_mid", "tiera_band_high",
+        )
+        if key in context.envelopes
+    ]
+    scalar_keys = [
+        key for key in ("tiera_width", "tiera_lr_corr")
+        if key in context.envelopes
+    ]
+    keys = energy_keys + scalar_keys
+    if not keys:
+        raise ValueError("cached stem envelope has no similarity feature arrays")
+    length = min(len(context.envelopes[key]) for key in keys)
+    track_end_beat = int(math.floor(
+        (length * context.hop_sec - context.downbeat_sec) * context.bpm / 60.0
+    ))
+    if track_end_beat <= 1:
+        raise ValueError("cached stem envelope is too short for beat similarity")
+
+    z = context.beat_features
+    if z is None:
+        features = []
+        for beat in range(track_end_beat):
+            mask = _quality_frame_slice(context, beat, beat + 1, length)
+            row = []
+            for key in energy_keys:
+                values = context.envelopes[key][:length][mask]
+                if values.size == 0:
+                    row.append(-240.0)
+                else:
+                    row.append(float(np.mean(
+                        20.0 * np.log10(np.maximum(values, 1e-12))
+                    )))
+            for key in scalar_keys:
+                values = context.envelopes[key][:length][mask]
+                row.append(float(np.mean(values)) if values.size else 0.0)
+            features.append(row)
+
+        matrix = np.asarray(features, dtype=float)
+        std = matrix.std(axis=0)
+        z = (matrix - matrix.mean(axis=0)) / np.where(std > 1e-8, std, 1.0)
+        context.beat_features = z
+    first = max(0, int(math.floor(beat_start)))
+    last = min(len(z), int(math.ceil(beat_end)))
+    window = z[first:last]
+    if len(window) < 2:
+        return 1.0
+    norms = np.linalg.norm(window, axis=1)
+    if np.all(norms <= 1e-8):
+        return 1.0
+    normalised = window / np.where(norms[:, None] > 1e-8, norms[:, None], 1.0)
+    similarity = normalised @ normalised.T
+    pairs = similarity[np.triu_indices(len(window), 1)]
+    # Identically quiet/constant zero vectors are mutually consistent.
+    pairs = np.where(np.isfinite(pairs), pairs, 1.0)
+    return float(np.mean(pairs))
+
+
+def evaluate_loop_quality(
+    context: LoopQualityContext,
+    source_beat_start: float,
+    source_beat_end: float,
+    insert_source_beat: float,
+    waived_checks=(),
+) -> LoopQualityResult:
+    """Measure and gate one loop using cached envelopes only (never audio)."""
+    import numpy as np
+
+    waived = frozenset(waived_checks)
+    unknown = waived - LOOP_QUALITY_CHECKS
+    if unknown:
+        raise ValueError(f"unknown loop-quality waivers: {sorted(unknown)}")
+    period = float(source_beat_end - source_beat_start)
+    mix = np.asarray(context.envelopes["mix"], dtype=float)
+    window_mask = _quality_frame_slice(
+        context, source_beat_start, source_beat_end, len(mix)
+    )
+    window = mix[window_mask]
+    if window.size == 0:
+        return LoopQualityResult(
+            period, None, None, None, None, (), tuple(sorted(waived)),
+            "loop window falls outside the cached mix envelope",
+        )
+
+    all_db = 20.0 * np.log10(np.maximum(mix, 1e-12))
+    window_db = 20.0 * np.log10(np.maximum(window, 1e-12))
+    silence_floor = float(np.median(all_db)) + LOOP_SILENCE_RELATIVE_FLOOR_DB
+    silence_fraction = float(np.mean(window_db < silence_floor))
+
+    beat_levels = []
+    beat = float(source_beat_start)
+    while beat < source_beat_end - 1e-6:
+        end = min(beat + 1.0, source_beat_end)
+        mask = _quality_frame_slice(context, beat, end, len(mix))
+        beat_levels.append(_rms_db(mix[mask]))
+        beat = end
+    beat_median = float(np.median(beat_levels))
+    worst_dip = float(min(beat_levels) - beat_median)
+    window_level = _rms_db(window)
+
+    if insert_source_beat >= 1.0:
+        insert_start, insert_end = insert_source_beat - 1.0, insert_source_beat
+    else:
+        insert_start, insert_end = insert_source_beat, insert_source_beat + 1.0
+    insert_mask = _quality_frame_slice(context, insert_start, insert_end, len(mix))
+    insert_level = _rms_db(mix[insert_mask])
+    insert_drop = float(insert_level - window_level)
+    self_similarity = _loop_self_similarity(
+        context, source_beat_start, source_beat_end
+    )
+
+    failed = []
+    rounded_period = int(round(period))
+    if (abs(period - rounded_period) > 1e-6
+            or rounded_period not in LOOP_ALLOWED_PERIOD_BEATS):
+        failed.append("period")
+    if silence_fraction > LOOP_MAX_SILENCE_FRACTION:
+        failed.append("silence_fraction")
+    if worst_dip < LOOP_MIN_WORST_BEAT_DIP_DB:
+        failed.append("worst_beat_dip")
+    if insert_drop > LOOP_MAX_INSERT_LEVEL_DROP_DB:
+        failed.append("insert_level_match")
+    if self_similarity < LOOP_MIN_SELF_SIMILARITY:
+        failed.append("self_similarity")
+    failed = [check for check in failed if check not in waived]
+    return LoopQualityResult(
+        period,
+        silence_fraction,
+        worst_dip,
+        insert_drop,
+        self_similarity,
+        tuple(failed),
+        tuple(sorted(waived)),
+    )
+
+
+def format_loop_quality_result(result: LoopQualityResult) -> str:
+    def number(value, digits=3):
+        return "unavailable" if value is None else f"{value:.{digits}f}"
+
+    return (
+        f"period_beats={result.period_beats:g} "
+        f"allowed={sorted(LOOP_ALLOWED_PERIOD_BEATS)}; "
+        f"silence_fraction={number(result.silence_fraction)} "
+        f"max={LOOP_MAX_SILENCE_FRACTION:.3f}; "
+        f"worst_beat_dip_db={number(result.worst_beat_dip_db, 1)} "
+        f"min={LOOP_MIN_WORST_BEAT_DIP_DB:.1f}; "
+        f"insert_level_drop_db={number(result.insert_level_drop_db, 1)} "
+        f"max={LOOP_MAX_INSERT_LEVEL_DROP_DB:.1f}; "
+        f"self_similarity={number(result.self_similarity)} "
+        f"min={LOOP_MIN_SELF_SIMILARITY:.3f}"
+        + (f"; error={result.error}" if result.error else "")
+    )
+
+
+def log_loop_quality_override(track_name: str, source_start: float,
+                              source_end: float, result: LoopQualityResult) -> None:
+    if result.waived_checks:
+        _LOG.warning(
+            "!!! LOOP QUALITY OVERRIDE APPLIED: %s %.3f-%.3f beats; waived=%s",
+            track_name, source_start, source_end, ",".join(result.waived_checks),
+        )
+
+
+@dataclass
 class Track:
     name: str
     bpm: float
@@ -179,6 +520,13 @@ class Track:
     first_break_bar: float | None = None
     outro_start_bar: float | None = None
     last_bass_drop_bar: float | None = None
+    envelope_cache_path: Path | None = None
+    loop_quality_overrides: list[dict] = field(default_factory=list)
+    # In-memory injection is used by focused tests; production tracks always
+    # populate envelope_cache_path in load_track().
+    loop_quality_context: LoopQualityContext | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def boundaries(self) -> list[tuple[float, str]]:
         """(bar, label) for every section start — the markers."""
@@ -212,6 +560,8 @@ def load_track(stem_json: Path) -> Track:
             fills.append((a, b))
     n_bars = d["n_bars"]
     last_min = max(8, round(60.0 / spb))
+    envelope_cache = stem_json.with_name(f"{d['track']}__stemenv.npz")
+    overrides = load_loop_quality_overrides(stem_json.parent)
     return Track(
         name=d["track"], bpm=bpm, spb=spb, downbeat=downbeat, n_bars=n_bars,
         sections=secs, bass_in_bar=bass_in, bass_out_bar=bass_out,
@@ -219,6 +569,8 @@ def load_track(stem_json: Path) -> Track:
         bass_out_is_end=(bass_out is not None and (n_bars - bass_out) <= 4),
         loop_windows=loop_windows, vocal_regions=vocal_regions, fills=fills,
         musical_landmarks=list(sig.get("musical_landmarks", [])),
+        envelope_cache_path=envelope_cache,
+        loop_quality_overrides=overrides,
     )
 
 
@@ -1126,7 +1478,60 @@ def _resolve_stem_key(name: str, stems: dict) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def pick_clean_drum_loop(track, sec_start, sec_end, pref=4):
+def _assess_loop_candidate(track, start_bar: float, end_bar: float,
+                           insert_bar: float) -> LoopQualityResult:
+    source_start = float(start_bar) * 4.0
+    source_end = float(end_bar) * 4.0
+    insert_source = float(insert_bar) * 4.0
+    context = getattr(track, "loop_quality_context", None)
+    if context is None:
+        cache_path = getattr(track, "envelope_cache_path", None)
+        if cache_path is None:
+            return LoopQualityResult(
+                source_end - source_start, None, None, None, None, (), (),
+                "track has no cached stem-envelope path",
+            )
+        try:
+            context = load_loop_quality_context(cache_path)
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+            return LoopQualityResult(
+                source_end - source_start, None, None, None, None, (), (), str(exc)
+            )
+    waivers = loop_quality_waivers(
+        getattr(track, "loop_quality_overrides", []),
+        track.name,
+        source_start,
+        source_end,
+        insert_source,
+    )
+    try:
+        result = evaluate_loop_quality(
+            context, source_start, source_end, insert_source, waivers
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return LoopQualityResult(
+            source_end - source_start, None, None, None, None, (), (), str(exc)
+        )
+    log_loop_quality_override(track.name, source_start, source_end, result)
+    return result
+
+
+def _print_loop_rejections(track, rejected: list[LoopQualityResult]) -> None:
+    if not rejected:
+        return
+    reasons: dict[str, int] = {}
+    for result in rejected:
+        checks = result.failed_checks or (("cache",) if result.error else ("unknown",))
+        for check in checks:
+            reasons[check] = reasons.get(check, 0) + 1
+    summary = ", ".join(f"{key}={value}" for key, value in sorted(reasons.items()))
+    print(
+        f"  [loop quality] no candidate survived for '{track.name}'; "
+        f"rejections: {summary}"
+    )
+
+
+def pick_clean_drum_loop(track, sec_start, sec_end, pref=4, insert_bar=None):
     """Pick a clean drum chunk from the track's loop_windows (drums-on/bass-off)
     overlapping [sec_start, sec_end), avoiding vocals + fills. Tries `pref`-bar
     first then the other of {4,2} — pass pref=2 for a small gap. Returns
@@ -1149,6 +1554,8 @@ def pick_clean_drum_loop(track, sec_start, sec_end, pref=4):
     windows = list(track.loop_windows)
     if not any(ws < sec_end and we > sec_start for ws, we in windows):
         windows.append((float(sec_start), float(sec_end)))
+    insert_bar = float(sec_start if insert_bar is None else insert_bar)
+    rejected: list[LoopQualityResult] = []
     for length in lengths:                           # prefer `pref` bars, then the other
         for ws, we in windows:
             lo, hi = max(ws, sec_start), min(we, sec_end)
@@ -1162,7 +1569,13 @@ def pick_clean_drum_loop(track, sec_start, sec_end, pref=4):
             for skip_first in skip_order:
                 for s in range(int(lo) + skip_first, int(hi) - length + 1):
                     if not _blocked(s, s + length):
-                        return (float(s), float(s + length))
+                        result = _assess_loop_candidate(
+                            track, float(s), float(s + length), insert_bar
+                        )
+                        if result.passed:
+                            return (float(s), float(s + length))
+                        rejected.append(result)
+    _print_loop_rejections(track, rejected)
     return None
 
 
@@ -1170,6 +1583,7 @@ def pick_cue_bounded_drum_loop(
     track,
     gap_bars: int,
     required_boundary_bars: int | None = None,
+    insert_bar: float | None = None,
 ):
     """Pick a clean loop whose complete repeats land exactly on a named cue.
 
@@ -1216,6 +1630,8 @@ def pick_cue_bounded_drum_loop(
                 synthetic = cand
         break   # take the first outro section only
     candidates_iter = list(track.loop_windows) + ([synthetic] if synthetic else [])
+    insert_bar = float(track.n_bars if insert_bar is None else insert_bar)
+    rejected: list[LoopQualityResult] = []
     for start, end in sorted(candidates_iter, key=lambda window: window[1],
                              reverse=True):
         for length in lengths:
@@ -1226,7 +1642,13 @@ def pick_cue_bounded_drum_loop(
             for source_start, source_end in candidates:
                 if (source_start >= start and source_end <= end
                         and not blocked(source_start, source_end)):
-                    return source_start, source_end
+                    result = _assess_loop_candidate(
+                        track, source_start, source_end, insert_bar
+                    )
+                    if result.passed:
+                        return source_start, source_end
+                    rejected.append(result)
+    _print_loop_rejections(track, rejected)
     return None
 
 
@@ -1314,7 +1736,9 @@ def _plan_incoming_entry_extension(o, i, al, intro_end, loop_budget, policy):
             reps = int(gap // phrase)
             if not 1 <= reps <= policy.max_loop_repeats:
                 continue
-            chunk = pick_clean_drum_loop(i, 0, intro_end, pref=phrase)
+            chunk = pick_clean_drum_loop(
+                i, 0, intro_end, pref=phrase, insert_bar=0
+            )
             if chunk is None:
                 continue
             if round(chunk[1] - chunk[0]) != phrase:
@@ -1394,12 +1818,16 @@ def plan_fill_or_cut(o, i, al, policy=None):
             and last_drop_o is not None and intro_end > 0):
         fill_bars = round((arr - last_drop_o) / SNAP_BARS) * SNAP_BARS
         if fill_bars >= SNAP_BARS:
-            chunk = pick_clean_drum_loop(i, 0, intro_end)            # intro drums (vocal-free)
+            chunk = pick_clean_drum_loop(
+                i, 0, intro_end, insert_bar=0
+            )                                                        # intro drums (vocal-free)
             src = "intro"
             if chunk is None:                                         # vocal intro -> outro drums
                 i_out = next((s for s in i.sections if s["label"] == "outro"), None)
                 if i_out:
-                    chunk = pick_clean_drum_loop(i, i_out["start_bar"], i.n_bars)
+                    chunk = pick_clean_drum_loop(
+                        i, i_out["start_bar"], i.n_bars, insert_bar=0
+                    )
                     src = "outro"
             if chunk:
                 clen = chunk[1] - chunk[0]
@@ -1484,6 +1912,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
                 o,
                 int(candidate_gap),
                 required_boundary_bars=required_boundary_bars or None,
+                insert_bar=float(outro["start_bar"]),
             )
             if candidate_chunk is not None:
                 chunk_length = candidate_chunk[1] - candidate_chunk[0]
@@ -1519,19 +1948,29 @@ def plan_fill_or_cut(o, i, al, policy=None):
             pref = 4 if gap >= 4 else 2
             if not landmark_mode:
                 chunk = pick_clean_drum_loop(
-                    o, outro["start_bar"], outro["end_bar"], pref
+                    o, outro["start_bar"], outro["end_bar"], pref,
+                    insert_bar=float(outro["start_bar"]),
                 )
             if chunk is None and o.loop_windows:
                 # bassy / vocal outro has no clean-drum window — use the outgoing's
                 # LATEST clean-drum window (a late break's drums) as the tail source.
                 ws, we = max(o.loop_windows, key=lambda w: w[1])
-                chunk = pick_clean_drum_loop(o, ws, we, pref)
+                chunk = pick_clean_drum_loop(
+                    o, ws, we, pref, insert_bar=float(outro["start_bar"])
+                )
             if chunk is None:
                 # last resort (no clean-drum window ANYWHERE, e.g. Crusy): loop the
                 # outro section itself so it still fires. May carry bass — flagged.
                 e = min(outro["start_bar"] + pref, o.n_bars)
                 if e - outro["start_bar"] >= 2:
-                    chunk = (float(outro["start_bar"]), float(e))
+                    candidate = (float(outro["start_bar"]), float(e))
+                    result = _assess_loop_candidate(
+                        o, candidate[0], candidate[1], float(outro["start_bar"])
+                    )
+                    if result.passed:
+                        chunk = candidate
+                    else:
+                        _print_loop_rejections(o, [result])
             if chunk:
                 clen = chunk[1] - chunk[0]
                 reps = int(gap // clen)
