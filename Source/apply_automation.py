@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -380,6 +381,11 @@ class TransitionPlan:
     two_stage_kill_beat: float = 0.0   # beat where full kill happens
     two_stage_volume: bool = False     # Rule 3: instant partial vol drop at swap
     low_sneak: bool = False            # Rule 4: use VOL_SNEAK_LOW for this incoming
+    # Every transform that MOVED bass_swap after the report/heuristic chose it
+    # ("clamped", "snapped"). Written back into the arrangement report so a
+    # moved beat is always visible provenance, never a silent edit (Codex
+    # round-2 BLOCKER 1).
+    swap_transforms: list[str] = field(default_factory=list)
 
 
 # ── Section helpers ───────────────────────────────────────────────────────────
@@ -631,6 +637,7 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
 
         rep = report_swaps.get((_normalise(out_t.name), _normalise(in_t.name)))
         aligner_chosen = False
+        swap_transforms: list[str] = []
         if rep is not None:
             # align_engine already chose the swap — use it (don't re-derive).
             # Preserve a valid swap near the overlap start: it may intentionally
@@ -638,12 +645,38 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             # a margin so the outgoing fade has room to complete.
             swap = rep["swap_beats"]
             margin = 8.0
-            clamped = min(max(swap, ov_start), ov_end - margin)
-            if abs(clamped - swap) > 0.5:
-                print(f"  align_engine swap {swap:.0f} outside safe overlap "
-                      f"[{ov_start:.0f},{ov_end - margin:.0f}] -> clamped {clamped:.0f}")
-            swap, reason = clamped, f"align_engine {rep.get('handoff_kind', 'swap')}"
             aligner_chosen = rep.get("alignment_policy") in ALIGNER_POLICIES
+            clamped = min(max(swap, ov_start), ov_end - margin)
+            if aligner_chosen:
+                # The clamp is a safety bound: it guarantees the swap sits
+                # inside the ARRANGED overlap with fade room after it. An
+                # aligner-chosen swap already satisfies that BY CONSTRUCTION
+                # (align_engine derives swap_beats from the same geometry it
+                # froze, with >= last_min_bars of outgoing tail after the
+                # handoff). So a clamp trigger here can only mean the report
+                # and the arranged ALS disagree — a stale report, a
+                # re-arranged ALS, or an upstream shift. Moving the beat
+                # would silently break the landmark contract while KEEPING
+                # its provenance (handoff_kind/paired cues), so it is a hard
+                # error, never a repair (Codex round-2 BLOCKER 1).
+                if abs(clamped - swap) > 1e-6:
+                    raise ValueError(
+                        f"Aligner-approved swap for '{out_t.name}' -> "
+                        f"'{in_t.name}' is outside the safe overlap: swap "
+                        f"{swap} not in [{ov_start}, {ov_end - margin}] "
+                        f"(policy {rep.get('alignment_policy')}, handoff "
+                        f"{rep.get('handoff_kind', '?')}). The arrangement "
+                        f"report and the arranged ALS disagree — rebuild the "
+                        f"arrangement or fix the report; refusing to move an "
+                        f"approved swap silently."
+                    )
+            elif clamped != swap:
+                if abs(clamped - swap) > 0.5:
+                    print(f"  align_engine swap {swap:.0f} outside safe overlap "
+                          f"[{ov_start:.0f},{ov_end - margin:.0f}] -> clamped {clamped:.0f}")
+                swap = clamped
+                swap_transforms.append("clamped")
+            reason = f"align_engine {rep.get('handoff_kind', 'swap')}"
         else:
             swap, reason = find_bass_swap(out_t, in_t, ov_start, ov_end)
 
@@ -657,7 +690,9 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             if snapped != swap and _inside_overlap(snapped, ov_start, ov_end):
                 print(f"  swap {swap:.0f} -> {snapped:.0f} (snapped onto section boundary)")
                 swap = snapped
-        plan = TransitionPlan(out_t, in_t, ov_start, ov_end, swap, reason)
+                swap_transforms.append("snapped")
+        plan = TransitionPlan(out_t, in_t, ov_start, ov_end, swap, reason,
+                              swap_transforms=swap_transforms)
 
         # ── Rule 2: two-stage bass ───────────────────────────────────
         # Conditions: outgoing outro >= 32 beats AND incoming has a build
@@ -712,7 +747,15 @@ def write_final_swaps_to_report(report_path: Path | None,
     downstream reconciliation (validate_mix_plan_als.reconcile) sees the
     truth even when a swap was clamped or snapped. Returns the number of
     transitions whose swap_beats changed; the pre-automation value is kept
-    as swap_beats_pre_automation for audit."""
+    as swap_beats_pre_automation and the transform(s) that moved the beat
+    as swap_transforms — a moved beat is always visible provenance, never
+    a silent edit.
+
+    TRANSACTIONALITY (Codex round-2 BLOCKER 1): the caller must only invoke
+    this AFTER the output ALS has been written and validated — the report
+    must never describe an attempt that never shipped. The write itself is
+    atomic (temp file + os.replace) so a crash mid-write can never leave a
+    half-written report."""
     if report_path is None or not Path(report_path).is_file():
         return 0
     path = Path(report_path)
@@ -721,7 +764,8 @@ def write_final_swaps_to_report(report_path: Path | None,
     except Exception:
         return 0
     final_by_key = {
-        (_normalise(p.outgoing.name), _normalise(p.incoming.name)): p.bass_swap
+        (_normalise(p.outgoing.name), _normalise(p.incoming.name)):
+            (p.bass_swap, list(p.swap_transforms))
         for p in plans
     }
     changed = 0
@@ -730,13 +774,17 @@ def write_final_swaps_to_report(report_path: Path | None,
                _normalise(tr.get("in_track", "")))
         if key not in final_by_key or tr.get("swap_beats") is None:
             continue
-        final = round(float(final_by_key[key]), 2)
+        final_beat, transforms = final_by_key[key]
+        final = round(float(final_beat), 2)
         if float(tr["swap_beats"]) != final:
             tr["swap_beats_pre_automation"] = tr["swap_beats"]
             tr["swap_beats"] = final
+            tr["swap_transforms"] = transforms or ["moved"]
             changed += 1
     if changed:
-        path.write_text(json.dumps(rep, indent=2), encoding="utf-8")
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(rep, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
         print(f"  Wrote {changed} final swap beat(s) back to {path.name}")
     return changed
 
@@ -1095,9 +1143,11 @@ def main() -> None:
               f"  overlap {p.overlap_start:.0f}-{p.overlap_end:.0f} ({bars:.0f} bars)"
               f"  swap@{p.bass_swap:.0f} ({p.reason}){rules_str}")
 
-    # The report must describe what the automation actually does (never a swap
-    # the automation stage silently moved) — reconcile reads it afterwards.
-    write_final_swaps_to_report(report_path, plans)
+    # NOTE: the final-swap write-back to the arrangement report happens AFTER
+    # the output ALS is written and validated (below) — mutating the report
+    # here would leave it describing an attempt that never shipped if any of
+    # automation construction / target validation / the ALS write failed
+    # (Codex round-2 BLOCKER 1).
 
     # ── generate automation ───────────────────────────────────────────
     track_auto = build_track_automation(plans, tracks)
@@ -1169,6 +1219,14 @@ def main() -> None:
     print(f"\nWriting {output_path.name} ...")
     compress_als(lines, output_path)
     print(f"Done -> {output_path}")
+
+    # ── final-swap write-back (transactional) ─────────────────────────
+    # Only now — the output ALS exists on disk and passed the corruption
+    # gate inside compress_als — may the arrangement report be mutated.
+    # The report must describe what the automation actually SHIPPED
+    # (never a swap the automation stage silently moved, and never an
+    # attempt that failed before writing) — reconcile reads it next.
+    write_final_swaps_to_report(report_path, plans)
 
     # ── MixPlan-to-ALS reconciliation (HARD GATE, optional) ───────────
     # Only fires when Phase 2c produced a MixPlan (mix_plan_path supplied).
