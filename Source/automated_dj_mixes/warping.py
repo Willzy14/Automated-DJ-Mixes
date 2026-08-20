@@ -101,19 +101,19 @@ def calculate_warp_markers_from_beat_grid(
     duration_sec: float,
     first_downbeat_offset: int = 0,
 ) -> list[WarpMarker]:
-    """Build PER-BEAT warp markers from Rekordbox's beat grid.
+    """Build PER-BEAT warp markers from the track's per-beat grid (beat_times_ms).
 
     One marker per BEAT (not per downbeat). The previous per-downbeat
     setup left 4 beats between markers, and Ableton's linear interpolation
     over that span slid inner beats off the grid on tracks with any
     micro-tempo drift. Per-beat markers eliminate the drift entirely.
 
-    Pre-downbeat audio (PQTZ entries before the first beat_of_bar=1) is
+    Pre-downbeat audio (grid entries before the first beat_of_bar=1) is
     emitted as warp markers with NEGATIVE beat_time, so the very first
     audio beat is preserved and Ableton doesn't extrapolate backwards.
 
     first_downbeat_offset is the index of the first beat_of_bar=1 entry.
-    Rekordbox grids can start on beat 2, 3, or 4 — warp beat 0 is the
+    Grids can start on beat 2, 3, or 4 — warp beat 0 is the
     first true downbeat, earlier entries map to beats -1, -2, -3.
 
     Falls back to 2-marker calculation if the beat grid is too short.
@@ -135,7 +135,7 @@ def calculate_warp_markers_from_beat_grid(
 #
 # The 09.06.26 mix surfaced a two-clock bug: section CUTS were computed on a
 # constant librosa BPM (quantized to a ~2.5% lattice — it literally cannot
-# output 128.00) while the AUDIO warps to the per-beat Rekordbox grid. Two
+# output 128.00) while the AUDIO warps to the per-beat grid. Two
 # clocks ~1% apart drift beats apart over a track, so every cut landed off
 # the warped audio. These helpers make the grid the single clock: callers
 # derive the detector's constant parameters from the grid itself, and map
@@ -149,7 +149,7 @@ def grid_bpm_and_downbeat(
 ) -> tuple[float | None, float | None]:
     """Effective constant BPM + true-downbeat anchor (sec) for a beat grid.
 
-    Rekordbox's stored BPM (db_bpm) wins when it agrees with the grid span —
+    The stored db_bpm wins when it agrees with the grid span -
     it matches constant grids without the integer-ms quantization error of
     per-interval maths. The downbeat anchor is the first beat_of_bar=1 entry
     (first_downbeat_offset), NOT grid entry 0: many tracks start on beat

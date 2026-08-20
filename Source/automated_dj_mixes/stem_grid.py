@@ -93,9 +93,8 @@ def score(kicks: np.ndarray, grid: np.ndarray) -> float:
 
 def grid_vs_kick(grid: np.ndarray, kicks: np.ndarray) -> float:
     """Median |nearest gridline - kick| over on-beat kicks (within half a beat of a
-    gridline; fills ignored). The RB-INDEPENDENT warp-fidelity metric — does the grid
-    actually sit on the transients we'll warp to? This is the metric that matters;
-    RB is only an advisory cross-check (and is demonstrably wrong on some tracks)."""
+    gridline; fills ignored). The warp-fidelity metric - does the grid actually sit
+    on the transients we'll warp to? This is the metric that matters."""
     g = np.sort(grid)
     idx = np.clip(np.searchsorted(g, kicks), 1, len(g) - 1)
     near = np.where(np.abs(kicks - g[idx - 1]) <= np.abs(kicks - g[idx]), g[idx - 1], g[idx])
@@ -105,49 +104,30 @@ def grid_vs_kick(grid: np.ndarray, kicks: np.ndarray) -> float:
 
 
 def main_compare() -> None:
-    """Primary metric = grid-vs-kick (RB-free, the warp-fidelity truth). RB is an
-    advisory cross-check: where it disagrees, the kicks arbitrate (we have caught RB
-    locking the wrong tempo on house tracks — see project-warp-beatgrid-bug)."""
-    try:
-        from automated_dj_mixes.rekordbox_reader import read_rekordbox_library, find_rekordbox_match
-        rb_lib = read_rekordbox_library()
-    except Exception as e:                                # RB reader is fragile (pyrekordbox/Py3.14)
-        print(f"(RB cross-check unavailable: {type(e).__name__}) — scoring grid-vs-kick only")
-        rb_lib = None
+    """Primary metric = grid-vs-kick (the warp-fidelity truth)."""
     cache = json.loads(GRID_CACHE.read_text())
-    print(f"{'track':34s} {'BPM':>6} {'conf':>5} {'spine':>9} {'DB':>13} {'kick':>7} {'RB?':>7} {'flag':>5}")
+    print(f"{'track':34s} {'BPM':>6} {'conf':>5} {'spine':>9} {'DB':>13} {'kick':>7} {'flag':>5}")
     kick_all, flags = [], []
     for name in sorted(cache):
         c = cache[name]
         grid = np.asarray(c["grid"]); kicks = np.asarray(c["kicks"])
-        kf = grid_vs_kick(grid, kicks)                   # RB-FREE accuracy
+        kf = grid_vs_kick(grid, kicks)
         kick_all.append(kf)
-        vs_rb = float("nan")
-        if rb_lib is not None:
-            try:
-                ra = find_rekordbox_match(name, rb_lib)
-                if ra and ra.beat_times_ms:
-                    vs_rb = score(grid, np.asarray(ra.beat_times_ms) / 1000)
-            except Exception:
-                pass
         spine = f"{c['n_spine']}/{c['n_kicks']}"
         flag = ""
         if c["conf"] < 0.80: flag = "LOWC"               # weak/syncopated kicks -> snare-primary
         elif kf > 15: flag = "JIT"                       # grid not on transients (real problem)
         elif c.get("downbeat_agree", 1) < 0.6: flag = "DB?"
-        elif not np.isnan(vs_rb) and vs_rb > 25: flag = "RB?"  # WE disagree with RB; kicks say we're right
-        if flag: flags.append((name, flag, kf, vs_rb))
-        rb_s = f"{vs_rb:7.1f}" if not np.isnan(vs_rb) else "      -"
+        if flag: flags.append((name, flag, kf))
         print(f"{name[:34]:34s} {c['bpm']:6.1f} {c['conf']:5.2f} {spine:>9} "
-              f"{c.get('downbeat_method','')[:9]:>9}{c.get('downbeat_agree',0):4.1f} {kf:6.1f}m{rb_s} {flag:>5}")
+              f"{c.get('downbeat_method','')[:9]:>9}{c.get('downbeat_agree',0):4.1f} {kf:6.1f}m {flag:>5}")
     arr = np.array([v for v in kick_all if not np.isnan(v)])
     print(f"\nMEDIAN grid-vs-kick (warp fidelity): {np.median(arr):.2f} ms")
     print(f"on transients <5ms: {(arr<5).sum()}/{len(arr)}   <15ms: {(arr<15).sum()}/{len(arr)}")
     if flags:
-        print("FLAGGED (LOWC=weak kicks, JIT=off transients, DB?=downbeat, RB?=RB disagrees/we're on the kicks):")
-        for n, f, kf, v in flags:
-            rb_note = f", RB {v:.0f}ms" if not np.isnan(v) else ""
-            print(f"  [{f:4s}] {n[:46]:46s}  (kick {kf:.1f}ms{rb_note})")
+        print("FLAGGED (LOWC=weak kicks, JIT=off transients, DB?=downbeat):")
+        for n, f, kf in flags:
+            print(f"  [{f:4s}] {n[:46]:46s}  (kick {kf:.1f}ms)")
 
 
 def main_viz() -> None:

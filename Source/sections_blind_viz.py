@@ -572,7 +572,7 @@ def main():
     print(f"Output:   {out_dir}")
     sections_data = json.loads(sections_path.read_text(encoding="utf-8"))
 
-    # BPMs: prefer arrangement report (MIK-enriched), fall back to RB analysis
+    # BPMs: prefer arrangement report (MIK-enriched), fall back to librosa analysis
     bpm_lookup = {}
     first_downbeat_lookup = {}
     report_candidates = list((project_dir / "Output").glob("ARRANGEMENT_REPORT*.json"))
@@ -585,24 +585,17 @@ def main():
             bpm_lookup[t["name"]] = t["bpm"]
         print(f"BPMs from: {report_candidates[-1].name}")
 
-    # First downbeat from RB analysis if available
+    # First downbeat + fallback BPM from the audio analysis (librosa).
     try:
-        from automated_dj_mixes.analysis import analyse_folder, enrich_from_rekordbox
-        from automated_dj_mixes.rekordbox_reader import read_rekordbox_library, find_rekordbox_match
-
+        from automated_dj_mixes.analysis import analyse_folder
         print("Loading audio analyses for downbeat...")
         analyses = analyse_folder(audio_dir)
-        rb_lib = read_rekordbox_library()
         for a in analyses:
-            rb_match = find_rekordbox_match(a.path.name, rb_lib)
-            if rb_match:
-                enrich_from_rekordbox(a, rb_match)
             first_downbeat_lookup[a.path.stem] = a.first_downbeat_sec or 0.0
-            # Fallback BPM if not in report
             if a.path.stem not in bpm_lookup:
                 bpm_lookup[a.path.stem] = a.bpm
     except Exception as e:
-        print(f"  (RB analysis unavailable: {e}; using 0.0 first_downbeat)")
+        print(f"  (audio analysis unavailable: {e}; using 0.0 first_downbeat)")
 
     rendered = 0
     tracks_for_notes = []  # (clean_name, sections, flags)

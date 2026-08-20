@@ -359,7 +359,12 @@ def verdict_from(r_half: float, mean_phase: float, r_detuned: float,
 
 
 def _mik_bpm(audio_path) -> float | None:
-    """MIK's independently-analyzed BPM for a track (None if unavailable)."""
+    """MIK's independently-analyzed BPM for a track (None if unavailable).
+
+    Kept after Rekordbox removal: the live beatgrid gate still uses MIK's BPM
+    as the independent-bpm tiebreaker (rescue_eligible in verdict_from). No
+    other caller outside the deleted CLI.
+    """
     try:
         from automated_dj_mixes.mik_reader import read_mik_db_track
         m = read_mik_db_track(Path(audio_path))
@@ -373,10 +378,9 @@ def enforce_beatgrid_quality(analyses, rb_matches: dict,
                              grid_overrides: dict | None = None) -> list[GridCheck]:
     """Pipeline gate: hard-stop if any track's grid fails verification.
 
-    Mirrors enforce_rekordbox_coverage: loud per-track verdicts, RuntimeError
-    on FAIL unless explicitly overridden (--allow-bad-grids).
-    grid_overrides supplies provenance: stem-kick-fitted grids are judged on
-    their stem evidence, not the (percussion-biased) ticks.
+    Loud per-track verdicts, RuntimeError on FAIL unless explicitly overridden
+    (--allow-bad-grids). grid_overrides supplies provenance: stem-kick-fitted
+    grids are judged on their stem evidence, not the (percussion-biased) ticks.
     """
     checks: list[GridCheck] = []
     overrides = grid_overrides or {}
@@ -415,9 +419,9 @@ def enforce_beatgrid_quality(analyses, rb_matches: dict,
 # the kicks (the Todd case), the fix is a phase SLIDE of the whole grid.
 # Corrections live in <project>/Hints/grid_overrides.json:
 #   { "<wav filename>": {"shift_ms": +70.3, "reason": "...", ...} }
-# The orchestrator applies them right after the Rekordbox match, so the warp
+# The orchestrator applies them right after grid enrichment, so the warp
 # markers, the one-clock section cuts AND this gate all see the corrected
-# grid — every later run re-validates the fix automatically.
+# grid - every later run re-validates the fix automatically.
 # (Full drum-stem beat-tracking remains the documented escalation if a track
 # ever FAILs on TEMPO; as of the 2026-06-11 calibration none does.)
 
@@ -631,94 +635,14 @@ def write_grid_replacement(project_dir: Path, wav: Path, rb_match,
     return overrides[wav.name]
 
 
-def write_phase_override(project_dir: Path, wav: Path, rb_match) -> dict | None:
-    """Measure a track's grid offset against Ableton's transient ticks (.asd)
-    and write/merge the corrective shift into grid_overrides.json.
-
-    TICK-BASED ONLY. The librosa kick-phase estimate carries track-dependent
-    bias up to ~100ms (it mis-corrected three healthy RB grids on 11.06.26,
-    the 'warping gone to shit' bug) — it is never allowed to write an
-    override. No .asd = no override: open the track in Ableton once so Live
-    writes its analysis file, then re-run.
-    """
-    import json
-    from asd_onsets import ableton_onsets_sec, grid_offset_vs_ticks
-    overrides = load_grid_overrides(project_dir)
-    existing = float(overrides.get(wav.name, {}).get("shift_ms", 0.0))
-
-    ticks = ableton_onsets_sec(wav)
-    if ticks is None or len(ticks) < 100:
-        print(f"  REFUSING override for {wav.name}: no usable .asd tick "
-              f"analysis — open the track in Ableton once, then re-run.")
-        return None
-    times = np.asarray(rb_match.beat_times_ms, dtype=float) + existing
-    off, nhit, quarts = grid_offset_vs_ticks(times / 1000.0, ticks)
-    if nhit < TICK_MIN_HITS or np.isnan(off):
-        print(f"  cannot measure {wav.name}: only {nhit} beats found a tick")
-        return None
-    total = existing + off
-    overrides[wav.name] = {
-        "shift_ms": round(total, 1),
-        "measured_offset_ms": round(off, 1),
-        "tick_hits": int(nhit),
-        "drift_quartiles_ms": [round(q, 1) for q in quarts],
-        "phase_source": "ableton-ticks",
-        "reason": "phase-correct grid to Ableton transient ticks (.asd)",
-    }
-    p = overrides_path(project_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
-    print(f"  wrote {p.name}: {wav.name} shift_ms={total:+.1f} "
-          f"(was {existing:+.1f}, ticks offset {off:+.1f}ms over {nhit} beats)")
-    return overrides[wav.name]
-
-
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    fix_substr = None
-    if "--write-override" in sys.argv:
-        i = sys.argv.index("--write-override")
-        if i + 1 < len(sys.argv):
-            fix_substr = sys.argv[i + 1]
-            args = [a for a in args if a != fix_substr]
-    if not args:
-        print(__doc__)
-        return 1
-    target = Path(args[0])
-    audio_dir = target / "Audio" if (target / "Audio").exists() else target
-    project_dir = audio_dir.parent if audio_dir.name == "Audio" else target
-    wavs = sorted(audio_dir.glob("*.wav"))
-    if not wavs:
-        print(f"No WAVs in {audio_dir}")
-        return 1
-    repo = Path(__file__).resolve().parent.parent
-    sys.path.insert(0, str(repo / "Source"))
-    from automated_dj_mixes.rekordbox_reader import (
-        read_rekordbox_library, find_rekordbox_match,
-    )
-    lib = read_rekordbox_library()
-    overrides = load_grid_overrides(project_dir)
-    rc = 0
-    for wav in wavs:
-        rb = find_rekordbox_match(wav.name, lib)
-        if rb is None:
-            print(f"  [SKIP] {wav.name[:54]:56s} no RB entry")
-            continue
-        if fix_substr and fix_substr.lower() in wav.name.lower():
-            write_phase_override(project_dir, wav, rb)
-            overrides = load_grid_overrides(project_dir)
-        if wav.name in overrides:
-            apply_grid_override(rb, overrides[wav.name])
-        c = check_grid(wav, rb.beat_times_ms,
-                       independent_bpm=_mik_bpm(wav), db_bpm=rb.bpm)
-        ov = " [override applied]" if wav.name in overrides else ""
-        stats = (f"R={c.resultant:.2f} n={c.n_onsets} segs={c.seg_r}"
-                 if c.resultant >= 0 else "-")
-        print(f"  [{c.verdict:4s}] {wav.name[:54]:56s} {c.detail}{ov}")
-        print(f"         {stats}")
-        if c.verdict == "FAIL":
-            rc = 2
-    return rc
+    # The Rekordbox-library CLI mode was removed (2026-08-18). The live gate is
+    # enforce_beatgrid_quality, invoked by the orchestrator; grid overrides in
+    # Hints/grid_overrides.json still apply.
+    print("The Rekordbox-library CLI mode was removed (2026-08-18). "
+          "The live gate is enforce_beatgrid_quality, invoked by the orchestrator; "
+          "grid overrides in Hints/grid_overrides.json still apply.")
+    return 2
 
 
 if __name__ == "__main__":
