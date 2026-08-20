@@ -8,6 +8,17 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "Source"))
 
 
+def _quality_context():
+    import numpy as np
+    from align_engine import LoopQualityContext
+
+    clean = np.full(5000, 0.1, dtype=float)
+    return LoopQualityContext(
+        Path("synthetic__stemenv.npz"), 126.0, 0.0, 0.1,
+        {name: clean.copy() for name in ("drums", "bass", "other", "vocals", "mix")},
+    )
+
+
 def _track(name, *, n_bars=128, sections=None, bass_in=0.0, bass_out=120.0,
            loop_windows=None):
     from align_engine import Track
@@ -27,6 +38,7 @@ def _track(name, *, n_bars=128, sections=None, bass_in=0.0, bass_out=120.0,
         bass_out_bar=bass_out,
         last_min_bars=64,
         loop_windows=loop_windows or [],
+        loop_quality_context=_quality_context(),
     )
 
 
@@ -312,12 +324,17 @@ def test_cue_bounded_loop_preserves_swap_and_later_target():
         loop_windows=[(180, 200)],
         vocal_regions=[],
         fills=[],
+        n_bars=220,
+        name="synthetic",
+        loop_quality_context=_quality_context(),
+        loop_quality_overrides=[],
     )
 
     chunk = pick_cue_bounded_drum_loop(
         track,
         gap_bars=21,
         required_boundary_bars=16,
+        insert_bar=180,
     )
 
     assert chunk is not None
@@ -342,6 +359,10 @@ def test_cue_bounded_loop_prefers_outro_section_when_no_window_registered():
             {"label": "intro", "start_bar": 0.0, "end_bar": 32.0},
             {"label": "outro", "start_bar": 192.0, "end_bar": 208.0},
         ],
+        n_bars=208,
+        name="synthetic",
+        loop_quality_context=_quality_context(),
+        loop_quality_overrides=[],
     )
 
     chunk = pick_cue_bounded_drum_loop(track, gap_bars=16, required_boundary_bars=8)

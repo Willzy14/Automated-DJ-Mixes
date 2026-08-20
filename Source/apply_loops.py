@@ -26,6 +26,7 @@ Can also be imported and called programmatically:
 from __future__ import annotations
 
 import gzip
+import html
 import json
 import math
 import re
@@ -109,11 +110,14 @@ def _normalise(s: str) -> str:
 def _match_track(name: str, als_tracks: list[tuple[int, int, str]]) -> tuple[int, int, str] | None:
     """Find the ALS track whose name matches `name`.
 
-    Match order (only ONE — first hit wins):
+    Match order:
       1. Exact match on normalised names.
       2. `name` is a substring of `tname` (the requesting name is the
          shorter, more specific one — fine).
       3. `tname` is a substring of `name` (the .als name is the shorter).
+
+    A stage with multiple survivors is ambiguous and raises. File/track sort
+    order must never decide which source receives an edit.
 
     Loose prefix matching (first 20 chars) was removed because it
     collides when an artist has two tracks sharing a long prefix
@@ -123,22 +127,27 @@ def _match_track(name: str, als_tracks: list[tuple[int, int, str]]) -> tuple[int
     """
     nn = _normalise(name)
 
-    # 1. Exact
-    for start, end, tname in als_tracks:
-        if nn == _normalise(tname):
-            return start, end, tname
+    exact = [track for track in als_tracks if nn == _normalise(track[2])]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise ValueError(
+            f"Ambiguous track match for '{name}': "
+            + ", ".join(repr(track[2]) for track in exact)
+        )
 
-    # 2. name ⊂ tname
-    for start, end, tname in als_tracks:
-        tn = _normalise(tname)
-        if nn in tn:
-            return start, end, tname
-
-    # 3. tname ⊂ name
-    for start, end, tname in als_tracks:
-        tn = _normalise(tname)
-        if tn in nn:
-            return start, end, tname
+    substring = []
+    for track in als_tracks:
+        tn = _normalise(track[2])
+        if nn in tn or tn in nn:
+            substring.append(track)
+    if len(substring) == 1:
+        return substring[0]
+    if len(substring) > 1:
+        raise ValueError(
+            f"Ambiguous track match for '{name}': "
+            + ", ".join(repr(track[2]) for track in substring)
+        )
 
     return None
 
@@ -556,6 +565,171 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
     return changed
 
 
+def _quality_cache_for_track(track_text: str, track_name: str) -> Path:
+    """Resolve an existing stem-envelope cache without decoding source audio."""
+    audio_stems = []
+    audio_paths = []
+    for encoded in re.findall(r'<Path Value="([^"]+\.wav)"', track_text,
+                              flags=re.IGNORECASE):
+        audio_path = Path(html.unescape(encoded).replace("/", "\\"))
+        audio_paths.append(audio_path)
+        if audio_path.stem not in audio_stems:
+            audio_stems.append(audio_path.stem)
+    if not audio_stems:
+        audio_stems.append(html.unescape(track_name))
+
+    # Prefer the current worktree. Stored ALS absolute paths can point at the
+    # main checkout even when a branch worktree is under test.
+    worktree_matches = []
+    for directory in Path.cwd().glob("**/_Stem Analysis"):
+        for stem in audio_stems:
+            candidate = directory / f"{stem}__stemenv.npz"
+            if candidate.is_file():
+                worktree_matches.append(candidate)
+    unique_worktree = list(dict.fromkeys(path.resolve() for path in worktree_matches))
+    if len(unique_worktree) == 1:
+        return unique_worktree[0]
+    if len(unique_worktree) > 1:
+        raise ValueError(
+            f"multiple cached stem envelopes match '{track_name}': "
+            + ", ".join(str(path) for path in unique_worktree)
+        )
+
+    direct_matches = []
+    for audio_path in audio_paths:
+        for parent in audio_path.parents:
+            candidate = parent / "_Stem Analysis" / f"{audio_path.stem}__stemenv.npz"
+            if candidate.is_file():
+                direct_matches.append(candidate.resolve())
+    unique_direct = list(dict.fromkeys(direct_matches))
+    if len(unique_direct) == 1:
+        return unique_direct[0]
+    if len(unique_direct) > 1:
+        raise ValueError(
+            f"multiple cached stem envelopes match '{track_name}': "
+            + ", ".join(str(path) for path in unique_direct)
+        )
+    raise FileNotFoundError(
+        f"no cached stem envelope found for loop target '{track_name}'"
+    )
+
+
+def _clip_geometry(lines: list[str], track_start: int,
+                   track_end: int) -> list[dict[str, float]]:
+    clips = []
+    current = None
+    for line in lines[track_start:track_end + 1]:
+        stripped = line.strip()
+        if "<AudioClip " in stripped:
+            match = re.search(r'Time="([^\"]+)"', stripped)
+            current = {"time": float(match.group(1))} if match else {}
+            continue
+        if current is None:
+            continue
+        for key, tag in (
+            ("current_start", "CurrentStart"),
+            ("current_end", "CurrentEnd"),
+            ("source_start", "LoopStart"),
+            ("source_end", "LoopEnd"),
+        ):
+            if key not in current and f"<{tag} " in stripped:
+                match = re.search(r'Value="([^\"]+)"', stripped)
+                if match:
+                    current[key] = float(match.group(1))
+        if "</AudioClip>" in stripped:
+            if all(key in current for key in (
+                "current_start", "current_end", "source_start", "source_end"
+            )):
+                clips.append(current)
+            current = None
+    return clips
+
+
+def _insert_source_beat(lines: list[str], track_start: int, track_end: int,
+                        insert_at_beat: float) -> float:
+    """Map the splice point back to the source beat playing immediately before it."""
+    clips = _clip_geometry(lines, track_start, track_end)
+    if not clips:
+        raise ValueError("track has no clip geometry for insert-level measurement")
+    tolerance = 1e-6
+    predecessors = [
+        clip for clip in clips
+        if abs(clip["current_end"] - insert_at_beat) <= tolerance
+    ]
+    if predecessors:
+        return max(predecessors, key=lambda clip: clip["current_start"])["source_end"]
+    containing = [
+        clip for clip in clips
+        if clip["current_start"] <= insert_at_beat < clip["current_end"]
+    ]
+    if containing:
+        clip = max(containing, key=lambda item: item["current_start"])
+        return clip["source_start"] + insert_at_beat - clip["current_start"]
+    following = [clip for clip in clips if clip["current_start"] > insert_at_beat]
+    if following:
+        return min(following, key=lambda clip: clip["current_start"])["source_start"]
+    preceding = [clip for clip in clips if clip["current_end"] < insert_at_beat]
+    if preceding:
+        return max(preceding, key=lambda clip: clip["current_end"])["source_end"]
+    raise ValueError("could not map loop insertion to a source beat")
+
+
+def _revalidate_loop_quality(lines: list[str], spec: LoopSpec,
+                             matched: tuple[int, int, str]) -> None:
+    """Hard-fail one LoopSpec against the shared cached-envelope gate."""
+    from align_engine import (
+        LoopQualityResult,
+        evaluate_loop_quality,
+        format_loop_quality_result,
+        load_loop_quality_context,
+        load_loop_quality_overrides,
+        log_loop_quality_override,
+        loop_quality_waivers,
+    )
+
+    track_start, track_end, track_name = matched
+    track_text = "".join(lines[track_start:track_end + 1])
+    period = float(spec.source_beat_end - spec.source_beat_start)
+    try:
+        cache_path = _quality_cache_for_track(track_text, track_name)
+        context = load_loop_quality_context(cache_path)
+        insert_source = _insert_source_beat(
+            lines, track_start, track_end, spec.insert_at_beat
+        )
+        overrides = load_loop_quality_overrides(cache_path.parent)
+        waivers = loop_quality_waivers(
+            overrides,
+            spec.track_name,
+            spec.source_beat_start,
+            spec.source_beat_end,
+            insert_source,
+        )
+        result = evaluate_loop_quality(
+            context,
+            spec.source_beat_start,
+            spec.source_beat_end,
+            insert_source,
+            waivers,
+        )
+    except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+        result = LoopQualityResult(
+            period, None, None, None, None, (), (), str(exc)
+        )
+    details = format_loop_quality_result(result)
+    if not result.passed:
+        failed = ",".join(result.failed_checks) or "cache/context"
+        loop_name = spec.clip_name or (
+            f"{spec.source_beat_start:g}-{spec.source_beat_end:g}"
+        )
+        raise ValueError(
+            f"Loop quality gate failed for '{spec.track_name}' loop '{loop_name}': "
+            f"{details}; failed={failed}"
+        )
+    log_loop_quality_override(
+        spec.track_name, spec.source_beat_start, spec.source_beat_end, result
+    )
+
+
 def _preflight_loop_specs(lines: list[str], specs: list[LoopSpec]) -> None:
     """Validate an entire loop batch before the first in-memory edit."""
     als_tracks = find_track_line_ranges(lines)
@@ -564,6 +738,8 @@ def _preflight_loop_specs(lines: list[str], specs: list[LoopSpec]) -> None:
         matched = _match_track(spec.track_name, als_tracks)
         if not matched:
             raise ValueError(f"Loop target track '{spec.track_name}' was not found")
+
+        _revalidate_loop_quality(lines, spec, matched)
 
         track_start, track_end, track_name = matched
         events_start, events_end = find_clip_events(lines, track_start, track_end)
