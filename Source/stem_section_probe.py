@@ -71,7 +71,14 @@ def _separate_envelopes(wav_path: Path, cache_dir: Path, hop_sec: float = 0.1):
     if cache.exists():
         d = np.load(cache, allow_pickle=False)
         hop_t = float(d["hop_t"])
-        return {k: d[k] for k in d.files if k != "hop_t"}, hop_t
+        # Drop the tiera_-prefixed arrays so the existing consumers
+        # (probe_track's L = min(len(e) for e in envs.values()), detect()'s
+        # _per_bar call sites, etc.) keep the SAME envelope shape they
+        # had before the Tier A augmentation. The new arrays are routed
+        # through ensure_tier_a_arrays() instead — which is called from
+        # detect() ONLY when tier_a=True. With the flag off, the envs dict
+        # is byte-identical to pre-augmentation main @ 4103ccf.
+        return {k: d[k] for k in d.files if k != "hop_t" and not k.startswith("tiera_")}, hop_t
 
     import torch
     from demucs.apply import apply_model

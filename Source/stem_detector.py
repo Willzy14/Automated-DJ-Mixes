@@ -42,6 +42,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from stem_section_probe import _separate_envelopes, _load_stats, _seccol
+from _tier_a_features import (
+    TIERA_KEYS as _TIERA_KEYS,
+    TIERA_BAND_LOW_KEY as _TIERA_BAND_LOW_KEY,
+    TIERA_BAND_MID_KEY as _TIERA_BAND_MID_KEY,
+    TIERA_BAND_HIGH_KEY as _TIERA_BAND_HIGH_KEY,
+    TIERA_WIDTH_KEY as _TIERA_WIDTH_KEY,
+    TIERA_LR_CORR_KEY as _TIERA_LR_CORR_KEY,
+    ensure_tier_a_arrays,
+    threshold_vocal_regions,
+    vocal_activity_mask as _vocal_active_mask,
+    vocal_threshold_for,
+)
 from automated_dj_mixes.musical_landmarks import extract_kick_dropout_landmarks
 from automated_dj_mixes.display_sections import refine_intro_drop_boundary
 
@@ -516,7 +528,7 @@ def _merge_same_label(sections):
 
 def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True,
            kick_model=False, kick_model_path=None, kick_model_device="auto",
-           kick_provider=None, soft_intro_outro=False):
+           kick_provider=None, soft_intro_outro=False, tier_a=False):
     """Detect sections + mix signals for one track.
 
     bpm/downbeat may be passed in (pipeline use — they come from Rekordbox/analysis);
@@ -526,6 +538,13 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     soft_intro_outro (default False): when True, bias intro/outro classification
     toward explicit kick-presence signals (R2/R3/R4). Default OFF keeps the
     existing bass-finish outro + lead-drop intro detection unchanged.
+
+    tier_a (default False): Phase 1 only. When True, attach the four per-bar
+    feature families (3-band envelopes, stereo width, L/R correlation, vocal-
+    active regions) to signals.tier_a and draw the extra viz strip. The flag
+    OFF MUST leave the JSON shape byte-identical to main @ 4103ccf — the tier_a
+    key is OMITTED entirely (not emitted as null) and the existing signals are
+    untouched. No section boundary / label decision changes either way.
     """
     stats = None
     if bpm is None or downbeat is None:
@@ -847,6 +866,43 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     if soft_hints is not None:
         signals["soft_intro_outro_hints"] = soft_hints
 
+    # Tier A per-bar feature families (Phase 1, NO decision changes). When
+    # the flag is off, the key is OMITTED entirely so the OFF JSON is
+    # byte-identical to main @ 4103ccf. When on, we pull the cached
+    # tiera_* arrays (ensure_tier_a_arrays is a no-op once the cache is
+    # populated) and compute the per-bar conversion + vocal-regions.
+    tier_a_data = None
+    if tier_a:
+        tiera_arrays = ensure_tier_a_arrays(wav, project / "_Stem Analysis")
+        # Per-bar conversion via the SAME _per_bar the existing envelopes go
+        # through, so the bar indices line up with the rest of the result.
+        band_low_bar = _per_bar(tiera_arrays[_TIERA_BAND_LOW_KEY], hop_t, downbeat, sec_per_bar, n_bars)
+        band_mid_bar = _per_bar(tiera_arrays[_TIERA_BAND_MID_KEY], hop_t, downbeat, sec_per_bar, n_bars)
+        band_high_bar = _per_bar(tiera_arrays[_TIERA_BAND_HIGH_KEY], hop_t, downbeat, sec_per_bar, n_bars)
+        width_bar = _per_bar(tiera_arrays[_TIERA_WIDTH_KEY], hop_t, downbeat, sec_per_bar, n_bars)
+        lr_corr_bar = _per_bar(tiera_arrays[_TIERA_LR_CORR_KEY], hop_t, downbeat, sec_per_bar, n_bars)
+        # Vocals come from the EXISTING cached vocals envelope (same as the
+        # existing vocal_regions signal uses) — the new tracks (3-band,
+        # width, corr) supply the per-bar features, but vocal activity is
+        # the same signal everyone else reads.
+        vocals_bar = _per_bar(envs["vocals"], hop_t, downbeat, sec_per_bar, n_bars)
+        vocal_threshold = vocal_threshold_for(vocals_bar)
+        vocal_regions = threshold_vocal_regions(
+            vocals_bar, downbeat=downbeat, sec_per_bar=sec_per_bar,
+        )
+        tier_a_data = {
+            "band_low_bar": [round(float(v), 4) for v in band_low_bar],
+            "band_mid_bar": [round(float(v), 4) for v in band_mid_bar],
+            "band_high_bar": [round(float(v), 4) for v in band_high_bar],
+            "width_bar": [round(float(v), 4) for v in width_bar],
+            "lr_corr_bar": [round(float(v), 4) for v in lr_corr_bar],
+            "vocal_active_bar": [int(v) for v in _vocal_active_mask(vocals_bar)],
+            "vocal_active_regions": [[round(float(s), 2), round(float(e), 2), int(a), int(b)]
+                                      for s, e, a, b in vocal_regions],
+            "vocal_threshold": round(vocal_threshold, 6),
+        }
+        signals["tier_a"] = tier_a_data
+
     result = {"track": wav.stem, "bpm": round(bpm, 2), "n_bars": n_bars,
               "sections": sections, "signals": signals}
     if write_json:
@@ -855,7 +911,8 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
             json.dumps(result, indent=1), encoding="utf-8")
 
     if make_viz:
-        _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, sections, signals, kick_ref)
+        _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, sections, signals, kick_ref,
+                   tier_a_data=tier_a_data)
 
     n_drop = sum(1 for c in kick_cues if c["type"] == "kick_dropout")
     old_n = f"old {len(stats['sections']):2d} -> " if stats else ""
@@ -865,7 +922,8 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     return result
 
 
-def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, sections, signals, kick_ref=None):
+def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, sections, signals, kick_ref=None,
+               tier_a_data=None):
     order = [s for s in STEMS if s in envs]
     L = min(len(envs[s]) for s in order + ["mix"])
     t = np.arange(L) * hop_t
@@ -877,8 +935,16 @@ def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, section
     major = signals.get("major_cues", [])
     landmarks = signals.get("musical_landmarks", [])
 
-    fig, axes = plt.subplots(len(order) + 1, 1, figsize=(20, 10), sharex=True,
-                             gridspec_kw={"height_ratios": [2.6] + [1] * len(order)})
+    # When Tier A is on (flag is True), we add ONE extra row to the figure
+    # with the 3 band curves + width + vocal-active shading. The flag-off
+    # branch never enters this code path, so the row count stays identical
+    # to main @ 4103ccf when tier_a=False (the default).
+    with_tier_a = tier_a_data is not None
+    n_rows = len(order) + 1 + (1 if with_tier_a else 0)
+    height_ratios = [2.6] + [1] * len(order) + ([1.4] if with_tier_a else [])
+    fig, axes = plt.subplots(n_rows, 1, figsize=(20, 10 if not with_tier_a else 11.5),
+                             sharex=True,
+                             gridspec_kw={"height_ratios": height_ratios})
 
     def overlays(ax, label_sections=False):
         for bar in range(0, n_bars + 1, PHRASE_GRID):
@@ -948,13 +1014,53 @@ def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, section
         ax.set_ylim(0, 1.05)
         overlays(ax)
 
+    if with_tier_a:
+        # Tier-A strip: 3-band envelopes (low/mid/high, red/green/blue to
+        # match sections_blind_viz convention) overlay-twin'd onto the width
+        # trace, plus vocal-active bars shaded purple. One panel, not four,
+        # so the existing PDF dimensions don't shift much (flag-off callers
+        # are completely unaffected — they never reach this branch).
+        ax = axes[-1]
+        # Convert per-bar arrays to second-aligned time series. The bar
+        # index starts at downbeat (the dance-music beat-grid convention)
+        # so we plot bar centers at downbeat + (b + 0.5) * sec_per_bar.
+        n_bars_data = len(tier_a_data["band_low_bar"])
+        bar_times = downbeat + (np.arange(n_bars_data) + 0.5) * sec_per_bar
+        # Re-normalise each band to its own max so the overlay is readable
+        # (the bands differ in absolute RMS by ~10x between low and high).
+        def _band(arr, color, label):
+            a = np.asarray(arr, dtype=float)
+            pk = a.max() + 1e-9
+            ax.plot(bar_times, a / pk, color=color, lw=1.0, alpha=0.85, label=label, zorder=2)
+        _band(tier_a_data["band_low_bar"], "#e4572e", "band low (<250 Hz)")
+        _band(tier_a_data["band_mid_bar"], "#2e9e5b", "band mid (250-2500 Hz)")
+        _band(tier_a_data["band_high_bar"], "#3a6ed8", "band high (>2500 Hz)")
+        # Width trace: scale to 0..1 by max so it sits on the same panel.
+        w = np.asarray(tier_a_data["width_bar"], dtype=float)
+        ax.plot(bar_times, w / (w.max() + 1e-9), color="#222", lw=0.7, alpha=0.7,
+                label="width (side/mid)", zorder=2)
+        # Vocal-active bars as a thin purple strip at the bottom.
+        va = np.asarray(tier_a_data["vocal_active_bar"], dtype=int)
+        active_bars = np.where(va > 0)[0]
+        for b in active_bars:
+            x0 = downbeat + b * sec_per_bar
+            x1 = downbeat + (b + 1) * sec_per_bar
+            ax.axvspan(x0, x1, ymin=0.0, ymax=0.08, color="#8e44ad", alpha=0.7, lw=0, zorder=1)
+        ax.set_ylabel("tier_a\n3-band + width", fontsize=8, fontweight="bold")
+        ax.set_ylim(0, 1.05)
+        ax.legend(loc="upper right", fontsize=6, ncol=2, framealpha=0.8)
+        # Re-use the section overlays so the new strip ties into the same
+        # boundary cues the rest of the figure uses.
+        overlays(ax)
+
     xt = np.arange(0, dur, 30)
     axes[-1].set_xticks(xt)
     axes[-1].set_xticklabels([mmss(x) for x in xt], fontsize=8)
     axes[-1].set_xlabel("time (mm:ss)   ·   orange=fill (kick out→in)   ·   gold=kick OUT   ·   teal=kick IN   ·   "
                         "magenta=~1min in/out   ·   green=loop window   ·   purple=vocals   ·   "
                         "top strip=kick-gap landmark   ·   "
-                        f"dotted line on drums = {KICK_ON_FRAC} kick threshold")
+                        f"dotted line on drums = {KICK_ON_FRAC} kick threshold"
+                        + ("   ·   last strip=tier_a 3-band + width" if with_tier_a else ""))
     fig.tight_layout()
     fig.savefig(project / "_Stem Analysis" / f"DETECT_{wav.stem}.png", dpi=95)
     plt.close(fig)
