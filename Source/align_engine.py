@@ -206,7 +206,17 @@ class LoopQualityResult:
 
     @property
     def passed(self) -> bool:
-        return not self.failed_checks and self.error is None
+        # `error` means the window could not be MEASURED (no cached envelope for the
+        # track), which is not evidence the loop is bad. Failing closed on it silently
+        # disabled loops for every un-analysed track -- including two of Sam's own
+        # hand-corrected reference transitions (2026-08-20). Absence of data is not a
+        # defect: unmeasurable windows pass the gate and are reported as unmeasured,
+        # while a window we CAN measure and that fails still gets rejected.
+        return not self.failed_checks
+
+    @property
+    def unmeasured(self) -> bool:
+        return self.error is not None
 
 
 def _normalise_quality_track_name(name: str) -> str:

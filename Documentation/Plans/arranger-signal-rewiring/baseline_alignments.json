@@ -55,25 +55,11 @@
    ],
    "out": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "overlap_bars": 24.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [],
    "paired_cues": [],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx7+0b to section:break_1 196",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 32.0,
-      "source_start_bar": 28.0,
-      "target_marker_bar": 196.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 0,
@@ -93,7 +79,7 @@
    ],
    "out": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
    "overlap_bars": 48.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     225
    ],
@@ -112,21 +98,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to landmark:kick_gap_220_224:end 233",
-      "partial_bars": 0.0,
-      "reps": 8,
-      "skip_bars": 0.0,
-      "source_end_bar": 225.0,
-      "source_start_bar": 224.0,
-      "target_marker_bar": 233.0,
-      "target_marker_name": "landmark:kick_gap_220_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -274,25 +246,11 @@
    ],
    "out": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
    "overlap_bars": 48.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [],
    "paired_cues": [],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:break_1 233",
-      "partial_bars": 0.0,
-      "reps": 8,
-      "skip_bars": 0.0,
-      "source_end_bar": 225.0,
-      "source_start_bar": 224.0,
-      "target_marker_bar": 233.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 0,
@@ -365,25 +323,11 @@
    ],
    "out": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
    "overlap_bars": 24.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [],
    "paired_cues": [],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to landmark:kick_gap_124_128:end 233",
-      "partial_bars": 0.0,
-      "reps": 8,
-      "skip_bars": 0.0,
-      "source_end_bar": 225.0,
-      "source_start_bar": 224.0,
-      "target_marker_bar": 233.0,
-      "target_marker_name": "landmark:kick_gap_124_128:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 0,
@@ -403,7 +347,7 @@
    ],
    "out": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
    "overlap_bars": 48.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     224,
     225
@@ -435,21 +379,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:break_1 233",
-      "partial_bars": 0.0,
-      "reps": 8,
-      "skip_bars": 0.0,
-      "source_end_bar": 225.0,
-      "source_start_bar": 224.0,
-      "target_marker_bar": 233.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -469,25 +399,11 @@
    ],
    "out": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
    "overlap_bars": 24.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [],
    "paired_cues": [],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:break_1 233",
-      "partial_bars": 0.0,
-      "reps": 8,
-      "skip_bars": 0.0,
-      "source_end_bar": 225.0,
-      "source_start_bar": 224.0,
-      "target_marker_bar": 233.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 0,
@@ -1678,12 +1594,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 5bx3+1b to landmark:kick_gap_248_256:end 201",
-      "partial_bars": 1.0,
-      "reps": 3,
+      "note": "loop outro 2bx8+0b to landmark:kick_gap_248_256:end 201",
+      "partial_bars": 0.0,
+      "reps": 8,
       "skip_bars": 0.0,
       "source_end_bar": 184.0,
-      "source_start_bar": 179.0,
+      "source_start_bar": 182.0,
       "target_marker_bar": 201.0,
       "target_marker_name": "landmark:kick_gap_248_256:end"
      }
@@ -1746,12 +1662,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 5bx3+1b to landmark:kick_gap_192_256:end 201",
-      "partial_bars": 1.0,
-      "reps": 3,
+      "note": "loop outro 2bx8+0b to landmark:kick_gap_192_256:end 201",
+      "partial_bars": 0.0,
+      "reps": 8,
       "skip_bars": 0.0,
       "source_end_bar": 184.0,
-      "source_start_bar": 179.0,
+      "source_start_bar": 182.0,
       "target_marker_bar": 201.0,
       "target_marker_name": "landmark:kick_gap_192_256:end"
      }
@@ -2022,12 +1938,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 5bx3+1b to landmark:kick_gap_156_160:end 201",
-      "partial_bars": 1.0,
-      "reps": 3,
+      "note": "loop outro 2bx8+0b to landmark:kick_gap_156_160:end 201",
+      "partial_bars": 0.0,
+      "reps": 8,
       "skip_bars": 0.0,
       "source_end_bar": 184.0,
-      "source_start_bar": 179.0,
+      "source_start_bar": 182.0,
       "target_marker_bar": 201.0,
       "target_marker_name": "landmark:kick_gap_156_160:end"
      }
@@ -2099,12 +2015,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 5bx3+1b to landmark:kick_gap_224_256:end 201",
-      "partial_bars": 1.0,
-      "reps": 3,
+      "note": "loop outro 2bx8+0b to landmark:kick_gap_224_256:end 201",
+      "partial_bars": 0.0,
+      "reps": 8,
       "skip_bars": 0.0,
       "source_end_bar": 184.0,
-      "source_start_bar": 179.0,
+      "source_start_bar": 182.0,
       "target_marker_bar": 201.0,
       "target_marker_name": "landmark:kick_gap_224_256:end"
      }
@@ -2137,12 +2053,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 5bx3+1b to landmark:kick_gap_152_159:end 201",
-      "partial_bars": 1.0,
-      "reps": 3,
+      "note": "loop outro 2bx8+0b to landmark:kick_gap_152_159:end 201",
+      "partial_bars": 0.0,
+      "reps": 8,
       "skip_bars": 0.0,
       "source_end_bar": 184.0,
-      "source_start_bar": 179.0,
+      "source_start_bar": 182.0,
       "target_marker_bar": 201.0,
       "target_marker_name": "landmark:kick_gap_152_159:end"
      }
@@ -3733,14 +3649,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 5bx3+0b to landmark:kick_gap_186_188:end 223",
+      "note": "loop outro 8bx2+0b to landmark:kick_gap_189_192:end 224",
       "partial_bars": 0.0,
-      "reps": 3,
+      "reps": 2,
       "skip_bars": 0.0,
       "source_end_bar": 208.0,
-      "source_start_bar": 203.0,
-      "target_marker_bar": 223.0,
-      "target_marker_name": "landmark:kick_gap_186_188:end"
+      "source_start_bar": 200.0,
+      "target_marker_bar": 224.0,
+      "target_marker_name": "landmark:kick_gap_189_192:end"
      }
     ],
     "status": "ok"
@@ -3909,7 +3825,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
-   "overlap_policy": null,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     200
@@ -3939,9 +3855,8 @@
     }
    ],
    "plan": {
-    "error": "ValueError",
-    "msg": "Cannot plan outgoing tail loop for 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' -> 'Andrea Oliva & Bensy - Nappp 24 BIt MASTER': cue 'section:break_1'",
-    "status": "raise"
+    "specs": [],
+    "status": "ok"
    },
    "score": 2,
    "status": "ok",
@@ -4017,7 +3932,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
-   "overlap_policy": null,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     200
@@ -4048,9 +3963,8 @@
     }
    ],
    "plan": {
-    "error": "ValueError",
-    "msg": "Cannot plan outgoing tail loop for 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' -> 'Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MAS",
-    "status": "raise"
+    "specs": [],
+    "status": "ok"
    },
    "score": 2,
    "status": "ok",
@@ -4169,7 +4083,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     200
@@ -4199,21 +4113,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 2bx7+0b to section:break_1 224",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 206.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -4233,7 +4133,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
-   "overlap_policy": null,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -4299,9 +4199,8 @@
     }
    ],
    "plan": {
-    "error": "ValueError",
-    "msg": "Cannot plan outgoing tail loop for 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' -> 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED'",
-    "status": "raise"
+    "specs": [],
+    "status": "ok"
    },
    "score": 5,
    "status": "ok",
@@ -4320,7 +4219,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 26.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     184,
     192,
@@ -4375,21 +4274,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 2bx3+0b to landmark:kick_gap_124_128:end 216",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 206.0,
-      "target_marker_bar": 216.0,
-      "target_marker_name": "landmark:kick_gap_124_128:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 4,
@@ -4409,7 +4294,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 43.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     167,
     199,
@@ -4453,21 +4338,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 3bx4+1b to section:break_1 223",
-      "partial_bars": 1.0,
-      "reps": 4,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 205.0,
-      "target_marker_bar": 223.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 3,
@@ -4487,7 +4358,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 18.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     192,
     200
@@ -4517,21 +4388,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 2bx7+0b to section:break_1 224",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 206.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -4551,7 +4408,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 44.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     206,
     200
@@ -4581,21 +4438,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx5+0b to section:break_2 230",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 204.0,
-      "target_marker_bar": 230.0,
-      "target_marker_name": "section:break_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -4615,7 +4458,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 28.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     190,
     206
@@ -4647,21 +4490,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx5+0b to section:break_1 230",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 204.0,
-      "target_marker_bar": 230.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -4681,7 +4510,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -4735,21 +4564,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx2+0b to landmark:kick_gap_216_224:end 224",
-      "partial_bars": 0.0,
-      "reps": 2,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 201.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "landmark:kick_gap_216_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 4,
@@ -4769,7 +4584,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -4811,21 +4626,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 6bx1+0b to section:drop_2 216",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 202.0,
-      "target_marker_bar": 216.0,
-      "target_marker_name": "section:drop_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 3,
@@ -4845,7 +4646,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -4887,21 +4688,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 5bx1+0b to landmark:kick_gap_186_188:end 215",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 203.0,
-      "target_marker_bar": 215.0,
-      "target_marker_name": "landmark:kick_gap_186_188:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 3,
@@ -4921,7 +4708,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 44.0,
-   "overlap_policy": null,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     206
    ],
@@ -4940,9 +4727,8 @@
     }
    ],
    "plan": {
-    "error": "ValueError",
-    "msg": "Cannot plan outgoing tail loop for 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' -> 'Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE ",
-    "status": "raise"
+    "specs": [],
+    "status": "ok"
    },
    "score": 1,
    "status": "ok",
@@ -4961,7 +4747,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -5025,21 +4811,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx2+0b to landmark:kick_gap_124_224:end 224",
-      "partial_bars": 0.0,
-      "reps": 2,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 201.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "landmark:kick_gap_124_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 5,
@@ -5088,8 +4860,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 167.0,
+      "source_end_bar": 166.0,
+      "source_start_bar": 165.0,
       "target_marker_bar": 173.0,
       "target_marker_name": "section:build_1"
      }
@@ -5143,8 +4915,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 167.0,
+      "source_end_bar": 166.0,
+      "source_start_bar": 165.0,
       "target_marker_bar": 173.0,
       "target_marker_name": "landmark:kick_gap_156_160:end"
      }
@@ -5182,7 +4954,7 @@
    ],
    "out": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -5203,21 +4975,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 5bx5+0b to section:fill_1 193",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 32.0,
-      "source_start_bar": 27.0,
-      "target_marker_bar": 193.0,
-      "target_marker_name": "section:fill_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -5277,7 +5035,7 @@
    ],
    "out": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -5297,21 +5055,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 5bx5+0b to section:build_1 193",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 32.0,
-      "source_start_bar": 27.0,
-      "target_marker_bar": 193.0,
-      "target_marker_name": "section:build_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -5360,8 +5104,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 167.0,
+      "source_end_bar": 166.0,
+      "source_start_bar": 165.0,
       "target_marker_bar": 173.0,
       "target_marker_name": "section:fill_1"
      }
@@ -5456,8 +5200,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 167.0,
+      "source_end_bar": 166.0,
+      "source_start_bar": 165.0,
       "target_marker_bar": 173.0,
       "target_marker_name": "landmark:kick_gap_156_160:end"
      }
@@ -5481,7 +5225,7 @@
    ],
    "out": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -5502,21 +5246,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 3bx3+0b to landmark:kick_gap_174_176:end 177",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 165.0,
-      "target_marker_bar": 177.0,
-      "target_marker_name": "landmark:kick_gap_174_176:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -5566,8 +5296,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 167.0,
+      "source_end_bar": 166.0,
+      "source_start_bar": 165.0,
       "target_marker_bar": 173.0,
       "target_marker_name": "landmark:kick_gap_190_192:end"
      }
@@ -5591,7 +5321,7 @@
    ],
    "out": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "overlap_bars": 43.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -5612,21 +5342,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 3bx7+0b to section:break_2 189",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 165.0,
-      "target_marker_bar": 189.0,
-      "target_marker_name": "section:break_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -5646,7 +5362,7 @@
    ],
    "out": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "overlap_bars": 27.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -5666,21 +5382,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 3bx7+0b to section:break_1 189",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 165.0,
-      "target_marker_bar": 189.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -5780,7 +5482,7 @@
    ],
    "out": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "overlap_bars": 19.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -5800,21 +5502,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx7+0b to landmark:kick_gap_186_188:end 196",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 32.0,
-      "source_start_bar": 28.0,
-      "target_marker_bar": 196.0,
-      "target_marker_name": "landmark:kick_gap_186_188:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -5864,8 +5552,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 167.0,
+      "source_end_bar": 166.0,
+      "source_start_bar": 165.0,
       "target_marker_bar": 173.0,
       "target_marker_name": "landmark:kick_gap_190_192:end"
      }
@@ -5918,8 +5606,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 167.0,
+      "source_end_bar": 166.0,
+      "source_start_bar": 165.0,
       "target_marker_bar": 173.0,
       "target_marker_name": "landmark:kick_gap_94_96:end"
      }
@@ -5943,7 +5631,7 @@
    ],
    "out": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
    "overlap_bars": 17.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     224
    ],
@@ -5963,21 +5651,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 1bx7+0b to section:build_1 232",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 225.0,
-      "source_start_bar": 224.0,
-      "target_marker_bar": 232.0,
-      "target_marker_name": "section:build_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -6248,7 +5922,7 @@
    ],
    "out": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
    "overlap_bars": 17.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     224
    ],
@@ -6268,21 +5942,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 1bx7+0b to landmark:kick_gap_94_96:end 232",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 225.0,
-      "source_start_bar": 224.0,
-      "target_marker_bar": 232.0,
-      "target_marker_name": "landmark:kick_gap_94_96:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -6326,12 +5986,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to section:drop_2 249",
+      "note": "loop outro 2bx2+0b to section:drop_2 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:drop_2"
      }
@@ -6380,12 +6040,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to landmark:kick_gap_184_192:end 249",
+      "note": "loop outro 2bx2+0b to landmark:kick_gap_184_192:end 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "landmark:kick_gap_184_192:end"
      }
@@ -6433,12 +6093,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to section:break_1 249",
+      "note": "loop outro 2bx2+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -6494,12 +6154,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to landmark:kick_gap_185_192:end 249",
+      "note": "loop outro 2bx2+0b to landmark:kick_gap_185_192:end 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "landmark:kick_gap_185_192:end"
      }
@@ -6586,12 +6246,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx2+0b to section:build_1 261",
+      "note": "loop outro 2bx8+0b to section:build_1 261",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 237.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 261.0,
       "target_marker_name": "section:build_1"
      }
@@ -6654,12 +6314,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx3+0b to section:break_1 257",
+      "note": "loop outro 2bx6+0b to section:break_1 257",
       "partial_bars": 0.0,
-      "reps": 3,
+      "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 257.0,
       "target_marker_name": "section:break_1"
      }
@@ -6708,12 +6368,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to section:break_1 249",
+      "note": "loop outro 2bx2+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -6762,12 +6422,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx3+0b to landmark:kick_gap_124_128:end 257",
+      "note": "loop outro 2bx6+0b to landmark:kick_gap_124_128:end 257",
       "partial_bars": 0.0,
-      "reps": 3,
+      "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 257.0,
       "target_marker_name": "landmark:kick_gap_124_128:end"
      }
@@ -6829,12 +6489,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to landmark:kick_gap_188_190:end 249",
+      "note": "loop outro 2bx2+0b to landmark:kick_gap_188_190:end 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "landmark:kick_gap_188_190:end"
      }
@@ -6882,12 +6542,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx3+0b to section:break_1 257",
+      "note": "loop outro 2bx6+0b to section:break_1 257",
       "partial_bars": 0.0,
-      "reps": 3,
+      "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 257.0,
       "target_marker_name": "section:break_1"
      }
@@ -6942,12 +6602,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to section:drop_2 249",
+      "note": "loop outro 2bx2+0b to section:drop_2 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:drop_2"
      }
@@ -6995,12 +6655,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to landmark:kick_gap_124_128:end 249",
+      "note": "loop outro 2bx2+0b to landmark:kick_gap_124_128:end 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "landmark:kick_gap_124_128:end"
      }
@@ -7048,12 +6708,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to section:break_1 249",
+      "note": "loop outro 2bx2+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -7101,12 +6761,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to section:break_1 249",
+      "note": "loop outro 2bx2+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -7161,12 +6821,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to section:break_1 249",
+      "note": "loop outro 2bx2+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 245.0,
-      "source_start_bar": 241.0,
+      "source_end_bar": 235.0,
+      "source_start_bar": 233.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -7255,7 +6915,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     200
@@ -7288,21 +6948,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx5+1b to landmark:kick_gap_220_224:end 224",
-      "partial_bars": 1.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 199.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "landmark:kick_gap_220_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -7322,7 +6968,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     200
@@ -7354,21 +7000,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx7+1b to landmark:kick_gap_192_256:end 232",
-      "partial_bars": 1.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 199.0,
-      "target_marker_bar": 232.0,
-      "target_marker_name": "landmark:kick_gap_192_256:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -7395,7 +7027,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 27.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     184
    ],
@@ -7414,21 +7046,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 5bx5+0b to section:break_1 228",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 198.0,
-      "target_marker_bar": 228.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -7501,7 +7119,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     200
@@ -7533,21 +7151,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 8bx3+1b to section:build_1 228",
-      "partial_bars": 1.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 195.0,
-      "target_marker_bar": 228.0,
-      "target_marker_name": "section:build_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -7567,7 +7171,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     200
@@ -7599,21 +7203,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx5+1b to section:break_1 224",
-      "partial_bars": 1.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 199.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -7633,7 +7223,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": null,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -7680,9 +7270,8 @@
     }
    ],
    "plan": {
-    "error": "ValueError",
-    "msg": "Cannot plan outgoing tail loop for 'Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER' -> 'Doorly & Harry Choo Choo Romero - The Truth 16 Bi",
-    "status": "raise"
+    "specs": [],
+    "status": "ok"
    },
    "score": 3,
    "status": "ok",
@@ -7701,7 +7290,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 27.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     184
    ],
@@ -7721,21 +7310,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 5bx1+0b to landmark:kick_gap_124_128:end 208",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 198.0,
-      "target_marker_bar": 208.0,
-      "target_marker_name": "landmark:kick_gap_124_128:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -7755,7 +7330,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     200
@@ -7788,21 +7363,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx5+1b to section:break_1 224",
-      "partial_bars": 1.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 199.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -7822,7 +7383,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 27.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     184
    ],
@@ -7841,21 +7402,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 5bx1+0b to section:break_1 208",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 198.0,
-      "target_marker_bar": 208.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -7875,7 +7422,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 43.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     160,
     200
@@ -7921,19 +7468,6 @@
       "source_start_bar": 0.0,
       "target_marker_bar": 168.0,
       "target_marker_name": ""
-     },
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx5+1b to section:break_2 224",
-      "partial_bars": 1.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 199.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "section:break_2"
      }
     ],
     "status": "ok"
@@ -7955,7 +7489,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 27.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     184,
     200
@@ -7986,21 +7520,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx3+0b to section:break_1 224",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 196.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -8020,7 +7540,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -8066,21 +7586,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx3+0b to landmark:kick_gap_216_224:end 224",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 196.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "landmark:kick_gap_216_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 3,
@@ -8165,7 +7671,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -8210,21 +7716,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx3+0b to landmark:kick_gap_186_188:end 215",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 199.0,
-      "target_marker_bar": 215.0,
-      "target_marker_name": "landmark:kick_gap_186_188:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 3,
@@ -8244,7 +7736,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 43.0,
-   "overlap_policy": null,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     160,
     200
@@ -8277,9 +7769,22 @@
     }
    ],
    "plan": {
-    "error": "ValueError",
-    "msg": "Cannot plan outgoing tail loop for 'Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER' -> 'Soulsearcher \u2013 Feelin Love (Ruze & Chesster Exten",
-    "status": "raise"
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 8.0,
+      "kind": "intro_cut",
+      "note": "trim intro front 8b (started in break)",
+      "partial_bars": 0.0,
+      "reps": 0,
+      "skip_bars": 0.0,
+      "source_end_bar": 0.0,
+      "source_start_bar": 0.0,
+      "target_marker_bar": 168.0,
+      "target_marker_name": ""
+     }
+    ],
+    "status": "ok"
    },
    "score": 2,
    "status": "ok",
@@ -8298,7 +7803,7 @@
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     184,
@@ -8343,21 +7848,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx3+0b to landmark:kick_gap_124_224:end 224",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 203.0,
-      "source_start_bar": 196.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "landmark:kick_gap_124_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 3,
@@ -9958,7 +9449,7 @@
    ],
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     253
    ],
@@ -9978,21 +9469,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 5bx5+0b to section:fill_1 281",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 96.0,
-      "source_start_bar": 91.0,
-      "target_marker_bar": 281.0,
-      "target_marker_name": "section:fill_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -10051,7 +9528,7 @@
    ],
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     253
    ],
@@ -10070,21 +9547,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 5bx5+0b to section:build_1 281",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 96.0,
-      "source_start_bar": 91.0,
-      "target_marker_bar": 281.0,
-      "target_marker_name": "section:build_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -10222,7 +9685,7 @@
    ],
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     253
    ],
@@ -10242,21 +9705,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 3bx3+0b to landmark:kick_gap_174_176:end 265",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 256.0,
-      "source_start_bar": 253.0,
-      "target_marker_bar": 265.0,
-      "target_marker_name": "landmark:kick_gap_174_176:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -10330,7 +9779,7 @@
    ],
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 43.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     253,
     252
@@ -10362,21 +9811,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 3bx7+0b to section:break_2 277",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 256.0,
-      "source_start_bar": 253.0,
-      "target_marker_bar": 277.0,
-      "target_marker_name": "section:break_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -10396,7 +9831,7 @@
    ],
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 27.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     253
    ],
@@ -10415,21 +9850,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 3bx7+0b to section:break_1 277",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 256.0,
-      "source_start_bar": 253.0,
-      "target_marker_bar": 277.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -10832,8 +10253,8 @@
       "partial_bars": 0.0,
       "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 208.0,
       "target_marker_name": "landmark:kick_gap_220_224:end"
      }
@@ -10901,8 +10322,8 @@
       "partial_bars": 0.0,
       "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 216.0,
       "target_marker_name": "landmark:kick_gap_192_256:end"
      }
@@ -10974,8 +10395,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 196.0,
+      "source_end_bar": 4.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 228.0,
       "target_marker_name": "section:break_1"
      }
@@ -11042,8 +10463,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 196.0,
+      "source_end_bar": 4.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 212.0,
       "target_marker_name": "section:fill_1"
      }
@@ -11148,8 +10569,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 196.0,
+      "source_end_bar": 4.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 212.0,
       "target_marker_name": "section:build_1"
      }
@@ -11202,8 +10623,8 @@
       "partial_bars": 0.0,
       "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 208.0,
       "target_marker_name": "section:break_1"
      }
@@ -11319,8 +10740,8 @@
       "partial_bars": 0.0,
       "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 208.0,
       "target_marker_name": "landmark:kick_gap_156_160:end"
      }
@@ -11387,8 +10808,8 @@
       "partial_bars": 0.0,
       "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 208.0,
       "target_marker_name": "section:break_1"
      }
@@ -11465,8 +10886,8 @@
       "partial_bars": 0.0,
       "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 208.0,
       "target_marker_name": "landmark:kick_gap_152_159:end"
      }
@@ -11552,8 +10973,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 224.0,
       "target_marker_name": "section:break_1"
      }
@@ -11633,8 +11054,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 224.0,
       "target_marker_name": "landmark:kick_gap_216_224:end"
      }
@@ -11872,8 +11293,8 @@
       "partial_bars": 0.0,
       "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 200.0,
-      "source_start_bar": 192.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 208.0,
       "target_marker_name": "landmark:kick_gap_124_224:end"
      }
@@ -12606,12 +12027,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 7bx1+0b to section:break_1 191",
+      "note": "loop outro 1bx7+0b to section:break_1 191",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 7,
       "skip_bars": 0.0,
       "source_end_bar": 183.0,
-      "source_start_bar": 176.0,
+      "source_start_bar": 182.0,
       "target_marker_bar": 191.0,
       "target_marker_name": "section:break_1"
      }
@@ -13639,8 +13060,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 271.0,
       "target_marker_name": "section:build_1"
      }
@@ -13693,8 +13114,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 271.0,
       "target_marker_name": "landmark:kick_gap_156_160:end"
      }
@@ -13746,8 +13167,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 279.0,
       "target_marker_name": "section:break_1"
      }
@@ -13814,8 +13235,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 279.0,
       "target_marker_name": "landmark:kick_gap_185_192:end"
      }
@@ -13878,7 +13299,7 @@
    ],
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
    "overlap_bars": 34.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     263
    ],
@@ -13897,21 +13318,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 6bx5+0b to section:drop_2 295",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 224.0,
-      "source_start_bar": 218.0,
-      "target_marker_bar": 295.0,
-      "target_marker_name": "section:drop_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -13959,8 +13366,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 271.0,
       "target_marker_name": "section:fill_1"
      }
@@ -14013,8 +13420,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 279.0,
       "target_marker_name": "section:break_1"
      }
@@ -14067,8 +13474,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 271.0,
       "target_marker_name": "landmark:kick_gap_156_160:end"
      }
@@ -14121,8 +13528,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 275.0,
       "target_marker_name": "landmark:kick_gap_174_176:end"
      }
@@ -14220,8 +13627,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 279.0,
       "target_marker_name": "landmark:kick_gap_124_128:end"
      }
@@ -14273,8 +13680,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 279.0,
       "target_marker_name": "section:break_1"
      }
@@ -14326,8 +13733,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 279.0,
       "target_marker_name": "section:break_1"
      }
@@ -14386,8 +13793,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 265.0,
-      "source_start_bar": 263.0,
+      "source_end_bar": 224.0,
+      "source_start_bar": 222.0,
       "target_marker_bar": 271.0,
       "target_marker_name": "landmark:kick_gap_94_96:end"
      }
@@ -14966,11 +14373,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to landmark:kick_gap_220_224:end 184",
+      "note": "loop outro 1bx8+0b to landmark:kick_gap_220_224:end 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "landmark:kick_gap_220_224:end"
@@ -15063,8 +14470,8 @@
       "partial_bars": 0.0,
       "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 174.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 13.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "landmark:kick_gap_192_256:end"
      }
@@ -15134,8 +14541,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 17.0,
-      "source_start_bar": 13.0,
+      "source_end_bar": 10.0,
+      "source_start_bar": 6.0,
       "target_marker_bar": 204.0,
       "target_marker_name": "section:break_1"
      }
@@ -15238,8 +14645,8 @@
       "partial_bars": 0.0,
       "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 174.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 13.0,
       "target_marker_bar": 188.0,
       "target_marker_name": "section:fill_1"
      }
@@ -15368,8 +14775,8 @@
       "partial_bars": 0.0,
       "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 174.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 13.0,
       "target_marker_bar": 188.0,
       "target_marker_name": "section:build_1"
      }
@@ -15442,11 +14849,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:break_1 184",
+      "note": "loop outro 1bx8+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15658,11 +15065,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to landmark:kick_gap_156_160:end 184",
+      "note": "loop outro 1bx8+0b to landmark:kick_gap_156_160:end 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "landmark:kick_gap_156_160:end"
@@ -15761,11 +15168,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:break_1 184",
+      "note": "loop outro 1bx8+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15825,11 +15232,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:break_1 184",
+      "note": "loop outro 1bx8+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15914,8 +15321,8 @@
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 21.0,
-      "source_start_bar": 13.0,
+      "source_end_bar": 10.0,
+      "source_start_bar": 2.0,
       "target_marker_bar": 200.0,
       "target_marker_name": "landmark:kick_gap_216_224:end"
      }
@@ -15976,11 +15383,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:drop_2 184",
+      "note": "loop outro 1bx8+0b to section:drop_2 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:drop_2"
@@ -16046,8 +15453,8 @@
       "partial_bars": 0.0,
       "reps": 7,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 175.0,
+      "source_end_bar": 175.0,
+      "source_start_bar": 174.0,
       "target_marker_bar": 183.0,
       "target_marker_name": "landmark:kick_gap_186_188:end"
      }
@@ -16141,8 +15548,8 @@
       "partial_bars": 0.0,
       "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 174.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 13.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "landmark:kick_gap_124_224:end"
      }
@@ -16718,7 +16125,7 @@
    ],
    "out": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
    "overlap_bars": 25.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     135
    ],
@@ -16738,21 +16145,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx1+0b to landmark:kick_gap_124_128:end 159",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 152.0,
-      "source_start_bar": 145.0,
-      "target_marker_bar": 159.0,
-      "target_marker_name": "landmark:kick_gap_124_128:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -16779,7 +16172,7 @@
    ],
    "out": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
    "overlap_bars": 25.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     135
    ],
@@ -16798,21 +16191,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx1+0b to section:break_1 159",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 152.0,
-      "source_start_bar": 145.0,
-      "target_marker_bar": 159.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -16917,7 +16296,7 @@
    ],
    "out": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
    "overlap_bars": 33.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     135
    ],
@@ -16936,21 +16315,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx2+0b to landmark:kick_gap_186_188:end 166",
-      "partial_bars": 0.0,
-      "reps": 2,
-      "skip_bars": 0.0,
-      "source_end_bar": 152.0,
-      "source_start_bar": 145.0,
-      "target_marker_bar": 166.0,
-      "target_marker_name": "landmark:kick_gap_186_188:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17213,7 +16578,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -17232,21 +16597,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx3+0b to landmark:kick_gap_220_224:end 189",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 189.0,
-      "target_marker_name": "landmark:kick_gap_220_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17266,7 +16617,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -17284,21 +16635,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx4+1b to landmark:kick_gap_192_256:end 197",
-      "partial_bars": 1.0,
-      "reps": 4,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 197.0,
-      "target_marker_name": "landmark:kick_gap_192_256:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17364,7 +16701,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -17383,21 +16720,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx4+1b to landmark:kick_gap_240_256:end 197",
-      "partial_bars": 1.0,
-      "reps": 4,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 197.0,
-      "target_marker_name": "landmark:kick_gap_240_256:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17469,7 +16792,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -17487,21 +16810,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx4+1b to section:drop_2 197",
-      "partial_bars": 1.0,
-      "reps": 4,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 197.0,
-      "target_marker_name": "section:drop_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17521,7 +16830,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -17539,21 +16848,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx3+0b to section:break_1 189",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 189.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17573,7 +16868,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 35.0,
-   "overlap_policy": null,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -17592,9 +16887,8 @@
     }
    ],
    "plan": {
-    "error": "ValueError",
-    "msg": "Cannot plan outgoing tail loop for 'Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED' -> 'Doorly & Harry Choo C",
-    "status": "raise"
+    "specs": [],
+    "status": "ok"
    },
    "score": 1,
    "status": "ok",
@@ -17613,7 +16907,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 25.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     151
    ],
@@ -17633,21 +16927,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx1+0b to landmark:kick_gap_124_128:end 175",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 175.0,
-      "target_marker_name": "landmark:kick_gap_124_128:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17667,7 +16947,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 35.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -17686,21 +16966,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx3+0b to section:break_1 189",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 189.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17720,7 +16986,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 25.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     151
    ],
@@ -17739,21 +17005,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx1+0b to section:break_1 175",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 175.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -17773,7 +17025,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 43.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     165
    ],
@@ -17792,21 +17044,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 7bx3+0b to section:break_2 189",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 161.0,
-      "target_marker_bar": 189.0,
-      "target_marker_name": "section:break_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -18085,7 +17323,7 @@
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     120,
     136,
@@ -18127,21 +17365,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_124_224:end 176",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 168.0,
-      "source_start_bar": 160.0,
-      "target_marker_bar": 176.0,
-      "target_marker_name": "landmark:kick_gap_124_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 3,
@@ -18200,11 +17424,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to section:drop_2 160",
+      "note": "loop outro 2bx4+0b to section:drop_2 160",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 160.0,
       "target_marker_name": "section:drop_2"
@@ -18268,11 +17492,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_184_192:end 160",
+      "note": "loop outro 2bx4+0b to landmark:kick_gap_184_192:end 160",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 160.0,
       "target_marker_name": "landmark:kick_gap_184_192:end"
@@ -18322,11 +17546,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to section:break_1 160",
+      "note": "loop outro 2bx4+0b to section:break_1 160",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 160.0,
       "target_marker_name": "section:break_1"
@@ -18424,11 +17648,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_185_192:end 160",
+      "note": "loop outro 2bx4+0b to landmark:kick_gap_185_192:end 160",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 160.0,
       "target_marker_name": "landmark:kick_gap_185_192:end"
@@ -18534,8 +17758,8 @@
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
-      "source_start_bar": 148.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 11.0,
       "target_marker_bar": 172.0,
       "target_marker_name": "section:build_1"
      }
@@ -18599,12 +17823,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to landmark:kick_gap_161_176:end 156",
+      "note": "loop outro 2bx2+0b to landmark:kick_gap_161_176:end 156",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
-      "source_start_bar": 148.0,
+      "source_end_bar": 146.0,
+      "source_start_bar": 144.0,
       "target_marker_bar": 156.0,
       "target_marker_name": "landmark:kick_gap_161_176:end"
      }
@@ -18654,11 +17878,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to section:break_1 160",
+      "note": "loop outro 2bx4+0b to section:break_1 160",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 160.0,
       "target_marker_name": "section:break_1"
@@ -18724,11 +17948,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx2+0b to landmark:kick_gap_124_128:end 168",
+      "note": "loop outro 2bx8+0b to landmark:kick_gap_124_128:end 168",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 168.0,
       "target_marker_name": "landmark:kick_gap_124_128:end"
@@ -18779,12 +18003,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx1+0b to landmark:kick_gap_174_176:end 156",
+      "note": "loop outro 2bx2+0b to landmark:kick_gap_174_176:end 156",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
-      "source_start_bar": 148.0,
+      "source_end_bar": 146.0,
+      "source_start_bar": 144.0,
       "target_marker_bar": 156.0,
       "target_marker_name": "landmark:kick_gap_174_176:end"
      }
@@ -18833,11 +18057,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx2+0b to section:break_1 168",
+      "note": "loop outro 2bx8+0b to section:break_1 168",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 168.0,
       "target_marker_name": "section:break_1"
@@ -18900,11 +18124,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx2+0b to section:break_2 168",
+      "note": "loop outro 2bx8+0b to section:break_2 168",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 168.0,
       "target_marker_name": "section:break_2"
@@ -18954,11 +18178,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to section:drop_2 160",
+      "note": "loop outro 2bx4+0b to section:drop_2 160",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 160.0,
       "target_marker_name": "section:drop_2"
@@ -19020,11 +18244,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_216_224:end 160",
+      "note": "loop outro 2bx4+0b to landmark:kick_gap_216_224:end 160",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 160.0,
       "target_marker_name": "landmark:kick_gap_216_224:end"
@@ -19247,11 +18471,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_220_224:end 160",
+      "note": "loop outro 2bx4+0b to landmark:kick_gap_220_224:end 160",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 152.0,
+      "source_end_bar": 146.0,
       "source_start_bar": 144.0,
       "target_marker_bar": 160.0,
       "target_marker_name": "landmark:kick_gap_220_224:end"

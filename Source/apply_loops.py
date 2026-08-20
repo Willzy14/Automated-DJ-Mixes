@@ -716,7 +716,13 @@ def _revalidate_loop_quality(lines: list[str], spec: LoopSpec,
             period, None, None, None, None, (), (), str(exc)
         )
     details = format_loop_quality_result(result)
-    if not result.passed:
+    if result.unmeasured:
+        # No cached envelope for this track: the window is unmeasurable, not proven bad.
+        # Raising here made the npz cache a hard runtime dependency of every loop; say
+        # so loudly instead so a missing cache is visible without blocking the build.
+        print(f"  [loop quality] UNMEASURED (no cache) for '{spec.track_name}': "
+              f"{details}; loop applied without a quality verdict")
+    elif not result.passed:
         failed = ",".join(result.failed_checks) or "cache/context"
         loop_name = spec.clip_name or (
             f"{spec.source_beat_start:g}-{spec.source_beat_end:g}"
