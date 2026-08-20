@@ -948,16 +948,21 @@ def _short(name: str) -> str:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def _wav_for_track(track_name: str, wavs: list[Path]) -> Path | None:
+    """Match an ALS track name to its WAV via the canonical matcher.
+
+    Routes through apply_loops._match_track (exact → substring, first hit
+    wins) — the old 24-char prefix fallback resurrected the prefix-collision
+    class killed on 2026-06-01 ("Your Love" vs "Your Love (Instrumental
+    Mix)") and could LUFS-level a track against the wrong audio file.
+    """
     import html
-    n = _normalise(html.unescape(track_name))         # ALS names are XML-escaped (&apos; etc.)
-    for w in wavs:
-        if _normalise(w.stem) == n:
-            return w
-    for w in wavs:                                   # prefix fallback (long names)
-        wn = _normalise(w.stem)
-        if wn[:24] == n[:24]:
-            return w
-    return None
+    from apply_loops import _match_track
+    name = html.unescape(track_name)                  # ALS names are XML-escaped (&apos; etc.)
+    pseudo_tracks = [(i, i, w.stem) for i, w in enumerate(wavs)]
+    m = _match_track(name, pseudo_tracks)
+    if m is None:
+        return None
+    return wavs[m[0]]
 
 
 def _apply_track_levelling(lines: list[str], tracks, audio_dir: Path) -> None:
