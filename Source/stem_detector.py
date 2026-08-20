@@ -66,6 +66,20 @@ DROP_REL = 0.85           # a drop must reach this fraction of the track's FULLE
 MIX_ENERGY_BREAK_FRAC = 0.40   # a sustained, low-mix-energy stretch is a break/fill signal
                                 # (used both as a boundary-cue trigger and as a classification
                                 # trigger in _assign_labels' break/fill branch)
+MIX_ENERGY_EXIT_FRAC = 0.45    # hysteresis EXIT for _energy_cues (Codex review 2026-08-20):
+                                # a low-energy run ENTERS below MIX_ENERGY_BREAK_FRAC but only
+                                # ENDS once the envelope recovers to >= this, so a single
+                                # borderline bar (0.40-0.45) can't split a real break into two
+                                # sub-floor halves (Codex case (a)). 0.45, not 0.48/0.50: on the
+                                # 111-track cached-envelope replay (2026-08-20), 0.45 recovers
+                                # the two genuinely-missed breaks (Real Love bars 44-59, Izinque
+                                # bars 90-104 -- deep dips split by lone 0.40-0.44 bars) and
+                                # moves 5 return cues onto the true energy return, while
+                                # 0.48/0.50 start sweeping oscillating ~0.42-0.49 grooves into
+                                # false runs (Really Nice 49-65 mean 0.42, Always 113-128
+                                # alternating 0.25/0.49, Heat 68-94). Trailing borderline bars
+                                # are trimmed (see _energy_cues) so the return cue stays
+                                # anchored to the last genuinely-low bar.
 MIN_ENERGY_RUN_BARS = 12  # sustained low-mix_energy stretches shorter than this aren't a real
                           # break — they look like phrase-amplitude. 12 bars (~one phrase) was
                           # the floor that cleanly separated the 16-bar break on Double Dutch
@@ -108,7 +122,17 @@ MIN_VOCAL_BARS = 2
 #     first drop section).
 INTRO_KICKLESS_BARS = 16       # R2 head window
 OUTRO_KICKLESS_BARS = 16       # R3 tail window
-KICKLESS_FRAC = 0.5            # bar fraction with kick ON below this = "kick-less"
+KICKLESS_FRAC = 0.47           # bar fraction with kick ON below this = "kick-less".
+                               # 0.47, not 0.50 (Codex review 2026-08-20): the head/tail
+                               # windows are 16 bars, so the fraction is quantized to
+                               # k/16 -- achievable values bracket the old boundary at
+                               # 0.4375 and 0.5000, and 17 rows of the 111-track replay
+                               # (Alaia & Gallo, Doorly, Natural Child, ...) sat EXACTLY
+                               # on 0.5, where `< 0.5` resolved kick-IN/R4 only by
+                               # tie-break luck against float jitter. 0.47 is >= 0.03
+                               # from both achievable neighbours: no corpus track sits
+                               # on the boundary, and every replayed track keeps its
+                               # current branch (0.5 heads stay kick-IN -> R4).
 
 
 def _per_bar(env, hop_t, downbeat, sec_per_bar, n_bars):
@@ -242,19 +266,38 @@ def _model_kick_presence_per_beat(wav, bpm, downbeat, n_beats, kick_model_path=N
 def _energy_cues(mix_norm, downbeat, sec_per_bar):
     """Sustained, low-mix-energy runs = boundary-worthy energy dips that the kick/bass
     paths miss (e.g. a sub-EQ'd kick whose transient still reads 'on' -- the 31-47 dip on
-    Double Dutch). Per-bar run detection via _regions() with a MIN_ENERGY_RUN_BARS floor
-    so 1-3 bar phrase-amplitude lulls don't fire. Emits energy_drop/energy_return cue
-    pairs shaped like _kick_cues's kick_dropout/kick_return (so they drop straight into
-    the same raw_bounds list)."""
-    low = mix_norm < MIX_ENERGY_BREAK_FRAC
-    runs = _regions(low, min_len=MIN_ENERGY_RUN_BARS)
-    cues = []
-    for s, e in runs:
-        cues.append({"type": "energy_drop", "start_sec": round(downbeat + s * sec_per_bar, 2),
-                     "bar": float(s)})
-        if e < len(mix_norm):
-            cues.append({"type": "energy_return", "start_sec": round(downbeat + e * sec_per_bar, 2),
-                         "bar": float(e)})
+    Double Dutch). Per-bar run detection with a MIN_ENERGY_RUN_BARS floor so 1-3 bar
+    phrase-amplitude lulls don't fire, plus HYSTERESIS (Codex review 2026-08-20): a run
+    enters below MIX_ENERGY_BREAK_FRAC and only exits at >= MIX_ENERGY_EXIT_FRAC, so a
+    single borderline bar can't split a real break into two sub-floor halves. Trailing
+    borderline bars (>= BREAK_FRAC but < EXIT_FRAC) are trimmed: the run ends after its
+    last genuinely-low bar, keeping the return cue on the actual energy return. No
+    kick/bass guard here, deliberately: on the 111-track replay every detected run had
+    kick fraction 0.0 (a guard is dead code on the corpus), and under the V3 kick-model
+    path the model reads the Double Dutch dip as kick-ON (bass presence 0.765), so a
+    kick+bass guard would suppress the exact break this mechanism exists to catch.
+    Emits energy_drop/energy_return cue pairs shaped like _kick_cues's
+    kick_dropout/kick_return (so they drop straight into the same raw_bounds list)."""
+    n, i, cues = len(mix_norm), 0, []
+    while i < n:
+        if mix_norm[i] < MIX_ENERGY_BREAK_FRAC:
+            j, last_low = i, i
+            while j < n and mix_norm[j] < MIX_ENERGY_EXIT_FRAC:
+                if mix_norm[j] < MIX_ENERGY_BREAK_FRAC:
+                    last_low = j
+                j += 1
+            e = last_low + 1
+            if e - i >= MIN_ENERGY_RUN_BARS:
+                cues.append({"type": "energy_drop",
+                             "start_sec": round(downbeat + i * sec_per_bar, 2),
+                             "bar": float(i)})
+                if e < n:
+                    cues.append({"type": "energy_return",
+                                 "start_sec": round(downbeat + e * sec_per_bar, 2),
+                                 "bar": float(e)})
+            i = j
+        else:
+            i += 1
     return cues
 
 
