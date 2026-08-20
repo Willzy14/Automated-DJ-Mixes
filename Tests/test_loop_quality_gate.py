@@ -228,3 +228,56 @@ def test_vente_style_inconsistent_window_is_rejected():
     result = evaluate_loop_quality(context, 24, 32, 24)
 
     assert "self_similarity" in result.failed_checks
+
+
+# --- UNMEASURED path -------------------------------------------------------
+# Added 2026-08-20 after review found ZERO tests covered it. The gate treats an
+# absent envelope cache as "cannot judge" (pass, reported) rather than "bad"
+# (reject) -- failing closed there silently stripped loops from every un-analysed
+# track and broke two of Sam's hand-corrected reference transitions. These pin
+# BOTH halves: absence is tolerated, every other failure still bites.
+
+def _unmeasured(msg="track has no cached stem-envelope path"):
+    from align_engine import LoopQualityResult
+    return LoopQualityResult(16.0, None, None, None, None, (), (), msg)
+
+
+def test_unmeasured_window_passes_the_gate():
+    result = _unmeasured()
+    assert result.passed, "an unmeasurable window must not be treated as a bad one"
+    assert result.unmeasured
+
+
+def test_measured_failure_still_rejected_even_without_error():
+    from align_engine import LoopQualityResult
+    result = LoopQualityResult(
+        12.0, 0.30, -40.0, 9.0, 0.5, ("silence_fraction", "period_beats"), (), None
+    )
+    assert not result.passed
+    assert not result.unmeasured
+
+
+def test_unmeasured_acceptance_is_reported_not_silent(capsys):
+    """Accepting without a verdict must leave a trace -- silence was the defect."""
+    from align_engine import _note_unmeasured_acceptance
+    _note_unmeasured_acceptance(
+        SimpleNamespace(name="Some Track"), _unmeasured(), 100.0, 116.0
+    )
+    out = capsys.readouterr().out
+    assert "UNMEASURED" in out and "Some Track" in out and "100-116" in out
+
+
+def test_a_measured_pass_prints_nothing(capsys):
+    from align_engine import LoopQualityResult, _note_unmeasured_acceptance
+    clean = LoopQualityResult(16.0, 0.0, -2.0, 0.5, 0.9, (), (), None)
+    _note_unmeasured_acceptance(SimpleNamespace(name="Clean"), clean, 0.0, 16.0)
+    assert capsys.readouterr().out == ""
+
+
+def test_a_bad_waiver_name_raises_instead_of_passing_the_window():
+    """A typo'd waiver used to be swallowed into UNMEASURED, silently passing the gate."""
+    from align_engine import evaluate_loop_quality
+
+    ctx = _context([1.0] * 64)
+    with pytest.raises(ValueError, match="waiver"):
+        evaluate_loop_quality(ctx, 0.0, 16.0, 0.0, ("not_a_real_check",))

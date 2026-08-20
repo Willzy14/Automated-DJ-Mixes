@@ -1503,7 +1503,10 @@ def _assess_loop_candidate(track, start_bar: float, end_bar: float,
             )
         try:
             context = load_loop_quality_context(cache_path)
-        except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+        except FileNotFoundError as exc:
+            # Absent cache = unmeasurable (allowed, reported). A malformed or ambiguous
+            # cache is a real defect and must not masquerade as absence -- see the same
+            # narrowing in apply_loops._revalidate_loop_quality.
             return LoopQualityResult(
                 source_end - source_start, None, None, None, None, (), (), str(exc)
             )
@@ -1514,16 +1517,29 @@ def _assess_loop_candidate(track, start_bar: float, end_bar: float,
         source_end,
         insert_source,
     )
-    try:
-        result = evaluate_loop_quality(
-            context, source_start, source_end, insert_source, waivers
-        )
-    except (KeyError, TypeError, ValueError) as exc:
-        return LoopQualityResult(
-            source_end - source_start, None, None, None, None, (), (), str(exc)
-        )
+    # Not wrapped: a bad waiver name or malformed context is a caller error, and
+    # swallowing it here let a typo'd waiver silently pass a window through the gate.
+    result = evaluate_loop_quality(
+        context, source_start, source_end, insert_source, waivers
+    )
     log_loop_quality_override(track.name, source_start, source_end, result)
     return result
+
+
+def _note_unmeasured_acceptance(track, result: LoopQualityResult,
+                                start: float, end: float) -> None:
+    """Say so when a window is accepted without a quality verdict.
+
+    An unmeasurable window passes the gate deliberately (absence of a cache is not
+    evidence of a defect), but accepting it SILENTLY meant an un-analysed track's loops
+    sailed through plan time with no trace at all -- the reviewer's point, 2026-08-20.
+    Called at the acceptance sites rather than inside the assessor so it fires once per
+    accepted loop, not once per candidate considered.
+    """
+    if not result.unmeasured:
+        return
+    print(f"  [loop quality] UNMEASURED: accepted {start:g}-{end:g} for "
+          f"'{getattr(track, 'name', '?')}' without a verdict ({result.error})")
 
 
 def _print_loop_rejections(track, rejected: list[LoopQualityResult]) -> None:
@@ -1583,6 +1599,9 @@ def pick_clean_drum_loop(track, sec_start, sec_end, pref=4, insert_bar=None):
                             track, float(s), float(s + length), insert_bar
                         )
                         if result.passed:
+                            _note_unmeasured_acceptance(
+                                track, result, float(s), float(s + length)
+                            )
                             return (float(s), float(s + length))
                         rejected.append(result)
     _print_loop_rejections(track, rejected)
@@ -1656,6 +1675,9 @@ def pick_cue_bounded_drum_loop(
                         track, source_start, source_end, insert_bar
                     )
                     if result.passed:
+                        _note_unmeasured_acceptance(
+                            track, result, source_start, source_end
+                        )
                         return source_start, source_end
                     rejected.append(result)
     _print_loop_rejections(track, rejected)
@@ -1978,6 +2000,9 @@ def plan_fill_or_cut(o, i, al, policy=None):
                         o, candidate[0], candidate[1], float(outro["start_bar"])
                     )
                     if result.passed:
+                        _note_unmeasured_acceptance(
+                            o, result, candidate[0], candidate[1]
+                        )
                         chunk = candidate
                     else:
                         _print_loop_rejections(o, [result])

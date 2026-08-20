@@ -690,9 +690,17 @@ def _revalidate_loop_quality(lines: list[str], spec: LoopSpec,
     track_start, track_end, track_name = matched
     track_text = "".join(lines[track_start:track_end + 1])
     period = float(spec.source_beat_end - spec.source_beat_start)
+    # ONLY a genuinely absent cache is "unmeasurable". Everything else in this block --
+    # an ambiguous cache match, unmappable clip geometry, a malformed override file, a
+    # typo'd waiver name -- is a real defect, and folding them all into UNMEASURED (as
+    # this did until review, 2026-08-20) turned four error classes into silent
+    # acceptance with a factually wrong message.
     try:
         cache_path = _quality_cache_for_track(track_text, track_name)
         context = load_loop_quality_context(cache_path)
+    except FileNotFoundError as exc:
+        result = LoopQualityResult(period, None, None, None, None, (), (), str(exc))
+    else:
         insert_source = _insert_source_beat(
             lines, track_start, track_end, spec.insert_at_beat
         )
@@ -710,10 +718,6 @@ def _revalidate_loop_quality(lines: list[str], spec: LoopSpec,
             spec.source_beat_end,
             insert_source,
             waivers,
-        )
-    except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
-        result = LoopQualityResult(
-            period, None, None, None, None, (), (), str(exc)
         )
     details = format_loop_quality_result(result)
     if result.unmeasured:
