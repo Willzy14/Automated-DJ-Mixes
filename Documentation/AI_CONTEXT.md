@@ -191,7 +191,34 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-19 overnight (Latest Session) - final 7 stale caches re-analyzed, corpus fully current
+### 2026-08-20 (Latest Session) - Codex's binding review, 3 adversarial rounds, loop gate + clip splitting, first render check
+**Brain:** Claude (orchestrator/judgment) + Codex (2 review rounds + 2 builds) + MiniMax (builds + 1 review). Kimi unavailable all day — billing-cycle quota exhausted, review staged for retry. **30 commits, suite 344 → 404 passing.**
+
+**Completed:**
+- **Codex binding review returned BLOCKER, twice.** Round 1 (on 08-17..19 work) found 6 blockers; all closed same-day. Round 2 (on the closures) found 3 more; all closed. Round 3 (integration) found the Tier A coupling below. Every finding closed or carded — none deferred silently. Raw: scratchpad `codex_review_out.txt` / `codex_closure_out.txt`.
+- **Sam's V10 ear-notes root-caused and fixed.** Loop-quality gate (`align_engine` + `apply_loops`, D1, Codex-built) rejects at plan time on period/silence/dip/insert-level/self-similarity + revalidates before ALS mutation: **all 5 defective V10 loops rejected, the 1 clean loop kept, no tuning needed**. Clip splitting at landmark swaps (D5, Codex-built) took the **V9 reconcile errors 6 → 1**; the survivor is honestly attributed to the loop side (its swap sits 56 beats before the loop starts, so no split could create that boundary).
+- **First-ever render check** on Sam's real V10 bounce (15s streaming sweep, 54 min audio): located BOTH ear-notes — the "silent bit" is Nappp's breakdown rendered solo at 22:15-22:21 (-46.7 dBFS), and "loops cut in the wrong place" is two faults (3 splices on -7..-9 dB level cliffs; Nappp's tail loop is 3 bars played as 4, restarting a bar early ×7) — plus 6 defects Sam had not mentioned. Also found `probe_render_flam.py` has a false-positive mode (its signature appears in a no-transition control) so it must not gate until it has a per-track baseline.
+- **Two new analysis methods evaluated** (read-only prototypes, both docs in `Documentation/Reviews/`): **allin1** (EDM-trained structure model) agrees with 84% of our boundaries and independently found Revoloution bar 147 — the width-collapse only Sam's ears had caught; red line established: never adopt its downbeat phase, project its boundary seconds onto our grid. **Self-similarity/repetition** located both bad loops from cached features in 0.03 s/track; chroma tried and rejected on evidence (130× slower, worse).
+- **Rekordbox removal complete** (item #10, 2,668 lines); **drums-stem cache** — Sam's "Demucs is the longest part" complaint fixed at root: **21 s cold → 3.5 s warm**, byte-identical output, torch never imported on a warm run; **ALS gate hardening** (truncation raises, per-device envelope coverage, track-count/device/transition layers); **regression net extended** to pin overlap_policy, cue provenance, exception types and fill/cut plans — proven by re-introducing a fixed bug and watching the net catch it.
+- **`--cue-signals rescue` token added** — the tail-anchor rescue merged 08-19 with the best held-out numbers of any signal (59/110 unalignable pairs rescued, 0/270 working pairs touched) and had **no CLI token**, so no invocation could ever enable it. Built, tested, merged, unwired.
+
+**Key Learnings:**
+- **A recursive delete TRAVERSES a Windows junction and wipes the target.** This destroyed Sam's master WAVs twice (08-19 unexplained, 08-20 diagnosed). Recovered 20/20 both times (corpus holds copies only). Rules written into `/orchestrate`; `Tests/test_corpus_audio_canary.py` added — analysis-without-audio proves loss, neither present skips. It caught a second corpus (`12.08.26 Deep Soulful 10`, 8/9 missing) on its first run.
+- **Tier A became a decision-maker by accident.** `_loop_self_similarity` picked feature keys opportunistically, so an augmented cache scored on 10 features and an unaugmented one on 5 — **8.4% of corpus windows flipped verdict on cache state alone**, silently falsifying Tier A's "no decision changes" contract. Fixed by pinning to base stems. Measured cost, documented not hidden: Vente's defect is now missed (0.833 clean vs 0.556 with tiera; its level dip is only -0.59 dB and min-adjacent doesn't separate it either) — **that is the held-out evidence Tier A Phase 2 was asked for**, not a reason to restore the coupling.
+- **Absence of data is not evidence of a defect.** The loop gate failed closed on a missing npz, silently stripping loops from un-analysed tracks and breaking two of Sam's hand-corrected reference transitions. Review then caught that my own fix was too broad — it folded an ambiguous cache, unmappable geometry, a malformed override file and a **typo'd waiver name** into "no cache", passing windows through the gate.
+- **Demucs is nondeterministic on the RTX 3050** — two identical cold runs differ in every derived envelope. Caches are more reproducible than re-analysis; never chase a 1-bar re-analysis diff without checking a cached run first.
+- Kimi has **two different 403s** and the helper conflated them: a rolling window (waiting works) vs a billing-cycle cap (waiting never works). 10-second test: probe the cheap tier with a 4-word prompt.
+- **Five parallel couriers exhausted the Claude credit pool** (130-260k tokens each). Two at a time is the sustainable rate.
+
+**Pending / next:**
+- **Tier A Phase 2 is now the highest-value build** and has its evidence (see above).
+- **The 20-track pool is not alignable** — longest default chain is 15. Three builds hard-raised at Revoloution → Renegades. With `--cue-signals rescue` that clears and the chain reaches T11. Dropping *incoming* tracks is whack-a-mole: **the failing party is always the OUTGOING** (Fish Go Deep, then I Want You). Structural: Dancing can never be incoming; Double Dutch can never be outgoing.
+- A 15-track build was still running at session end (`Audio Mix 15` → `Sections V6`); **no certified mix was produced today**.
+- Un-built from the day's plan (dispatched, lost to the credit wall): render gate promotion, allin1 adapter, the Codex-PARTIAL hardening batch.
+- Canary hardening (a wipe taking `_Stem Analysis` too would skip green); 4 `shutil.rmtree` sites still lack junction guards; `12.08.26 Deep Soulful 10` audio — Sam to decide recover-or-accept.
+- **Held-Karp segfault** on >15-track pools — deferred by Sam, next session.
+
+### 2026-08-19 overnight - final 7 stale caches re-analyzed, corpus fully current
 **Brain:** Claude (Fable 5, autonomous overnight courier — Sam back tomorrow).
 
 **Task**: re-analyze the last stale `_Stem Analysis` caches in `Test Project/14.08.26` (pre-`6a717f4`/
