@@ -8,6 +8,7 @@ when the --kick-model path is explicitly enabled.
 from __future__ import annotations
 
 import importlib.util
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,8 @@ MODEL_FILENAME = "kick_crnn_V3.pt"
 DEFAULT_THRESHOLD = 0.30
 DEFAULT_FILL_OFF_BEATS = 6
 DEFAULT_DROP_ON_BEATS = 1
+DEMUCS_MODEL_NAME = "htdemucs"
+DRUMS_CACHE_VERSION = 1
 
 _MODEL_MODULE = None
 _PRESENCE_MODULE = None
@@ -82,7 +85,7 @@ def _demucs_model(device: str):
     global _DEMUCS_MODEL
     if _DEMUCS_MODEL is None:
         from demucs.pretrained import get_model
-        _DEMUCS_MODEL = get_model("htdemucs")
+        _DEMUCS_MODEL = get_model(DEMUCS_MODEL_NAME)
         _DEMUCS_MODEL.to(device).eval()
     return _DEMUCS_MODEL
 
@@ -104,17 +107,67 @@ def _env(mono: np.ndarray, hop: int) -> np.ndarray:
     return np.sqrt((fr.astype(np.float64) ** 2).mean(axis=1) + 1e-12)
 
 
-def separate_envelopes_and_drums(
-    wav_path: Path,
-    cache_dir: Path,
-    device: str = "auto",
-    hop_sec: float = 0.1,
-) -> tuple[dict[str, np.ndarray], float, np.ndarray, int]:
-    """Single Demucs pass for model mode.
+def _drums_cache_path(wav_path: Path, cache_dir: Path) -> Path:
+    return cache_dir / f"{wav_path.stem}__drumsstem.npz"
 
-    Returns the same envelope dict shape as stem_section_probe._separate_envelopes,
-    plus the raw mono drums stem required by Kick Detector. Only envelopes are
-    cached to disk, preserving the no-stem-audio-on-disk invariant.
+
+def _save_drums_cache(wav_path: Path, cache_dir: Path, drums: np.ndarray, sr: int) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    st = os.stat(wav_path)
+    final = _drums_cache_path(wav_path, cache_dir)
+    tmp = cache_dir / f"{wav_path.stem}.tmp.npz"
+    np.savez(
+        tmp,
+        drums=np.asarray(drums, dtype=np.float32),
+        sr=np.array(int(sr)),
+        src_size=np.array(int(st.st_size)),
+        src_mtime_ns=np.array(int(st.st_mtime_ns)),
+        demucs_model=np.array(DEMUCS_MODEL_NAME),
+        cache_version=np.array(int(DRUMS_CACHE_VERSION)),
+    )
+    os.replace(tmp, final)
+
+
+def _load_drums_cache(wav_path: Path, cache_dir: Path) -> tuple[np.ndarray, int] | None:
+    cache = _drums_cache_path(wav_path, cache_dir)
+    if not cache.exists():
+        return None
+    try:
+        with np.load(cache, allow_pickle=False) as d:
+            for key in (
+                "drums",
+                "sr",
+                "src_size",
+                "src_mtime_ns",
+                "demucs_model",
+                "cache_version",
+            ):
+                if key not in d.files:
+                    return None
+            if int(d["cache_version"]) != DRUMS_CACHE_VERSION:
+                return None
+            if str(d["demucs_model"]) != DEMUCS_MODEL_NAME:
+                return None
+            if not wav_path.exists():
+                return None
+            st = os.stat(wav_path)
+            if int(st.st_size) != int(d["src_size"]):
+                return None
+            if int(st.st_mtime_ns) != int(d["src_mtime_ns"]):
+                return None
+            drums = np.asarray(d["drums"], dtype=np.float32)
+            sr = int(d["sr"])
+    except Exception:
+        return None
+    return drums, sr
+
+
+def _run_demucs_separation(
+    wav_path: Path, device: str, hop_sec: float
+) -> tuple[dict[str, np.ndarray], float, np.ndarray, int]:
+    """Heavy Demucs separation body. The import torch / from demucs.apply
+    lines stay INSIDE this function so the module's lazy-import guarantee
+    holds and the warm cache path (case A) never pulls torch/demucs.
     """
     import torch
     from demucs.apply import apply_model
@@ -147,10 +200,63 @@ def separate_envelopes_and_drums(
     envs["mix"] = _env(wav.mean(0), hop)
     drums = out[source_names.index("drums")].mean(0).cpu().numpy().astype(np.float32)
 
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(cache_dir / f"{wav_path.stem}__stemenv.npz",
-                        hop_t=np.array(hop / sr), **envs)
     return envs, hop / sr, drums, sr
+
+
+def separate_envelopes_and_drums(
+    wav_path: Path,
+    cache_dir: Path,
+    device: str = "auto",
+    hop_sec: float = 0.1,
+) -> tuple[dict[str, np.ndarray], float, np.ndarray, int]:
+    """Single Demucs pass for model mode, with disk caches for both envelopes
+    and the raw mono drums stem.
+
+    Returns the same envelope dict shape as stem_section_probe._separate_envelopes,
+    plus the raw mono drums stem required by Kick Detector. The envelope cache
+    (<stem>__stemenv.npz) and a new drums-stem sidecar (<stem>__drumsstem.npz)
+    live side by side in cache_dir. Re-runs with intact caches do zero Demucs
+    work (Sam 2026-08-19: persist Demucs output so re-runs skip Demucs entirely).
+    The sidecar stores analysis output, not mixable audio, so the
+    no-stem-audio-on-disk invariant is preserved.
+    """
+    env_cache = cache_dir / f"{wav_path.stem}__stemenv.npz"
+
+    # CASE A - warm: envelopes + drums stem both cached; pure read-through.
+    drums_hit = _load_drums_cache(wav_path, cache_dir)
+    if env_cache.exists() and drums_hit is not None:
+        with np.load(env_cache, allow_pickle=False) as d:
+            hop_t = float(d["hop_t"])
+            envs = {
+                k: d[k] for k in d.files if k != "hop_t" and not k.startswith("tiera_")
+            }
+        drums, sr = drums_hit
+        print(f"  cache hit {wav_path.name} (envelopes + drums stem, Demucs skipped)")
+        return envs, hop_t, drums, sr
+
+    # Cases B and C: must run Demucs at least once for fresh drums.
+    envs, hop_t, drums, sr = _run_demucs_separation(wav_path, device, hop_sec)
+
+    # Always persist the drums stem when we just computed it.
+    _save_drums_cache(wav_path, cache_dir, drums, sr)
+
+    if env_cache.exists():
+        # CASE B - mixed: env_cache is authoritative for envelopes (it may
+        # carry tiera_ augmentation keys and must NOT be rewritten); drums
+        # come from the fresh separation we just ran. Return envelopes loaded
+        # from disk so callers see exactly what is persisted.
+        with np.load(env_cache, allow_pickle=False) as d:
+            cached_hop_t = float(d["hop_t"])
+            cached_envs = {
+                k: d[k] for k in d.files if k != "hop_t" and not k.startswith("tiera_")
+            }
+        return cached_envs, cached_hop_t, drums, sr
+
+    # CASE C - fresh: write the envelope cache byte-identically to today's
+    # layout, then return the values we just computed.
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(env_cache, hop_t=np.array(hop_t), **envs)
+    return envs, hop_t, drums, sr
 
 
 class KickPresenceProvider:
@@ -218,32 +324,33 @@ class KickPresenceProvider:
                     break
         return acc / np.maximum(cnt, 1e-6)
 
-    def _drums_from_mix(self, wav_path: Path) -> tuple[np.ndarray, int]:
-        import torch
-        from demucs.apply import apply_model
+    def _drums_from_mix(
+        self, wav_path: Path, cache_dir: Path | None = None
+    ) -> tuple[np.ndarray, int]:
+        if cache_dir is None and wav_path.parent.name == "Audio":
+            cache_dir = wav_path.parent.parent / "_Stem Analysis"
 
-        data, sr = sf.read(str(wav_path), always_2d=True)
-        wav = data.T.astype(np.float32)
-        if wav.shape[0] == 1:
-            wav = np.vstack([wav, wav])
-        if sr != 44100:
-            import librosa
-            wav = librosa.resample(wav, orig_sr=sr, target_sr=44100)
-            sr = 44100
+        if cache_dir is not None:
+            hit = _load_drums_cache(wav_path, cache_dir)
+            if hit is not None:
+                return hit
 
-        model = _demucs_model(self.device)
-        source_names = list(model.sources)
-        if "drums" not in source_names:
-            raise RuntimeError(f"Demucs model has no drums source: {source_names}")
-        drums_idx = source_names.index("drums")
+        envs, hop_t, drums, sr = _run_demucs_separation(wav_path, self.device, 0.1)
 
-        t = torch.from_numpy(wav)
-        ref = t.mean(0)
-        t = (t - ref.mean()) / (ref.std() + 1e-8)
-        with torch.no_grad():
-            out = apply_model(model, t[None], device=self.device, progress=True)[0]
-        out = out * (ref.std() + 1e-8) + ref.mean()
-        drums = out[drums_idx].mean(0).cpu().numpy().astype(np.float32)
+        if cache_dir is not None:
+            try:
+                _save_drums_cache(wav_path, cache_dir, drums, sr)
+            except OSError as e:
+                print(
+                    f"  warning: drums stem cache write failed for "
+                    f"{wav_path.name}: {e}"
+                )
+            env_cache = cache_dir / f"{wav_path.stem}__stemenv.npz"
+            if not env_cache.exists():
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(
+                    env_cache, hop_t=np.array(hop_t), **envs
+                )
         return drums, sr
 
     def _presence_readout(
@@ -271,13 +378,17 @@ class KickPresenceProvider:
     def presence_per_beat(
         self, wav_path: Path, bpm: float, downbeat: float,
         n_beats: int | None = None,
+        cache_dir: Path | None = None,
     ) -> KickPresenceReadout:
-        drums, sr = self._drums_from_mix(Path(wav_path))
+        drums, sr = self._drums_from_mix(Path(wav_path), cache_dir=cache_dir)
         return self._presence_readout(drums, sr, bpm, downbeat, n_beats)
 
     def on_per_beat(self, wav_path: Path, bpm: float, downbeat: float,
-                    n_beats: int | None = None) -> np.ndarray:
-        return self.presence_per_beat(wav_path, bpm, downbeat, n_beats).section
+                    n_beats: int | None = None,
+                    cache_dir: Path | None = None) -> np.ndarray:
+        return self.presence_per_beat(
+            wav_path, bpm, downbeat, n_beats, cache_dir=cache_dir
+        ).section
 
     def presence_per_beat_from_drums(
         self,
