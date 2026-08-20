@@ -64,6 +64,18 @@
 
 ## Standing findings ledger (cross-module)
 
+- **KNOWN DETECTION GAP: Vente's loop defect is currently missed (2026-08-20).** The loop-quality
+  gate's self-similarity score was silently reading the `tiera_*` keys when a cache happened to be
+  augmented — 8.4% of corpus windows flipped verdict on cache state alone, which falsified Tier A's
+  "compute+cache, no decision changes" contract. Fixed by pinning the feature set to the base stems.
+  **Cost, measured and accepted rather than hidden:** Vente's window scores 0.833 on clean features
+  (passes) vs 0.556 with `tiera_*` (rejected). Its defect is invisible to every level measure
+  — worst-beat dip is just **-0.59 dB** — and a min-adjacent-similarity check on clean features does
+  not separate it either (Vente 0.796 vs clean control Fish Go Deep 0.854). **This is the held-out
+  evidence Tier A Phase 2 was asked for:** the band/width features detect a real shipped defect that
+  no loudness-domain measure catches. Route it through the Phase 2 evidential gate — do NOT restore
+  the opportunistic key pickup, which was undeclared coupling, not a feature.
+
 - **Demucs is nondeterministic run-to-run on the RTX 3050** (proven 2026-08-20 during the drums-cache
   build: two identical cold runs differ in every Demucs-derived envelope; only `hop_t`/`mix` are
   deterministic). Consequences: (a) "byte-identical to a fresh run" is unachievable for anything

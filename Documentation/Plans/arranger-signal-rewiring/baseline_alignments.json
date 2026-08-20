@@ -4408,7 +4408,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 44.0,
-   "overlap_policy": "standard_48",
+   "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
     206,
     200
@@ -4438,7 +4438,21 @@
     }
    ],
    "plan": {
-    "specs": [],
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 0.0,
+      "kind": "outgoing_tail",
+      "note": "loop outro 4bx5+0b to section:break_2 230",
+      "partial_bars": 0.0,
+      "reps": 5,
+      "skip_bars": 0.0,
+      "source_end_bar": 208.0,
+      "source_start_bar": 204.0,
+      "target_marker_bar": 230.0,
+      "target_marker_name": "section:break_2"
+     }
+    ],
     "status": "ok"
    },
    "score": 2,
@@ -4458,7 +4472,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 28.0,
-   "overlap_policy": "standard_48",
+   "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
     190,
     206
@@ -4490,7 +4504,21 @@
     }
    ],
    "plan": {
-    "specs": [],
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 0.0,
+      "kind": "outgoing_tail",
+      "note": "loop outro 4bx5+0b to section:break_1 230",
+      "partial_bars": 0.0,
+      "reps": 5,
+      "skip_bars": 0.0,
+      "source_end_bar": 208.0,
+      "source_start_bar": 204.0,
+      "target_marker_bar": 230.0,
+      "target_marker_name": "section:break_1"
+     }
+    ],
     "status": "ok"
    },
    "score": 2,
@@ -4708,7 +4736,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 44.0,
-   "overlap_policy": "standard_48",
+   "overlap_policy": null,
    "paired_cue_bars": [
     206
    ],
@@ -4727,8 +4755,9 @@
     }
    ],
    "plan": {
-    "specs": [],
-    "status": "ok"
+    "error": "ValueError",
+    "msg": "Cannot plan outgoing tail loop for 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' -> 'Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE ",
+    "status": "raise"
    },
    "score": 1,
    "status": "ok",
@@ -6246,11 +6275,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx8+0b to section:build_1 261",
+      "note": "loop outro 8bx2+0b to section:build_1 261",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
+      "source_end_bar": 241.0,
       "source_start_bar": 233.0,
       "target_marker_bar": 261.0,
       "target_marker_name": "section:build_1"
@@ -14373,11 +14402,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to landmark:kick_gap_220_224:end 184",
+      "note": "loop outro 2bx4+0b to landmark:kick_gap_220_224:end 184",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 175.0,
+      "source_end_bar": 176.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "landmark:kick_gap_220_224:end"
@@ -14470,8 +14499,8 @@
       "partial_bars": 0.0,
       "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 15.0,
-      "source_start_bar": 13.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 174.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "landmark:kick_gap_192_256:end"
      }
@@ -14645,8 +14674,8 @@
       "partial_bars": 0.0,
       "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 15.0,
-      "source_start_bar": 13.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 174.0,
       "target_marker_bar": 188.0,
       "target_marker_name": "section:fill_1"
      }
@@ -14775,8 +14804,8 @@
       "partial_bars": 0.0,
       "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 15.0,
-      "source_start_bar": 13.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 174.0,
       "target_marker_bar": 188.0,
       "target_marker_name": "section:build_1"
      }
@@ -14849,11 +14878,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:break_1 184",
+      "note": "loop outro 2bx4+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 175.0,
+      "source_end_bar": 176.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15065,11 +15094,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to landmark:kick_gap_156_160:end 184",
+      "note": "loop outro 2bx4+0b to landmark:kick_gap_156_160:end 184",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 175.0,
+      "source_end_bar": 176.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "landmark:kick_gap_156_160:end"
@@ -15168,11 +15197,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:break_1 184",
+      "note": "loop outro 2bx4+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 175.0,
+      "source_end_bar": 176.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15232,11 +15261,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:break_1 184",
+      "note": "loop outro 2bx4+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 175.0,
+      "source_end_bar": 176.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15383,11 +15412,11 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:drop_2 184",
+      "note": "loop outro 2bx4+0b to section:drop_2 184",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 175.0,
+      "source_end_bar": 176.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:drop_2"
@@ -15548,8 +15577,8 @@
       "partial_bars": 0.0,
       "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 15.0,
-      "source_start_bar": 13.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 174.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "landmark:kick_gap_124_224:end"
      }

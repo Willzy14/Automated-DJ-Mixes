@@ -340,18 +340,20 @@ def _loop_self_similarity(context: LoopQualityContext, beat_start: float,
     """Mean pairwise beat cosine in whole-track z-score context."""
     import numpy as np
 
+    # FIXED feature set -- deliberately excludes the tiera_* keys. Picking features
+    # opportunistically ("if key in context.envelopes") made the score depend on whether
+    # a track's cache happened to be Tier-A-augmented: 5 features vs 10, different
+    # dimensionality, different cosine, different verdict against LOOP_MIN_SELF_SIMILARITY.
+    # Measured 2026-08-20: 315 of 3,738 corpus windows (8.4%) flipped across the threshold
+    # on cache state alone, which silently falsified Tier A's "compute+cache, no decision
+    # changes" contract and made loop selection depend on re-analysis history.
+    # Wiring bands/width/vocals INTO decisions is Tier A Phase 2 -- a pending design item
+    # requiring held-out evidence. It must not arrive by accident through this door.
     energy_keys = [
-        key for key in (
-            "drums", "bass", "other", "vocals", "mix",
-            "tiera_band_low", "tiera_band_mid", "tiera_band_high",
-        )
+        key for key in ("drums", "bass", "other", "vocals", "mix")
         if key in context.envelopes
     ]
-    scalar_keys = [
-        key for key in ("tiera_width", "tiera_lr_corr")
-        if key in context.envelopes
-    ]
-    keys = energy_keys + scalar_keys
+    keys = energy_keys
     if not keys:
         raise ValueError("cached stem envelope has no similarity feature arrays")
     length = min(len(context.envelopes[key]) for key in keys)
@@ -375,9 +377,6 @@ def _loop_self_similarity(context: LoopQualityContext, beat_start: float,
                     row.append(float(np.mean(
                         20.0 * np.log10(np.maximum(values, 1e-12))
                     )))
-            for key in scalar_keys:
-                values = context.envelopes[key][:length][mask]
-                row.append(float(np.mean(values)) if values.size else 0.0)
             features.append(row)
 
         matrix = np.asarray(features, dtype=float)
@@ -421,9 +420,13 @@ def evaluate_loop_quality(
     )
     window = mix[window_mask]
     if window.size == 0:
+        # A window outside the envelope is a GEOMETRY defect, not a missing measurement.
+        # Returning it as an in-band `error` routed it to `unmeasured` and passed it --
+        # so "only an absent cache is unmeasurable" was untrue until this was a real
+        # failed check (found in review, 2026-08-20).
         return LoopQualityResult(
-            period, None, None, None, None, (), tuple(sorted(waived)),
-            "loop window falls outside the cached mix envelope",
+            period, None, None, None, None, ("window_outside_envelope",),
+            tuple(sorted(waived)), None,
         )
 
     all_db = 20.0 * np.log10(np.maximum(mix, 1e-12))
