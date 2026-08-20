@@ -268,8 +268,8 @@ def test_transition_envelope_pass(tmp_path):
 
 def test_transition_envelope_catches_missing_envelope(tmp_path):
     """Track B has NO envelopes; swap 604 is on the swap -> layer 7 fails
-    for the in_track side. Track A has no transition automation either
-    since it would be the out_track of this single transition."""
+    for the in_track side, ONCE PER EXPECTED DEVICE (coverage is per
+    device, so both the StereoGain and the ChannelEq miss are named)."""
     import validate_als
     p = tmp_path / "fixture.als"
     _make_als(p, [
@@ -290,14 +290,16 @@ def test_transition_envelope_catches_missing_envelope(tmp_path):
             "swap_beats": 604.0,
         }],
     )
-    assert len(errs) == 1
-    assert "covers the swap" in errs[0]
-    assert "B" in errs[0]
+    assert len(errs) == 2
+    assert all("covers the swap" in e and "'B'" in e for e in errs)
+    assert any("StereoGain" in e for e in errs)
+    assert any("ChannelEq" in e for e in errs)
 
 
 def test_transition_envelope_catches_non_covering_span(tmp_path):
     """Track B's envelope events span 900..1200 while swap=604 falls
-    outside that window -> one error for B."""
+    outside that window -> BOTH device envelopes miss -> two errors for
+    B, one naming each device."""
     import validate_als
     p = tmp_path / "fixture.als"
     _make_als(p, [
@@ -321,14 +323,82 @@ def test_transition_envelope_catches_non_covering_span(tmp_path):
             "swap_beats": 604.0,
         }],
     )
+    assert len(errs) == 2
+    assert all("covers the swap" in e and "'B'" in e for e in errs)
+    assert any("StereoGain" in e for e in errs)
+    assert any("ChannelEq" in e for e in errs)
+
+
+def test_transition_envelope_missing_eq_only_fails_naming_device(tmp_path):
+    """Codex round-2 BLOCKER 2 negative control: track B carries a PERFECT
+    volume (StereoGain) envelope over the swap but NO ChannelEq envelope at
+    all. The old pooled-target logic accepted any one qualifying envelope,
+    so the volume fade concealed the completely absent bass-EQ envelope - a
+    false pass. Per-device coverage must fail, naming exactly the missing
+    device."""
+    import validate_als
+    p = tmp_path / "fixture.als"
+    _make_als(p, [
+        {"name": "A", "clip": (0.0, 800.0), "devices": True,
+         "envelopes": [
+             (1000, [(500.0, 1.0), (700.0, 0.0)]),     # gain
+             (1001, [(500.0, 0.5), (700.0, 0.5)]),     # eq
+         ]},
+        {"name": "B", "clip": (500.0, 1400.0), "devices": True,
+         "envelopes": [
+             (1010, [(500.0, 0.0), (700.0, 1.0)]),     # gain ONLY
+         ]},
+    ])
+    errs = validate_als.validate_als(
+        p,
+        expected_track_devices=validate_als.MIXER_AUTOMATION_DEVICES,
+        expected_transitions=[{
+            "out_track": "A",
+            "in_track": "B",
+            "swap_beats": 604.0,
+        }],
+    )
     assert len(errs) == 1
-    assert "covers the swap" in errs[0]
-    assert "B" in errs[0]
+    assert "ChannelEq" in errs[0] and "LowShelfGain" in errs[0]
+    assert "'B'" in errs[0] and "covers the swap" in errs[0]
+    assert "StereoGain" not in errs[0]
+
+
+def test_transition_envelope_missing_gain_only_fails_naming_device(tmp_path):
+    """Symmetric control: a bass-EQ envelope alone must not conceal an
+    absent volume envelope either."""
+    import validate_als
+    p = tmp_path / "fixture.als"
+    _make_als(p, [
+        {"name": "A", "clip": (0.0, 800.0), "devices": True,
+         "envelopes": [
+             (1001, [(500.0, 0.5), (700.0, 0.5)]),     # eq ONLY
+         ]},
+        {"name": "B", "clip": (500.0, 1400.0), "devices": True,
+         "envelopes": [
+             (1010, [(500.0, 0.0), (700.0, 1.0)]),     # gain
+             (1011, [(500.0, 0.5), (700.0, 0.5)]),     # eq
+         ]},
+    ])
+    errs = validate_als.validate_als(
+        p,
+        expected_track_devices=validate_als.MIXER_AUTOMATION_DEVICES,
+        expected_transitions=[{
+            "out_track": "A",
+            "in_track": "B",
+            "swap_beats": 604.0,
+        }],
+    )
+    assert len(errs) == 1
+    assert "StereoGain" in errs[0] and "Gain" in errs[0]
+    assert "'A'" in errs[0] and "covers the swap" in errs[0]
+    assert "ChannelEq" not in errs[0]
 
 
 def test_transition_envelope_ignores_non_mixer_pointee(tmp_path):
     """Track B's ONLY envelope points at PointeeId 99999 (not a mixer
-    target), even though it covers swap=604 -> one error for B."""
+    target), even though it covers swap=604 -> both devices miss -> two
+    errors for B."""
     import validate_als
     p = tmp_path / "fixture.als"
     _make_als(p, [
@@ -351,9 +421,10 @@ def test_transition_envelope_ignores_non_mixer_pointee(tmp_path):
             "swap_beats": 604.0,
         }],
     )
-    assert len(errs) == 1
-    assert "covers the swap" in errs[0]
-    assert "B" in errs[0]
+    assert len(errs) == 2
+    assert all("covers the swap" in e and "'B'" in e for e in errs)
+    assert any("StereoGain" in e for e in errs)
+    assert any("ChannelEq" in e for e in errs)
 
 
 def test_transition_envelope_skips_null_swap(tmp_path):
@@ -443,7 +514,7 @@ def test_sentinel_events_excluded(tmp_path):
     Case 1: 1 sentinel + 1 real event at 604 -> span [604, 604] -> covers
             swap 604 -> no errors.
     Case 2: ONLY the sentinel event -> empty real-events list -> NOT
-            covered -> one error.
+            covered -> one error PER EXPECTED DEVICE (two total).
     """
     import validate_als
     p = tmp_path / "fixture.als"
@@ -475,10 +546,11 @@ def test_sentinel_events_excluded(tmp_path):
         }],
     )
     # A is covered (single-point span covers 604); B is NOT covered
-    # because its only FloatEvent is the sentinel.
-    assert len(errs) == 1
-    assert "covers the swap" in errs[0]
-    assert "B" in errs[0]
+    # because its only FloatEvent is the sentinel - both devices miss.
+    assert len(errs) == 2
+    assert all("covers the swap" in e and "'B'" in e for e in errs)
+    assert any("StereoGain" in e for e in errs)
+    assert any("ChannelEq" in e for e in errs)
 
 
 # ---------------------------------------------------------------------------

@@ -346,14 +346,15 @@ def validate_als(
 
     # --- Layer 7: transition envelope presence (Codex B6) ---
     # For each transition dict with a non-null swap_beats, both the
-    # out_track and in_track must carry a mixer-device automation envelope
-    # whose real FloatEvent times cover the swap. "Real" means Time >=
-    # _SENTINEL_TIME_CEILING so Ableton's before-all-time sentinel
-    # (Time="-63072000") doesn't fake-coverage. Runs only when the caller
-    # passes expected_transitions; absent = skip. When the caller also
-    # passes expected_track_devices, that overrides the default mixer
-    # device set; otherwise the standard (Utility + Channel EQ) set is
-    # used.
+    # out_track and in_track must carry, for EVERY device in the
+    # expectation set (Utility gain AND Channel EQ low shelf), an
+    # automation envelope whose real FloatEvent times cover the swap.
+    # "Real" means Time >= _SENTINEL_TIME_CEILING so Ableton's
+    # before-all-time sentinel (Time="-63072000") doesn't fake-coverage.
+    # Runs only when the caller passes expected_transitions; absent =
+    # skip. When the caller also passes expected_track_devices, that
+    # overrides the default mixer device set; otherwise the standard
+    # (Utility + Channel EQ) set is used.
     if expected_transitions is not None:
         devices = expected_track_devices or MIXER_AUTOMATION_DEVICES
         by_name = {
@@ -390,39 +391,49 @@ def validate_als(
                             f"its transition envelopes."
                         )
                         continue
-                target_ids = _mixer_target_ids(track, devices)
                 track_name = _track_effective_name(track)
-                covered = False
-                for env in track.iter("AutomationEnvelope"):
-                    env_target = env.find("EnvelopeTarget/PointeeId")
-                    if env_target is None:
-                        continue
-                    pointee = env_target.get("Value")
-                    if pointee is None or pointee not in target_ids:
-                        continue
-                    times: list[float] = []
-                    for ev in env.iter("FloatEvent"):
-                        try:
-                            t = float(ev.get("Time", "nan"))
-                        except (ValueError, TypeError):
-                            continue
-                        if t >= _SENTINEL_TIME_CEILING:
-                            times.append(t)
-                    if not times:
-                        continue
-                    lo, hi = min(times), max(times)
-                    if lo <= swap <= hi:
-                        covered = True
-                        break
-                if not covered:
-                    errors.append(
-                        f"Transition '{tr.get('out_track', '?')}' -> "
-                        f"'{tr.get('in_track', '?')}' at beat {swap}: no "
-                        f"mixer-device automation envelope on track "
-                        f"'{track_name}' covers the swap - the planned "
-                        f"transition automation is missing from the ALS "
-                        f"(Codex B6)."
+                # Coverage is PER DEVICE: every (device, param) in the
+                # expectation set must have its own envelope whose real
+                # events span the swap. Pooling the target ids let ANY one
+                # qualifying envelope (e.g. the volume fade) conceal a
+                # completely absent bass-EQ envelope - a false pass
+                # (Codex round-2 BLOCKER 2). Each miss is reported naming
+                # the device so the failure is actionable.
+                for device_tag, param_tag in devices:
+                    target_ids = _mixer_target_ids(
+                        track, ((device_tag, param_tag),)
                     )
+                    covered = False
+                    for env in track.iter("AutomationEnvelope"):
+                        env_target = env.find("EnvelopeTarget/PointeeId")
+                        if env_target is None:
+                            continue
+                        pointee = env_target.get("Value")
+                        if pointee is None or pointee not in target_ids:
+                            continue
+                        times: list[float] = []
+                        for ev in env.iter("FloatEvent"):
+                            try:
+                                t = float(ev.get("Time", "nan"))
+                            except (ValueError, TypeError):
+                                continue
+                            if t >= _SENTINEL_TIME_CEILING:
+                                times.append(t)
+                        if not times:
+                            continue
+                        lo, hi = min(times), max(times)
+                        if lo <= swap <= hi:
+                            covered = True
+                            break
+                    if not covered:
+                        errors.append(
+                            f"Transition '{tr.get('out_track', '?')}' -> "
+                            f"'{tr.get('in_track', '?')}' at beat {swap}: no "
+                            f"<{device_tag}> (param {param_tag}) automation "
+                            f"envelope on track '{track_name}' covers the "
+                            f"swap - the planned transition automation is "
+                            f"missing from the ALS (Codex B6)."
+                        )
 
     return errors
 
