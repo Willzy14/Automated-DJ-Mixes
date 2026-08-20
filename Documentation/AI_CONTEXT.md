@@ -210,6 +210,14 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - Kimi has **two different 403s** and the helper conflated them: a rolling window (waiting works) vs a billing-cycle cap (waiting never works). 10-second test: probe the cheap tier with a 4-word prompt.
 - **Five parallel couriers exhausted the Claude credit pool** (130-260k tokens each). Two at a time is the sustainable rate.
 
+**KNOWN RED AT SESSION END (not a regression):** `test_alignment_baseline` fails with *85 changed,
+3 newly align, 0 newly raise*. Cause: the 15-track build still running at session end re-analysed
+tracks with fresh Demucs, and Demucs is nondeterministic on this GPU (proven today), so cached
+sections drifted underneath the pinned baseline. Zero pairs newly RAISE, so nothing broke. The
+baseline was deliberately NOT refreshed — blessing a mid-build corpus state would freeze a
+half-written analysis as truth. **Next session: confirm the build finished, re-run, attribute the
+diff, then refresh.**
+
 **Pending / next:**
 - **Tier A Phase 2 is now the highest-value build** and has its evidence (see above).
 - **The 20-track pool is not alignable** — longest default chain is 15. Three builds hard-raised at Revoloution → Renegades. With `--cue-signals rescue` that clears and the chain reaches T11. Dropping *incoming* tracks is whack-a-mole: **the failing party is always the OUTGOING** (Fish Go Deep, then I Want You). Structural: Dancing can never be incoming; Double Dutch can never be outgoing.
