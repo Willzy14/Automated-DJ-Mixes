@@ -161,6 +161,36 @@ def find_eq_bass_target(lines: list[str], s: int, e: int) -> str | None:
     return _find_target(lines, s, e, "ChannelEq", "LowShelfGain")
 
 
+def _require_automation_targets(track_name: str,
+                                needs_volume: bool,
+                                needs_bass: bool,
+                                vol_id: str | None,
+                                bass_id: str | None) -> None:
+    """Codex B6 hard gate: raise if a track has automation points to write but
+    the device parameter they target cannot be resolved in the ALS.
+
+    A transition whose Utility Gain or ChannelEq envelope target is missing is
+    a BROKEN transition — the fade/bass-swap the plan promised would silently
+    not exist in the shipped file (the old behaviour printed a '!! NO target
+    found' warning and carried on). A track with no automation points never
+    reaches this check, so tracks without transitions stay exempt.
+    """
+    missing: list[str] = []
+    if needs_volume and not vol_id:
+        missing.append("Utility gain (StereoGain > Gain)")
+    if needs_bass and not bass_id:
+        missing.append("EQ bass (ChannelEq > LowShelfGain)")
+    if missing:
+        raise ValueError(
+            f"Automation target(s) unresolvable on track '{track_name}': "
+            + "; ".join(missing)
+            + ". The planned transition cannot be written — the track's device "
+              "chain lacks the mixer device(s) the template provides (Utility "
+              "+ Channel EQ). Fix the ALS/template; refusing to ship a broken "
+              "transition."
+        )
+
+
 # ── Envelope XML building ────────────────────────────────────────────────────
 
 def build_envelope_xml(target_id: str,
@@ -1088,6 +1118,13 @@ def main() -> None:
         vol_id = find_utility_gain_target(lines, s, e)
         bass_id = find_eq_bass_target(lines, s, e)
 
+        # Codex B6: these targets are LOAD-BEARING. A transition whose Utility
+        # Gain or ChannelEq envelope target cannot be resolved is a broken
+        # transition — the fade / bass swap the plan promised would silently
+        # not exist in the shipped ALS. Hard error, never a warning.
+        _require_automation_targets(track.name, bool(vol_pts), bool(bass_pts),
+                                    vol_id, bass_id)
+
         # detect indent from the <Envelopes> tag
         _, _, indent = _find_envelopes_tag(lines, s, e)
         env_indent = indent + "\t"  # one level deeper than <Envelopes>
@@ -1098,15 +1135,11 @@ def main() -> None:
             envelopes.append(build_envelope_xml(vol_id, vol_pts, env_indent))
             print(f"  {_short(track.name):20s}  volume  target={vol_id}  "
                   f"pts={len(vol_pts)}")
-        elif vol_pts:
-            print(f"  !! {_short(track.name)}  volume points but NO target found")
 
         if bass_id and bass_pts:
             envelopes.append(build_envelope_xml(bass_id, bass_pts, env_indent))
             print(f"  {_short(track.name):20s}  eq_bass target={bass_id}  "
                   f"pts={len(bass_pts)}")
-        elif bass_pts:
-            print(f"  !! {_short(track.name)}  bass points but NO target found")
 
         if envelopes:
             delta = insert_envelopes(lines, s, e, envelopes)

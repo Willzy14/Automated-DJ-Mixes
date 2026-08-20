@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import html
+import json
 import sys
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -46,6 +48,23 @@ KNOWN_INT_TOPLEVEL = [
     "Disabled",          # actually bool but Ableton stores 'true'/'false'
 ]
 
+# Mixer devices the automation pipeline writes envelopes to, as
+# (device_tag, param_tag) pairs. Discovered from the live template
+# ("DJ Mix Template 2026.als": every audio track except Session Time
+# carries Utility + Channel EQ) and mirrored by the target finders in
+# als_generator.py / apply_automation.py (StereoGain>Gain,
+# ChannelEq>LowShelfGain). Kept here as DATA, not imports - validate_als
+# is the corruption gate and must never import the pipeline; callers
+# that know their expectations pass them in as arguments.
+MIXER_AUTOMATION_DEVICES = (
+    ("StereoGain", "Gain"),          # Utility gain - volume fades
+    ("ChannelEq", "LowShelfGain"),   # Channel EQ low shelf - bass swaps
+)
+
+# FloatEvents earlier than this are Ableton "before-all-time" sentinel
+# points (Time="-63072000"), not real automation - excluded from spans.
+_SENTINEL_TIME_CEILING = 0.0
+
 
 def _is_int(s: str) -> bool:
     try:
@@ -63,15 +82,52 @@ def _is_float(s: str) -> bool:
         return False
 
 
-def report_als(path) -> list[str]:
+def _track_effective_name(track_elem) -> str:
+    for e in track_elem.iter("EffectiveName"):
+        return e.get("Value", "?")
+    return "?"
+
+
+def _normalise_name(s: str) -> str:
+    return " ".join(html.unescape(s or "").split()).casefold()
+
+
+def _mixer_target_ids(track_elem, devices) -> set[str]:
+    """AutomationTarget Ids of the given (device_tag, param_tag) params on one track."""
+    ids: set[str] = set()
+    for device_tag, param_tag in devices:
+        for dev in track_elem.iter(device_tag):
+            for param in dev.iter(param_tag):
+                tgt = param.find("AutomationTarget")
+                if tgt is not None and tgt.get("Id"):
+                    ids.add(tgt.get("Id"))
+    return ids
+
+
+def report_als(
+    path,
+    expected_track_count: int | None = None,
+    expected_track_devices: tuple[tuple[str, str], ...] | None = None,
+    expected_transitions: list[dict] | None = None,
+) -> list[str]:
     """Validate `path`, print a one-line OK/FAIL banner, return the errors.
 
     Hook wired into every compress_als() so the corruption gate runs
     automatically on every emitted .als — not only when a human runs the
     CLI. Writers treat a non-empty result as fatal and do not report success.
+
+    The three optional expectation layers (track count, mixer device
+    presence, transition envelope presence) are forwarded as-is when
+    supplied; omitted = skipped (existing compress_als hooks stay
+    byte-identical).
     """
     p = Path(path)
-    errs = validate_als(p)
+    errs = validate_als(
+        p,
+        expected_track_count=expected_track_count,
+        expected_track_devices=expected_track_devices,
+        expected_transitions=expected_transitions,
+    )
     if errs:
         print(f"  [FAIL] ALS validation: {len(errs)} issue(s) in {p.name} "
               f"- do NOT load in Ableton:")
@@ -84,8 +140,31 @@ def report_als(path) -> list[str]:
     return errs
 
 
-def validate_als(path: Path) -> list[str]:
-    """Return a list of error messages. Empty list = file is clean."""
+def validate_als(
+    path: Path,
+    expected_track_count: int | None = None,
+    expected_track_devices: tuple[tuple[str, str], ...] | None = None,
+    expected_transitions: list[dict] | None = None,
+) -> list[str]:
+    """Return a list of error messages. Empty list = file is clean.
+
+    The first four layers (gzip/XML structural parse, known-int field
+    types, clip sanity, track ordering) always run. The three OPTIONAL
+    expectation layers are skipped unless their caller passes them:
+
+      expected_track_count   - asserts the ALS carries exactly this many
+                               clip-bearing AudioTracks (layer 5).
+      expected_track_devices - asserts every ACTIVE track has each of these
+                               (device_tag, param_tag) AutomationTarget Ids
+                               (layer 6, transition automation contract).
+      expected_transitions   - asserts every transition dict with a non-null
+                               swap_beats has, on BOTH its out_track and
+                               in_track, an automation envelope covering the
+                               swap time (layer 7).
+
+    All three are None by default so existing call sites (the report_als
+    hook fired on every compress_als) stay byte-identical.
+    """
     errors: list[str] = []
 
     # --- Layer 1: gzip + XML structural parse ---
@@ -221,6 +300,130 @@ def validate_als(path: Path) -> list[str]:
                 )
             prev_t, prev_name = t, name
 
+    # Compute once for layers 5-7 (only used when the caller asked for them).
+    audio_tracks = list(root.iter("AudioTrack"))
+    active_tracks = [at for at in audio_tracks
+                     if next(at.iter("AudioClip"), None) is not None]
+
+    # --- Layer 5: expected track count (Codex B6) ---
+    # The orchestrator knows exactly how many clip-bearing AudioTracks the
+    # job must produce (one per track patch). A mismatch means a clip
+    # insertion silently failed or the template was stripped/wrong upstream.
+    # Runs only when the caller passes expected_track_count; absent = skip.
+    if expected_track_count is not None and len(active_tracks) != expected_track_count:
+        errors.append(
+            f"Track count: ALS has {len(active_tracks)} clip-bearing AudioTrack(s) "
+            f"but the job expects {expected_track_count} - a track was dropped or "
+            f"duplicated upstream (truncation class, Codex B6)."
+        )
+
+    # --- Layer 6: mixer device presence on every active track (Codex B6) ---
+    # The automation stage writes envelopes to Utility gain + Channel EQ
+    # low shelf; both must be present with a resolved AutomationTarget Id
+    # on every clip-bearing track, otherwise the planned transition
+    # automation cannot land. Runs only when the caller passes
+    # expected_track_devices; absent = skip.
+    if expected_track_devices is not None:
+        for at in active_tracks:
+            name = _track_effective_name(at)
+            for device_tag, param_tag in expected_track_devices:
+                has_target = False
+                for dev in at.iter(device_tag):
+                    for param in dev.iter(param_tag):
+                        tgt = param.find("AutomationTarget")
+                        if tgt is not None and tgt.get("Id"):
+                            has_target = True
+                            break
+                    if has_target:
+                        break
+                if not has_target:
+                    errors.append(
+                        f"Track '{name}': mixer device <{device_tag}> "
+                        f"(param {param_tag}) is missing or has no "
+                        f"AutomationTarget Id - transition automation "
+                        f"cannot target it (Codex B6)."
+                    )
+
+    # --- Layer 7: transition envelope presence (Codex B6) ---
+    # For each transition dict with a non-null swap_beats, both the
+    # out_track and in_track must carry a mixer-device automation envelope
+    # whose real FloatEvent times cover the swap. "Real" means Time >=
+    # _SENTINEL_TIME_CEILING so Ableton's before-all-time sentinel
+    # (Time="-63072000") doesn't fake-coverage. Runs only when the caller
+    # passes expected_transitions; absent = skip. When the caller also
+    # passes expected_track_devices, that overrides the default mixer
+    # device set; otherwise the standard (Utility + Channel EQ) set is
+    # used.
+    if expected_transitions is not None:
+        devices = expected_track_devices or MIXER_AUTOMATION_DEVICES
+        by_name = {
+            _normalise_name(_track_effective_name(at)): at
+            for at in active_tracks
+        }
+        for tr in expected_transitions:
+            swap = tr.get("swap_beats")
+            if swap is None:
+                continue  # transition has no automation contract
+            out_raw = tr.get("out_track", "")
+            in_raw = tr.get("in_track", "")
+            for side_raw in (out_raw, in_raw):
+                norm = _normalise_name(side_raw)
+                if norm in by_name:
+                    track = by_name[norm]
+                else:
+                    # Substring match either direction, unique only -
+                    # mirrors the pipeline's exact/substring matcher.
+                    candidates = [
+                        at for at in active_tracks
+                        if norm and (
+                            norm in _normalise_name(_track_effective_name(at))
+                            or _normalise_name(_track_effective_name(at)) in norm
+                        )
+                    ]
+                    if len(candidates) == 1:
+                        track = candidates[0]
+                    else:
+                        errors.append(
+                            f"Transition '{tr.get('out_track', '?')}' -> "
+                            f"'{tr.get('in_track', '?')}': track '{side_raw}' "
+                            f"not found unambiguously in ALS - cannot verify "
+                            f"its transition envelopes."
+                        )
+                        continue
+                target_ids = _mixer_target_ids(track, devices)
+                track_name = _track_effective_name(track)
+                covered = False
+                for env in track.iter("AutomationEnvelope"):
+                    env_target = env.find("EnvelopeTarget/PointeeId")
+                    if env_target is None:
+                        continue
+                    pointee = env_target.get("Value")
+                    if pointee is None or pointee not in target_ids:
+                        continue
+                    times: list[float] = []
+                    for ev in env.iter("FloatEvent"):
+                        try:
+                            t = float(ev.get("Time", "nan"))
+                        except (ValueError, TypeError):
+                            continue
+                        if t >= _SENTINEL_TIME_CEILING:
+                            times.append(t)
+                    if not times:
+                        continue
+                    lo, hi = min(times), max(times)
+                    if lo <= swap <= hi:
+                        covered = True
+                        break
+                if not covered:
+                    errors.append(
+                        f"Transition '{tr.get('out_track', '?')}' -> "
+                        f"'{tr.get('in_track', '?')}' at beat {swap}: no "
+                        f"mixer-device automation envelope on track "
+                        f"'{track_name}' covers the swap - the planned "
+                        f"transition automation is missing from the ALS "
+                        f"(Codex B6)."
+                    )
+
     return errors
 
 
@@ -228,13 +431,42 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("als_path", type=Path)
+    parser.add_argument(
+        "--expected-tracks", type=int, default=None,
+        help="Assert the ALS carries exactly this many clip-bearing AudioTracks",
+    )
+    parser.add_argument(
+        "--require-devices", action="store_true",
+        help="Assert every active track carries Utility (StereoGain) + Channel EQ "
+             "with resolved AutomationTarget Ids",
+    )
+    parser.add_argument(
+        "--arrangement-report", type=Path, default=None,
+        help="JSON arrangement report; its transitions are checked for envelope "
+             "coverage of the planned swap_beats",
+    )
     args = parser.parse_args()
 
     if not args.als_path.exists():
         print(f"ERROR: {args.als_path} does not exist", file=sys.stderr)
         return 1
 
-    errs = validate_als(args.als_path)
+    devices = MIXER_AUTOMATION_DEVICES if args.require_devices else None
+    transitions = None
+    if args.arrangement_report is not None:
+        if not args.arrangement_report.exists():
+            print(f"ERROR: {args.arrangement_report} does not exist",
+                  file=sys.stderr)
+            return 1
+        rep = json.loads(args.arrangement_report.read_text(encoding="utf-8"))
+        transitions = rep.get("transitions", [])
+
+    errs = validate_als(
+        args.als_path,
+        expected_track_count=args.expected_tracks,
+        expected_track_devices=devices,
+        expected_transitions=transitions,
+    )
     if errs:
         print(f"FAIL  {args.als_path.name}: {len(errs)} issue(s)",
               file=sys.stderr)
