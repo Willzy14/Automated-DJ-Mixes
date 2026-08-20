@@ -9,23 +9,13 @@ import traceback
 from pathlib import Path
 
 from automated_dj_mixes.config import load_config
-from automated_dj_mixes.analysis import analyse_folder, enrich_from_rekordbox
+from automated_dj_mixes.analysis import analyse_folder
 from automated_dj_mixes.sequencer import build_harmonic_path, key_to_camelot, apply_energy_arc
 from automated_dj_mixes.warping import (calculate_warp_markers, calculate_warp_markers_from_beat_grid, choose_warp_mode, WARP_MODE_REPITCH)
 from automated_dj_mixes.automation import calculate_gain_offsets, AutomationPoint
 from automated_dj_mixes.als_generator import TrackPatch, generate_session
-from automated_dj_mixes.phrase_viz import build_intervals, segments_from_intervals
-from automated_dj_mixes.features import extract_track_features
-from automated_dj_mixes.cue_candidates import (
-    find_cue_candidates,
-    first_credible,
-    mik_to_candidates,
-    amplitude_to_candidates,
-    hint_to_candidates,
-    load_hints_file,
-)
+from automated_dj_mixes.cue_candidates import load_hints_file
 from automated_dj_mixes.mik_reader import enrich_from_mik
-from automated_dj_mixes.report import write_track_csv, write_transition_report
 from automated_dj_mixes.waveform_preview import PreviewContext, render_preview
 
 
@@ -147,20 +137,18 @@ def _validate_hints(audio_dir: Path, hints: dict) -> list[str]:
     return errors
 
 
-def _render_previews(ordered_analyses, mik_data, rb_matches, project_bpm, preview_dir: Path) -> int:
+def _render_previews(ordered_analyses, mik_data, project_bpm, preview_dir: Path) -> int:
     """Render blank-canvas preview PNGs for hint authoring. Returns count rendered."""
     preview_dir.mkdir(parents=True, exist_ok=True)
     rendered = 0
     for i, analysis in enumerate(ordered_analyses):
         mik = mik_data.get(str(analysis.path))
-        rb_match = rb_matches.get(str(analysis.path))
         try:
             ctx = PreviewContext(
                 track_index=i + 1,
                 analysis=analysis,
                 mik_cues_sec=[c.time_sec for c in mik.cues] if mik else [],
                 mik_energy_segments=mik.energy_segments if mik else [],
-                rb_phrases=getattr(rb_match, "phrases", None) if rb_match else None,
                 project_bpm=project_bpm,
             )
             render_preview(ctx, preview_dir)
@@ -168,42 +156,6 @@ def _render_previews(ordered_analyses, mik_data, rb_matches, project_bpm, previe
         except Exception as e:
             print(f"  WARNING: preview render failed for track {i + 1}: {e}")
     return rendered
-
-
-def enforce_rekordbox_coverage(analyses, rb_matches, allow_partial_rekordbox):
-    """Hard gate: stop the pipeline if any track lacks Rekordbox phrase data.
-
-    Phrase grids and per-beat warp markers come from Rekordbox; without them a
-    track falls back to librosa (looser warping, weaker section detection).
-    The old behaviour caught a desktop-analysis failure, printed "continuing",
-    and produced a degraded mix with no warning — the exact failure of
-    2026-06-08. This converts that silent degrade into a loud, decidable stop.
-
-    Returns the list of track names missing RB data (empty == full coverage).
-    Raises RuntimeError when coverage is partial and the caller has not opted
-    into librosa fallback via allow_partial_rekordbox.
-    """
-    missing_rb = [a.path.name for a in analyses if str(a.path) not in rb_matches]
-    if missing_rb and not allow_partial_rekordbox:
-        listing = "\n".join(f"    - {n}" for n in missing_rb)
-        raise RuntimeError(
-            f"\nRekordbox phrase data MISSING for {len(missing_rb)}/{len(analyses)} track(s):\n"
-            f"{listing}\n\n"
-            "Building a mix without RB phrase/beat-grid data degrades section\n"
-            "detection and beat-matching, so the pipeline STOPS here rather than\n"
-            "silently producing a lower-quality mix.\n\n"
-            "FIX (recommended): open rekordbox 7, turn Library Protection OFF,\n"
-            "import these tracks, let analysis finish, then re-run the pipeline.\n"
-            "(If RB already analysed them, re-run with --skip-desktop-analyze.)\n\n"
-            "OR re-run with --allow-partial-rekordbox to knowingly proceed on\n"
-            "librosa fallback for the un-analysed tracks."
-        )
-    if missing_rb and allow_partial_rekordbox:
-        print(f"  WARNING: --allow-partial-rekordbox set — proceeding with "
-              f"{len(missing_rb)}/{len(analyses)} track(s) on librosa fallback:")
-        for n in missing_rb:
-            print(f"    - {n}")
-    return missing_rb
 
 
 def enforce_owned_grid_coverage(analyses, grid_matches):
@@ -218,8 +170,8 @@ def enforce_owned_grid_coverage(analyses, grid_matches):
         raise RuntimeError(
             f"\nOwned stem-grid MISSING for {len(missing)}/{len(analyses)} track(s):\n"
             f"{listing}\n\n"
-            "The production path does not fall back to Rekordbox or a two-marker "
-            "constant grid. Fix or exclude these tracks, then rerun."
+            "The production path does not fall back to a two-marker constant grid. "
+            "Fix or exclude these tracks, then rerun."
         )
     print(f"  Owned stem-grid coverage: {len(analyses)}/{len(analyses)} tracks")
     return missing
@@ -249,6 +201,10 @@ def run_pipeline(
 
     config = load_config(config_path or project_root / "Config" / "settings.json")
 
+    if allow_partial_rekordbox:
+        print("  WARNING: --allow-partial-rekordbox is deprecated and ignored - "
+              "Rekordbox was removed from the pipeline (2026-08-18).")
+
     # --stem-grid is only one-clock-safe on the stem-section cut path
     # (segments_from_stem_sections -> sec_to_clip_beats reads the injected grid). The
     # RB-phrase cut path uses extract_track_features, whose disk cache key omits the
@@ -259,8 +215,7 @@ def run_pipeline(
         raise RuntimeError(
             "--stem-grid requires --sections-layout --stem-sections (the one-clock-safe "
             "cut path). Without it, section cuts read grid-unaware cached features while "
-            "audio warps to the stem grid — a two-clock split. Add both flags, or drop "
-            "--stem-grid to use the Rekordbox/.asd grid.")
+            "audio warps to the stem grid — a two-clock split. Add both flags.")
 
     if kick_model and not (sections_layout and stem_sections):
         raise RuntimeError(
@@ -273,7 +228,7 @@ def run_pipeline(
     #   • "24 Bit MASTER" (with optional AMENDED / AMENDED V2 etc.)
     #   • "SW V1", "SW V2", … (Sam Wills stem-master renders)
     # Anything else (stems, freezes, pre-masters, bounces) is rejected
-    # hard so MIK / Rekordbox never see them.
+    # hard so MIK never sees them.
     # ------------------------------------------------------------------
     _MASTER_PATTERN = re.compile(
         r"(24\s*Bit\s*MASTER|SW\s+V\d+)",
@@ -297,23 +252,15 @@ def run_pipeline(
     if audio_wavs:
         print(f"Master-file gate: {len(audio_wavs)} WAVs OK")
 
-    # Owned-grid mode drives MIK only. Legacy mode still drives both apps.
+    # Owned-grid mode drives MIK only.
     if not skip_desktop_analyze:
-        mode = "MIK only; Rekordbox disabled" if stem_grid else "MIK + Rekordbox"
-        print(f"Desktop analysis ({mode})...")
+        print("Desktop analysis (MIK only - metadata)...")
         try:
             from automated_dj_mixes.desktop_analyzer import analyze_folder_with_mik
             audio_paths = sorted(input_dir.glob("*.wav"))
             if audio_paths:
                 analyze_folder_with_mik(input_dir, expected_tracks=audio_paths,
                                         allow_non_master=allow_non_master)
-                if not stem_grid:
-                    from automated_dj_mixes.desktop_analyzer import analyze_folder_with_rekordbox
-                    analyze_folder_with_rekordbox(
-                        input_dir,
-                        expected_tracks=audio_paths,
-                        allow_non_master=allow_non_master,
-                    )
         except Exception as e:
             # Surface metadata-analysis failures; grid coverage is gated later.
             print("  WARNING: desktop analysis did not complete cleanly:")
@@ -329,9 +276,8 @@ def run_pipeline(
     # Grid overrides apply BEFORE enrichment so the warp markers, downbeat
     # anchor, one-clock cuts and the gate all see the corrected grid. Loaded
     # up front because replace_grid overrides (fitted from Ableton .asd
-    # ticks) are also the RB-LESS grid source when the local Rekordbox DB
-    # doesn't know these tracks — RB/MIK DBs are machine-local and don't
-    # follow the project between Sam's machines; the .asd files do.
+    # ticks) are a grid source in their own right - the .asd files follow
+    # the project between Sam's machines.
     grid_overrides: dict = {}
     apply_grid_override = None
     try:
@@ -340,38 +286,18 @@ def run_pipeline(
     except ImportError:
         pass
 
-    # Legacy Rekordbox enrichment is bypassed entirely in owned-grid mode.
-    rb_count = 0
-    rb_matches: dict[str, object] = {}  # track path → RekordboxAnalysis (for beat grid warp)
+    # Rekordbox enrichment is GONE (Sam 2026-08-18: "done away with"). The
+    # grid dict is populated by tick-grid shells and/or the owned stem-grid
+    # detector below; there is no external library read.
+    rb_matches: dict[str, object] = {}  # track path -> TrackGrid (for beat grid warp)
     if stem_grid:
         print("Rekordbox disabled: owned stem-grid + stem-sections are authoritative")
-    else:
-        try:
-            from automated_dj_mixes.rekordbox_reader import read_rekordbox_library, find_rekordbox_match
-            print("Reading Rekordbox library...")
-            rb_library = read_rekordbox_library()
-            for a in analyses:
-                rb_match = find_rekordbox_match(a.path.name, rb_library)
-                if rb_match and rb_match.phrases:
-                    if apply_grid_override and a.path.name in grid_overrides:
-                        ov = grid_overrides[a.path.name]
-                        apply_grid_override(rb_match, ov)
-                        kind = ("replace_grid" if ov.get("replace_grid")
-                                else f"shift {ov.get('shift_ms', 0):+.1f}ms")
-                        print(f"  [grid-override] {a.path.name[:50]}: {kind}")
-                    enrich_from_rekordbox(a, rb_match)
-                    rb_matches[str(a.path)] = rb_match
-                    rb_count += 1
-            print(f"  Rekordbox: {rb_count}/{len(analyses)} tracks enriched with phrase data")
-        except Exception as e:
-            print(f"  Rekordbox unavailable ({e}), using librosa analysis only")
 
-    # RB-LESS grid source: synthesize a grid carrier from a replace_grid
-    # override for any track Rekordbox didn't cover. Stem-sections mode only —
-    # these shells carry a beat grid but NO phrase data, so they must not
-    # satisfy the phrase-coverage gate for the retired RB-phrase path.
+    # Tick-grid source: synthesize a grid carrier from a replace_grid
+    # override for any track without a grid. Stem-sections mode only -
+    # these shells carry a beat grid but NO phrase data.
     if stem_sections and apply_grid_override and not stem_grid:
-        from automated_dj_mixes.rekordbox_reader import RekordboxAnalysis
+        from automated_dj_mixes.grid_carrier import TrackGrid
         tick_count = 0
         for a in analyses:
             if str(a.path) in rb_matches:
@@ -379,7 +305,7 @@ def run_pipeline(
             ov = grid_overrides.get(a.path.name)
             if not ov or not ov.get("replace_grid"):
                 continue
-            shell = RekordboxAnalysis(
+            shell = TrackGrid(
                 file_path=str(a.path), title=a.path.stem, bpm=0.0,
                 key_name=None, mood=1, end_beat=0, phrases=[],
                 beat_times_ms=[], first_downbeat_offset=0)
@@ -391,7 +317,7 @@ def run_pipeline(
                   f"{ov['replace_grid']['bpm']} BPM grid from Ableton ticks")
         if tick_count:
             print(f"  Tick grids: {tick_count}/{len(analyses)} tracks gridded "
-                  f"from .asd-fitted overrides (RB-less)")
+                  f"from .asd-fitted overrides")
 
     # OUR-OWN-GRID source: build the beat grid from the stem-kick detector.
     # detector (Source/automated_dj_mixes/stem_grid.py). Injected into rb_matches
@@ -403,11 +329,11 @@ def run_pipeline(
     #     (sample-accurate, fixes soft-kick lag — Eli sat 7.6ms late, snaps to 0);
     #     our detector keeps the structure, Ableton refines the timing.
     #   - weak/syncopated (LOWC/JIT) grids are judged by the hard grid gate;
-    #     production never falls back to Rekordbox or a two-marker grid.
+    #     production never falls back to a two-marker grid.
     # Separates its own drum stem (GPU Demucs); the Phase-1a reuse is a TODO.
     if stem_grid and not previews_only:
         from automated_dj_mixes.stem_grid import detect_beat_grid
-        from automated_dj_mixes.rekordbox_reader import RekordboxAnalysis
+        from automated_dj_mixes.grid_carrier import TrackGrid
         try:
             from asd_onsets import ableton_onsets_sec
         except ImportError:
@@ -441,25 +367,25 @@ def run_pipeline(
             has_rb = existing is not None and len(getattr(existing, "beat_times_ms", [])) >= 8
             if bg.flag in ("LOWC", "JIT") and not bg.snapped_to_asd and has_rb:
                 print(f"  [stem-grid] {a.path.name[:46]}: flagged {bg.flag}, no .asd to "
-                      f"rescue timing — keeping RB as fallback")
+                      f"rescue timing — keeping existing grid as fallback")
                 continue
             note = ""
             if has_rb:
                 dis = _disagree_ms(bg.beat_times_ms, existing.beat_times_ms)
-                note = (f" — OVERRIDES RB (disagree {dis:.0f}ms; we sit {bg.grid_vs_kick_ms}ms "
+                note = (f" — OVERRIDES prior grid (disagree {dis:.0f}ms; we sit {bg.grid_vs_kick_ms}ms "
                         f"on the kicks)" if not _np.isnan(dis) and dis > 25
-                        else f" — agrees w/ RB ({dis:.0f}ms)")
+                        else f" — agrees w/ prior grid ({dis:.0f}ms)")
                 existing.beat_times_ms = bg.beat_times_ms
                 existing.first_downbeat_offset = bg.first_downbeat_offset
                 existing.bpm = bg.bpm
                 existing.end_beat = len(bg.beat_times_ms)
             else:
-                rb_matches[str(a.path)] = RekordboxAnalysis(
+                rb_matches[str(a.path)] = TrackGrid(
                     file_path=str(a.path), title=a.path.stem, bpm=bg.bpm,
                     key_name=None, mood=1, end_beat=len(bg.beat_times_ms), phrases=[],
                     beat_times_ms=bg.beat_times_ms,
                     first_downbeat_offset=bg.first_downbeat_offset)
-                note = " — no RB; stem-grid sole source"
+                note = " — stem-grid sole source"
             if bg.flag == "JIT":
                 note += (f" [OFF THE KICKS by {bg.grid_vs_kick_ms:.0f}ms — out of range, "
                          f"the beatgrid gate will reject this]")
@@ -487,8 +413,7 @@ def run_pipeline(
                   f"{bg.grid_vs_kick_ms}ms on kicks{flag_s}{note}")
         if n_stem:
             print(f"  Stem-grid: {n_stem}/{len(analyses)} tracks gridded from our own "
-                  f"kick detector ({n_snap} timing-snapped to Ableton .asd transients; "
-                  f"Rekordbox disabled)")
+                  f"kick detector ({n_snap} timing-snapped to Ableton .asd transients)")
 
     # The grid is the BPM AUTHORITY for every track that has one. Without
     # this, a.bpm stays librosa's quantized lattice whenever the MIK DB is
@@ -506,12 +431,10 @@ def run_pipeline(
             if g_bpm and g_bpm > 40.0:
                 a.bpm = g_bpm
 
-    # HARD GATE: require complete coverage from the selected grid authority.
+    # HARD GATE: require complete per-beat grid coverage regardless of source
+    # (owned stem grids or .asd tick fits - there is no Rekordbox fallback).
     if not previews_only:
-        if stem_grid:
-            enforce_owned_grid_coverage(analyses, rb_matches)
-        else:
-            enforce_rekordbox_coverage(analyses, rb_matches, allow_partial_rekordbox)
+        enforce_owned_grid_coverage(analyses, rb_matches)
 
     # Beatgrid quality gate — sections-layout is the production entry point
     # where warp markers + cuts get baked, so bad grids must hard-stop HERE
@@ -557,7 +480,7 @@ def run_pipeline(
 
     # Visual hints — human (or Claude) broad-strokes reading of each track's
     # waveform. Highest-confidence cue source: when a track has a hint, the
-    # hint wins over MIK/RB/amplitude algorithms.
+    # hint wins over MIK/amplitude algorithms.
     hints_dir = input_dir.parent / "Hints"
     hints_path = hints_dir / "track_hints.json"
     track_hints_data = load_hints_file(hints_path)
@@ -624,7 +547,7 @@ def run_pipeline(
     # authored. The --previews-only flag exits here, before transition
     # planning. Production gate below also runs after this point.
     preview_dir = output_dir / "Visualisations" / "Previews"
-    preview_count = _render_previews(ordered_analyses, mik_data, rb_matches, project_bpm, preview_dir)
+    preview_count = _render_previews(ordered_analyses, mik_data, project_bpm, preview_dir)
     if preview_count:
         print(f"Track previews (for hint authoring): {preview_count}/{len(ordered_analyses)} -> {preview_dir}")
 
@@ -693,7 +616,7 @@ def run_pipeline(
             warp_src = "2-marker linear"
         print(f"  {a.path.name}: {mode_name}, {warp_src}")
     if rb_warp_count:
-        source = "owned stem grid" if stem_grid else "Rekordbox grid"
+        source = "owned stem grid" if stem_grid else "per-beat grid"
         print(f"  Beat grid warp: {rb_warp_count}/{len(ordered_analyses)} tracks using {source}")
 
     # === SECTIONS LAYOUT MODE ===
@@ -708,7 +631,6 @@ def run_pipeline(
     # line up across the seam.
     if sections_layout:
         print("SECTIONS LAYOUT MODE — natural-fill aligned, section colour-code, no automation")
-        INTERVAL_BARS = 8
         patches = []
         # Per-track: (analysis, markers, mode, segments, total_beats)
         track_data = []
@@ -718,7 +640,6 @@ def run_pipeline(
             total_beats = markers[-1].beat_time if markers else 0.0
             rb_match = rb_matches.get(str(analysis.path))
             segments = None
-            features = None
             if stem_sections:
                 # Stem-based detector as the section source — needs no RB phrases
                 # (only the audio + bpm + downbeat). The .npz envelope cache makes
@@ -746,7 +667,7 @@ def run_pipeline(
                             det_bpm, det_downbeat = g_bpm, g_db
                             grid_times = rb_match.beat_times_ms
                             grid_offset = getattr(rb_match, "first_downbeat_offset", 0)
-                            grid_name = "owned stem grid" if stem_grid else "Rekordbox grid"
+                            grid_name = "owned stem grid" if stem_grid else "tick grid"
                             print(f"  [one-clock] {analysis.path.name[:46]}: "
                                   f"detector on {grid_name} ({g_bpm:.2f} BPM, downbeat {g_db:.3f}s)")
                     stem_res = stem_detect(
@@ -769,32 +690,8 @@ def run_pipeline(
                             print(f"  BAR-MATH: {w}")
                 except Exception as e:
                     print(f"  WARNING: stem section detection failed for {analysis.path.name}: {e}")
-            elif rb_match:
-                offset = getattr(rb_match, "first_downbeat_offset", 0)
-                ext_path = Path(rb_match.ext_path) if rb_match.ext_path else None
-                try:
-                    features = extract_track_features(
-                        audio_path=analysis.path,
-                        bpm=rb_match.bpm or analysis.bpm,
-                        beat_times_ms=rb_match.beat_times_ms,
-                        first_downbeat_offset=offset,
-                        ext_path=ext_path,
-                    )
-                    intervals = build_intervals(rb_match, features, interval_bars=INTERVAL_BARS)
-                    segments = segments_from_intervals(intervals)
-                    # 2026-05-19: refine with per-beat data — split intro
-                    # build-zones, find 1-4 bar fills inside drops.
-                    from automated_dj_mixes.phrase_viz import refine_segments, validate_bar_math
-                    segments = refine_segments(segments, features)
-                    # Bar-math validation — print warnings for any chop whose
-                    # delta from previous chop isn't on a 4-bar grid (Sam's
-                    # rule: every event should land at 4/8/12/16/24/32/...).
-                    for w in validate_bar_math(segments, analysis.path.stem[:40]):
-                        print(f"  BAR-MATH: {w}")
-                except Exception as e:
-                    print(f"  WARNING: section analysis failed for {analysis.path.name}: {e}")
             else:
-                print(f"  WARNING: no Rekordbox data for {analysis.path.name} — single uncoloured clip")
+                print(f"  WARNING: no stem-sections for {analysis.path.name} - single uncoloured clip")
             track_data.append((analysis, markers, mode, segments, total_beats))
 
         # Sections-layout is a per-track section-chop artifact for REVIEW only.
@@ -886,14 +783,14 @@ def main():
     parser.add_argument("--output", required=True, help="Folder for generated ALS output")
     parser.add_argument("--config", help="Path to settings.json")
     parser.add_argument("--skip-desktop-analyze", action="store_true",
-                        help="Skip driving MIK and Rekordbox UI (use only existing analysis data)")
+                        help="Skip driving the MIK UI (use only existing analysis data)")
     parser.add_argument("--allow-bad-grids", action="store_true",
                         help="Proceed even if the beatgrid gate finds grids that "
                              "don't sit on their audio (warp WILL drift on those "
                              "tracks — the 09.06.26 'Todd' bug).")
     parser.add_argument("--allow-partial-rekordbox", action="store_true",
-                        help="Proceed even if some tracks lack Rekordbox phrase data "
-                             "(knowingly degraded — librosa fallback). Default: hard-stop.")
+                        help="Deprecated and ignored - Rekordbox was removed from the pipeline (2026-08-18). "
+                             "Accepted only so older documented invocations don't break.")
     parser.add_argument("--allow-non-master", action="store_true",
                         help="Allow WAVs that don't match Sam's master naming "
                              "('24 Bit MASTER' / 'SW V<N>') — for mixing finished "
@@ -919,14 +816,13 @@ def main():
                              "mode exists.")
     parser.add_argument("--stem-sections", action="store_true",
                         help="In --sections-layout mode, use the Demucs stem-based detector "
-                             "(Source/stem_detector.py) as the section source instead of "
-                             "Rekordbox phrases. Analysis-only; envelope cache makes re-runs "
+                             "(Source/stem_detector.py) as the section source (the only surviving one). "
+                             "Analysis-only; envelope cache makes re-runs "
                              "on known tracks instant.")
     parser.add_argument("--stem-grid", action="store_true",
                         help="Use our own stem-kick beat detector "
                              "(automated_dj_mixes.stem_grid) as the sole beat-grid authority. "
-                             "Disables Rekordbox desktop analysis and library reads; weak grids "
-                             "fail closed instead of falling back. Separates a drum stem on GPU.")
+                             "Weak grids fail closed instead of falling back. Separates a drum stem on GPU.")
     parser.add_argument("--kick-model", action="store_true",
                         help="Use Kick Detector V3 for stem-section kick IN/OUT presence. "
                              "Requires --sections-layout --stem-sections. Default is off.")

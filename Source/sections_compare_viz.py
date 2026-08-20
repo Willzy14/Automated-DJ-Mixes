@@ -234,18 +234,13 @@ def main():
     v7_data = json.loads(v7_path.read_text(encoding="utf-8"))
     v8_data = json.loads(v8_path.read_text(encoding="utf-8"))
 
-    # Get BPM + first_downbeat_sec per track via rekordbox.
-    from automated_dj_mixes.analysis import analyse_folder, enrich_from_rekordbox
-    from automated_dj_mixes.rekordbox_reader import read_rekordbox_library, find_rekordbox_match
+    # BPM + first_downbeat_sec per track from the audio analysis (librosa).
+    from automated_dj_mixes.analysis import analyse_folder
 
     print("Loading audio analyses...")
     analyses = analyse_folder(audio_dir)
-    rb_lib = read_rekordbox_library()
     by_stem: dict[str, TrackBPMInfo] = {}
     for a in analyses:
-        rb_match = find_rekordbox_match(a.path.name, rb_lib)
-        if rb_match:
-            enrich_from_rekordbox(a, rb_match)
         by_stem[a.path.stem] = TrackBPMInfo(
             bpm=a.bpm,
             first_downbeat_sec=a.first_downbeat_sec or 0.0,

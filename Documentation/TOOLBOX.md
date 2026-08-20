@@ -4,8 +4,8 @@ Module reference for all pipeline components.
 
 ## Modules
 
-### `Source/validate_beatgrid.py` (2026-06-11, v2 same day)
-Hard-stop gate: does each track's Rekordbox beat grid sit ON its audio? Whole-track kick onsets (150Hz lowpass — not mel fmax, which produces empty filters), half-beat-circle phase concentration (R) folds house offbeat-bass stabs so locked grids read high regardless of bassline; mean full-circle phase catches grids whose tempo is right but markers sit between the kicks (the Todd case). Per-track +1% detuned twin acts as a known-bad control. Calibrated on 22 tracks (08.06.26 + 09.06.26) + 12 more (11.06.26). Wired into `--sections-layout`; `--allow-bad-grids` to override.
+### `Source/validate_beatgrid.py` (2026-06-11, v2 same day; RB-library CLI removed 2026-08-20)
+Hard-stop gate: does each track's beat grid sit ON its audio? Whole-track kick onsets (150Hz lowpass — not mel fmax, which produces empty filters), half-beat-circle phase concentration (R) folds house offbeat-bass stabs so locked grids read high regardless of bassline; mean full-circle phase catches grids whose tempo is right but markers sit between the kicks (the Todd case). Per-track +1% detuned twin acts as a known-bad control. Calibrated on 22 tracks (08.06.26 + 09.06.26) + 12 more (11.06.26). Wired into `--sections-layout`; `--allow-bad-grids` to override.
 
 **v2 — MIK tiebreaker (11.06.26 run):** percussion-heavy genres (Latin house, gospel stabs) smear R below the absolute thresholds even on correct grids. `check_grid(..., independent_bpm, db_bpm)` + `verdict_from(..., tempo_confirmed)`: a track is rescued from the ambiguous band only when R≥0.20, ≥5× its detuned control, the grid is internally consistent (span vs RB DB ≤0.5%) AND MIK agrees with the grid span ≤0.2% AND the phase is clean. Never rescues noise-floor grids; never overrides a bad phase.
 
@@ -13,62 +13,47 @@ Hard-stop gate: does each track's Rekordbox beat grid sit ON its audio? Whole-tr
 - `shift_ms` — phase slide (the Todd fix). Written by CLI `--write-override <substr>` (measures, composes with existing shifts).
 - `replace_grid` — full constant-grid synthesis for unusable grids (first case: La Trumpter — internally inconsistent RB grid, true 126 BPM confirmed by MIK + Sam). `_fit_anchor` kick-fits the anchor (bar-phase inherited from the old grid's downbeat); `write_grid_replacement(project, wav, rb, true_bpm)` PROVES the fit with the gate before writing — a failing fit is refused.
 
-Library: `check_grid`, `enforce_beatgrid_quality`, `load_grid_overrides`, `apply_grid_override`, `write_phase_override`, `write_grid_replacement`, `_fit_anchor`, `verdict_from` (pure). CLI: project table + `--write-override`.
+Library: `check_grid`, `enforce_beatgrid_quality`, `load_grid_overrides`, `apply_grid_override`, `write_grid_replacement`, `_fit_anchor`, `verdict_from` (pure). The Rekordbox-library CLI mode (`--write-override` against the RB library, incl. `write_phase_override`) was removed with the Rekordbox removal (2026-08-20); running the script now prints a retirement message. The live gate functions are unchanged.
 
 
 ### `Source/automated_dj_mixes/orchestrator.py`
-Main pipeline controller. The canonical `/mix` path uses `--stem-grid --stem-sections --kick-model`: owned per-beat grids, Demucs structure and Kick Detector V3 evidence. In this mode the orchestrator runs MIK only for optional key/energy metadata, never launches or reads Rekordbox, requires complete owned-grid coverage, and fails weak grids closed. Legacy non-stem-grid callers retain the old Rekordbox path. CLI: `python -m automated_dj_mixes.orchestrator --input "Tracks/" --output "Output/"`.
+Main pipeline controller. The canonical `/mix` path uses `--stem-grid --stem-sections --kick-model`: owned per-beat grids, Demucs structure and Kick Detector V3 evidence. The orchestrator runs MIK only for optional key/energy metadata. **Rekordbox was removed entirely (2026-08-20, Sam 2026-08-18: "done away with")**: no desktop driving, no library reads, no phrase enrichment; `enforce_owned_grid_coverage` is the coverage gate for every mode (owned stem grids or `.asd` tick-fit shells; no fallback). `--allow-partial-rekordbox` is accepted-but-ignored with a deprecation warning so documented invocations don't break. CLI: `python -m automated_dj_mixes.orchestrator --input "Tracks/" --output "Output/"`.
 
 Key functions: `run_pipeline()`, `enforce_owned_grid_coverage()`, `_find_template()`, `_next_version()`, `main()` (CLI).
 
-### `Source/automated_dj_mixes/analysis.py`
-Reads key/BPM from file tags (mutagen ID3/Vorbis). Transient/downbeat detection (librosa). LUFS measurement (pyloudnorm). Bass section detection (off-beat energy sampling). Phrase-aware break detection. Rekordbox enrichment maps RB phrases → pipeline fields (bass_start/end, break_start/end, intro_end, last_kick).
+### `Source/automated_dj_mixes/grid_carrier.py`
+**Added 2026-08-20 (Rekordbox removal).** `TrackGrid` — the one per-track beat-grid carrier every grid consumer reads (warp markers, one-clock section cuts, beatgrid gate, grid overrides). Field-compatible with the old `RekordboxAnalysis` (file_path, title, bpm, key_name, mood, end_beat, phrases (always empty), beat_times_ms, first_downbeat_offset, ext_path). Populated by the owned stem-grid detector and `.asd` tick-fit shells.
 
-Key types: `TrackAnalysis` (dataclass with path, key, camelot, bpm, lufs, first_downbeat_sec, duration_sec, sample_rate, bass_start_sec, bass_end_sec, first_break_start_sec, first_break_end_sec, intro_end_sec, last_kick_sec, rekordbox_phrases, analysis_source, warnings).
-Key functions: `analyse_track()`, `analyse_folder()`, `enrich_from_rekordbox()`, `_detect_downbeat()`, `_detect_bass_section()`, `_detect_first_break_phrase_aware()`.
+### `Source/automated_dj_mixes/analysis.py`
+SHIM over the shared `audio_analysis` package. Reads key/BPM from file tags (mutagen ID3/Vorbis). Transient/downbeat detection (librosa). LUFS measurement (pyloudnorm). Bass section detection (off-beat energy sampling). Phrase-aware break detection. (`enrich_from_rekordbox` was deleted in the Rekordbox removal, 2026-08-20.)
+
+Key types: `TrackAnalysis` (dataclass with path, key, camelot, bpm, lufs, first_downbeat_sec, duration_sec, sample_rate, bass_start_sec, bass_end_sec, first_break_start_sec, first_break_end_sec, intro_end_sec, last_kick_sec, analysis_source, warnings).
+Key functions: `analyse_track()`, `analyse_folder()`, `_detect_downbeat()`, `_detect_bass_section()`, `_detect_first_break_phrase_aware()`.
 
 ### `Source/automated_dj_mixes/sequencer.py`
 Full Camelot wheel mapping (24 keys + common aliases like "Am", "Bbm", "F#"). Compatibility scoring: 4=identical, 3=smooth/relative, 2=power, 1=diagonal, 0=clash. Greedy nearest-neighbour harmonic path with **composite scoring**: `(camelot_norm * 0.6) + (bpm_norm * 0.4)`, both normalized to 0-1. **Energy arc post-pass**: `apply_energy_arc()` divides tracks into build/peak/cooldown thirds, sorts by MIK OverallEnergy (0-10), with BPM-gap guard (rejects reorder if 15+ BPM gap). **20 tests.**
 
 Key functions: `key_to_camelot()`, `compatibility_score()`, `is_compatible()`, `build_harmonic_path()`, `apply_energy_arc()`, `_bpm_proximity()`.
 
-### `Source/automated_dj_mixes/rekordbox_reader.py`
-Reads Rekordbox 7 ANLZ files (`.DAT`, `.EXT`) for beat grids, phrase analysis, and key data. Manual PSSI binary parser (pyrekordbox doesn't expose phrase data; construct.ConstError on RB7 files). Matches tracks by filename against Rekordbox library.
-
-Key types: `PhraseEntry` (start_beat, label, kind, fill, fill_beat), `RekordboxAnalysis` (title, bpm, key, beat_times_ms, first_downbeat_offset, phrases, ext_path, + helpers).
-Key functions: `read_rekordbox_library()`, `find_rekordbox_match()`, `beat_to_sec()`, `phrase_end_beat()`, `first_phrase_of()`.
-
-### `Source/automated_dj_mixes/rekordbox_waveform.py`
-Parses Rekordbox's purpose-built waveform colour data (PWV5 / PWV4) from the same `.EXT` files. Each PWV5 entry is a 16-bit big-endian word with LSB-first packing: 3-bit R + 3-bit G + 3-bit B + 5-bit height. Neutral colour/height fields — frequency-band correlation is the Rekordbox UI convention, not formally validated against spectral separation.
-
-Key types: `WaveformEntry` (color_r/g/b 0-7, height 0-31).
-Key functions: `parse_pwv5()`, `parse_pwv4()`, `parse_waveform()` (PWV5 first, PWV4 fallback), `waveform_per_beat()` (aggregates per-pixel data into beat-aligned arrays).
-
-### `Source/automated_dj_mixes/features.py`
-Per-beat feature extraction with disk cache. Combines librosa (overall RMS + 40-180Hz bass band) with PWV5 waveform data. Cache key includes audio path/mtime/size/ANALYSIS_MODEL_VERSION — avoids re-running librosa on every viz iteration. Stores `BeatFeatures` per beat plus track-local p30/p50/p70 percentile stats per signal.
-
-Key types: `BeatFeatures` (beat_index, sec, rms, bass, wf_height, wf_r/g/b), `FeatureStats` (p30, p50, p70), `TrackFeatures` (whole-track container).
-Key functions: `extract_track_features()` (cached entry point), `smooth_window()` (rolling-mean smoothing).
-Cache dir: `Test Project/May 2026 Mix/Analysis Cache/`.
+### Archived 2026-08-20 — the Rekordbox removal (Sam 2026-08-18: "done away with")
+Moved to `Source/Archive/` (history preserved via `git mv`): `rekordbox_reader.py` (ANLZ `.DAT`/`.EXT` + PSSI parser, library matcher), `rekordbox_waveform.py` (PWV5/PWV4 waveform parser), `features.py` (per-beat RB-waveform feature extraction + disk cache), `report.py` (interval CSV / transition Markdown reports), `test_rb_driver.py` (RB desktop-driver smoke test), `regress_section_detection.py` (golden-sections regression harness for the retired RB-phrase mode; superseded by the property-based kick-cues test per the 2026-08-18 review item #2). The grid-carrier dataclass survives as `grid_carrier.TrackGrid`. Also deleted outright (not archived): `analysis.enrich_from_rekordbox`, `orchestrator.enforce_rekordbox_coverage` + its RB-enrichment loop, `desktop_analyzer`'s entire RB driving/launch/agent-health half, `phrase_viz`'s Interval/refinement layer, `cue_candidates.find_cue_candidates`/`first_drop_candidate`, and `validate_beatgrid`'s RB-library CLI.
 
 ### `Source/automated_dj_mixes/phrase_viz.py`
-Builds factual `Interval` records (one per 8-bar slot) from Rekordbox phrases + per-beat features. No labels or cue flags on `Interval` — those live in cue_candidates.py. `segments_from_intervals()` is the visualization-only collapse into colour-coded clips (intro green / drop yellow / break blue / outro red).
+Section clips for Ableton display. `PhraseSegment` is the colour-coded clip record (intro green / build cyan / break blue / drop yellow / fill orange / outro red / beat_dropout purple); `segments_from_stem_sections()` is the ONLY producer — maps `stem_detector.detect()` sections onto warp-beat coordinates through the beat grid (one-clock rule) and bar-snaps with contiguity/zero-length guards. `validate_bar_math()` flags chops off the 4-bar grid. (The RB interval/refinement layer was deleted 2026-08-20.)
 
-Key types: `IntervalEnergy`, `Interval`, `PhraseSegment`.
-Key functions: `build_intervals()`, `segments_from_intervals()`.
+Key types: `PhraseSegment`. Key functions: `segments_from_stem_sections()`, `validate_bar_math()`; `LABEL_TO_COLOR` map.
 
 ### `Source/automated_dj_mixes/cue_candidates.py`
-Interpretation layer. Reads `Interval` lists and emits ranked `CueCandidate` records with confidence (0-1) + sources list + human-readable reasons. Five cue types: `bass_entry`, `break_start`, `break_end`, `chop_point`, `outro_start`. Pre-chorus candidates penalized 15% but never hidden (Harry Romero fix).
+Cue candidate records + MIK/amplitude/visual-hint candidate synthesis. Emits ranked `CueCandidate` records with confidence (0-1) + sources list + human-readable reasons. Five cue types: `bass_entry`, `break_start`, `break_end`, `chop_point`, `outro_start`. The RB interval-based detector (`find_cue_candidates`, `first_drop_candidate`) was deleted 2026-08-20; `ANALYSIS_MODEL_VERSION` ("cue-candidates-v1") now lives here.
 
-Five candidate sources (selection precedence highest first):
+Candidate sources (selection precedence highest first):
 1. **`hint_to_candidates`** (conf 0.95) — from `Hints/track_hints.json`, the visual-hint workflow. Wins over all other sources via `_is_visual_hint` check in selectors.
-2. **`find_cue_candidates`** (conf 0.55–1.00) — RB+librosa+PWV5 path; +0.25 MIK corroboration when a MIK cue is within the same 8-bar interval.
-3. **`mik_to_candidates`** (conf 0.65–0.85) — synthesises bass_entry/outro_start/chop_point from MIK cues directly (used for tracks without RB phrase data).
-4. **`amplitude_to_candidates`** (conf 0.70–0.85) — librosa amplitude envelope; produces bass_entry/break_start/outro_start when other signals miss.
-5. Position fallback in mik_to_candidates if no signals corroborate.
+2. **`mik_to_candidates`** (conf 0.65–0.85) — synthesises bass_entry/outro_start/chop_point from MIK cues directly.
+3. **`amplitude_to_candidates`** (conf 0.70–0.85) — librosa amplitude envelope; produces bass_entry/break_start/outro_start when other signals miss.
+4. Position fallback in mik_to_candidates if no signals corroborate.
 
 Key types: `CueCandidate` (beat, sec, cue_type, confidence, sources, reasons, interval_index, region, penalty).
-Key functions: `find_cue_candidates()`, `mik_to_candidates()`, `amplitude_to_candidates()`, `hint_to_candidates()`, `load_hints_file()`, `candidates_for()`, `first_credible()` (visual_hint wins), `first_drop_candidate()` (earliest credible bass_entry — dance-music structural prior).
+Key functions: `mik_to_candidates()`, `amplitude_to_candidates()`, `hint_to_candidates()`, `load_hints_file()`, `candidates_for()`, `first_credible()` (visual_hint wins).
 
 ### `Source/automated_dj_mixes/mik_reader.py`
 Reads Mixed In Key 11 data — GEOB ID3 tags (cue points, beat grid, energy, key — base64-encoded JSON) plus SQLite enrichment (`MIKStore.db` for key, BPM, LUFS, key confidence, overall energy, per-segment energy timeline). `enrich_from_mik()` now copies key + BPM from DB back to `MikTrackData` (was missing — WAV files showed "?" for key). MIK's `MainKey` is stored in Camelot format (e.g. "8A"). Resilient: DB read failures don't lose tag-derived cues (Codex P2 fix).
@@ -83,19 +68,13 @@ Constants: `DROP_SEARCH_START_SEC=8` (skip "music starts" jump), `DROP_MIN_RISE=
 Key functions: `compute_envelope()`, `find_first_drop()`, `find_first_break()`, `find_outro_start()`, `find_clean_loop_window()`, `snap_to_mik_or_beat()`.
 
 ### `Source/automated_dj_mixes/waveform_preview.py`
-Blank-canvas PNG render for the visual-hint authoring workflow. ZERO candidate picks — just waveform + RB phrases + MIK cues (numbered) + MIK energy strip + tiered phrase grid. The image to look at BEFORE writing hints to `track_hints.json`.
+Blank-canvas PNG render for the visual-hint authoring workflow. ZERO candidate picks — just waveform + MIK cues (numbered) + MIK energy strip + tiered phrase grid (the RB phrase strip was removed 2026-08-20). The image to look at BEFORE writing hints to `track_hints.json`.
 
 Key types: `PreviewContext`.
 Key functions: `render_preview()`.
 
-### `Source/automated_dj_mixes/report.py`
-Debug reports. Per-track CSV (`Analysis - {track}.csv`) lists every interval's facts + candidate annotations. Per-mix Markdown (`Transition - Mix V{N}.md`) gives a "why this transition" rationale with selected cue, confidence, and reasons.
-
-Key functions: `write_track_csv()`, `write_transition_report()`.
-Output dir: `Test Project/May 2026 Mix/Reports/` and `{output_dir}/Reports/`.
-
 ### `Source/automated_dj_mixes/warping.py`
-Warp marker calculation. Two modes: (1) 2-marker linear from BPM + downbeat (fallback), (2) per-beat grid from Rekordbox — one marker per downbeat using exact ms timestamps (165-252 markers per track, eliminates up to 13-beat drift). Now also the home of the **one-clock converter** that fixes the 2026-06-11 warp/cut regression: `grid_bpm_and_downbeat(beat_times_ms, first_downbeat_offset, db_bpm)` returns the effective constant BPM + true-downbeat anchor seconds; `sec_to_clip_beats(sec, beat_times_ms, first_downbeat_offset)` maps audio time → clip warp-beat coordinate via the same grid the warp markers use, so section cuts land on warped audio by construction. **5+ tests in Tests/test_one_clock.py.**
+Warp marker calculation. Two modes: (1) 2-marker linear from BPM + downbeat (fallback), (2) per-beat grid (`beat_times_ms` from the owned stem grid / tick fits) — one marker per downbeat using exact ms timestamps (165-252 markers per track, eliminates up to 13-beat drift). Now also the home of the **one-clock converter** that fixes the 2026-06-11 warp/cut regression: `grid_bpm_and_downbeat(beat_times_ms, first_downbeat_offset, db_bpm)` returns the effective constant BPM + true-downbeat anchor seconds; `sec_to_clip_beats(sec, beat_times_ms, first_downbeat_offset)` maps audio time → clip warp-beat coordinate via the same grid the warp markers use, so section cuts land on warped audio by construction. **5+ tests in Tests/test_one_clock.py.**
 
 Key types: `WarpMarker` (beat_time, sample_time).
 Key functions: `calculate_warp_markers()`, `calculate_warp_markers_from_beat_grid()`, `choose_warp_mode()`, `choose_dj_mix_warp_mode()` (nominal +/-1 BPM Re-Pitch with 0.05 BPM grid tolerance for the MixPlan proof path).
@@ -130,26 +109,22 @@ Builds a focused Sections proof without recreating target tracks. It empties non
 Loads settings from `Config/settings.json` with sensible defaults (crossfade_bars=48, max_gain_reduction_db=12, default_project_tempo=128, versioning_prefix="V").
 
 ### `Source/automated_dj_mixes/desktop_analyzer.py`
-**Added 2026-05-19, major rewrite 2026-05-21.** Drives Mixed In Key 11 and Rekordbox 7 desktop UIs to analyse tracks without manual clicks via `pywinauto` + Win32 API.
+**Added 2026-05-19, major rewrite 2026-05-21; Rekordbox half deleted 2026-08-20.** Drives the Mixed In Key 11 desktop UI to analyse tracks without manual clicks via `pywinauto` + Win32 API. (The entire RB driving/launch/agent-health machinery — `analyze_folder_with_rekordbox`, `is_rekordbox_analyzed`, `RekordboxAgentError`, launch/kill/agent-reset helpers, menu navigation — was removed; see Source/Archive/ and git history.)
 
 **Architecture — two Windows folder dialog types (auto-detected by `_select_folder_in_browse_dialog`):**
 
-| Dialog type | Used by | Win32 API | Key child control | Strategy |
-|-------------|---------|-----------|-------------------|----------|
-| Old-style `SHBrowseForFolder` | MIK | `#32770` with `SysTreeView32` | TreeView (OK follows tree selection, ignores Edit text) | `_drive_old_style_browse_dialog()` — pywinauto `tree.get_item("\\Desktop\\_Pipeline_Import")` selects node, then `BM_CLICK` on OK |
-| Modern `IFileDialog` (Vista+) | Rekordbox | `#32770` with `ComboBoxEx32`/`ToolbarWindow32` address bar | "Folder:" Edit field + "Select Folder" button | `_drive_modern_folder_dialog()` — set path in Edit via `SendMessage`, `Enter` to navigate in, `WM_COMMAND IDOK` to confirm |
+| Dialog type | Win32 API | Key child control | Strategy |
+|-------------|-----------|-------------------|----------|
+| Old-style `SHBrowseForFolder` (MIK's usual) | `#32770` with `SysTreeView32` | TreeView (OK follows tree selection, ignores Edit text) | `_drive_old_style_browse_dialog()` — pywinauto `tree.get_item("\\Desktop\\_Pipeline_Import")` selects node, then `BM_CLICK` on OK |
+| Modern `IFileDialog` (Vista+) | `#32770` with `ComboBoxEx32`/`ToolbarWindow32` address bar | "Folder:" Edit field + "Select Folder" button | `_drive_modern_folder_dialog()` — set path in Edit via `SendMessage`, `Enter` to navigate in, `WM_COMMAND IDOK` to confirm. **Kept** in the removal: reachable from the MIK path via `_select_folder_in_browse_dialog`'s auto-detect (`analyze_folder_with_mik` → :679) |
 
 **Staging folder pattern**: `Desktop/_Pipeline_Import/` — shallow path both dialog types can reach. Created BEFORE dialog opens (tree populates on open). Cleaned up in `finally` block after analysis completes.
 
 **Focus-stealing bypass**: `_force_focus()` uses Alt-tap trick (`keybd_event(VK_MENU)`) before `SetForegroundWindow`. `AttachThreadInput` as belt-and-suspenders.
 
-**RB launch**: Desktop shortcut `rekordbox 7.lnk` via `cmd /c start` (versioned subfolder changes with updates, direct exe path breaks). Retry logic: kill+relaunch on menu navigation failure.
-
 **MIK DB**: `MIKStore.db` at `%LOCALAPPDATA%\Mixed In Key\Mixed In Key\11.0\MIKStore.db`. `is_mik_analyzed()` checks exact path, then filename fallback (`WHERE File LIKE '%filename.wav'`) for staging paths. Master-file gate (`_MASTER_PATTERN`) refuses non-master files.
 
-Key functions: `analyze_folder_with_mik(folder)`, `analyze_folder_with_rekordbox(folder)`, `is_mik_analyzed(path)`, `is_rekordbox_analyzed(path)`, `_force_focus(window)`, `_select_folder_in_browse_dialog(folder)` (auto-detects dialog type → delegates), `_drive_old_style_browse_dialog()` (MIK TreeView), `_drive_modern_folder_dialog()` (RB IFileDialog), `_create_staging_folder()`, `_copy_mik_tags_to_originals()`.
-
-Prerequisites: Rekordbox Library Protection OFF. Mouse clicks required for RB menu navigation — warn user before running.
+Key functions: `analyze_folder_with_mik(folder)`, `is_mik_analyzed(path)`, `_force_focus(window)`, `_select_folder_in_browse_dialog(folder)` (auto-detects dialog type → delegates), `_drive_old_style_browse_dialog()` (TreeView), `_drive_modern_folder_dialog()` (IFileDialog), `_create_staging_folder()`, `_copy_mik_tags_to_originals()`.
 
 ### `Source/propose_arrangement.py`
 **Added 2026-05-21; N-track MixPlan/playback gate 2026-07-16.** Arrangement orchestrator for the `/arrange-mix` skill. The active align-engine path recomputes final loop-adjusted geometry and rejects transitions outside 16-48 bars before ALS mutation. `--mix-plan PATH --project-bpm N --warp-mode auto` freezes exact grids plus per-track playback policy before the ALS writer runs. Reports preserve raw kick-dropout candidates without selecting them and remap original/repeated landmarks through final loop geometry. Supports `--hints` for `intro_skip_bars` and `loop_source_sec`; produces arranged ALS plus the arrangement report.
@@ -203,12 +178,7 @@ Safe standalone landmark refresh for certified stem JSONs. Hashes section geomet
 
 - `Source/analyze_real_mix.py` — Decompresses a real Sam DJ mix `.als` and lists tracks/clips. Used 2026-05-19 to learn transition patterns from Bargrooves Summer 2015 Mix 1.
 - `Source/inspect_transition.py` — Renders ONE transition as a clip-position timeline image. CLI: `python inspect_transition.py <out_substr> <in_substr> <label>`.
-- `Source/test_mik_driver.py` / `Source/test_rb_driver.py` — Smoke tests for `desktop_analyzer.py`.
-- `Source/automated_dj_mixes/diag_vlad.py` — Prints VLAD's full Rekordbox phrase + fill data
-- `Source/validate_pwv5.py` — Renders PWV5 waveform PNGs side-by-side to compare against Rekordbox UI
-- `Source/test_features.py` — Smoke test for `extract_track_features()` on one track
-- `Source/diagnose_rekordbox.py` — (legacy) Rekordbox phrase map vs pipeline fields side-by-side
-- `Source/analyze_phrase_patterns.py` — (legacy) Structural patterns across all RB-analyzed tracks
+- `Source/test_mik_driver.py` — Smoke test for `desktop_analyzer.py` (MIK). (`test_rb_driver.py` moved to `Source/Archive/` in the Rekordbox removal, 2026-08-20; `diag_vlad.py`, `validate_pwv5.py`, `diagnose_rekordbox.py`, `analyze_phrase_patterns.py`, `test_features.py` were already archived/removed earlier.)
 
 - `Source/transition_review_viz.py` - Renders zoom + full-context evidence for every transition. Since 2026-07-16, waveform sampling maps every arrangement point through the actual clip's source range, so repeated intro/tail loops display their real audio instead of false silence. Includes color-55 `beat_dropout` bands and frozen swap/landmark overlays.
 - `Source/materialize_section_details.py` - Converts stable coarse sections plus every raw Kick V3 gap up to 16 beats into a separate review ALS/JSON with color-55 `beat_dropout` clips. Proves source warp-grid summaries are unchanged before accepting output.
@@ -224,11 +194,10 @@ Safe standalone landmark refresh for certified stem JSONs. Hashes section geomet
 | librosa | Transient/downbeat detection, energy analysis (fallback) |
 | pyloudnorm | LUFS measurement |
 | mutagen | Reading ID3/Vorbis tags |
-| pyrekordbox | Reading Rekordbox ANLZ files (beat grids, key data) — PSSI/PWV5 parsed manually |
-| matplotlib | PWV5 visual validation renders |
-| numpy | Percentile stats + smoothing in `features.py` |
+| matplotlib | Visualisation renders (previews, DETECT images) |
+| numpy | Percentile stats + smoothing |
 | ffmpeg-python | Audio format handling |
-| pywinauto | Desktop UI automation (MIK + RB) via Windows messages |
+| pywinauto | Desktop UI automation (MIK) via Windows messages |
 | pyautogui | Mouse/keyboard fallback for non-message-responsive controls |
 | pyperclip | Clipboard support for `desktop_analyzer.py` path pasting |
 
