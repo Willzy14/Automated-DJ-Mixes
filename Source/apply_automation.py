@@ -399,6 +399,12 @@ def _inside_overlap(t: float, ov_start: float, ov_end: float) -> bool:
 #: One bar - the error Sam spotted by eye was consistently 1-4 beats.
 SECTION_SNAP_BEATS = 4.0
 
+#: Report alignment_policy values that mean align_engine itself chose the
+#: swap (it already sits on a real cue). Snapping those to a nearby section
+#: edge silently overrides the approved handoff -- only legacy/fallback
+#: swaps still get the snap.
+ALIGNER_POLICIES = ("paired_landmarks_v2", "tail_anchor_rescue_v1")
+
 
 def snap_to_section_boundary(beat: float, *tracks,
                              tol: float = SECTION_SNAP_BEATS) -> float:
@@ -535,12 +541,11 @@ def _find_incoming_build_drop(track: TrackInfo,
     return None
 
 
-def _load_arrangement_report(als_path: Path,
-                             explicit_path: Path | None = None) -> dict:
-    """{(out_track, in_track): {swap_beats, handoff_kind}} from the ALS's arrangement
-    report (align_engine's explicit swap points). Prefers <als-stem>_ARRANGEMENT_
-    REPORT.json, else the newest beside the .als. Empty if none (back-compat for
-    hand-made mixes -> falls back to find_bass_swap)."""
+def _resolve_report_path(als_path: Path,
+                         explicit_path: Path | None = None) -> Path | None:
+    """The arrangement report apply_automation reads and writes back to.
+    Prefers <als-stem>_ARRANGEMENT_REPORT.json, else the newest beside the
+    .als; an explicit path is required to exist."""
     cand = explicit_path or als_path.parent / (
         als_path.stem + "_ARRANGEMENT_REPORT.json"
     )
@@ -550,6 +555,16 @@ def _load_arrangement_report(als_path: Path,
         reps = sorted(als_path.parent.glob("*ARRANGEMENT_REPORT.json"),
                       key=lambda p: p.stat().st_mtime, reverse=True)
         cand = reps[0] if reps else None
+    return cand
+
+
+def _load_arrangement_report(als_path: Path,
+                             explicit_path: Path | None = None) -> dict:
+    """{(out_track, in_track): {swap_beats, handoff_kind}} from the ALS's arrangement
+    report (align_engine's explicit swap points). Prefers <als-stem>_ARRANGEMENT_
+    REPORT.json, else the newest beside the .als. Empty if none (back-compat for
+    hand-made mixes -> falls back to find_bass_swap)."""
+    cand = _resolve_report_path(als_path, explicit_path)
     if not cand or not cand.exists():
         return {}
     try:
@@ -564,6 +579,7 @@ def _load_arrangement_report(als_path: Path,
             out[(_normalise(tr["out_track"]), _normalise(tr["in_track"]))] = {
                 "swap_beats": tr["swap_beats"],
                 "handoff_kind": tr.get("handoff_kind", "align"),
+                "alignment_policy": tr.get("alignment_policy", "legacy_v1"),
             }
     if out:
         print(f"  Loaded {len(out)} align_engine swap point(s) from {cand.name}")
@@ -584,6 +600,7 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             continue
 
         rep = report_swaps.get((_normalise(out_t.name), _normalise(in_t.name)))
+        aligner_chosen = False
         if rep is not None:
             # align_engine already chose the swap — use it (don't re-derive).
             # Preserve a valid swap near the overlap start: it may intentionally
@@ -596,17 +613,20 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
                 print(f"  align_engine swap {swap:.0f} outside safe overlap "
                       f"[{ov_start:.0f},{ov_end - margin:.0f}] -> clamped {clamped:.0f}")
             swap, reason = clamped, f"align_engine {rep.get('handoff_kind', 'swap')}"
+            aligner_chosen = rep.get("alignment_policy") in ALIGNER_POLICIES
         else:
             swap, reason = find_bass_swap(out_t, in_t, ov_start, ov_end)
 
         # Land the swap exactly on a section boundary of either track (Sam's
-        # "you're like a bar out" - see snap_to_section_boundary). The clamp
-        # above can leave it a few beats short of the boundary align_engine
-        # actually chose, and the margin arithmetic never re-checks structure.
-        snapped = snap_to_section_boundary(swap, out_t, in_t)
-        if snapped != swap and _inside_overlap(snapped, ov_start, ov_end):
-            print(f"  swap {swap:.0f} -> {snapped:.0f} (snapped onto section boundary)")
-            swap = snapped
+        # "you're like a bar out" - see snap_to_section_boundary) — but ONLY
+        # for legacy/fallback swaps. An aligner-chosen handoff already sits on
+        # a real cue; nudging it to an unrelated section edge would silently
+        # override the approved handoff (Codex review 2026-08-20).
+        if not aligner_chosen:
+            snapped = snap_to_section_boundary(swap, out_t, in_t)
+            if snapped != swap and _inside_overlap(snapped, ov_start, ov_end):
+                print(f"  swap {swap:.0f} -> {snapped:.0f} (snapped onto section boundary)")
+                swap = snapped
         plan = TransitionPlan(out_t, in_t, ov_start, ov_end, swap, reason)
 
         # ── Rule 2: two-stage bass ───────────────────────────────────
@@ -653,6 +673,42 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
         plans.append(plan)
 
     return plans
+
+
+def write_final_swaps_to_report(report_path: Path | None,
+                                plans: list) -> int:
+    """The paperwork must never lie: write the beat each transition's
+    automation ACTUALLY uses back into the arrangement report, so
+    downstream reconciliation (validate_mix_plan_als.reconcile) sees the
+    truth even when a swap was clamped or snapped. Returns the number of
+    transitions whose swap_beats changed; the pre-automation value is kept
+    as swap_beats_pre_automation for audit."""
+    if report_path is None or not Path(report_path).is_file():
+        return 0
+    path = Path(report_path)
+    try:
+        rep = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    final_by_key = {
+        (_normalise(p.outgoing.name), _normalise(p.incoming.name)): p.bass_swap
+        for p in plans
+    }
+    changed = 0
+    for tr in rep.get("transitions", []):
+        key = (_normalise(tr.get("out_track", "")),
+               _normalise(tr.get("in_track", "")))
+        if key not in final_by_key or tr.get("swap_beats") is None:
+            continue
+        final = round(float(final_by_key[key]), 2)
+        if float(tr["swap_beats"]) != final:
+            tr["swap_beats_pre_automation"] = tr["swap_beats"]
+            tr["swap_beats"] = final
+            changed += 1
+    if changed:
+        path.write_text(json.dumps(rep, indent=2), encoding="utf-8")
+        print(f"  Wrote {changed} final swap beat(s) back to {path.name}")
+    return changed
 
 
 # ── Per-track automation points ───────────────────────────────────────────────
@@ -984,6 +1040,7 @@ def main() -> None:
         sys.exit(1)
 
     # ── plan transitions ──────────────────────────────────────────────
+    report_path = _resolve_report_path(als_path, arrangement_report_path)
     plans = plan_transitions(
         tracks,
         _load_arrangement_report(als_path, arrangement_report_path),
@@ -1002,6 +1059,10 @@ def main() -> None:
         print(f"  T{i + 1}: {_short(p.outgoing.name):18s} -> {_short(p.incoming.name):18s}"
               f"  overlap {p.overlap_start:.0f}-{p.overlap_end:.0f} ({bars:.0f} bars)"
               f"  swap@{p.bass_swap:.0f} ({p.reason}){rules_str}")
+
+    # The report must describe what the automation actually does (never a swap
+    # the automation stage silently moved) — reconcile reads it afterwards.
+    write_final_swaps_to_report(report_path, plans)
 
     # ── generate automation ───────────────────────────────────────────
     track_auto = build_track_automation(plans, tracks)
