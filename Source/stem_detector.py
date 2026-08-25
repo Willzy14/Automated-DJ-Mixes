@@ -97,6 +97,35 @@ MIN_ENERGY_RUN_BARS = 12  # sustained low-mix_energy stretches shorter than this
                           # the floor that cleanly separated the 16-bar break on Double Dutch
                           # from the 1- and 8-bar mid-drop lulls; 4 bars was too aggressive
                           # and re-cut those lulls as false breaks.
+WIDTH_STEP_DB = 3.0        # sustained side/mid drop of at least this many dB
+                           # (20*log10(post/pre)); Revoloution's confirmed case is
+                           # -4.0 dB (bars 145-149), phrase-amplitude wobble sits
+                           # well under 3, so this is the band where the energy
+                           # detector is provably blind (RMS stays dead flat).
+WIDTH_STEP_WINDOW_BARS = 8 # medians are taken this many bars each side of the
+                           # candidate. 8/8 straddle a 4-5 bar ramp so the pre/post
+                           # windows hit flat-0.170 / flat-0.107 simultaneously at
+                           # the ramp midpoint.
+WIDTH_STEP_MIN_PRE = 0.05  # pre-step median width floor - below this the track
+                           # is essentially mono there and the post/pre ratio is
+                           # numerical noise, not a musical width event.
+WIDTH_STEP_GRID_TOL = 1    # a step only counts if its detected bar lands within
+                           # this many bars of a PHRASE_GRID line. Off-grid drift
+                           # is not a musical boundary - same discipline every
+                           # other cue gets.
+WIDTH_STEP_RMS_FLAT_DB = 1.5   # the step only counts if the mix level
+                               # medians move LESS than this across it -
+                               # beyond that the event is energy-visible
+                               # and already belongs to the kick/energy
+                               # cues; this signal exists for the class
+                               # every energy detector is blind to
+                               # (Revoloution: width -3.4 dB, rms +0.05)
+WIDTH_STEP_MIN_RUN_BARS = 4    # a real 4-5 bar ramp produces a run of
+                               # consecutive qualifying bars as the two
+                               # medians slide across it; 1-2 bar blips
+                               # are imaging wobble, not a boundary
+                               # (corpus: the target runs are 4-9 bars,
+                               # the discarded blips 1-2)
 OUTRO_LEAD_FRAC = 0.60    # outro starts where the LEAD (vocals+other) drops below this fraction
                           # of its body level near the end (kick+bass can keep running)
 MIN_OUTRO_BARS = 8        # don't push the outro start so late it leaves less than this
@@ -313,6 +342,160 @@ def _energy_cues(mix_norm, downbeat, sec_per_bar):
     return cues
 
 
+def _width_step_cues(width_bar, mix_norm, downbeat, sec_per_bar):
+    """Sustained, DOWN-side/mid-ratio collapses = boundary candidates the energy
+    cues miss (Nic Fanciulli - Revoloution bars 145-149: side/mid falls 0.170 to
+    0.107 / -4.0 dB while RMS stays dead flat, so every energy detector is
+    blind). width_bar is the per-bar tiera_width (already _per_bar-averaged -
+    that IS the "smoothed like RMS" treatment mix_norm gets). DOWN-only:
+    width GAIN almost always rides an energy/kick event the existing cues
+    already cut, so we don't double-fire. Step magnitude uses 20*log10 of the
+    post/pre median ratio.
+
+    Two corpus-measured gates beyond the step magnitude (the courier's sweep
+    firing ~50 cues uncovered them):
+
+      rms_delta_db (WIDTH_STEP_RMS_FLAT_DB): the step only counts if the
+      mix-level medians move LESS than this across it. The mix_norm arg is
+      the per-bar normalised mix envelope (the same _energy_cues uses);
+      here it is equivalent to absolute mix dB because the normalisation
+      constant cancels in the median difference -- dB(median(post)/median(pre))
+      is identical to dB(absolute_mix_post / absolute_mix_pre). A step that
+      moves the RMS noticeably is energy-visible and already belongs to the
+      kick/energy cues; this detector exists for the class every energy
+      detector is blind to (Revoloution: width -3.4 dB, rms +0.05 dB).
+
+      WIDTH_STEP_MIN_RUN_BARS: a real 4-5 bar ramp produces a RUN of
+      consecutive qualifying bars as the pre/post medians slide across it.
+      1-2 bar blips are imaging wobble, not a boundary. Corpus: target runs
+      4-9 bars, discarded blips 1-2.
+
+    Each qualifying run collapses to ONE candidate: the bar inside the run
+    whose |step_db| is largest, with rightmost tie-break so the snap target
+    sits on the descending side of the ramp (for a symmetric ramp centered
+    at an on-grid bar, the rightmost max snaps exactly to the grid line; for
+    an off-grid-center ramp it does not, and the grid discipline drops the
+    candidate). After snap-to-grid, the SNAPPED bar is what survives into
+    raw_bounds / merge protection (so a width cut whose best detected bar
+    was off-grid by one - a Vente case at 153 -> snapped 152 - has the
+    section boundary and the merge protection land at the same bar, and
+    the cue survives). step_db / pre_width / post_width stay measured at
+    the detected (unsnapped) bar for the sweep report; "detected_bar"
+    exposes that bar explicitly.
+
+    Emits cue dicts shaped like _energy_cues's so they drop straight into
+    raw_bounds (which reads "bar"); the extra keys (step_db / pre_width /
+    post_width / rms_delta_db / detected_bar) are for the corpus sweep report.
+    """
+    width_bar = np.asarray(width_bar, dtype=float)
+    mix_norm = np.asarray(mix_norm, dtype=float)
+    n = len(width_bar)
+    cues = []
+    W = WIDTH_STEP_WINDOW_BARS
+    if n < 2 * W + 1:
+        return cues
+
+    # Per-bar (step_db, rms_delta_db, pre, post). None when pre < MIN_PRE
+    # (mono floor: a near-mono track has no meaningful side/mid ratio so the
+    # cue is suppressed, not relabelled as "down"). rms_delta_db is
+    # post_median_db - pre_median_db on mix_norm -- the normalisation
+    # constant cancels in the difference so this is equivalent to
+    # dB(absolute_mix_post / absolute_mix_pre).
+    per_bar = []
+    for b in range(W, n - W):
+        pre_w = float(np.median(width_bar[b - W:b]))
+        if pre_w < WIDTH_STEP_MIN_PRE:
+            per_bar.append(None)
+            continue
+        post_w = float(np.median(width_bar[b:b + W]))
+        step_db = 20.0 * np.log10((post_w + 1e-12) / (pre_w + 1e-12))
+        pre_rms_db = float(np.median(20.0 * np.log10(np.maximum(mix_norm[b - W:b], 1e-12))))
+        post_rms_db = float(np.median(20.0 * np.log10(np.maximum(mix_norm[b:b + W], 1e-12))))
+        rms_delta_db = post_rms_db - pre_rms_db
+        per_bar.append({
+            "step_db": step_db,
+            "rms_delta_db": rms_delta_db,
+            "pre": pre_w,
+            "post": post_w,
+        })
+
+    # Group consecutive qualifying bars into runs. A bar qualifies when
+    # step_db <= -WIDTH_STEP_DB AND |rms_delta_db| <= WIDTH_STEP_RMS_FLAT_DB
+    # (the two gates together). A None or non-qualifying bar breaks a run:
+    # the floor's "skip" is also a "stop", consistent with the energy cue
+    # convention.
+    runs = _width_step_qualifying_runs(per_bar)
+
+    for start, end in runs:
+        # Run-length gate: imaging wobble produces 1-2 bar blips, real
+        # 4-5 bar ramps produce runs of consecutive qualifying bars as the
+        # two medians slide across the ramp. Discard the blips outright.
+        if end - start < WIDTH_STEP_MIN_RUN_BARS:
+            continue
+
+        # Rightmost bar with the largest |step_db|. The brief's "ramp
+        # midpoint" intuition holds for symmetric ramps whose midpoint is
+        # on-grid; for off-grid midpoints the rightmost max does not snap
+        # and the grid discipline drops the candidate (no cue).
+        best_local = start
+        best_abs = abs(per_bar[start]["step_db"])
+        for k in range(start + 1, end):
+            ak = abs(per_bar[k]["step_db"])
+            if ak >= best_abs:
+                best_abs = ak
+                best_local = k
+        detected_bar = W + best_local
+        snapped = int(round(detected_bar / PHRASE_GRID)) * PHRASE_GRID
+        if abs(snapped - detected_bar) > WIDTH_STEP_GRID_TOL:
+            continue
+        d = per_bar[best_local]
+        cues.append({
+            "type": "width_step",
+            "start_sec": round(downbeat + snapped * sec_per_bar, 2),
+            "bar": float(snapped),
+            "detected_bar": float(detected_bar),
+            "step_db": round(d["step_db"], 2),
+            "pre_width": round(d["pre"], 4),
+            "post_width": round(d["post"], 4),
+            "rms_delta_db": round(d["rms_delta_db"], 2),
+        })
+    return cues
+
+
+def _width_step_qualifying_runs(per_bar):
+    """Group consecutive qualifying bars into runs on a hand-built per_bar list.
+
+    Extracted from _width_step_cues for direct unit testing of the run-length
+    gate (the WIDTH_STEP_MIN_RUN_BARS discard). Real raw inputs don't easily
+    produce a 2-bar qualifying run -- the W=8 medians in the upstream path
+    tend to swallow short blips -- so the test feeds an explicit per_bar
+    list here. The run-length filter itself stays in the caller
+    (_width_step_cues's for-loop over the returned (start, end) tuples
+    skips anything whose length is < WIDTH_STEP_MIN_RUN_BARS), so the two
+    gates stay independently inspectable in the sweep report.
+
+    A None entry or a bar that fails either step_db <= -WIDTH_STEP_DB or
+    |rms_delta_db| <= WIDTH_STEP_RMS_FLAT_DB breaks the current run: same
+    discipline as the energy cue convention.
+    """
+    runs = []
+    i = 0
+    while i < len(per_bar):
+        if (per_bar[i] is not None
+                and per_bar[i]["step_db"] <= -WIDTH_STEP_DB
+                and abs(per_bar[i]["rms_delta_db"]) <= WIDTH_STEP_RMS_FLAT_DB):
+            j = i
+            while (j < len(per_bar) and per_bar[j] is not None
+                   and per_bar[j]["step_db"] <= -WIDTH_STEP_DB
+                   and abs(per_bar[j]["rms_delta_db"]) <= WIDTH_STEP_RMS_FLAT_DB):
+                j += 1
+            runs.append((i, j))
+            i = j
+        else:
+            i += 1
+    return runs
+
+
 def _kick_cues(kick_on, bpm, downbeat):
     """Kick transitions = cue points, but only for kick-OUT runs of at least
     MIN_KICK_OUT_BEATS (a real drop, not syncopation). Each run yields a
@@ -526,9 +709,18 @@ def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start,
                     s["label"] = "build"
 
 
-def _merge_same_label(sections):
+def _merge_same_label(sections, protected_bars=frozenset()):
     """Merge consecutive same-label sections into one block (internal stem/kick
-    changes survive as cue points, not as extra section splits)."""
+    changes survive as cue points, not as extra section splits).
+
+    protected_bars (default empty frozenset): a section boundary whose start_bar
+    is in this set is never merged into its predecessor (both the same-label
+    branch and the kickout branch respect it). Wired by the width_step_cues
+    detector so a stereo-width cut inside an otherwise-mergeable run of
+    same-label sections survives as a real boundary -- Revoloution bars
+    128-164 classify as drop on both sides of the bar ~148 step and would
+    otherwise fold into one drop, erasing the cue inside.
+    """
     if not sections:
         return sections
     kickout = {"break", "fill"}
@@ -549,9 +741,12 @@ def _merge_same_label(sections):
         # sections (break+fill are one contiguous kick-out region). A drop broken
         # by a real kick-out keeps that kick-out as a separate fill/break marker
         # between the two drops; only truly adjacent same-label blocks fold together.
+        # Protected boundaries (the width-step cue set) skip the merge: a width
+        # cut inside an otherwise-mergeable run must survive.
         mergeable = (
-            s["label"] == prev["label"]
-            or (s["label"] in kickout and prev["label"] in kickout)
+            (s["label"] == prev["label"]
+             or (s["label"] in kickout and prev["label"] in kickout))
+            and int(s["start_bar"]) not in protected_bars
         )
         if mergeable:
             prev["end_bar"] = s["end_bar"]
@@ -571,7 +766,7 @@ def _merge_same_label(sections):
 
 def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True,
            kick_model=False, kick_model_path=None, kick_model_device="auto",
-           kick_provider=None, soft_intro_outro=False, tier_a=False):
+           kick_provider=None, soft_intro_outro=False, tier_a=False, width_cues=False):
     """Detect sections + mix signals for one track.
 
     bpm/downbeat may be passed in (pipeline use — they come from Rekordbox/analysis);
@@ -588,6 +783,30 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     OFF MUST leave the JSON shape byte-identical to main @ 4103ccf — the tier_a
     key is OMITTED entirely (not emitted as null) and the existing signals are
     untouched. No section boundary / label decision changes either way.
+
+    width_cues (default False): Phase 2 boundary candidate. When True, compute
+    stereo-width steps via _width_step_cues and feed them into raw_bounds (the
+    same way _energy_cues does); their snapped bars are also passed to
+    _merge_same_label as protected_bars so a width cut inside an otherwise-
+    mergeable run of same-label sections (Revoloution's bar ~148 step inside
+    drop_4) survives as a real boundary. Default OFF leaves raw_bounds and the
+    merge byte-identical to main @ 55182d4 - wcues is initialised to [] before
+    the flag branch so the kick_cues + energy_cues + wcues expression is
+    unchanged in effect. No new JSON keys are added in either state.
+
+    Rev 2 (Tier A Phase 2 corpus sweep): _width_step_cues also takes
+    mix_norm (the per-bar normalised mix envelope the _energy_cues path
+    uses; equivalent to absolute mix dB because the normalisation constant
+    cancels in the median difference). It applies two corpus-measured
+    gates beyond the step magnitude: |rms_delta_db| <= WIDTH_STEP_RMS_FLAT_DB
+    (the event is energy-visible past this and belongs to the energy path;
+    the detector exists for the class every energy detector is blind to -
+    Revoloution: width -3.4 dB, rms +0.05) and
+    end - start >= WIDTH_STEP_MIN_RUN_BARS (1-2 bar blips are imaging
+    wobble, not a boundary). The helper also emits the SNAPPED bar as
+    "bar" (Rev 2 bug fix - Vente case detected 153 -> snapped 152 had the
+    boundary at 152 and the protection at 153 and the cue folded away)
+    with "detected_bar" exposing the unsnapped bar for the sweep report.
     """
     stats = None
     if bpm is None or downbeat is None:
@@ -701,9 +920,29 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
 
     # Boundaries: a kick drop-out + return marks a new 16-beat section (Sam's
     # rule), plus bass on/off (bass-to-bass), sustained low-mix-energy runs
-    # (_energy_cues, per-bar), and the outro lead-drop. Snapped to grid.
+    # (_energy_cues, per-bar), the outro lead-drop, and (flag-gated) sustained
+    # stereo-width collapses (_width_step_cues, per-bar). Snapped to grid.
     energy_cues = _energy_cues(mix_norm, downbeat, sec_per_bar)
-    raw_bounds = [int(round(c["bar"])) for c in kick_cues + energy_cues]
+    # wcues initialised to [] so flag OFF leaves the expression below
+    # byte-identical (kick_cues + energy_cues + [] == kick_cues + energy_cues).
+    wcues = []
+    if width_cues:
+        # ensure_tier_a_arrays is cache-only on an augmented corpus (no-op once
+        # the tiera_* arrays are in the npz); on an unaugmented one it
+        # computes-and-caches, which is why this is gated behind width_cues
+        # rather than always-on.
+        tiera = ensure_tier_a_arrays(wav, project / "_Stem Analysis")
+        width_bar = _per_bar(tiera[_TIERA_WIDTH_KEY], hop_t, downbeat,
+                             sec_per_bar, n_bars)
+        wcues = _width_step_cues(width_bar, mix_norm, downbeat, sec_per_bar)
+    # wcues emit "bar" as the SNAPPED bar (the merge protection needs it on
+    # the same line raw_bounds writes down, so a width cut at detected 153
+    # snapped to 152 lands the section boundary and the merge guard at the
+    # same bar). Other cue types ("bar"/"beat"/raw int) keep int(round(...))
+    # for back-compat - _width_step_cues is the only emitter of a float bar.
+    raw_bounds = [int(round(c["bar"])) for c in kick_cues + energy_cues] + [
+        int(c["bar"]) for c in wcues
+    ]
     for b in range(1, n_bars):
         if presence["bass"][b] != presence["bass"][b - 1]:
             raw_bounds.append(b)
@@ -730,7 +969,18 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     # Strip internal R2/R4 marker before downstream sees the section dicts.
     for s in sections:
         s.pop("_r2_r4_touched", None)
-    sections = _merge_same_label(sections)
+    # Protected boundaries: the grid-snapped width-cue bars (the helper emits
+    # "bar" as the SNAPPED bar, so int(c["bar"]) lines up with the bar
+    # _snap_merge wrote into bounds - the section boundary and the merge
+    # guard land at the same bar). Flag OFF -> empty set, default branch ->
+    # byte-identical merge behaviour. Flag ON -> a width cut inside an
+    # otherwise-mergeable same-label run survives (Revoloution bars 128-164:
+    # drop on both sides of bar ~148, would otherwise fold into one drop and
+    # erase the cue inside).
+    width_protected = frozenset(
+        int(c["bar"]) for c in wcues
+    ) if width_cues else frozenset()
+    sections = _merge_same_label(sections, protected_bars=width_protected)
 
     # A tiny drop fragment (<= one phrase) right before the outro is the last
     # fill's block, not a real drop — fold it into the preceding drop so it reads

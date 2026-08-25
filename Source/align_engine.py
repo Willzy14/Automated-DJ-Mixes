@@ -55,6 +55,18 @@ LOOP_MAX_INSERT_LEVEL_DROP_DB = 4.5
 LOOP_MIN_SELF_SIMILARITY = 0.65
 LOOP_QUALITY_OVERRIDE_FILENAME = "loop_quality_overrides.json"
 
+# Tier A Phase 2 opt-in: expand the loop-self-similarity feature set with the
+# three band envelopes and the two stereo descriptors the Tier A cache already
+# computes. Flag defaults OFF so the 6b40ccf "pin to base stems" invariant
+# survives unchanged; a test sweep monkey-patches LOOP_SELF_SIMILARITY_TIERA=True
+# to score under the augmented feature set. With the flag ON, ANY missing or
+# zero-length tiera key (the mono-input wart produces zero-length tiera arrays)
+# returns the score as UNMEASURED rather than silently falling back to the
+# 5-key base set -- the accidental coupling 6b40ccf removed.
+LOOP_SELF_SIMILARITY_TIERA = False
+LOOP_TIERA_ENERGY_KEYS = ("tiera_band_low", "tiera_band_mid", "tiera_band_high")
+LOOP_TIERA_SCALAR_KEYS = ("tiera_width", "tiera_lr_corr")
+
 LOOP_QUALITY_CHECKS = frozenset({
     "period",
     "silence_fraction",
@@ -336,8 +348,17 @@ def _quality_frame_slice(context: LoopQualityContext, beat_start: float,
 
 
 def _loop_self_similarity(context: LoopQualityContext, beat_start: float,
-                          beat_end: float) -> float:
-    """Mean pairwise beat cosine in whole-track z-score context."""
+                          beat_end: float, use_tiera: bool = False) -> float | None:
+    """Mean pairwise beat cosine in whole-track z-score context.
+
+    use_tiera=False (the default and 6b40ccf-pinned behaviour): the 5-key base
+    set only. use_tiera=True: append the 3 band envelopes as dB-meaned energy
+    columns and the 2 stereo descriptors as plain-meaned scalar columns
+    (declared fixed sets -- no opportunistic picking). With the flag on, ANY
+    missing or zero-length tiera key returns None ("unmeasured" -- cannot fail
+    a check that could not be measured) rather than silently falling back to
+    the base set.
+    """
     import numpy as np
 
     # FIXED feature set -- deliberately excludes the tiera_* keys. Picking features
@@ -353,8 +374,20 @@ def _loop_self_similarity(context: LoopQualityContext, beat_start: float,
         key for key in ("drums", "bass", "other", "vocals", "mix")
         if key in context.envelopes
     ]
-    keys = energy_keys
-    if not keys:
+    scalar_keys: list[str] = []
+    if use_tiera:
+        # Unmeasured-term rule: with the flag ON, every tiera key the declared
+        # set expects MUST be present and non-empty (the mono-input wart produces
+        # zero-length tiera arrays). One absent key collapses the term to
+        # UNMEASURED -- we never silently compute the 5-key base score under
+        # the flag.
+        for key in LOOP_TIERA_ENERGY_KEYS + LOOP_TIERA_SCALAR_KEYS:
+            if key not in context.envelopes or len(context.envelopes[key]) == 0:
+                return None
+        energy_keys = energy_keys + list(LOOP_TIERA_ENERGY_KEYS)
+        scalar_keys = list(LOOP_TIERA_SCALAR_KEYS)
+    keys = energy_keys + scalar_keys
+    if not energy_keys:
         raise ValueError("cached stem envelope has no similarity feature arrays")
     length = min(len(context.envelopes[key]) for key in keys)
     track_end_beat = int(math.floor(
@@ -363,7 +396,17 @@ def _loop_self_similarity(context: LoopQualityContext, beat_start: float,
     if track_end_beat <= 1:
         raise ValueError("cached stem envelope is too short for beat similarity")
 
-    z = context.beat_features
+    # Cache the z-matrix keyed by the exact feature-set tuple it was computed
+    # on, so flag flips in the same process cannot reuse a matrix of the
+    # wrong dimensionality (5 vs 10 columns -> silent wrong scores against
+    # LOOP_MIN_SELF_SIMILARITY). Lazily create the dict on first use; any
+    # legacy single-ndarray value is replaced.
+    cache = context.beat_features
+    if not isinstance(cache, dict):
+        cache = {}
+        context.beat_features = cache
+    cache_key = tuple(keys)
+    z = cache.get(cache_key)
     if z is None:
         features = []
         for beat in range(track_end_beat):
@@ -377,12 +420,15 @@ def _loop_self_similarity(context: LoopQualityContext, beat_start: float,
                     row.append(float(np.mean(
                         20.0 * np.log10(np.maximum(values, 1e-12))
                     )))
+            for key in scalar_keys:
+                values = context.envelopes[key][:length][mask]
+                row.append(float(np.mean(values)) if values.size else 0.0)
             features.append(row)
 
         matrix = np.asarray(features, dtype=float)
         std = matrix.std(axis=0)
         z = (matrix - matrix.mean(axis=0)) / np.where(std > 1e-8, std, 1.0)
-        context.beat_features = z
+        cache[cache_key] = z
     first = max(0, int(math.floor(beat_start)))
     last = min(len(z), int(math.ceil(beat_end)))
     window = z[first:last]
@@ -453,7 +499,8 @@ def evaluate_loop_quality(
     insert_level = _rms_db(mix[insert_mask])
     insert_drop = float(insert_level - window_level)
     self_similarity = _loop_self_similarity(
-        context, source_beat_start, source_beat_end
+        context, source_beat_start, source_beat_end,
+        use_tiera=LOOP_SELF_SIMILARITY_TIERA,
     )
 
     failed = []
@@ -467,7 +514,12 @@ def evaluate_loop_quality(
         failed.append("worst_beat_dip")
     if insert_drop > LOOP_MAX_INSERT_LEVEL_DROP_DB:
         failed.append("insert_level_match")
-    if self_similarity < LOOP_MIN_SELF_SIMILARITY:
+    # self_similarity can be None when the tiera feature set is on but
+    # unmeasurable (a tiera key absent / zero-length, the mono wart). Skipping
+    # the comparison in that case matches the LOOP_MIN_SELF_SIMILARITY
+    # contract: "you cannot fail a check you could not measure". Every other
+    # check above keeps running and can still fail.
+    if self_similarity is not None and self_similarity < LOOP_MIN_SELF_SIMILARITY:
         failed.append("self_similarity")
     failed = [check for check in failed if check not in waived]
     return LoopQualityResult(
