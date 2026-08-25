@@ -2,10 +2,10 @@
  "corpus": "Test Project/14.08.26",
  "n_pairs": 380,
  "n_tracks": 20,
- "ok": 264,
- "raised": 116,
- "rescue_ok": 65,
- "rescue_raised": 51,
+ "ok": 267,
+ "raised": 113,
+ "rescue_ok": 64,
+ "rescue_raised": 49,
  "rescue_rows": [
   {
    "error": "ValueError",
@@ -828,20 +828,6 @@
   },
   {
    "error": "ValueError",
-   "in": "Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED' -> 'Nic Fanciulli - Revoloution (Extended Mix) 24 Bi",
-   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "status": "raise"
-  },
-  {
-   "error": "ValueError",
-   "in": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "msg": "No paired section/dropout alignment for 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED' -> 'Soulsearcher \u2013 Feelin Love (Ruze & Chesster Exte",
-   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "status": "raise"
-  },
-  {
-   "error": "ValueError",
    "in": "Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER",
    "msg": "No paired section/dropout alignment for 'Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED' -> 'Andrea Oliva feat. Morchebba - Dancin",
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
@@ -1104,44 +1090,6 @@
    "msg": "No paired section/dropout alignment for 'Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED' -> 'Andrea Oliva feat. Morchebba - Dancing (Or",
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
    "status": "raise"
-  },
-  {
-   "alignment_policy": "tail_anchor_rescue_v1",
-   "anchor_bar_in": 8.0,
-   "arr_offset_bars": 241.0,
-   "handoff_bar_out": 249.0,
-   "handoff_kind": "rescue/grid_tail->drop",
-   "in": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
-   "n_paired_cues": 0,
-   "notes": [
-    "tail-anchor rescue (Sam: run-back 16 from end, first drop in): outgoing anchor is a grid-derived position (n_bars - 16), incoming anchor is a detected cue (first_drop_bar); 0 REAL paired cue(s) coincided with the swap point (the rescue fires regardless, since 0 pair(s) were not detected)."
-   ],
-   "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 24.0,
-   "overlap_policy": "named_landmark_64",
-   "paired_cue_bars": [],
-   "paired_cues": [],
-   "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx7+0b to section:break_1 293",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 224.0,
-      "source_start_bar": 220.0,
-      "target_marker_bar": 293.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
-    "status": "ok"
-   },
-   "score": 0,
-   "status": "ok",
-   "swap_progress": 0.333333
   },
   {
    "error": "ValueError",
@@ -1938,14 +1886,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx8+0b to landmark:kick_gap_156_160:end 201",
+      "note": "loop outro 2bx8+0b to landmark:kick_gap_158_160:end 201",
       "partial_bars": 0.0,
       "reps": 8,
       "skip_bars": 0.0,
       "source_end_bar": 184.0,
       "source_start_bar": 182.0,
       "target_marker_bar": 201.0,
-      "target_marker_name": "landmark:kick_gap_156_160:end"
+      "target_marker_name": "landmark:kick_gap_158_160:end"
      }
     ],
     "status": "ok"
@@ -2053,14 +2001,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx8+0b to landmark:kick_gap_152_159:end 201",
+      "note": "loop outro 2bx8+0b to landmark:kick_gap_152_160:end 201",
       "partial_bars": 0.0,
       "reps": 8,
       "skip_bars": 0.0,
       "source_end_bar": 184.0,
       "source_start_bar": 182.0,
       "target_marker_bar": 201.0,
-      "target_marker_name": "landmark:kick_gap_152_159:end"
+      "target_marker_name": "landmark:kick_gap_152_160:end"
      }
     ],
     "status": "ok"
@@ -2200,35 +2148,20 @@
    "handoff_bar_out": 136.0,
    "handoff_kind": "rescue/grid_tail->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 1,
+   "n_paired_cues": 0,
    "notes": [
-    "tail-anchor rescue (Sam: run-back 16 from end, first drop in): outgoing anchor is a grid-derived position (n_bars - 16), incoming anchor is a detected cue (first_drop_bar); 1 REAL paired cue(s) coincided with the swap point (the rescue fires regardless, since 0 pair(s) were not detected)."
+    "tail-anchor rescue (Sam: run-back 16 from end, first drop in): outgoing anchor is a grid-derived position (n_bars - 16), incoming anchor is a detected cue (first_drop_bar); 0 REAL paired cue(s) coincided with the swap point (the rescue fires regardless, since 0 pair(s) were not detected)."
    ],
    "out": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
    "overlap_bars": 32.0,
    "overlap_policy": "standard_48",
-   "paired_cue_bars": [
-    152
-   ],
-   "paired_cues": [
-    {
-     "arrangement_bar": 152,
-     "incoming_labels": [
-      "section:build:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 32,
-     "outgoing_labels": [
-      "track_end",
-      "section:drop:end"
-     ]
-    }
-   ],
+   "paired_cue_bars": [],
+   "paired_cues": [],
    "plan": {
     "specs": [],
     "status": "ok"
    },
-   "score": 1,
+   "score": 0,
    "status": "ok",
    "swap_progress": 0.5
   },
@@ -3190,8 +3123,7 @@
      "arrangement_bar": 192,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
@@ -3649,14 +3581,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx2+0b to landmark:kick_gap_189_192:end 224",
+      "note": "loop outro 8bx2+0b to landmark:kick_gap_190_192:end 224",
       "partial_bars": 0.0,
       "reps": 2,
       "skip_bars": 0.0,
       "source_end_bar": 208.0,
       "source_start_bar": 200.0,
       "target_marker_bar": 224.0,
-      "target_marker_name": "landmark:kick_gap_189_192:end"
+      "target_marker_name": "landmark:kick_gap_190_192:end"
      }
     ],
     "status": "ok"
@@ -3741,26 +3673,25 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
-   "arr_offset_bars": 168.0,
-   "handoff_bar_out": 184.0,
+   "arr_offset_bars": 176.0,
+   "handoff_bar_out": 192.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 4,
+   "n_paired_cues": 3,
    "notes": [
-    "paired cue score 40; swap 38% through overlap"
+    "paired cue score 29; swap 47% through overlap"
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "overlap_bars": 42.0,
+   "overlap_bars": 34.0,
    "overlap_policy": "standard_48",
    "paired_cue_bars": [
-    168,
-    184,
+    176,
     192,
     200
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 168,
+     "arrangement_bar": 176,
      "incoming_labels": [
       "track_start",
       "section:intro:start"
@@ -3771,7 +3702,7 @@
      ]
     },
     {
-     "arrangement_bar": 184,
+     "arrangement_bar": 192,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
@@ -3782,23 +3713,12 @@
      ]
     },
     {
-     "arrangement_bar": 192,
+     "arrangement_bar": 200,
      "incoming_labels": [
       "section:drop:end",
       "section:build:start"
      ],
      "incoming_source_bar": 24,
-     "outgoing_labels": [
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 200,
-     "incoming_labels": [
-      "section:build:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 32,
      "outgoing_labels": [
       "landmark:kick_dropout:end"
      ]
@@ -3808,9 +3728,9 @@
     "specs": [],
     "status": "ok"
    },
-   "score": 4,
+   "score": 3,
    "status": "ok",
-   "swap_progress": 0.380952
+   "swap_progress": 0.470588
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -4127,9 +4047,9 @@
    "handoff_bar_out": 200.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "n_paired_cues": 5,
+   "n_paired_cues": 4,
    "notes": [
-    "paired cue score 47; swap 76% through overlap"
+    "paired cue score 39; swap 76% through overlap"
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 42.0,
@@ -4138,8 +4058,7 @@
     168,
     184,
     200,
-    183,
-    199
+    183
    ],
    "paired_cues": [
     {
@@ -4169,8 +4088,7 @@
      "arrangement_bar": 200,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
@@ -4186,23 +4104,13 @@
      "outgoing_labels": [
       "landmark:kick_dropout:start"
      ]
-    },
-    {
-     "arrangement_bar": 199,
-     "incoming_labels": [
-      "landmark:pre_drop_kick_gap:start"
-     ],
-     "incoming_source_bar": 31,
-     "outgoing_labels": [
-      "landmark:kick_dropout:start"
-     ]
     }
    ],
    "plan": {
     "specs": [],
     "status": "ok"
    },
-   "score": 5,
+   "score": 4,
    "status": "ok",
    "swap_progress": 0.761905
   },
@@ -4402,16 +4310,15 @@
    "handoff_bar_out": 206.0,
    "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER",
-   "n_paired_cues": 2,
+   "n_paired_cues": 1,
    "notes": [
-    "paired cue score 19; swap 91% through overlap"
+    "paired cue score 10; swap 91% through overlap"
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 44.0,
    "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    206,
-    200
+    206
    ],
    "paired_cues": [
     {
@@ -4424,16 +4331,6 @@
      "incoming_source_bar": 40,
      "outgoing_labels": [
       "landmark:kick_dropout:start"
-     ]
-    },
-    {
-     "arrangement_bar": 200,
-     "incoming_labels": [
-      "landmark:kick_dropout:start"
-     ],
-     "incoming_source_bar": 34,
-     "outgoing_labels": [
-      "landmark:kick_dropout:end"
      ]
     }
    ],
@@ -4455,7 +4352,7 @@
     ],
     "status": "ok"
    },
-   "score": 2,
+   "score": 1,
    "status": "ok",
    "swap_progress": 0.909091
   },
@@ -5167,8 +5064,7 @@
      "arrangement_bar": 165,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
@@ -5225,14 +5121,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx5+0b to landmark:kick_gap_156_160:end 173",
+      "note": "loop outro 1bx5+0b to landmark:kick_gap_158_160:end 173",
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
       "source_end_bar": 166.0,
       "source_start_bar": 165.0,
       "target_marker_bar": 173.0,
-      "target_marker_name": "landmark:kick_gap_156_160:end"
+      "target_marker_name": "landmark:kick_gap_158_160:end"
      }
     ],
     "status": "ok"
@@ -5985,15 +5881,16 @@
    "handoff_bar_out": 233.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "notes": [
-    "paired cue score 12; swap 57% through overlap"
+    "paired cue score 23; swap 57% through overlap"
    ],
    "out": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
    "overlap_bars": 28.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
-    233
+    233,
+    245
    ],
    "paired_cues": [
     {
@@ -6007,27 +5904,26 @@
       "section:drop:end",
       "section:outro:start"
      ]
+    },
+    {
+     "arrangement_bar": 245,
+     "incoming_labels": [
+      "section:build:end",
+      "section:drop:start"
+     ],
+     "incoming_source_bar": 28,
+     "outgoing_labels": [
+      "track_end",
+      "section:outro:end",
+      "landmark:kick_dropout:end"
+     ]
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to section:drop_2 249",
-      "partial_bars": 0.0,
-      "reps": 2,
-      "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
-      "target_marker_bar": 249.0,
-      "target_marker_name": "section:drop_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
-   "score": 1,
+   "score": 2,
    "status": "ok",
    "swap_progress": 0.571429
   },
@@ -6069,12 +5965,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to landmark:kick_gap_184_192:end 249",
+      "note": "loop outro 4bx1+0b to landmark:kick_gap_184_192:end 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "landmark:kick_gap_184_192:end"
      }
@@ -6122,12 +6018,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to section:break_1 249",
+      "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -6183,12 +6079,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to landmark:kick_gap_185_192:end 249",
+      "note": "loop outro 4bx1+0b to landmark:kick_gap_185_192:end 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "landmark:kick_gap_185_192:end"
      }
@@ -6343,12 +6239,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx6+0b to section:break_1 257",
+      "note": "loop outro 4bx3+0b to section:break_1 257",
       "partial_bars": 0.0,
-      "reps": 6,
+      "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 257.0,
       "target_marker_name": "section:break_1"
      }
@@ -6381,8 +6277,7 @@
      "arrangement_bar": 233,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
@@ -6397,12 +6292,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to section:break_1 249",
+      "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -6451,12 +6346,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx6+0b to landmark:kick_gap_124_128:end 257",
+      "note": "loop outro 4bx3+0b to landmark:kick_gap_124_128:end 257",
       "partial_bars": 0.0,
-      "reps": 6,
+      "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 257.0,
       "target_marker_name": "landmark:kick_gap_124_128:end"
      }
@@ -6518,14 +6413,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to landmark:kick_gap_188_190:end 249",
+      "note": "loop outro 4bx1+0b to landmark:kick_gap_188_192:end 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
-      "target_marker_name": "landmark:kick_gap_188_190:end"
+      "target_marker_name": "landmark:kick_gap_188_192:end"
      }
     ],
     "status": "ok"
@@ -6571,12 +6466,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx6+0b to section:break_1 257",
+      "note": "loop outro 4bx3+0b to section:break_1 257",
       "partial_bars": 0.0,
-      "reps": 6,
+      "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 257.0,
       "target_marker_name": "section:break_1"
      }
@@ -6631,12 +6526,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to section:drop_2 249",
+      "note": "loop outro 4bx1+0b to section:drop_2 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:drop_2"
      }
@@ -6684,12 +6579,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to landmark:kick_gap_124_128:end 249",
+      "note": "loop outro 4bx1+0b to landmark:kick_gap_124_128:end 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "landmark:kick_gap_124_128:end"
      }
@@ -6737,12 +6632,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to section:break_1 249",
+      "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -6790,12 +6685,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to section:break_1 249",
+      "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -6850,12 +6745,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx2+0b to section:break_1 249",
+      "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
-      "reps": 2,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 235.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 4.0,
       "target_marker_bar": 249.0,
       "target_marker_name": "section:break_1"
      }
@@ -6873,17 +6768,16 @@
    "handoff_bar_out": 184.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 3,
+   "n_paired_cues": 2,
    "notes": [
-    "paired cue score 33; swap 46% through overlap"
+    "paired cue score 23; swap 46% through overlap"
    ],
    "out": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 35.0,
    "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
-    184,
-    200
+    184
    ],
    "paired_cues": [
     {
@@ -6910,24 +6804,13 @@
       "section:drop:end",
       "section:outro:start"
      ]
-    },
-    {
-     "arrangement_bar": 200,
-     "incoming_labels": [
-      "section:build:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 32,
-     "outgoing_labels": [
-      "landmark:kick_dropout:start"
-     ]
     }
    ],
    "plan": {
     "specs": [],
     "status": "ok"
    },
-   "score": 3,
+   "score": 2,
    "status": "ok",
    "swap_progress": 0.457143
   },
@@ -7289,8 +7172,7 @@
      "arrangement_bar": 200,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
@@ -8712,8 +8594,7 @@
      "arrangement_bar": 196,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
@@ -8796,14 +8677,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx2+0b to landmark:kick_gap_156_160:end 208",
+      "note": "loop outro 4bx2+0b to landmark:kick_gap_158_160:end 208",
       "partial_bars": 0.0,
       "reps": 2,
       "skip_bars": 0.0,
       "source_end_bar": 200.0,
       "source_start_bar": 196.0,
       "target_marker_bar": 208.0,
-      "target_marker_name": "landmark:kick_gap_156_160:end"
+      "target_marker_name": "landmark:kick_gap_158_160:end"
      }
     ],
     "status": "ok"
@@ -8916,14 +8797,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx2+0b to landmark:kick_gap_152_159:end 208",
+      "note": "loop outro 4bx2+0b to landmark:kick_gap_152_160:end 208",
       "partial_bars": 0.0,
       "reps": 2,
       "skip_bars": 0.0,
       "source_end_bar": 200.0,
       "source_start_bar": 196.0,
       "target_marker_bar": 208.0,
-      "target_marker_name": "landmark:kick_gap_152_159:end"
+      "target_marker_name": "landmark:kick_gap_152_160:end"
      }
     ],
     "status": "ok"
@@ -9590,40 +9471,27 @@
    "handoff_bar_out": 253.0,
    "handoff_kind": "paired/section:fill:end->drop",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "n_paired_cues": 2,
+   "n_paired_cues": 1,
    "notes": [
-    "paired cue score 19; swap 91% through overlap"
+    "paired cue score 12; swap 91% through overlap"
    ],
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 35.0,
    "overlap_policy": "standard_48",
    "paired_cue_bars": [
-    253,
-    252
+    253
    ],
    "paired_cues": [
     {
      "arrangement_bar": 253,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
       "section:fill:end",
       "section:outro:start"
-     ]
-    },
-    {
-     "arrangement_bar": 252,
-     "incoming_labels": [
-      "landmark:pre_drop_kick_gap:start"
-     ],
-     "incoming_source_bar": 31,
-     "outgoing_labels": [
-      "section:drop:end",
-      "section:fill:start"
      ]
     }
    ],
@@ -9631,7 +9499,7 @@
     "specs": [],
     "status": "ok"
    },
-   "score": 2,
+   "score": 1,
    "status": "ok",
    "swap_progress": 0.914286
   },
@@ -9685,14 +9553,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx5+0b to landmark:kick_gap_156_160:end 261",
+      "note": "loop outro 1bx5+0b to landmark:kick_gap_158_160:end 261",
       "partial_bars": 0.0,
       "reps": 5,
       "skip_bars": 0.0,
       "source_end_bar": 256.0,
       "source_start_bar": 255.0,
       "target_marker_bar": 261.0,
-      "target_marker_name": "landmark:kick_gap_156_160:end"
+      "target_marker_name": "landmark:kick_gap_158_160:end"
      }
     ],
     "status": "ok"
@@ -9977,7 +9845,7 @@
    ],
    "out": "Christoph - The Rise 16 Bit MASTER",
    "overlap_bars": 19.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     253
    ],
@@ -9996,21 +9864,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx7+0b to landmark:kick_gap_186_188:end 284",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 96.0,
-      "source_start_bar": 92.0,
-      "target_marker_bar": 284.0,
-      "target_marker_name": "landmark:kick_gap_186_188:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -10139,25 +9993,25 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
-   "arr_offset_bars": 168.0,
-   "handoff_bar_out": 184.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 160.0,
+   "handoff_bar_out": 176.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
    "n_paired_cues": 3,
    "notes": [
-    "paired cue score 33; swap 50% through overlap"
+    "paired cue score 30; swap 41% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
+   "overlap_bars": 39.0,
    "overlap_policy": "standard_48",
    "paired_cue_bars": [
-    168,
-    184,
-    200
+    160,
+    176,
+    184
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 168,
+     "arrangement_bar": 160,
      "incoming_labels": [
       "track_start",
       "section:intro:start"
@@ -10168,28 +10022,26 @@
      ]
     },
     {
-     "arrangement_bar": 184,
+     "arrangement_bar": 176,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
       "landmark:kick_dropout:end"
      ]
     },
     {
-     "arrangement_bar": 200,
+     "arrangement_bar": 184,
      "incoming_labels": [
-      "section:build:end",
-      "section:drop:start"
+      "section:drop:end",
+      "section:build:start"
      ],
-     "incoming_source_bar": 32,
+     "incoming_source_bar": 24,
      "outgoing_labels": [
-      "track_end",
-      "section:outro:end",
+      "section:drop:end",
+      "section:outro:start",
       "landmark:kick_dropout:end"
      ]
     }
@@ -10200,31 +10052,43 @@
    },
    "score": 3,
    "status": "ok",
-   "swap_progress": 0.5
+   "swap_progress": 0.410256
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 184.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 151.0,
+   "handoff_bar_out": 183.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
-   "n_paired_cues": 4,
+   "n_paired_cues": 5,
    "notes": [
-    "paired cue score 39; swap 67% through overlap"
+    "paired cue score 46; swap 67% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
    "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    176,
-    184,
+    151,
+    175,
+    183,
     191,
-    200
+    199
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 176,
+     "arrangement_bar": 151,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 175,
      "incoming_labels": [
       "section:intro:end",
       "section:break:start",
@@ -10232,11 +10096,11 @@
      ],
      "incoming_source_bar": 24,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "landmark:kick_dropout:start"
      ]
     },
     {
-     "arrangement_bar": 184,
+     "arrangement_bar": 183,
      "incoming_labels": [
       "section:break:end",
       "section:drop:start",
@@ -10244,23 +10108,21 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
-      "landmark:kick_dropout:end"
+      "landmark:kick_dropout:start"
      ]
     },
     {
      "arrangement_bar": 191,
      "incoming_labels": [
-      "landmark:kick_dropout:start"
+      "landmark:kick_dropout:end"
      ],
-     "incoming_source_bar": 39,
+     "incoming_source_bar": 40,
      "outgoing_labels": [
       "landmark:kick_dropout:start"
      ]
     },
     {
-     "arrangement_bar": 200,
+     "arrangement_bar": 199,
      "incoming_labels": [
       "landmark:kick_dropout:end"
      ],
@@ -10278,56 +10140,66 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_220_224:end 208",
+      "note": "loop outro 8bx1+0b to landmark:kick_gap_220_224:end 207",
       "partial_bars": 0.0,
       "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 208.0,
+      "source_end_bar": 192.0,
+      "source_start_bar": 184.0,
+      "target_marker_bar": 207.0,
       "target_marker_name": "landmark:kick_gap_220_224:end"
      }
     ],
     "status": "ok"
    },
-   "score": 4,
+   "score": 5,
    "status": "ok",
    "swap_progress": 0.666667
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 184.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 151.0,
+   "handoff_bar_out": 183.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "notes": [
-    "paired cue score 21; swap 67% through overlap"
+    "paired cue score 28; swap 67% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
    "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    184,
-    200
+    151,
+    183,
+    199
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 184,
+     "arrangement_bar": 151,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 183,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
-      "landmark:kick_dropout:end"
+      "landmark:kick_dropout:start"
      ]
     },
     {
-     "arrangement_bar": 200,
+     "arrangement_bar": 199,
      "incoming_labels": [
       "section:drop:end",
       "section:break:start",
@@ -10347,19 +10219,19 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx2+0b to landmark:kick_gap_192_256:end 216",
+      "note": "loop outro 8bx2+0b to landmark:kick_gap_192_256:end 215",
       "partial_bars": 0.0,
       "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 216.0,
+      "source_end_bar": 192.0,
+      "source_start_bar": 184.0,
+      "target_marker_bar": 215.0,
       "target_marker_name": "landmark:kick_gap_192_256:end"
      }
     ],
     "status": "ok"
    },
-   "score": 2,
+   "score": 3,
    "status": "ok",
    "swap_progress": 0.666667
   },
@@ -10379,11 +10251,11 @@
    "in": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
    "n_paired_cues": 2,
    "notes": [
-    "paired cue score 22; swap 33% through overlap"
+    "paired cue score 22; swap 35% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 24.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 23.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     176,
     184
@@ -10415,48 +10287,46 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx7+0b to section:break_1 228",
-      "partial_bars": 0.0,
-      "reps": 7,
-      "skip_bars": 0.0,
-      "source_end_bar": 4.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 228.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
    "status": "ok",
-   "swap_progress": 0.333333
+   "swap_progress": 0.347826
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 184.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 151.0,
+   "handoff_bar_out": 183.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "notes": [
-    "paired cue score 22; swap 67% through overlap"
+    "paired cue score 29; swap 67% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
    "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    184,
-    200
+    151,
+    183,
+    199
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 184,
+     "arrangement_bar": 151,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 183,
      "incoming_labels": [
       "section:build:end",
       "section:drop:start",
@@ -10464,13 +10334,11 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
-      "landmark:kick_dropout:end"
+      "landmark:kick_dropout:start"
      ]
     },
     {
-     "arrangement_bar": 200,
+     "arrangement_bar": 199,
      "incoming_labels": [
       "landmark:kick_dropout:end"
      ],
@@ -10488,19 +10356,19 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 4bx3+0b to section:fill_1 212",
+      "note": "loop outro 4bx3+0b to section:fill_1 211",
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 4.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 212.0,
+      "source_end_bar": 188.0,
+      "source_start_bar": 184.0,
+      "target_marker_bar": 211.0,
       "target_marker_name": "section:fill_1"
      }
     ],
     "status": "ok"
    },
-   "score": 2,
+   "score": 3,
    "status": "ok",
    "swap_progress": 0.666667
   },
@@ -10513,10 +10381,10 @@
    "in": "Cevin Fisher - Emotions 24 Bit MASTER",
    "n_paired_cues": 2,
    "notes": [
-    "paired cue score 22; swap 50% through overlap"
+    "paired cue score 22; swap 52% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
+   "overlap_bars": 31.0,
    "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
@@ -10554,7 +10422,7 @@
    },
    "score": 2,
    "status": "ok",
-   "swap_progress": 0.5
+   "swap_progress": 0.516129
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -10563,17 +10431,29 @@
    "handoff_bar_out": 184.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Christoph - Reachin 16 Bit MASTER",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "notes": [
-    "paired cue score 12; swap 67% through overlap"
+    "paired cue score 22; swap 68% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 47.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
+    152,
     184
    ],
    "paired_cues": [
+    {
+     "arrangement_bar": 152,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
     {
      "arrangement_bar": 184,
      "incoming_labels": [
@@ -10589,80 +10469,78 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx3+0b to section:build_1 212",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 4.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 212.0,
-      "target_marker_name": "section:build_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
-   "score": 1,
+   "score": 2,
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.680851
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 184.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 159.0,
+   "handoff_bar_out": 191.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
    "in": "Christoph - The Rise 16 Bit MASTER",
-   "n_paired_cues": 1,
+   "n_paired_cues": 3,
    "notes": [
-    "paired cue score 12; swap 67% through overlap"
+    "paired cue score 28; swap 80% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 40.0,
+   "overlap_policy": null,
    "paired_cue_bars": [
-    184
+    159,
+    191,
+    199
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 184,
+     "arrangement_bar": 159,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 191,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 199,
+     "incoming_labels": [
       "section:drop:end",
-      "section:outro:start",
+      "section:fill:start",
+      "landmark:pre_drop_kick_gap:start"
+     ],
+     "incoming_source_bar": 40,
+     "outgoing_labels": [
+      "track_end",
+      "section:outro:end",
       "landmark:kick_dropout:end"
      ]
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to section:break_1 208",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 208.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
-    "status": "ok"
+    "error": "ValueError",
+    "msg": "Cannot plan outgoing tail loop for 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED' -> 'Christoph - The Rise 16 Bit MASTER': cue 'section:dro",
+    "status": "raise"
    },
-   "score": 1,
+   "score": 3,
    "status": "ok",
-   "swap_progress": 0.666667
+   "swap_progress": 0.8
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -10673,18 +10551,18 @@
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "n_paired_cues": 6,
    "notes": [
-    "paired cue score 59; swap 25% through overlap"
+    "paired cue score 57; swap 26% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 31.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     168,
     176,
     184,
-    200,
     175,
-    183
+    183,
+    199
    ],
    "paired_cues": [
     {
@@ -10721,20 +10599,6 @@
      "outgoing_labels": [
       "section:drop:end",
       "section:outro:start",
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 200,
-     "incoming_labels": [
-      "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
-     ],
-     "incoming_source_bar": 32,
-     "outgoing_labels": [
-      "track_end",
-      "section:outro:end",
       "landmark:kick_dropout:end"
      ]
     },
@@ -10757,29 +10621,27 @@
      "outgoing_labels": [
       "landmark:kick_dropout:start"
      ]
+    },
+    {
+     "arrangement_bar": 199,
+     "incoming_labels": [
+      "landmark:pre_drop_kick_gap:start"
+     ],
+     "incoming_source_bar": 31,
+     "outgoing_labels": [
+      "track_end",
+      "section:outro:end",
+      "landmark:kick_dropout:end"
+     ]
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_156_160:end 208",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 208.0,
-      "target_marker_name": "landmark:kick_gap_156_160:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 6,
    "status": "ok",
-   "swap_progress": 0.25
+   "swap_progress": 0.258065
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -10788,18 +10650,30 @@
    "handoff_bar_out": 184.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Harry Romero - Renegades SW V1",
-   "n_paired_cues": 2,
+   "n_paired_cues": 3,
    "notes": [
-    "paired cue score 22; swap 67% through overlap"
+    "paired cue score 31; swap 68% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 47.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
+    152,
     184,
-    200
+    199
    ],
    "paired_cues": [
+    {
+     "arrangement_bar": 152,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
     {
      "arrangement_bar": 184,
      "incoming_labels": [
@@ -10815,11 +10689,11 @@
      ]
     },
     {
-     "arrangement_bar": 200,
+     "arrangement_bar": 199,
      "incoming_labels": [
-      "landmark:kick_dropout:end"
+      "landmark:kick_dropout:start"
      ],
-     "incoming_source_bar": 48,
+     "incoming_source_bar": 47,
      "outgoing_labels": [
       "track_end",
       "section:outro:end",
@@ -10828,111 +10702,12 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to section:break_1 208",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 208.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
-    "status": "ok"
-   },
-   "score": 2,
-   "status": "ok",
-   "swap_progress": 0.666667
-  },
-  {
-   "alignment_policy": "paired_landmarks_v2",
-   "anchor_bar_in": 8.0,
-   "arr_offset_bars": 168.0,
-   "handoff_bar_out": 176.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
-   "in": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "n_paired_cues": 3,
-   "notes": [
-    "paired cue score 29; swap 25% through overlap"
-   ],
-   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
-   "overlap_policy": "named_landmark_64",
-   "paired_cue_bars": [
-    168,
-    176,
-    200
-   ],
-   "paired_cues": [
-    {
-     "arrangement_bar": 168,
-     "incoming_labels": [
-      "track_start",
-      "section:intro:start"
-     ],
-     "incoming_source_bar": 0,
-     "outgoing_labels": [
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 176,
-     "incoming_labels": [
-      "section:intro:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 8,
-     "outgoing_labels": [
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 200,
-     "incoming_labels": [
-      "section:drop:end",
-      "section:break:start"
-     ],
-     "incoming_source_bar": 32,
-     "outgoing_labels": [
-      "track_end",
-      "section:outro:end",
-      "landmark:kick_dropout:end"
-     ]
-    }
-   ],
-   "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_152_159:end 208",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 208.0,
-      "target_marker_name": "landmark:kick_gap_152_159:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 3,
    "status": "ok",
-   "swap_progress": 0.25
-  },
-  {
-   "error": "ValueError",
-   "in": "Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED' -> 'Nic Fanciulli - Revoloution (Extended Mix) 24 Bi",
-   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "status": "raise"
+   "swap_progress": 0.680851
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -10940,18 +10715,17 @@
    "arr_offset_bars": 176.0,
    "handoff_bar_out": 184.0,
    "handoff_kind": "paired/section:drop:end->drop",
-   "in": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
-   "n_paired_cues": 3,
+   "in": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
+   "n_paired_cues": 2,
    "notes": [
-    "paired cue score 33; swap 33% through overlap"
+    "paired cue score 22; swap 35% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 24.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 23.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     176,
-    184,
-    200
+    184
    ],
    "paired_cues": [
     {
@@ -10977,9 +10751,123 @@
       "section:outro:start",
       "landmark:kick_dropout:end"
      ]
+    }
+   ],
+   "plan": {
+    "specs": [],
+    "status": "ok"
+   },
+   "score": 2,
+   "status": "ok",
+   "swap_progress": 0.347826
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "anchor_bar_in": 40.0,
+   "arr_offset_bars": 151.0,
+   "handoff_bar_out": 191.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
+   "in": "Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER",
+   "n_paired_cues": 3,
+   "notes": [
+    "paired cue score 26; swap 83% through overlap"
+   ],
+   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
+   "overlap_bars": 48.0,
+   "overlap_policy": "standard_48",
+   "paired_cue_bars": [
+    151,
+    183,
+    191
+   ],
+   "paired_cues": [
+    {
+     "arrangement_bar": 151,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
     },
     {
-     "arrangement_bar": 200,
+     "arrangement_bar": 183,
+     "incoming_labels": [
+      "section:intro:end",
+      "section:break:start"
+     ],
+     "incoming_source_bar": 32,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 191,
+     "incoming_labels": [
+      "section:break:end",
+      "section:drop:start",
+      "landmark:pre_drop_kick_gap:end"
+     ],
+     "incoming_source_bar": 40,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    }
+   ],
+   "plan": {
+    "specs": [],
+    "status": "ok"
+   },
+   "score": 3,
+   "status": "ok",
+   "swap_progress": 0.833333
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "anchor_bar_in": 8.0,
+   "arr_offset_bars": 175.0,
+   "handoff_bar_out": 183.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
+   "in": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
+   "n_paired_cues": 3,
+   "notes": [
+    "paired cue score 30; swap 33% through overlap"
+   ],
+   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
+   "overlap_bars": 24.0,
+   "overlap_policy": "named_landmark_64",
+   "paired_cue_bars": [
+    175,
+    183,
+    199
+   ],
+   "paired_cues": [
+    {
+     "arrangement_bar": 175,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 183,
+     "incoming_labels": [
+      "section:intro:end",
+      "section:drop:start"
+     ],
+     "incoming_source_bar": 8,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 199,
      "incoming_labels": [
       "section:build:end",
       "section:drop:start"
@@ -10998,13 +10886,13 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx3+0b to section:break_1 224",
+      "note": "loop outro 8bx3+0b to section:break_1 223",
       "partial_bars": 0.0,
       "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 224.0,
+      "source_end_bar": 192.0,
+      "source_start_bar": 184.0,
+      "target_marker_bar": 223.0,
       "target_marker_name": "section:break_1"
      }
     ],
@@ -11017,25 +10905,26 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
-   "arr_offset_bars": 168.0,
-   "handoff_bar_out": 184.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 152.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
-   "n_paired_cues": 3,
+   "n_paired_cues": 4,
    "notes": [
-    "paired cue score 32; swap 50% through overlap"
+    "paired cue score 40; swap 34% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 32.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 47.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
+    152,
     168,
     184,
-    200
+    183
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 168,
+     "arrangement_bar": 152,
      "incoming_labels": [
       "track_start",
       "section:intro:start"
@@ -11046,12 +10935,24 @@
      ]
     },
     {
-     "arrangement_bar": 184,
+     "arrangement_bar": 168,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
      ],
      "incoming_source_bar": 16,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
+    {
+     "arrangement_bar": 184,
+     "incoming_labels": [
+      "section:drop:end",
+      "section:build:start",
+      "landmark:kick_dropout:end"
+     ],
+     "incoming_source_bar": 32,
      "outgoing_labels": [
       "section:drop:end",
       "section:outro:start",
@@ -11059,13 +10960,214 @@
      ]
     },
     {
-     "arrangement_bar": 200,
+     "arrangement_bar": 183,
+     "incoming_labels": [
+      "landmark:kick_dropout:start"
+     ],
+     "incoming_source_bar": 31,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    }
+   ],
+   "plan": {
+    "specs": [],
+    "status": "ok"
+   },
+   "score": 4,
+   "status": "ok",
+   "swap_progress": 0.340426
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "anchor_bar_in": 16.0,
+   "arr_offset_bars": 152.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "in": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+   "n_paired_cues": 3,
+   "notes": [
+    "paired cue score 30; swap 34% through overlap"
+   ],
+   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
+   "overlap_bars": 47.0,
+   "overlap_policy": "standard_48",
+   "paired_cue_bars": [
+    152,
+    168,
+    184
+   ],
+   "paired_cues": [
+    {
+     "arrangement_bar": 152,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
+    {
+     "arrangement_bar": 168,
+     "incoming_labels": [
+      "section:intro:end",
+      "section:drop:start"
+     ],
+     "incoming_source_bar": 16,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
+    {
+     "arrangement_bar": 184,
      "incoming_labels": [
       "section:drop:end",
-      "section:build:start",
-      "landmark:kick_dropout:end"
+      "section:break:start"
      ],
      "incoming_source_bar": 32,
+     "outgoing_labels": [
+      "section:drop:end",
+      "section:outro:start",
+      "landmark:kick_dropout:end"
+     ]
+    }
+   ],
+   "plan": {
+    "specs": [],
+    "status": "ok"
+   },
+   "score": 3,
+   "status": "ok",
+   "swap_progress": 0.340426
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "anchor_bar_in": 16.0,
+   "arr_offset_bars": 152.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
+   "n_paired_cues": 4,
+   "notes": [
+    "paired cue score 39; swap 34% through overlap"
+   ],
+   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
+   "overlap_bars": 47.0,
+   "overlap_policy": "standard_48",
+   "paired_cue_bars": [
+    152,
+    168,
+    184,
+    199
+   ],
+   "paired_cues": [
+    {
+     "arrangement_bar": 152,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
+    {
+     "arrangement_bar": 168,
+     "incoming_labels": [
+      "section:intro:end",
+      "section:drop:start"
+     ],
+     "incoming_source_bar": 16,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
+    {
+     "arrangement_bar": 184,
+     "incoming_labels": [
+      "section:drop:end",
+      "section:break:start"
+     ],
+     "incoming_source_bar": 32,
+     "outgoing_labels": [
+      "section:drop:end",
+      "section:outro:start",
+      "landmark:kick_dropout:end"
+     ]
+    },
+    {
+     "arrangement_bar": 199,
+     "incoming_labels": [
+      "landmark:pre_drop_kick_gap:start"
+     ],
+     "incoming_source_bar": 47,
+     "outgoing_labels": [
+      "track_end",
+      "section:outro:end",
+      "landmark:kick_dropout:end"
+     ]
+    }
+   ],
+   "plan": {
+    "specs": [],
+    "status": "ok"
+   },
+   "score": 4,
+   "status": "ok",
+   "swap_progress": 0.340426
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "anchor_bar_in": 40.0,
+   "arr_offset_bars": 151.0,
+   "handoff_bar_out": 191.0,
+   "handoff_kind": "paired/landmark:kick_dropout:start->drop",
+   "in": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
+   "n_paired_cues": 3,
+   "notes": [
+    "paired cue score 29; swap 83% through overlap"
+   ],
+   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
+   "overlap_bars": 48.0,
+   "overlap_policy": "named_landmark_64",
+   "paired_cue_bars": [
+    151,
+    191,
+    199
+   ],
+   "paired_cues": [
+    {
+     "arrangement_bar": 151,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 191,
+     "incoming_labels": [
+      "section:build:end",
+      "section:drop:start",
+      "landmark:pre_drop_kick_gap:end"
+     ],
+     "incoming_source_bar": 40,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
+     ]
+    },
+    {
+     "arrangement_bar": 199,
+     "incoming_labels": [
+      "landmark:kick_dropout:end"
+     ],
+     "incoming_source_bar": 48,
      "outgoing_labels": [
       "track_end",
       "section:outro:end",
@@ -11079,161 +11181,21 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx3+0b to landmark:kick_gap_216_224:end 224",
+      "note": "loop outro 1bx8+0b to landmark:kick_gap_220_224:end 207",
       "partial_bars": 0.0,
-      "reps": 3,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 224.0,
-      "target_marker_name": "landmark:kick_gap_216_224:end"
+      "source_end_bar": 185.0,
+      "source_start_bar": 184.0,
+      "target_marker_bar": 207.0,
+      "target_marker_name": "landmark:kick_gap_220_224:end"
      }
     ],
     "status": "ok"
    },
    "score": 3,
    "status": "ok",
-   "swap_progress": 0.5
-  },
-  {
-   "alignment_policy": "paired_landmarks_v2",
-   "anchor_bar_in": 16.0,
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
-   "in": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
-   "n_paired_cues": 3,
-   "notes": [
-    "paired cue score 31; swap 33% through overlap"
-   ],
-   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "overlap_policy": "standard_48",
-   "paired_cue_bars": [
-    168,
-    184,
-    200
-   ],
-   "paired_cues": [
-    {
-     "arrangement_bar": 168,
-     "incoming_labels": [
-      "section:intro:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 16,
-     "outgoing_labels": [
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 184,
-     "incoming_labels": [
-      "section:drop:end",
-      "section:break:start"
-     ],
-     "incoming_source_bar": 32,
-     "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 200,
-     "incoming_labels": [
-      "section:break:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 48,
-     "outgoing_labels": [
-      "track_end",
-      "section:outro:end",
-      "landmark:kick_dropout:end"
-     ]
-    }
-   ],
-   "plan": {
-    "specs": [],
-    "status": "ok"
-   },
-   "score": 3,
-   "status": "ok",
-   "swap_progress": 0.333333
-  },
-  {
-   "alignment_policy": "paired_landmarks_v2",
-   "anchor_bar_in": 16.0,
-   "arr_offset_bars": 152.0,
-   "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
-   "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
-   "n_paired_cues": 3,
-   "notes": [
-    "paired cue score 31; swap 33% through overlap"
-   ],
-   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "overlap_policy": "standard_48",
-   "paired_cue_bars": [
-    168,
-    184,
-    200
-   ],
-   "paired_cues": [
-    {
-     "arrangement_bar": 168,
-     "incoming_labels": [
-      "section:intro:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 16,
-     "outgoing_labels": [
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 184,
-     "incoming_labels": [
-      "section:drop:end",
-      "section:break:start"
-     ],
-     "incoming_source_bar": 32,
-     "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 200,
-     "incoming_labels": [
-      "section:break:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
-     ],
-     "incoming_source_bar": 48,
-     "outgoing_labels": [
-      "track_end",
-      "section:outro:end",
-      "landmark:kick_dropout:end"
-     ]
-    }
-   ],
-   "plan": {
-    "specs": [],
-    "status": "ok"
-   },
-   "score": 3,
-   "status": "ok",
-   "swap_progress": 0.333333
-  },
-  {
-   "error": "ValueError",
-   "in": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "msg": "No paired section/dropout alignment for 'Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED' -> 'Soulsearcher \u2013 Feelin Love (Ruze & Chesster Exte",
-   "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "status": "raise"
+   "swap_progress": 0.833333
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -11242,14 +11204,15 @@
    "handoff_bar_out": 168.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
-   "n_paired_cues": 5,
+   "n_paired_cues": 6,
    "notes": [
-    "paired cue score 46; swap 33% through overlap"
+    "paired cue score 56; swap 34% through overlap"
    ],
    "out": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 47.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
+    152,
     168,
     184,
     175,
@@ -11257,6 +11220,17 @@
     183
    ],
    "paired_cues": [
+    {
+     "arrangement_bar": 152,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
     {
      "arrangement_bar": 168,
      "incoming_labels": [
@@ -11313,45 +11287,30 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_124_224:end 208",
-      "partial_bars": 0.0,
-      "reps": 1,
-      "skip_bars": 0.0,
-      "source_end_bar": 8.0,
-      "source_start_bar": 0.0,
-      "target_marker_bar": 208.0,
-      "target_marker_name": "landmark:kick_gap_124_224:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
-   "score": 5,
+   "score": 6,
    "status": "ok",
-   "swap_progress": 0.333333
+   "swap_progress": 0.340426
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
    "arr_offset_bars": 152.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 3,
+   "n_paired_cues": 2,
    "notes": [
-    "paired cue score 32; swap 50% through overlap"
+    "paired cue score 22; swap 50% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 32.0,
    "overlap_policy": "standard_48",
    "paired_cue_bars": [
     152,
-    168,
-    184
+    168
    ],
    "paired_cues": [
     {
@@ -11373,20 +11332,8 @@
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 184,
-     "incoming_labels": [
-      "section:build:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 32,
-     "outgoing_labels": [
-      "track_end",
-      "section:outro:end",
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     }
    ],
@@ -11394,7 +11341,7 @@
     "specs": [],
     "status": "ok"
    },
-   "score": 3,
+   "score": 2,
    "status": "ok",
    "swap_progress": 0.5
   },
@@ -11403,11 +11350,11 @@
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "n_paired_cues": 3,
    "notes": [
-    "paired cue score 31; swap 67% through overlap"
+    "paired cue score 32; swap 67% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
@@ -11438,7 +11385,8 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
@@ -11460,12 +11408,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to landmark:kick_gap_220_224:end 192",
+      "note": "loop outro 8bx1+0b to landmark:kick_gap_220_224:end 192",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 183.0,
-      "source_start_bar": 182.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 168.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "landmark:kick_gap_220_224:end"
      }
@@ -11481,15 +11429,15 @@
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "n_paired_cues": 3,
    "notes": [
-    "paired cue score 30; swap 67% through overlap"
+    "paired cue score 31; swap 67% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
-   "overlap_policy": "standard_48",
+   "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
     136,
     168,
@@ -11515,7 +11463,8 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
@@ -11534,7 +11483,21 @@
     }
    ],
    "plan": {
-    "specs": [],
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 0.0,
+      "kind": "outgoing_tail",
+      "note": "loop outro 8bx2+0b to landmark:kick_gap_192_256:end 200",
+      "partial_bars": 0.0,
+      "reps": 2,
+      "skip_bars": 0.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 168.0,
+      "target_marker_bar": 200.0,
+      "target_marker_name": "landmark:kick_gap_192_256:end"
+     }
+    ],
     "status": "ok"
    },
    "score": 3,
@@ -11551,23 +11514,23 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 8.0,
-   "arr_offset_bars": 159.0,
-   "handoff_bar_out": 167.0,
+   "arr_offset_bars": 160.0,
+   "handoff_bar_out": 168.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
    "n_paired_cues": 1,
    "notes": [
-    "paired cue score 12; swap 32% through overlap"
+    "paired cue score 12; swap 33% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 25.0,
-   "overlap_policy": "standard_48",
+   "overlap_bars": 24.0,
+   "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    167
+    168
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 167,
+     "arrangement_bar": 168,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
@@ -11575,33 +11538,46 @@
      "incoming_source_bar": 8,
      "outgoing_labels": [
       "section:drop:end",
-      "section:outro:start",
-      "landmark:kick_dropout:start"
+      "section:outro:start"
      ]
     }
    ],
    "plan": {
-    "specs": [],
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 0.0,
+      "kind": "outgoing_tail",
+      "note": "loop outro 4bx7+0b to section:break_1 212",
+      "partial_bars": 0.0,
+      "reps": 7,
+      "skip_bars": 0.0,
+      "source_end_bar": 172.0,
+      "source_start_bar": 168.0,
+      "target_marker_bar": 212.0,
+      "target_marker_name": "section:break_1"
+     }
+    ],
     "status": "ok"
    },
    "score": 1,
    "status": "ok",
-   "swap_progress": 0.32
+   "swap_progress": 0.333333
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 3,
    "notes": [
-    "paired cue score 31; swap 67% through overlap"
+    "paired cue score 32; swap 67% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
-   "overlap_policy": "standard_48",
+   "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
     136,
     168,
@@ -11628,7 +11604,8 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
@@ -11645,7 +11622,21 @@
     }
    ],
    "plan": {
-    "specs": [],
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 0.0,
+      "kind": "outgoing_tail",
+      "note": "loop outro 4bx3+0b to section:fill_1 196",
+      "partial_bars": 0.0,
+      "reps": 3,
+      "skip_bars": 0.0,
+      "source_end_bar": 172.0,
+      "source_start_bar": 168.0,
+      "target_marker_bar": 196.0,
+      "target_marker_name": "section:fill_1"
+     }
+    ],
     "status": "ok"
    },
    "score": 3,
@@ -11657,11 +11648,11 @@
    "anchor_bar_in": 16.0,
    "arr_offset_bars": 152.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Cevin Fisher - Emotions 24 Bit MASTER",
    "n_paired_cues": 2,
    "notes": [
-    "paired cue score 21; swap 50% through overlap"
+    "paired cue score 22; swap 50% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 32.0,
@@ -11690,7 +11681,8 @@
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     }
    ],
@@ -11707,61 +11699,11 @@
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Christoph - Reachin 16 Bit MASTER",
    "n_paired_cues": 2,
    "notes": [
-    "paired cue score 21; swap 67% through overlap"
-   ],
-   "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
-   "overlap_policy": "standard_48",
-   "paired_cue_bars": [
-    136,
-    168
-   ],
-   "paired_cues": [
-    {
-     "arrangement_bar": 136,
-     "incoming_labels": [
-      "track_start",
-      "section:intro:start"
-     ],
-     "incoming_source_bar": 0,
-     "outgoing_labels": [
-      "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 168,
-     "incoming_labels": [
-      "section:intro:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 32,
-     "outgoing_labels": [
-      "landmark:kick_dropout:end"
-     ]
-    }
-   ],
-   "plan": {
-    "specs": [],
-    "status": "ok"
-   },
-   "score": 2,
-   "status": "ok",
-   "swap_progress": 0.666667
-  },
-  {
-   "alignment_policy": "paired_landmarks_v2",
-   "anchor_bar_in": 32.0,
-   "arr_offset_bars": 136.0,
-   "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
-   "in": "Christoph - The Rise 16 Bit MASTER",
-   "n_paired_cues": 2,
-   "notes": [
-    "paired cue score 21; swap 67% through overlap"
+    "paired cue score 22; swap 67% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
@@ -11790,7 +11732,8 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     }
    ],
@@ -11800,12 +11743,77 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:break_1 192",
+      "note": "loop outro 4bx3+0b to section:build_1 196",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 183.0,
-      "source_start_bar": 182.0,
+      "source_end_bar": 172.0,
+      "source_start_bar": 168.0,
+      "target_marker_bar": 196.0,
+      "target_marker_name": "section:build_1"
+     }
+    ],
+    "status": "ok"
+   },
+   "score": 2,
+   "status": "ok",
+   "swap_progress": 0.666667
+  },
+  {
+   "alignment_policy": "paired_landmarks_v2",
+   "anchor_bar_in": 32.0,
+   "arr_offset_bars": 136.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/section:drop:end->drop",
+   "in": "Christoph - The Rise 16 Bit MASTER",
+   "n_paired_cues": 2,
+   "notes": [
+    "paired cue score 22; swap 67% through overlap"
+   ],
+   "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
+   "overlap_bars": 48.0,
+   "overlap_policy": "named_landmark_64",
+   "paired_cue_bars": [
+    136,
+    168
+   ],
+   "paired_cues": [
+    {
+     "arrangement_bar": 136,
+     "incoming_labels": [
+      "track_start",
+      "section:intro:start"
+     ],
+     "incoming_source_bar": 0,
+     "outgoing_labels": [
+      "landmark:kick_dropout:end"
+     ]
+    },
+    {
+     "arrangement_bar": 168,
+     "incoming_labels": [
+      "section:intro:end",
+      "section:drop:start"
+     ],
+     "incoming_source_bar": 32,
+     "outgoing_labels": [
+      "section:drop:end",
+      "section:outro:start"
+     ]
+    }
+   ],
+   "plan": {
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 0.0,
+      "kind": "outgoing_tail",
+      "note": "loop outro 8bx1+0b to section:break_1 192",
+      "partial_bars": 0.0,
+      "reps": 1,
+      "skip_bars": 0.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 168.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "section:break_1"
      }
@@ -11821,11 +11829,11 @@
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "n_paired_cues": 7,
+   "n_paired_cues": 6,
    "notes": [
-    "paired cue score 65; swap 67% through overlap"
+    "paired cue score 56; swap 67% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
@@ -11836,7 +11844,6 @@
     168,
     184,
     151,
-    167,
     183
    ],
    "paired_cues": [
@@ -11867,12 +11874,12 @@
      "arrangement_bar": 168,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
@@ -11899,18 +11906,6 @@
      ]
     },
     {
-     "arrangement_bar": 167,
-     "incoming_labels": [
-      "landmark:pre_drop_kick_gap:start"
-     ],
-     "incoming_source_bar": 31,
-     "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
-      "landmark:kick_dropout:start"
-     ]
-    },
-    {
      "arrangement_bar": 183,
      "incoming_labels": [
       "landmark:kick_dropout:start"
@@ -11925,7 +11920,7 @@
     "specs": [],
     "status": "ok"
    },
-   "score": 7,
+   "score": 6,
    "status": "ok",
    "swap_progress": 0.666667
   },
@@ -11934,11 +11929,11 @@
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 136.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Harry Romero - Renegades SW V1",
    "n_paired_cues": 4,
    "notes": [
-    "paired cue score 39; swap 67% through overlap"
+    "paired cue score 40; swap 67% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
@@ -11970,7 +11965,8 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
@@ -12002,12 +11998,12 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx8+0b to section:break_1 192",
+      "note": "loop outro 8bx1+0b to section:break_1 192",
       "partial_bars": 0.0,
-      "reps": 8,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 183.0,
-      "source_start_bar": 182.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 168.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "section:break_1"
      }
@@ -12021,23 +12017,23 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 8.0,
-   "arr_offset_bars": 159.0,
-   "handoff_bar_out": 167.0,
+   "arr_offset_bars": 160.0,
+   "handoff_bar_out": 168.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
    "n_paired_cues": 1,
    "notes": [
-    "paired cue score 12; swap 32% through overlap"
+    "paired cue score 12; swap 33% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 25.0,
+   "overlap_bars": 24.0,
    "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    167
+    168
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 167,
+     "arrangement_bar": 168,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
@@ -12045,8 +12041,7 @@
      "incoming_source_bar": 8,
      "outgoing_labels": [
       "section:drop:end",
-      "section:outro:start",
-      "landmark:kick_dropout:start"
+      "section:outro:start"
      ]
     }
    ],
@@ -12056,13 +12051,13 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx7+0b to section:break_1 191",
+      "note": "loop outro 8bx1+0b to section:break_1 192",
       "partial_bars": 0.0,
-      "reps": 7,
+      "reps": 1,
       "skip_bars": 0.0,
-      "source_end_bar": 183.0,
-      "source_start_bar": 182.0,
-      "target_marker_bar": 191.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 168.0,
+      "target_marker_bar": 192.0,
       "target_marker_name": "section:break_1"
      }
     ],
@@ -12070,7 +12065,7 @@
    },
    "score": 1,
    "status": "ok",
-   "swap_progress": 0.32
+   "swap_progress": 0.333333
   },
   {
    "error": "ValueError",
@@ -12084,15 +12079,15 @@
    "anchor_bar_in": 8.0,
    "arr_offset_bars": 160.0,
    "handoff_bar_out": 168.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 2,
    "notes": [
-    "paired cue score 22; swap 33% through overlap"
+    "paired cue score 23; swap 33% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 24.0,
-   "overlap_policy": "standard_48",
+   "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
     168,
     184
@@ -12106,7 +12101,8 @@
      ],
      "incoming_source_bar": 8,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
@@ -12124,7 +12120,21 @@
     }
    ],
    "plan": {
-    "specs": [],
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 0.0,
+      "kind": "outgoing_tail",
+      "note": "loop outro 8bx3+0b to section:break_1 208",
+      "partial_bars": 0.0,
+      "reps": 3,
+      "skip_bars": 0.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 168.0,
+      "target_marker_bar": 208.0,
+      "target_marker_name": "section:break_1"
+     }
+    ],
     "status": "ok"
    },
    "score": 2,
@@ -12134,26 +12144,26 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
-   "arr_offset_bars": 136.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "arr_offset_bars": 152.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
    "n_paired_cues": 4,
    "notes": [
-    "paired cue score 41; swap 33% through overlap"
+    "paired cue score 40; swap 50% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
+   "overlap_bars": 32.0,
    "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    136,
     152,
     168,
-    167
+    184,
+    183
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 136,
+     "arrangement_bar": 152,
      "incoming_labels": [
       "track_start",
       "section:intro:start"
@@ -12164,18 +12174,19 @@
      ]
     },
     {
-     "arrangement_bar": 152,
+     "arrangement_bar": 168,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
-     "arrangement_bar": 168,
+     "arrangement_bar": 184,
      "incoming_labels": [
       "section:drop:end",
       "section:build:start",
@@ -12183,18 +12194,18 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
+      "track_end",
+      "section:outro:end",
       "landmark:kick_dropout:end"
      ]
     },
     {
-     "arrangement_bar": 167,
+     "arrangement_bar": 183,
      "incoming_labels": [
       "landmark:kick_dropout:start"
      ],
      "incoming_source_bar": 31,
      "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
       "landmark:kick_dropout:start"
      ]
     }
@@ -12205,13 +12216,13 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_216_224:end 192",
+      "note": "loop outro 8bx3+0b to landmark:kick_gap_216_224:end 208",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 183.0,
-      "source_start_bar": 175.0,
-      "target_marker_bar": 192.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 168.0,
+      "target_marker_bar": 208.0,
       "target_marker_name": "landmark:kick_gap_216_224:end"
      }
     ],
@@ -12219,7 +12230,7 @@
    },
    "score": 4,
    "status": "ok",
-   "swap_progress": 0.333333
+   "swap_progress": 0.5
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -12230,7 +12241,7 @@
    "in": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
    "n_paired_cues": 4,
    "notes": [
-    "paired cue score 40; swap 33% through overlap"
+    "paired cue score 41; swap 33% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
@@ -12272,7 +12283,8 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
@@ -12349,7 +12361,8 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
@@ -12369,7 +12382,6 @@
     {
      "arrangement_bar": 183,
      "incoming_labels": [
-      "landmark:pre_drop_kick_gap:end",
       "landmark:pre_drop_kick_gap:start"
      ],
      "incoming_source_bar": 47,
@@ -12396,26 +12408,26 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
-   "arr_offset_bars": 136.0,
-   "handoff_bar_out": 152.0,
-   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
+   "arr_offset_bars": 152.0,
+   "handoff_bar_out": 168.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
    "n_paired_cues": 4,
    "notes": [
-    "paired cue score 39; swap 33% through overlap"
+    "paired cue score 38; swap 50% through overlap"
    ],
    "out": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 48.0,
+   "overlap_bars": 32.0,
    "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    136,
     152,
     168,
-    167
+    184,
+    183
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 136,
+     "arrangement_bar": 152,
      "incoming_labels": [
       "track_start",
       "section:intro:start"
@@ -12426,36 +12438,37 @@
      ]
     },
     {
-     "arrangement_bar": 152,
+     "arrangement_bar": 168,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "landmark:kick_dropout:end"
+      "section:drop:end",
+      "section:outro:start"
      ]
     },
     {
-     "arrangement_bar": 168,
+     "arrangement_bar": 184,
      "incoming_labels": [
       "section:drop:end",
       "section:break:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
+      "track_end",
+      "section:outro:end",
       "landmark:kick_dropout:end"
      ]
     },
     {
-     "arrangement_bar": 167,
+     "arrangement_bar": 183,
      "incoming_labels": [
       "landmark:kick_dropout:start"
      ],
      "incoming_source_bar": 31,
      "outgoing_labels": [
-      "section:drop:end",
-      "section:outro:start",
       "landmark:kick_dropout:start"
      ]
     }
@@ -12466,13 +12479,13 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 8bx1+0b to landmark:kick_gap_124_224:end 192",
+      "note": "loop outro 8bx3+0b to landmark:kick_gap_124_224:end 208",
       "partial_bars": 0.0,
-      "reps": 1,
+      "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 183.0,
-      "source_start_bar": 175.0,
-      "target_marker_bar": 192.0,
+      "source_end_bar": 176.0,
+      "source_start_bar": 168.0,
+      "target_marker_bar": 208.0,
       "target_marker_name": "landmark:kick_gap_124_224:end"
      }
     ],
@@ -12480,7 +12493,7 @@
    },
    "score": 4,
    "status": "ok",
-   "swap_progress": 0.333333
+   "swap_progress": 0.5
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -13051,23 +13064,24 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
-   "arr_offset_bars": 247.0,
-   "handoff_bar_out": 263.0,
+   "arr_offset_bars": 236.0,
+   "handoff_bar_out": 252.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "notes": [
-    "paired cue score 12; swap 89% through overlap"
+    "paired cue score 19; swap 55% through overlap"
    ],
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 18.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 29.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
-    263
+    252,
+    264
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 263,
+     "arrangement_bar": 252,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
@@ -13075,38 +13089,35 @@
      "incoming_source_bar": 16,
      "outgoing_labels": [
       "section:drop:end",
-      "section:outro:start"
+      "section:break:start"
+     ]
+    },
+    {
+     "arrangement_bar": 264,
+     "incoming_labels": [
+      "section:build:end",
+      "section:drop:start"
+     ],
+     "incoming_source_bar": 28,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
      ]
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 2bx3+0b to section:build_1 271",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 224.0,
-      "source_start_bar": 222.0,
-      "target_marker_bar": 271.0,
-      "target_marker_name": "section:build_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
-   "score": 1,
+   "score": 2,
    "status": "ok",
-   "swap_progress": 0.888889
+   "swap_progress": 0.551724
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 231.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "n_paired_cues": 1,
    "notes": [
@@ -13128,7 +13139,7 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13160,7 +13171,7 @@
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 231.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Andrea Oliva & Bensy - Nappp 24 BIt MASTER",
    "n_paired_cues": 1,
    "notes": [
@@ -13181,7 +13192,7 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13216,18 +13227,50 @@
    "status": "raise"
   },
   {
-   "error": "ValueError",
+   "alignment_policy": "paired_landmarks_v2",
+   "anchor_bar_in": 8.0,
+   "arr_offset_bars": 244.0,
+   "handoff_bar_out": 252.0,
+   "handoff_kind": "paired/section:drop:end->drop",
    "in": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
-   "msg": "No paired section/dropout alignment for 'Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED' -> 'BUTCH & Santos -  Come Get Up 24 Bit MASTE",
+   "n_paired_cues": 1,
+   "notes": [
+    "paired cue score 9; swap 38% through overlap"
+   ],
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "status": "raise"
+   "overlap_bars": 21.0,
+   "overlap_policy": "standard_48",
+   "paired_cue_bars": [
+    252
+   ],
+   "paired_cues": [
+    {
+     "arrangement_bar": 252,
+     "incoming_labels": [
+      "section:intro:end",
+      "section:drop:start"
+     ],
+     "incoming_source_bar": 8,
+     "outgoing_labels": [
+      "section:drop:end",
+      "section:break:start"
+     ]
+    }
+   ],
+   "plan": {
+    "specs": [],
+    "status": "ok"
+   },
+   "score": 1,
+   "status": "ok",
+   "swap_progress": 0.380952
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 231.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 1,
    "notes": [
@@ -13249,7 +13292,7 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13281,7 +13324,7 @@
    "anchor_bar_in": 16.0,
    "arr_offset_bars": 247.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Cevin Fisher - Emotions 24 Bit MASTER",
    "n_paired_cues": 1,
    "notes": [
@@ -13302,7 +13345,7 @@
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13320,7 +13363,7 @@
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 231.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Christoph - Reachin 16 Bit MASTER",
    "n_paired_cues": 1,
    "notes": [
@@ -13341,7 +13384,7 @@
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13357,23 +13400,24 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
-   "arr_offset_bars": 231.0,
-   "handoff_bar_out": 263.0,
+   "arr_offset_bars": 220.0,
+   "handoff_bar_out": 252.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Christoph - The Rise 16 Bit MASTER",
-   "n_paired_cues": 1,
+   "n_paired_cues": 2,
    "notes": [
-    "paired cue score 12; swap 94% through overlap"
+    "paired cue score 19; swap 71% through overlap"
    ],
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 34.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 45.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
-    263
+    252,
+    264
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 263,
+     "arrangement_bar": 252,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start"
@@ -13381,7 +13425,19 @@
      "incoming_source_bar": 32,
      "outgoing_labels": [
       "section:drop:end",
-      "section:outro:start"
+      "section:break:start"
+     ]
+    },
+    {
+     "arrangement_bar": 264,
+     "incoming_labels": [
+      "section:fill:end",
+      "section:drop:start",
+      "landmark:pre_drop_kick_gap:end"
+     ],
+     "incoming_source_bar": 44,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
      ]
     }
    ],
@@ -13389,30 +13445,30 @@
     "specs": [
      {
       "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 2bx3+0b to section:fill_1 271",
+      "cut_to_bar": 4.0,
+      "kind": "intro_cut",
+      "note": "trim intro front 4b (started in break)",
       "partial_bars": 0.0,
-      "reps": 3,
+      "reps": 0,
       "skip_bars": 0.0,
-      "source_end_bar": 224.0,
-      "source_start_bar": 222.0,
-      "target_marker_bar": 271.0,
-      "target_marker_name": "section:fill_1"
+      "source_end_bar": 0.0,
+      "source_start_bar": 0.0,
+      "target_marker_bar": 224.0,
+      "target_marker_name": ""
      }
     ],
     "status": "ok"
    },
-   "score": 1,
+   "score": 2,
    "status": "ok",
-   "swap_progress": 0.941176
+   "swap_progress": 0.711111
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
    "arr_offset_bars": 231.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
    "n_paired_cues": 1,
    "notes": [
@@ -13429,12 +13485,11 @@
      "arrangement_bar": 263,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13463,78 +13518,66 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "anchor_bar_in": 32.0,
-   "arr_offset_bars": 231.0,
-   "handoff_bar_out": 263.0,
+   "anchor_bar_in": 8.0,
+   "arr_offset_bars": 244.0,
+   "handoff_bar_out": 252.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED",
    "n_paired_cues": 1,
    "notes": [
-    "paired cue score 12; swap 94% through overlap"
+    "paired cue score 9; swap 38% through overlap"
    ],
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 34.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_bars": 21.0,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
-    263
+    252
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 263,
+     "arrangement_bar": 252,
      "incoming_labels": [
-      "section:build:end",
+      "section:intro:end",
       "section:drop:start",
       "landmark:pre_drop_kick_gap:end"
      ],
-     "incoming_source_bar": 32,
+     "incoming_source_bar": 8,
      "outgoing_labels": [
       "section:drop:end",
-      "section:outro:start"
+      "section:break:start"
      ]
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "kind": "outgoing_tail",
-      "note": "loop outro 2bx3+0b to landmark:kick_gap_156_160:end 271",
-      "partial_bars": 0.0,
-      "reps": 3,
-      "skip_bars": 0.0,
-      "source_end_bar": 224.0,
-      "source_start_bar": 222.0,
-      "target_marker_bar": 271.0,
-      "target_marker_name": "landmark:kick_gap_156_160:end"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
    "status": "ok",
-   "swap_progress": 0.941176
+   "swap_progress": 0.380952
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 32.0,
-   "arr_offset_bars": 231.0,
-   "handoff_bar_out": 263.0,
+   "arr_offset_bars": 220.0,
+   "handoff_bar_out": 252.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Harry Romero - Renegades SW V1",
-   "n_paired_cues": 1,
+   "n_paired_cues": 3,
    "notes": [
-    "paired cue score 12; swap 94% through overlap"
+    "paired cue score 28; swap 71% through overlap"
    ],
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 34.0,
+   "overlap_bars": 45.0,
    "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    263
+    252,
+    263,
+    264
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 263,
+     "arrangement_bar": 252,
      "incoming_labels": [
       "section:intro:end",
       "section:drop:start",
@@ -13543,7 +13586,28 @@
      "incoming_source_bar": 32,
      "outgoing_labels": [
       "section:drop:end",
+      "section:break:start"
+     ]
+    },
+    {
+     "arrangement_bar": 263,
+     "incoming_labels": [
+      "landmark:kick_dropout:start"
+     ],
+     "incoming_source_bar": 43,
+     "outgoing_labels": [
+      "section:break:end",
       "section:outro:start"
+     ]
+    },
+    {
+     "arrangement_bar": 264,
+     "incoming_labels": [
+      "landmark:kick_dropout:end"
+     ],
+     "incoming_source_bar": 44,
+     "outgoing_labels": [
+      "landmark:kick_dropout:start"
      ]
     }
    ],
@@ -13551,23 +13615,36 @@
     "specs": [
      {
       "clip_name": "",
+      "cut_to_bar": 4.0,
+      "kind": "intro_cut",
+      "note": "trim intro front 4b (started in break)",
+      "partial_bars": 0.0,
+      "reps": 0,
+      "skip_bars": 0.0,
+      "source_end_bar": 0.0,
+      "source_start_bar": 0.0,
+      "target_marker_bar": 224.0,
+      "target_marker_name": ""
+     },
+     {
+      "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx5+0b to landmark:kick_gap_174_176:end 275",
+      "note": "loop outro 1bx3+0b to landmark:kick_gap_188_192:end 268",
       "partial_bars": 0.0,
-      "reps": 5,
+      "reps": 3,
       "skip_bars": 0.0,
-      "source_end_bar": 224.0,
-      "source_start_bar": 222.0,
-      "target_marker_bar": 275.0,
-      "target_marker_name": "landmark:kick_gap_174_176:end"
+      "source_end_bar": 145.0,
+      "source_start_bar": 144.0,
+      "target_marker_bar": 268.0,
+      "target_marker_name": "landmark:kick_gap_188_192:end"
      }
     ],
     "status": "ok"
    },
-   "score": 1,
+   "score": 3,
    "status": "ok",
-   "swap_progress": 0.941176
+   "swap_progress": 0.711111
   },
   {
    "error": "ValueError",
@@ -13578,49 +13655,63 @@
   },
   {
    "alignment_policy": "paired_landmarks_v2",
-   "anchor_bar_in": 24.0,
-   "arr_offset_bars": 239.0,
-   "handoff_bar_out": 263.0,
+   "anchor_bar_in": 8.0,
+   "arr_offset_bars": 244.0,
+   "handoff_bar_out": 252.0,
    "handoff_kind": "paired/section:drop:end->drop",
    "in": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
    "n_paired_cues": 1,
    "notes": [
-    "paired cue score 12; swap 92% through overlap"
+    "paired cue score 9; swap 38% through overlap"
    ],
    "out": "Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED",
-   "overlap_bars": 26.0,
-   "overlap_policy": "standard_48",
+   "overlap_bars": 21.0,
+   "overlap_policy": "named_landmark_64",
    "paired_cue_bars": [
-    263
+    252
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 263,
+     "arrangement_bar": 252,
      "incoming_labels": [
-      "section:build:end",
+      "section:intro:end",
       "section:drop:start"
      ],
-     "incoming_source_bar": 24,
+     "incoming_source_bar": 8,
      "outgoing_labels": [
       "section:drop:end",
-      "section:outro:start"
+      "section:break:start"
      ]
     }
    ],
    "plan": {
-    "specs": [],
+    "specs": [
+     {
+      "clip_name": "",
+      "cut_to_bar": 0.0,
+      "kind": "outgoing_tail",
+      "note": "loop outro 1bx3+0b to section:drop_2 268",
+      "partial_bars": 0.0,
+      "reps": 3,
+      "skip_bars": 0.0,
+      "source_end_bar": 145.0,
+      "source_start_bar": 144.0,
+      "target_marker_bar": 268.0,
+      "target_marker_name": "section:drop_2"
+     }
+    ],
     "status": "ok"
    },
    "score": 1,
    "status": "ok",
-   "swap_progress": 0.923077
+   "swap_progress": 0.380952
   },
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
    "arr_offset_bars": 247.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER",
    "n_paired_cues": 1,
    "notes": [
@@ -13641,7 +13732,7 @@
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13673,7 +13764,7 @@
    "anchor_bar_in": 16.0,
    "arr_offset_bars": 247.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
    "n_paired_cues": 1,
    "notes": [
@@ -13694,7 +13785,7 @@
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13726,7 +13817,7 @@
    "anchor_bar_in": 16.0,
    "arr_offset_bars": 247.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
    "n_paired_cues": 1,
    "notes": [
@@ -13747,7 +13838,7 @@
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -13786,7 +13877,7 @@
    "anchor_bar_in": 16.0,
    "arr_offset_bars": 247.0,
    "handoff_bar_out": 263.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "handoff_kind": "paired/section:break:end->drop",
    "in": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
    "n_paired_cues": 1,
    "notes": [
@@ -13807,7 +13898,7 @@
      ],
      "incoming_source_bar": 16,
      "outgoing_labels": [
-      "section:drop:end",
+      "section:break:end",
       "section:outro:start"
      ]
     }
@@ -14901,9 +14992,9 @@
    "handoff_bar_out": 160.0,
    "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED",
-   "n_paired_cues": 5,
+   "n_paired_cues": 4,
    "notes": [
-    "paired cue score 43; swap 67% through overlap"
+    "paired cue score 35; swap 67% through overlap"
    ],
    "out": "Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER",
    "overlap_bars": 48.0,
@@ -14912,7 +15003,6 @@
     128,
     160,
     176,
-    159,
     175
    ],
    "paired_cues": [
@@ -14932,8 +15022,7 @@
      "arrangement_bar": 160,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
@@ -14951,16 +15040,6 @@
       "track_end",
       "section:outro:end",
       "landmark:kick_dropout:end"
-     ]
-    },
-    {
-     "arrangement_bar": 159,
-     "incoming_labels": [
-      "landmark:pre_drop_kick_gap:start"
-     ],
-     "incoming_source_bar": 31,
-     "outgoing_labels": [
-      "landmark:kick_dropout:start"
      ]
     },
     {
@@ -14992,7 +15071,7 @@
     ],
     "status": "ok"
    },
-   "score": 5,
+   "score": 4,
    "status": "ok",
    "swap_progress": 0.666667
   },
@@ -15094,14 +15173,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to landmark:kick_gap_156_160:end 184",
+      "note": "loop outro 2bx4+0b to landmark:kick_gap_158_160:end 184",
       "partial_bars": 0.0,
       "reps": 4,
       "skip_bars": 0.0,
       "source_end_bar": 176.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
-      "target_marker_name": "landmark:kick_gap_156_160:end"
+      "target_marker_name": "landmark:kick_gap_158_160:end"
      }
     ],
     "status": "ok"
@@ -15478,14 +15557,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx7+0b to landmark:kick_gap_186_188:end 183",
+      "note": "loop outro 2bx4+0b to landmark:kick_gap_190_192:end 184",
       "partial_bars": 0.0,
-      "reps": 7,
+      "reps": 4,
       "skip_bars": 0.0,
-      "source_end_bar": 175.0,
+      "source_end_bar": 176.0,
       "source_start_bar": 174.0,
-      "target_marker_bar": 183.0,
-      "target_marker_name": "landmark:kick_gap_186_188:end"
+      "target_marker_bar": 184.0,
+      "target_marker_name": "landmark:kick_gap_190_192:end"
      }
     ],
     "status": "ok"
@@ -15900,14 +15979,14 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 1bx6+0b to landmark:kick_gap_186_188:end 191",
+      "note": "loop outro 1bx7+0b to landmark:kick_gap_190_192:end 192",
       "partial_bars": 0.0,
-      "reps": 6,
+      "reps": 7,
       "skip_bars": 0.0,
       "source_end_bar": 184.0,
       "source_start_bar": 183.0,
-      "target_marker_bar": 191.0,
-      "target_marker_name": "landmark:kick_gap_186_188:end"
+      "target_marker_bar": 192.0,
+      "target_marker_name": "landmark:kick_gap_190_192:end"
      }
     ],
     "status": "ok"
@@ -16533,41 +16612,29 @@
   {
    "alignment_policy": "paired_landmarks_v2",
    "anchor_bar_in": 16.0,
-   "arr_offset_bars": 135.0,
-   "handoff_bar_out": 151.0,
-   "handoff_kind": "paired/section:drop:end->drop",
+   "arr_offset_bars": 151.0,
+   "handoff_bar_out": 167.0,
+   "handoff_kind": "paired/landmark:kick_dropout:end->drop",
    "in": "A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER",
-   "n_paired_cues": 3,
+   "n_paired_cues": 2,
    "notes": [
-    "paired cue score 32; swap 48% through overlap"
+    "paired cue score 22; swap 94% through overlap"
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
-   "overlap_bars": 33.0,
+   "overlap_bars": 17.0,
    "overlap_policy": "standard_48",
    "paired_cue_bars": [
-    135,
     151,
     167
    ],
    "paired_cues": [
     {
-     "arrangement_bar": 135,
+     "arrangement_bar": 151,
      "incoming_labels": [
       "track_start",
       "section:intro:start"
      ],
      "incoming_source_bar": 0,
-     "outgoing_labels": [
-      "landmark:kick_dropout:start"
-     ]
-    },
-    {
-     "arrangement_bar": 151,
-     "incoming_labels": [
-      "section:intro:end",
-      "section:drop:start"
-     ],
-     "incoming_source_bar": 16,
      "outgoing_labels": [
       "section:drop:end",
       "section:outro:start"
@@ -16576,10 +16643,10 @@
     {
      "arrangement_bar": 167,
      "incoming_labels": [
-      "section:build:end",
+      "section:intro:end",
       "section:drop:start"
      ],
-     "incoming_source_bar": 32,
+     "incoming_source_bar": 16,
      "outgoing_labels": [
       "landmark:kick_dropout:end",
       "landmark:kick_dropout:start"
@@ -16590,9 +16657,9 @@
     "specs": [],
     "status": "ok"
    },
-   "score": 3,
+   "score": 2,
    "status": "ok",
-   "swap_progress": 0.484848
+   "swap_progress": 0.941176
   },
   {
    "alignment_policy": "paired_landmarks_v2",
@@ -16906,8 +16973,7 @@
      "arrangement_bar": 165,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
@@ -17270,7 +17336,7 @@
    "in": "Sam Leagas - Double Dutch (Extended Mix) SW V1",
    "n_paired_cues": 4,
    "notes": [
-    "paired cue score 42; swap 33% through overlap"
+    "paired cue score 41; swap 33% through overlap"
    ],
    "out": "Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED",
    "overlap_bars": 48.0,
@@ -17321,7 +17387,6 @@
     {
      "arrangement_bar": 167,
      "incoming_labels": [
-      "landmark:pre_drop_kick_gap:end",
       "landmark:pre_drop_kick_gap:start"
      ],
      "incoming_source_bar": 47,
@@ -17453,13 +17518,13 @@
       "clip_name": "",
       "cut_to_bar": 0.0,
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:drop_2 160",
+      "note": "loop outro 2bx2+0b to section:drop_2 156",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 2,
       "skip_bars": 0.0,
       "source_end_bar": 146.0,
       "source_start_bar": 144.0,
-      "target_marker_bar": 160.0,
+      "target_marker_bar": 156.0,
       "target_marker_name": "section:drop_2"
      }
     ],
@@ -17890,8 +17955,7 @@
      "arrangement_bar": 144,
      "incoming_labels": [
       "section:build:end",
-      "section:drop:start",
-      "landmark:pre_drop_kick_gap:end"
+      "section:drop:start"
      ],
      "incoming_source_bar": 32,
      "outgoing_labels": [
