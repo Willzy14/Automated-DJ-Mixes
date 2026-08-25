@@ -1,0 +1,859 @@
+"""Tests for Source/render_check.py: render gate over a bounced mix WAV.
+
+All fixtures are built in code from scratch: a minimal gzipped ALS the
+parser accepts, an arrangement report dict, and short synthetic renders
+(kick-like bursts over a tone bed, never accidentally silent). The corpus
+regression pin (V10) skips cleanly when the audio corpus is absent.
+"""
+from __future__ import annotations
+
+import gzip
+import json
+import math
+import sys
+from pathlib import Path
+from xml.etree.ElementTree import Element, SubElement, tostring
+
+import numpy as np
+import pytest
+import soundfile as sf
+
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "Source"))
+
+import render_check  # noqa: E402
+
+
+# --------------------------------------------------------------------------- #
+# ALS fixture                                                                 #
+# --------------------------------------------------------------------------- #
+
+def _als_xml(clips, bpm=128.0):
+    """Minimal gzipped XML the parser accepts: <Ableton>/<LiveSet>, one
+    Tempo/Manual, one AudioTrack per track, each with N AudioClips."""
+    root = Element("Ableton")
+    live = SubElement(root, "LiveSet")
+    tempo = SubElement(live, "Tempo")
+    manual = SubElement(tempo, "Manual")
+    manual.set("Value", str(bpm))
+
+    # Group clips by track so each AudioTrack has the right EffectiveName.
+    by_track: dict[str, list[dict]] = {}
+    for c in clips:
+        by_track.setdefault(c["track"], []).append(c)
+
+    for tname, tclips in by_track.items():
+        track = SubElement(live, "AudioTrack")
+        name = SubElement(track, "EffectiveName")
+        name.set("Value", tname)
+        for c in tclips:
+            clip = SubElement(track, "AudioClip")
+            cs = SubElement(clip, "CurrentStart")
+            cs.set("Value", str(c["arr_start"]))
+            ce = SubElement(clip, "CurrentEnd")
+            ce.set("Value", str(c["arr_end"]))
+            cname = SubElement(clip, "Name")
+            cname.set("Value", c.get("name", "clip"))
+            if c.get("loop_on"):
+                loop = SubElement(clip, "Loop")
+                ls = SubElement(loop, "LoopStart")
+                ls.set("Value", str(c["loop_start"]))
+                le = SubElement(loop, "LoopEnd")
+                le.set("Value", str(c["loop_end"]))
+                sr = SubElement(loop, "StartRelative")
+                sr.set("Value", str(c.get("start_relative", 0.0)))
+                lo = SubElement(loop, "LoopOn")
+                lo.set("Value", "true")
+            else:
+                loop = SubElement(clip, "Loop")
+                ls = SubElement(loop, "LoopStart")
+                ls.set("Value", "0")
+                le = SubElement(loop, "LoopEnd")
+                le.set("Value", str(c["arr_end"] - c["arr_start"]))
+                sr = SubElement(loop, "StartRelative")
+                sr.set("Value", "0")
+                lo = SubElement(loop, "LoopOn")
+                lo.set("Value", "false")
+    return gzip.compress(tostring(root, encoding="utf-8"))
+
+
+def _write_als(path, clips, bpm=128.0):
+    path.write_bytes(_als_xml(clips, bpm))
+
+
+def _write_report(path, loops=None, transitions=None):
+    obj = {"loops": loops or [], "transitions": transitions or []}
+    path.write_text(json.dumps(obj), encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# Synthetic render                                                            #
+# --------------------------------------------------------------------------- #
+
+def _synth_render(path, seconds, *, bpm=128.0, sr=44100,
+                  clips=None, extra_process=None,
+                  level_db=-20.0, with_kicks=True):
+    """Stereo float -> PCM_24. Kick-like bursts (decaying sine) on a -20 dBFS
+    220 Hz tone bed, so the file is never accidentally silent. Per-clip gain
+    lets each test scale a clip's amplitude. extra_process(t, L, R) runs on
+    every sample and can inject defects (silence, clicks, dips). With
+    with_kicks=False, the per-beat kick layer is skipped -- useful for
+    correlation tests where periodic peaks at frame boundaries produce
+    spurious anti-correlation between otherwise-identical iterations."""
+    spb = sr * 60.0 / bpm
+    n = int(round(seconds * sr))
+    t = np.arange(n) / sr
+    amp = 10 ** (level_db / 20.0)
+    L = amp * 0.5 * np.sin(2 * math.pi * 220.0 * t)
+    R = amp * 0.5 * np.sin(2 * math.pi * 220.0 * t + 0.001)
+
+    if with_kicks:
+        beat_times = np.arange(0, seconds, 60.0 / bpm)
+        for bt in beat_times:
+            i0 = int(round(bt * sr))
+            dur_samp = int(round(0.06 * sr))
+            if i0 + dur_samp > n:
+                break
+            env = np.exp(-np.arange(dur_samp) / (sr * 0.012))
+            ramp = int(round(0.005 * sr))
+            env[:ramp] *= np.linspace(0, 1, ramp)
+            L[i0:i0 + dur_samp] += env * np.sin(2 * math.pi * 60.0 * np.arange(dur_samp) / sr)
+            R[i0:i0 + dur_samp] += env * np.sin(2 * math.pi * 60.0 * np.arange(dur_samp) / sr)
+
+    if clips:
+        sec_per_beat = 60.0 / bpm
+        for c in clips:
+            i0 = int(round(c["arr_start"] * sec_per_beat * sr))
+            i1 = int(round(c["arr_end"] * sec_per_beat * sr))
+            i0 = max(0, i0)
+            i1 = min(n, i1)
+            gain = c.get("gain", 1.0)
+            if gain != 1.0:
+                L[i0:i1] *= gain
+                R[i0:i1] *= gain
+            if c.get("freq"):
+                f = c["freq"]
+                seg_t = np.arange(i1 - i0) / sr
+                L[i0:i1] = L[i0:i1] * 0.5 + amp * 0.4 * np.sin(2 * math.pi * f * seg_t)
+                R[i0:i1] = R[i0:i1] * 0.5 + amp * 0.4 * np.sin(2 * math.pi * f * seg_t)
+
+    if extra_process is not None:
+        L, R = extra_process(t, L, R)
+
+    stereo = np.stack([np.clip(L, -1.0, 1.0), np.clip(R, -1.0, 1.0)], axis=1)
+    sf.write(str(path), stereo, sr, subtype="PCM_24")
+
+
+def _single_track_clips(seconds, bpm=128.0, name="Tone"):
+    """One full-track AudioClip covering the whole render. Useful for
+    building up defect tests where exactly one clip is active everywhere."""
+    return [{
+        "track": name,
+        "arr_start": 0,
+        "arr_end": round(seconds * bpm / 60.0),
+        "loop_on": False,
+    }]
+
+
+def _two_track_overlap(seconds, bpm=128.0):
+    """Track A covers first half, Track B covers second half, then a 20%
+    overlap region where both are active (so exposed_solo is NOT triggered
+    on the quiet material in the second half)."""
+    half = seconds / 2.0
+    overlap_start = seconds * 0.5
+    overlap_end = seconds * 0.7
+    beats_per_sec = bpm / 60.0
+    return [
+        {"track": "A", "arr_start": 0,
+         "arr_end": round(overlap_end * beats_per_sec),
+         "loop_on": False},
+        {"track": "B", "arr_start": round(overlap_start * beats_per_sec),
+         "arr_end": round(seconds * beats_per_sec),
+         "loop_on": False},
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Tests                                                                       #
+# --------------------------------------------------------------------------- #
+
+def test_clean_render_passes(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 30.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips)
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+
+    res = render_check.run_check(wav, rpt, als)
+    assert res.exit_code == 0, [(f.check, f.level) for f in res.findings]
+    assert res.verdict == "PASS"
+    # INFO findings never affect the exit code (per spec); only FAIL/WARN count.
+    assert not any(f.level in ("FAIL", "WARN") for f in res.findings)
+
+
+def test_hard_silence_injected_fails(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 30.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips)
+
+    silence_start = 10.0
+    silence_end = 11.0
+
+    def silence(t, L, R):
+        m = (t >= silence_start) & (t < silence_end)
+        L = L.copy()
+        R = R.copy()
+        L[m] = 0.0
+        R[m] = 0.0
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=silence)
+    _write_report(rpt)
+
+    res = render_check.run_check(wav, rpt, als)
+    assert res.exit_code == 2
+    assert any(f.check == "hard_silence" and f.level == "FAIL" for f in res.findings)
+
+    # Control A: 0.3 s silence (below the 0.5 s threshold) -> no finding.
+    wav_b = tmp_path / "short.wav"
+    rpt_b = tmp_path / "r_short.json"
+    def short_silence(t, L, R):
+        m = (t >= 5.0) & (t < 5.3)
+        L = L.copy(); R = R.copy()
+        L[m] = 0.0; R[m] = 0.0
+        return L, R
+    _synth_render(wav_b, seconds, clips=clips, extra_process=short_silence)
+    _write_report(rpt_b)
+    res_b = render_check.run_check(wav_b, rpt_b, als)
+    assert not any(f.check == "hard_silence" for f in res_b.findings)
+
+    # Control B: silence AFTER last clip end (the render tail) -> no finding.
+    # Rendered 2 s longer than the arrangement so the tail actually exists.
+    wav_c = tmp_path / "tail.wav"
+    rpt_c = tmp_path / "r_tail.json"
+    end_sec = clips[0]["arr_end"] * 60.0 / 128.0
+    def tail_silence(t, L, R):
+        m = t > end_sec
+        L = L.copy(); R = R.copy()
+        L[m] = 0.0; R[m] = 0.0
+        return L, R
+    _synth_render(wav_c, seconds + 2.0, clips=clips, extra_process=tail_silence)
+    _write_report(rpt_c)
+    res_c = render_check.run_check(wav_c, rpt_c, als)
+    assert not any(f.check == "hard_silence" for f in res_c.findings)
+
+
+def test_boundary_click_single_sample_step(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    seconds = 30.0
+    bps = bpm / 60.0
+    # Two clips that meet exactly at beat 10 (4.6875 s).
+    boundary_beat = 10
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": boundary_beat, "loop_on": False},
+        {"track": "B", "arr_start": boundary_beat,
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+    _write_als(als, clips)
+
+    def click_at_boundary(t, L, R):
+        L = L.copy(); R = R.copy()
+        t_b = boundary_beat / bps
+        idx = int(round(t_b * 44100))
+        L[idx] = L[idx] + 0.7
+        R[idx] = R[idx] + 0.7
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=click_at_boundary)
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    assert any(f.check == "boundary_click" and f.level == "FAIL" for f in res.findings), \
+        [(f.check, f.level, f.measured) for f in res.findings]
+
+    # Control: a 5 ms ramped loud hit at the same boundary -> no click finding.
+    wav_b = tmp_path / "ramp.wav"
+    rpt_b = tmp_path / "r_ramp.json"
+    def ramp_hit(t, L, R):
+        L = L.copy(); R = R.copy()
+        t_b = boundary_beat / bps
+        i0 = int(round((t_b - 0.003) * 44100))
+        i1 = int(round((t_b + 0.003) * 44100))
+        ramp = np.linspace(0, 0.9, i1 - i0)
+        L[i0:i1] += ramp
+        R[i0:i1] += ramp
+        return L, R
+    _synth_render(wav_b, seconds, clips=clips, extra_process=ramp_hit)
+    _write_report(rpt_b)
+    res_b = render_check.run_check(wav_b, rpt_b, als)
+    assert not any(f.check == "boundary_click" for f in res_b.findings), \
+        [(f.check, f.level) for f in res_b.findings]
+
+
+def test_level_cliff_at_loop_insert(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    seconds = 30.0
+    bps = bpm / 60.0
+    insert_beat = 16
+    # Whole-render base clip; loop insert at beat 16 drops 8 dB.
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": round(seconds * bps),
+         "loop_on": False},
+    ]
+    _write_als(als, clips)
+    loops = [{
+        "track": "A",
+        "type": "tail",
+        "source_beats": f"100-116",  # 16-beat loop
+        "count": 1,
+        "total_beats": 16.0,
+        "insert_at_beat": insert_beat,
+    }]
+
+    def drop_at_insert(t, L, R):
+        L = L.copy(); R = R.copy()
+        t_b = insert_beat / bps
+        m = t >= t_b
+        L[m] *= 0.4  # ~ -8 dB
+        R[m] *= 0.4
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=drop_at_insert)
+    _write_report(rpt, loops=loops)
+    res = render_check.run_check(wav, rpt, als)
+    cliffs = [f for f in res.findings if f.check == "level_cliff"]
+    assert cliffs, [f.check for f in res.findings]
+    assert all(f.level == "WARN" for f in cliffs)
+    assert res.exit_code == 1
+
+    # Control: 3 dB step -> no finding.
+    wav_b = tmp_path / "small.wav"
+    rpt_b = tmp_path / "r_small.json"
+    def small_drop(t, L, R):
+        L = L.copy(); R = R.copy()
+        t_b = insert_beat / bps
+        m = t >= t_b
+        L[m] *= 10 ** (-3 / 20)  # ~ -3 dB
+        R[m] *= 10 ** (-3 / 20)
+        return L, R
+    _synth_render(wav_b, seconds, clips=clips, extra_process=small_drop)
+    _write_report(rpt_b, loops=loops)
+    res_b = render_check.run_check(wav_b, rpt_b, als)
+    assert not any(f.check == "level_cliff" for f in res_b.findings)
+
+
+def test_loop_period_off_phrase(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    seconds = 30.0
+    bps = bpm / 60.0
+    clips = [{
+        "track": "A", "arr_start": 0, "arr_end": round(seconds * bps),
+        "loop_on": False,
+    }]
+    _write_als(als, clips)
+    # 12-beat loop, 4 iterations starting at beat 16.
+    loops = [{
+        "track": "A", "type": "tail",
+        "source_beats": "100-112",  # 12-beat loop
+        "count": 4,
+        "total_beats": 48.0,
+        "insert_at_beat": 16,
+    }]
+
+    def repeat_pattern(t, L, R):
+        # 4-beat repeating loud/quiet pattern within the loop span.
+        L = L.copy(); R = R.copy()
+        t0 = (16 / bps)
+        t1 = ((16 + 48) / bps)
+        m = (t >= t0) & (t < t1)
+        phase = ((t - t0) % (4 / bps)) / (1 / bps)  # beat position within 4-beat
+        env = np.where((phase % 4) < 2, 1.0, 0.3)
+        L[m] *= env[m]
+        R[m] *= env[m]
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=repeat_pattern)
+    _write_report(rpt, loops=loops)
+    res = render_check.run_check(wav, rpt, als)
+    periods = [f for f in res.findings if f.check == "loop_period"]
+    assert periods, [f.check for f in res.findings]
+    assert any(f.level == "WARN" for f in periods)
+    # Lag in measured should be 12.
+    assert any(abs(f.measured.get("iter_len", 0) - 12) < 1e-6 for f in periods)
+
+    # Control: 16-beat loop -> no finding.
+    wav_b = tmp_path / "ok.wav"
+    rpt_b = tmp_path / "r_ok.json"
+    loops_ok = [{
+        "track": "A", "type": "tail",
+        "source_beats": "100-116",
+        "count": 3,
+        "total_beats": 48.0,
+        "insert_at_beat": 16,
+    }]
+    _synth_render(wav_b, seconds, clips=clips, extra_process=repeat_pattern)
+    _write_report(rpt_b, loops=loops_ok)
+    res_b = render_check.run_check(wav_b, rpt_b, als)
+    assert not any(f.check == "loop_period" for f in res_b.findings)
+
+
+def test_exposed_solo_quiet_stretch(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    seconds = 40.0
+    bps = bpm / 60.0
+    # Single clip covers everything (one active clip everywhere).
+    clips = [{
+        "track": "Solo", "arr_start": 0,
+        "arr_end": round(seconds * bps),
+        "loop_on": False,
+    }]
+    _write_als(als, clips)
+
+    quiet_start = 10.0
+    quiet_end = 16.0  # 6 s
+
+    def quiet_stretch(t, L, R):
+        L = L.copy(); R = R.copy()
+        m = (t >= quiet_start) & (t < quiet_end)
+        L[m] *= 10 ** (-15 / 20)  # -15 dB drop -> floor ~ -35 dBFS
+        R[m] *= 10 ** (-15 / 20)
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=quiet_stretch,
+                  level_db=-20.0)
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    solos = [f for f in res.findings if f.check == "exposed_solo"]
+    assert solos, [f.check for f in res.findings]
+    assert all(f.level == "WARN" for f in solos)
+
+    # Control: same quiet audio but with TWO overlapping clips in the ALS at
+    # that time -> no exposed_solo finding.
+    als_b = tmp_path / "m2.als"
+    wav_b = tmp_path / "two.wav"
+    rpt_b = tmp_path / "r2.json"
+    beats_total = round(seconds * bps)
+    clips_two = [
+        {"track": "A", "arr_start": 0, "arr_end": beats_total, "loop_on": False},
+        {"track": "B", "arr_start": 0, "arr_end": beats_total, "loop_on": False},
+    ]
+    _write_als(als_b, clips_two)
+    _synth_render(wav_b, seconds, clips=clips_two, extra_process=quiet_stretch,
+                  level_db=-20.0)
+    _write_report(rpt_b)
+    res_b = render_check.run_check(wav_b, rpt_b, als_b)
+    assert not any(f.check == "exposed_solo" for f in res_b.findings), \
+        [(f.check, f.t0, f.t1) for f in res_b.findings if f.check == "exposed_solo"]
+
+
+def test_loop_hole_quiet_run(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    seconds = 30.0
+    bps = bpm / 60.0
+    clips = [{
+        "track": "A", "arr_start": 0, "arr_end": round(seconds * bps),
+        "loop_on": False,
+    }]
+    _write_als(als, clips)
+    loops = [{
+        "track": "A", "type": "tail",
+        "source_beats": "100-108",  # 8-beat loop
+        "count": 4,
+        "total_beats": 32.0,
+        "insert_at_beat": 16,
+    }]
+
+    def pattern(t, L, R):
+        L = L.copy(); R = R.copy()
+        t0 = (16 / bps)
+        t1 = ((16 + 32) / bps)
+        m = (t >= t0) & (t < t1)
+        local = (t - t0) * bps  # beat position within loop
+        within = local % 8
+        env = np.where(within < 4, 1.0, 0.4)  # 4 loud + 4 quiet
+        L[m] *= env[m]
+        R[m] *= env[m]
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=pattern)
+    _write_report(rpt, loops=loops)
+    res = render_check.run_check(wav, rpt, als)
+    holes = [f for f in res.findings if f.check == "loop_hole"]
+    assert holes, [f.check for f in res.findings]
+
+    # Control: flat loop -> no finding.
+    wav_b = tmp_path / "flat.wav"
+    rpt_b = tmp_path / "r_flat.json"
+    def noop(t, L, R):
+        return L, R
+    _synth_render(wav_b, seconds, clips=clips, extra_process=noop)
+    _write_report(rpt_b, loops=loops)
+    res_b = render_check.run_check(wav_b, rpt_b, als)
+    assert not any(f.check == "loop_hole" for f in res_b.findings)
+
+
+def test_loop_exit_jump(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    seconds = 30.0
+    bps = bpm / 60.0
+    clips = [{
+        "track": "A", "arr_start": 0, "arr_end": round(seconds * bps),
+        "loop_on": False,
+    }]
+    _write_als(als, clips)
+    insert = 16
+    exit = insert + 16  # one iteration
+    loops = [{
+        "track": "A", "type": "tail",
+        "source_beats": "100-116",  # 16-beat loop, 1 iter
+        "count": 1,
+        "total_beats": 16.0,
+        "insert_at_beat": insert,
+    }]
+
+    def bump(t, L, R):
+        L = L.copy(); R = R.copy()
+        t_b = exit / bps
+        m = t >= t_b
+        L[m] *= 10 ** (5 / 20)  # +5 dB
+        R[m] *= 10 ** (5 / 20)
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=bump)
+    _write_report(rpt, loops=loops)
+    res = render_check.run_check(wav, rpt, als)
+    jumps = [f for f in res.findings if f.check == "loop_exit_jump"]
+    assert jumps, [f.check for f in res.findings]
+    assert all(f.level == "WARN" for f in jumps)
+
+    # Control: +2 dB -> no finding.
+    wav_b = tmp_path / "small.wav"
+    rpt_b = tmp_path / "r_small.json"
+    def small_bump(t, L, R):
+        L = L.copy(); R = R.copy()
+        t_b = exit / bps
+        m = t >= t_b
+        L[m] *= 10 ** (2 / 20)
+        R[m] *= 10 ** (2 / 20)
+        return L, R
+    _synth_render(wav_b, seconds, clips=clips, extra_process=small_bump)
+    _write_report(rpt_b, loops=loops)
+    res_b = render_check.run_check(wav_b, rpt_b, als)
+    assert not any(f.check == "loop_exit_jump" for f in res_b.findings)
+
+
+def test_loop_verbatim_envelope_correlation(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    seconds = 30.0
+    bps = bpm / 60.0
+    # 4 iterations of 4 beats each. Kicks stay ON: the check reads each
+    # iteration at exact sample offsets, so identical iterations correlate
+    # ~1.0 regardless of where the 100 ms sweep frames fall -- the kick
+    # attacks are the very structure the correlation should be measuring.
+    clips = [{
+        "track": "A", "arr_start": 0, "arr_end": round(seconds * bps),
+        "loop_on": False,
+    }]
+    _write_als(als, clips)
+    loops = [{
+        "track": "A", "type": "tail",
+        "source_beats": "100-104",  # 4-beat loop
+        "count": 4,
+        "total_beats": 16.0,
+        "insert_at_beat": 16,
+    }]
+
+    def break_iteration(t, L, R):
+        # Iteration 3 (beats 24..28) uses a different envelope shape:
+        # half the time silence, half the time the bed. Different shape
+        # across the iteration -> rms100 envelope diverges -> r drops < 0.9.
+        L = L.copy(); R = R.copy()
+        m3 = (t >= (24 / bps)) & (t < (28 / bps))
+        local_idx = np.where(m3)[0]
+        within = (t[local_idx] - (24 / bps)) * bps  # beat pos within iter
+        # 4-beat iteration -> silence beats 25, 27; bed on 24, 26.
+        silent = ((within.astype(int)) % 2) == 1
+        L[local_idx[silent]] = 0.0
+        R[local_idx[silent]] = 0.0
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=break_iteration)
+    _write_report(rpt, loops=loops)
+    res = render_check.run_check(wav, rpt, als)
+    vbs = [f for f in res.findings if f.check == "loop_verbatim"]
+    assert vbs, [(f.check, f.level) for f in res.findings]
+    assert all(f.level == "FAIL" for f in vbs)
+    assert any(f.measured.get("min_r", 1.0) < 0.9 for f in vbs)
+
+    # Control: flat loop (no modification) -> no finding.
+    wav_b = tmp_path / "flat.wav"
+    rpt_b = tmp_path / "r_flat.json"
+    def noop(t, L, R):
+        return L, R
+    _synth_render(wav_b, seconds, clips=clips, extra_process=noop)
+    _write_report(rpt_b, loops=loops)
+    res_b = render_check.run_check(wav_b, rpt_b, als)
+    assert not any(f.check == "loop_verbatim" for f in res_b.findings), \
+        [(f.check, f.measured.get("min_r")) for f in res_b.findings if f.check == "loop_verbatim"]
+
+
+def test_transition_dip(tmp_path):
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    seconds = 40.0
+    bps = bpm / 60.0
+    # Long base track; transition overlaps near the middle.
+    clips = [{
+        "track": "A", "arr_start": 0, "arr_end": round(seconds * bps),
+        "loop_on": False,
+    }]
+    _write_als(als, clips)
+
+    swap_beat = 32
+    overlap = 8
+    transitions = [{
+        "pair_index": 1,
+        "swap_beats": swap_beat,
+        "overlap_beats": overlap,
+        "swap_progress": 0.5,
+    }]
+
+    def dip(t, L, R):
+        L = L.copy(); R = R.copy()
+        t0 = ((swap_beat - overlap * 0.5) / bps)
+        t1 = ((swap_beat - overlap * 0.5 + overlap) / bps)
+        m = (t >= t0) & (t < t1)
+        L[m] *= 10 ** (-5 / 20)  # ~5 dB dip
+        R[m] *= 10 ** (-5 / 20)
+        return L, R
+
+    _synth_render(wav, seconds, clips=clips, extra_process=dip)
+    _write_report(rpt, transitions=transitions)
+    res = render_check.run_check(wav, rpt, als)
+    dips = [f for f in res.findings if f.check == "transition_dip"]
+    assert dips, [f.check for f in res.findings]
+    assert any(f.measured.get("pair_index") == 1 for f in dips)
+
+    # Control: 1 dB dip -> no finding.
+    wav_b = tmp_path / "sm.wav"
+    rpt_b = tmp_path / "r_sm.json"
+    def small_dip(t, L, R):
+        L = L.copy(); R = R.copy()
+        t0 = ((swap_beat - overlap * 0.5) / bps)
+        t1 = ((swap_beat - overlap * 0.5 + overlap) / bps)
+        m = (t >= t0) & (t < t1)
+        L[m] *= 10 ** (-1 / 20)
+        R[m] *= 10 ** (-1 / 20)
+        return L, R
+    _synth_render(wav_b, seconds, clips=clips, extra_process=small_dip)
+    _write_report(rpt_b, transitions=transitions)
+    res_b = render_check.run_check(wav_b, rpt_b, als)
+    assert not any(f.check == "transition_dip" for f in res_b.findings)
+
+
+def test_exit_code_semantics(tmp_path):
+    """Pin: 0 = clean, 1 = warn only, 2 = fail."""
+    # Clean -> 0 (reuse test_clean_render_passes setup).
+    als = tmp_path / "a.als"
+    wav = tmp_path / "a.wav"
+    rpt = tmp_path / "a.json"
+    seconds = 20.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips)
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+    assert render_check.run_check(wav, rpt, als).exit_code == 0
+
+    # Warn only -> 1 (loop_exit_jump, no FAIL).
+    als = tmp_path / "b.als"
+    wav = tmp_path / "b.wav"
+    rpt = tmp_path / "b.json"
+    bps = 128.0 / 60.0
+    clips = [{"track": "A", "arr_start": 0, "arr_end": round(seconds * bps), "loop_on": False}]
+    _write_als(als, clips)
+    def bump(t, L, R):
+        L = L.copy(); R = R.copy()
+        m = t >= (16 + 16) / bps
+        L[m] *= 10 ** (5 / 20); R[m] *= 10 ** (5 / 20)
+        return L, R
+    _synth_render(wav, seconds, clips=clips, extra_process=bump)
+    _write_report(rpt, loops=[{
+        "track": "A", "type": "tail", "source_beats": "100-116",
+        "count": 1, "total_beats": 16.0, "insert_at_beat": 16,
+    }])
+    res = render_check.run_check(wav, rpt, als)
+    assert res.exit_code == 1
+    assert res.verdict == "WARN"
+
+    # Fail -> 2 (silence in middle).
+    als = tmp_path / "c.als"
+    wav = tmp_path / "c.wav"
+    rpt = tmp_path / "c.json"
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips)
+    def silence(t, L, R):
+        L = L.copy(); R = R.copy()
+        m = (t >= 5) & (t < 6)
+        L[m] = 0.0; R[m] = 0.0
+        return L, R
+    _synth_render(wav, seconds, clips=clips, extra_process=silence, level_db=-60.0)
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    assert res.exit_code == 2
+    assert res.verdict == "FAIL"
+
+
+def test_grid_fold_drift(tmp_path):
+    """Kicks on the grid in region 1, shifted +55 ms in region 2 -> FAIL;
+    control with a consistent grid -> no FAIL (constant bias is fine)."""
+    bpm = 128.0
+    seconds = 145.0
+    bps = bpm / 60.0
+    # Two solo regions >= 45 s separated by a 2-clip overlap, so
+    # _pick_solo_regions has two distinct probe windows.
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": round(70 * bps),
+         "loop_on": False},
+        {"track": "B", "arr_start": round(65 * bps),
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+
+    def kicks(shift_late):
+        def add(t, L, R):
+            L = L.copy(); R = R.copy()
+            sr = 44100
+            n = len(L)
+            for b in np.arange(0, seconds, 60.0 / bpm):
+                bt = b + (shift_late if b >= 75.0 else 0.0)
+                i0 = int(round(bt * sr))
+                dur = int(round(0.05 * sr))
+                if i0 + dur > n:
+                    break
+                env = np.exp(-np.arange(dur) / (sr * 0.01))
+                kick = env * np.sin(2 * math.pi * 55.0 * np.arange(dur) / sr)
+                L[i0:i0 + dur] += kick
+                R[i0:i0 + dur] += kick
+            return L, R
+        return add
+
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    _write_als(als, clips)
+    _synth_render(wav, seconds, clips=clips, with_kicks=False,
+                  extra_process=kicks(0.055))
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    folds = [f for f in res.findings if f.check == "grid_fold"]
+    assert any(f.level == "FAIL" for f in folds), \
+        [(f.level, f.measured) for f in folds]
+
+    # Control: consistent grid -> no FAIL (INFO only).
+    wav_b = tmp_path / "ok.wav"
+    _synth_render(wav_b, seconds, clips=clips, with_kicks=False,
+                  extra_process=kicks(0.0))
+    res_b = render_check.run_check(wav_b, rpt, als)
+    folds_b = [f for f in res_b.findings if f.check == "grid_fold"]
+    assert folds_b and all(f.level == "INFO" for f in folds_b), \
+        [(f.level, f.measured) for f in folds_b]
+
+
+# --------------------------------------------------------------------------- #
+# V10 corpus regression pin                                                   #
+# --------------------------------------------------------------------------- #
+
+V10_WAV = (ROOT / "Test Project" / "14.08.26" / "Output"
+           / "14.08.26 Mix V10.wav")
+V10_ALS = (ROOT / "Test Project" / "14.08.26" / "Output"
+           / "14.08.26 Mix V10.als")
+V10_REPORT = (ROOT / "Test Project" / "14.08.26" / "Output"
+              / "ARRANGEMENT_REPORT_V10.json")
+
+
+@pytest.mark.skipif(
+    not (V10_WAV.exists() and V10_ALS.exists() and V10_REPORT.exists()),
+    reason="V10 corpus not present (gitignored)",
+)
+def test_v10_regression_pin():
+    """The control sample the gate was calibrated on: no FAIL findings, exit
+    code 1 (warnings only), and the exact defect set the V10 review located.
+    See Documentation/Reviews/2026-08-20 First Render Check - Mix V10.md."""
+    res = render_check.run_check(V10_WAV, V10_REPORT, V10_ALS)
+    assert res.exit_code == 1, (
+        f"V10 should exit 1 (warnings); got {res.exit_code}: "
+        + "; ".join(f"{f.check}/{f.level}" for f in res.findings)
+    )
+    assert not any(f.level == "FAIL" for f in res.findings), (
+        "V10 should have no FAIL findings: "
+        + "; ".join(f"{f.check}/{f.level}" for f in res.findings)
+    )
+
+    def find(check, level="WARN"):
+        return [f for f in res.findings if f.check == check and f.level == level]
+
+    def near(check, t_center, tol=1.0):
+        return [f for f in find(check)
+                if abs((f.t0 + f.t1) / 2 - t_center) < tol]
+
+    # Level cliffs at the three T-swap loop inserts (4:43.1, 20:15, 49:54.4).
+    assert near("level_cliff", 283.1)
+    assert near("level_cliff", 1215.0)
+    assert near("level_cliff", 2994.4)
+
+    # Loop period: Nappp 12-beat (24:24 area), and L1/L6 28-beat.
+    nappp = [f for f in find("loop_period")
+             if abs(f.measured.get("iter_len", 0) - 12) < 1e-6]
+    assert any(abs(f.t0 - 1464.4) < 1.0 for f in nappp), \
+        [(f.t0, f.measured) for f in nappp]
+    bar28 = [f for f in find("loop_period")
+             if abs(f.measured.get("iter_len", 0) - 28) < 1e-6]
+    assert any(abs(f.t0 - 283.1) < 1.0 for f in bar28)
+    assert any(abs(f.t0 - 2994.4) < 1.0 for f in bar28)
+
+    # Exposed solo at 22:15.5-22:21.5 (+/-1 s each end), and nothing else.
+    solos = find("exposed_solo")
+    assert len(solos) == 1, [(f.t0, f.t1) for f in solos]
+    assert abs(solos[0].t0 - 1335.5) < 1.0 and abs(solos[0].t1 - 1341.5) < 1.0
+
+    # Loop hole overlapping 41:52.5-42:15.0.
+    assert any(2512.5 <= f.t0 and f.t1 <= 2535.0 for f in find("loop_hole"))
+
+    # Loop exit jumps at 20:22.5, 42:15.0, 50:20.6.
+    assert near("loop_exit_jump", 1222.5)
+    assert near("loop_exit_jump", 2535.0)
+    assert near("loop_exit_jump", 3020.6)
+
+    # Transition dips: exactly the prototype's firing set {T1, T4, T5, T11}
+    # (T2/T8/T9 measured under 2 dB, T10 1.9 -- must stay silent).
+    pairs = {f.measured.get("pair_index") for f in find("transition_dip")}
+    assert pairs == {1, 4, 5, 11}, pairs
+    assert 2 not in pairs and 9 not in pairs
