@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import subprocess
 import sys
 from pathlib import Path
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -29,9 +30,15 @@ import render_check  # noqa: E402
 # ALS fixture                                                                 #
 # --------------------------------------------------------------------------- #
 
-def _als_xml(clips, bpm=128.0):
+def _als_xml(clips, bpm=128.0, tempo_envelope=None):
     """Minimal gzipped XML the parser accepts: <Ableton>/<LiveSet>, one
-    Tempo/Manual, one AudioTrack per track, each with N AudioClips."""
+    Tempo/Manual, one AudioTrack per track, each with N AudioClips.
+
+    If tempo_envelope is not None, a MainTrack is added at the end with a
+    Tempo/AutomationTarget (Id="8") and an AutomationEnvelope whose PointeeId
+    is "8" and whose FloatEvent Values are the supplied list. The LiveSet
+    Tempo/Manual remains the canonical Manual source (the envelope does not
+    carry its own Manual)."""
     root = Element("Ableton")
     live = SubElement(root, "LiveSet")
     tempo = SubElement(live, "Tempo")
@@ -75,11 +82,30 @@ def _als_xml(clips, bpm=128.0):
                 sr.set("Value", "0")
                 lo = SubElement(loop, "LoopOn")
                 lo.set("Value", "false")
+
+    if tempo_envelope is not None:
+        # The MainTrack shape mirrors als_generator._build_envelope_xml:
+        # Tempo/AutomationTarget with Id="8" and an AutomationEnvelope with
+        # EnvelopeTarget/PointeeId Value="8" and FloatEvent Values.
+        mt = SubElement(live, "MainTrack")
+        mt_tempo = SubElement(mt, "Tempo")
+        at = SubElement(mt_tempo, "AutomationTarget")
+        at.set("Id", "8")
+        env = SubElement(mt, "AutomationEnvelope")
+        target = SubElement(env, "EnvelopeTarget")
+        pid = SubElement(target, "PointeeId")
+        pid.set("Value", "8")
+        auto = SubElement(env, "Automation")
+        events = SubElement(auto, "Events")
+        for v in tempo_envelope:
+            fe = SubElement(events, "FloatEvent")
+            fe.set("Time", "0")
+            fe.set("Value", str(v))
     return gzip.compress(tostring(root, encoding="utf-8"))
 
 
-def _write_als(path, clips, bpm=128.0):
-    path.write_bytes(_als_xml(clips, bpm))
+def _write_als(path, clips, bpm=128.0, tempo_envelope=None):
+    path.write_bytes(_als_xml(clips, bpm, tempo_envelope=tempo_envelope))
 
 
 def _write_report(path, loops=None, transitions=None):
@@ -788,6 +814,329 @@ def test_grid_fold_drift(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# FIX 1 - tempo-automation guard                                              #
+# --------------------------------------------------------------------------- #
+
+def test_tempo_automation_ramped_fails(tmp_path):
+    """Ramped envelope (128 -> 130) must hard-FAIL the gate: any beat<->sec
+    conversion under a non-flat envelope is wrong, and silent mis-check is
+    the failure mode the guard exists to stop."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 30.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips, bpm=128.0, tempo_envelope=[128.0, 130.0])
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    assert res.exit_code == 2
+    assert res.verdict == "FAIL"
+    tempo_findings = [f for f in res.findings
+                      if f.check == "tempo_automation_unsupported"]
+    assert len(tempo_findings) == 1
+    assert tempo_findings[0].level == "FAIL"
+    distinct = tempo_findings[0].measured["distinct_tempo_values"]
+    assert set(distinct) == {128.0, 130.0}
+    # No other checks ran - a wrong map would have mis-checked.
+    assert not any(f.check != "tempo_automation_unsupported"
+                   for f in res.findings)
+
+
+def test_tempo_automation_flat_envelope_passes(tmp_path):
+    """Flat envelope (two FloatEvents both at Manual) must NOT trip the
+    guard. V10 ALS has this exact shape; pin it as the negative control."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 30.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips, bpm=128.0, tempo_envelope=[128.0, 128.0])
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    assert res.exit_code == 0
+    assert res.verdict == "PASS"
+    assert not any(f.check == "tempo_automation_unsupported"
+                   for f in res.findings)
+
+
+def test_tempo_automation_mismatch_fails(tmp_path):
+    """Flat envelope at a DIFFERENT value than Manual: the envelope overrides
+    Manual at playback, so Manual is the wrong map source. Hard-FAIL."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 30.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips, bpm=128.0, tempo_envelope=[130.0])
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    assert res.exit_code == 2
+    tempo_findings = [f for f in res.findings
+                      if f.check == "tempo_automation_unsupported"]
+    assert len(tempo_findings) == 1
+    assert tempo_findings[0].level == "FAIL"
+    distinct = tempo_findings[0].measured["distinct_tempo_values"]
+    assert distinct == [130.0]
+
+
+def test_tempo_automation_raises_library():
+    """As a library, run_check is NOT supposed to swallow the
+    TempoAutomationUnsupported - only main() catches it. Pin the helper."""
+    root_xml = _als_xml(_single_track_clips(30), bpm=128.0,
+                        tempo_envelope=[128.0, 130.0])
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".als", delete=False) as fh:
+            fh.write(root_xml)
+            tmp_path = Path(fh.name)
+        with pytest.raises(render_check.TempoAutomationUnsupported):
+            render_check.parse_als(tmp_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
+
+
+# --------------------------------------------------------------------------- #
+# FIX 2 - crash = exit 2 (CLI subprocess)                                     #
+# --------------------------------------------------------------------------- #
+
+def test_cli_missing_als_exits_2(tmp_path):
+    """A missing ALS file is an operational exception. The CLI must catch
+    it and exit 2 (FAIL); without FIX 2, Python exits with 1, which mix.md
+    defines as non-blocking WARN - a gate that could not run must not
+    read as WARN."""
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    missing_als = tmp_path / "does_not_exist.als"
+    _synth_render(wav, 30.0, clips=_single_track_clips(30.0))
+    _write_report(rpt)
+    script = ROOT / "Source" / "render_check.py"
+    proc = subprocess.run(
+        [sys.executable, str(script), str(wav), str(rpt), str(missing_als)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 2, (proc.stdout, proc.stderr, proc.returncode)
+    assert "gate-error" in proc.stdout
+    assert "verdict=FAIL" in proc.stdout
+
+
+def test_cli_malformed_report_exits_2(tmp_path):
+    """A malformed report JSON is an operational exception. CLI exits 2."""
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "m.json"
+    als = tmp_path / "m.als"
+    rpt.write_text("not json{", encoding="utf-8")
+    _synth_render(wav, 30.0, clips=_single_track_clips(30.0))
+    _write_als(als, _single_track_clips(30.0))
+    script = ROOT / "Source" / "render_check.py"
+    proc = subprocess.run(
+        [sys.executable, str(script), str(wav), str(rpt), str(als)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 2, (proc.stdout, proc.stderr, proc.returncode)
+    assert "gate-error" in proc.stdout
+
+
+def test_cli_missing_render_exits_2(tmp_path):
+    """A missing render WAV is an operational exception. CLI exits 2."""
+    rpt = tmp_path / "r.json"
+    als = tmp_path / "m.als"
+    missing_wav = tmp_path / "does_not_exist.wav"
+    _write_report(rpt)
+    _write_als(als, _single_track_clips(30.0))
+    script = ROOT / "Source" / "render_check.py"
+    proc = subprocess.run(
+        [sys.executable, str(script), str(missing_wav), str(rpt), str(als)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 2, (proc.stdout, proc.stderr, proc.returncode)
+    assert "gate-error" in proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# FIX 3 - truncated render FAIL                                               #
+# --------------------------------------------------------------------------- #
+
+def test_render_truncated_fails(tmp_path):
+    """ALS arr ~30 s (64 beats @ 128 bpm) but render only ~20 s -> FAIL."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    arr_seconds = 30.0
+    render_seconds = 20.0
+    beats_total = round(arr_seconds * bpm / 60.0)  # 64
+    clips = [{
+        "track": "Tone", "arr_start": 0,
+        "arr_end": beats_total, "loop_on": False,
+    }]
+    _write_als(als, clips)
+    _synth_render(wav, render_seconds, clips=clips)
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    truncated = [f for f in res.findings if f.check == "render_truncated"]
+    assert truncated, [(f.check, f.level) for f in res.findings]
+    assert all(f.level == "FAIL" for f in truncated)
+    assert res.exit_code == 2
+    shortfall = truncated[0].measured["shortfall_sec"]
+    # 30 - 20 = 10 s.
+    assert abs(shortfall - 10.0) < 1.0, shortfall
+
+    # Control: render matches arrangement (+ tail) -> no render_truncated.
+    wav_full = tmp_path / "full.wav"
+    rpt_full = tmp_path / "r_full.json"
+    _synth_render(wav_full, arr_seconds + 0.5, clips=clips)
+    _write_report(rpt_full)
+    res_full = render_check.run_check(wav_full, rpt_full, als)
+    assert not any(f.check == "render_truncated" for f in res_full.findings)
+
+
+def test_render_truncated_produces_eof_reads_with_loop(tmp_path):
+    """When a loop iteration extends past EOF, eof_truncated_reads FAILs too.
+    The duration FAIL is the load-bearing assertion; this just confirms the
+    EOF path fires."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    bpm = 128.0
+    arr_seconds = 30.0
+    render_seconds = 12.0  # well before arrangement end -> loop iter past EOF
+    beats_total = round(arr_seconds * bpm / 60.0)
+    clips = [{
+        "track": "Tone", "arr_start": 0,
+        "arr_end": beats_total, "loop_on": False,
+    }]
+    _write_als(als, clips)
+    # Loop insert at beat 16 with 16-beat iterations -> iter 2 spans beats
+    # 48..64, but the render is only 12 s (~25.6 beats), so iter 2 reads
+    # start past EOF.
+    loops = [{
+        "track": "Tone", "type": "tail",
+        "source_beats": "100-116",
+        "count": 4, "total_beats": 64.0,
+        "insert_at_beat": 16,
+    }]
+    _synth_render(wav, render_seconds, clips=clips)
+    _write_report(rpt, loops=loops)
+    res = render_check.run_check(wav, rpt, als)
+    eofs = [f for f in res.findings if f.check == "eof_truncated_reads"]
+    assert eofs, [(f.check, f.level) for f in res.findings]
+    assert all(f.level == "FAIL" for f in eofs)
+    # Confirm render_truncated is also reported.
+    assert any(f.check == "render_truncated" for f in res.findings)
+    assert res.exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# FIX 4 - _pick_solo_regions dedup                                            #
+# --------------------------------------------------------------------------- #
+
+def test_pick_solo_regions_dedupes_with_one_run():
+    """One eligible solo run must return exactly one region. The pre-fix
+    bug returned the same run three times, masking drift in single-run
+    arrangements (V10 had this exact shape)."""
+    # Three target percentages, exactly one eligible solo run. Solo runs
+    # of 23 s are below the 45 s GRID_FOLD_REGION_S threshold, so only the
+    # long E tail is eligible.
+    clips_one = [
+        {"track": "A", "arr_start": 0, "arr_end": 50, "loop_on": False},
+        {"track": "B", "arr_start": 50, "arr_end": 100, "loop_on": False},
+        {"track": "C", "arr_start": 100, "arr_end": 150, "loop_on": False},
+        {"track": "D", "arr_start": 150, "arr_end": 200, "loop_on": False},
+        {"track": "E", "arr_start": 200, "arr_end": 300, "loop_on": False},
+    ]
+    regions_one = render_check._pick_solo_regions(clips_one, 128.0,
+                                                  [0.15, 0.5, 0.85])
+    assert len(regions_one) == 1, regions_one
+    # The single region is E alone from 200..300 beats = 93.75..140.625 sec.
+    expected = (200 * 60.0 / 128.0, 300 * 60.0 / 128.0)
+    assert regions_one[0] == expected
+
+    # Two back-to-back clips each >= 45 s solo -> two distinct regions,
+    # third target skipped (no duplicate region possible).
+    clips_two = [
+        {"track": "A", "arr_start": 0, "arr_end": 100, "loop_on": False},
+        {"track": "B", "arr_start": 100, "arr_end": 200, "loop_on": False},
+    ]
+    regions_two = render_check._pick_solo_regions(clips_two, 128.0,
+                                                  [0.15, 0.5, 0.85])
+    assert len(regions_two) == 2, regions_two
+    assert regions_two[0] != regions_two[1]
+
+
+# --------------------------------------------------------------------------- #
+# FIX 5 - missing report keys                                                 #
+# --------------------------------------------------------------------------- #
+
+def test_report_empty_dict_exits_2(tmp_path):
+    """Report {} (no loops key, no transitions key): both report_missing_*
+    SKIPs fire AND report_empty FAIL fires; gate exits 2."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 30.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips)
+    _synth_render(wav, seconds, clips=clips)
+    rpt.write_text("{}", encoding="utf-8")
+    res = render_check.run_check(wav, rpt, als)
+    checks = {f.check: f for f in res.findings}
+    assert "report_missing_loops" in checks
+    assert checks["report_missing_loops"].level == "SKIP"
+    assert "report_missing_transitions" in checks
+    assert checks["report_missing_transitions"].level == "SKIP"
+    assert "report_empty" in checks
+    assert checks["report_empty"].level == "FAIL"
+    assert res.exit_code == 2
+    assert res.verdict == "FAIL"
+
+
+def test_report_loops_only_skips_transitions_clean_pass(tmp_path):
+    """Report {"loops": []}: transitions is missing (SKIP), no report_empty,
+    no FAIL -> clean render passes (SKIP does not affect verdict)."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 30.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips)
+    _synth_render(wav, seconds, clips=clips)
+    rpt.write_text(json.dumps({"loops": []}), encoding="utf-8")
+    res = render_check.run_check(wav, rpt, als)
+    checks = {f.check: f for f in res.findings}
+    assert "report_missing_transitions" in checks
+    assert checks["report_missing_transitions"].level == "SKIP"
+    assert "report_missing_loops" not in checks
+    assert "report_empty" not in checks
+    assert not any(f.level == "FAIL" for f in res.findings)
+    assert res.exit_code == 0
+    assert res.verdict == "PASS"
+
+
+def test_report_both_keys_no_skip_findings(tmp_path):
+    """Existing fixtures (both keys present, possibly empty): no SKIP
+    findings. Asserts the no-missing path stays clean."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 30.0
+    clips = _single_track_clips(seconds)
+    _write_als(als, clips)
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)  # both keys, both empty
+    res = render_check.run_check(wav, rpt, als)
+    assert not any(f.level == "SKIP" for f in res.findings)
+    assert not any(f.check.startswith("report_missing_")
+                   for f in res.findings)
+    assert not any(f.check == "report_empty" for f in res.findings)
+
+
+# --------------------------------------------------------------------------- #
 # V10 corpus regression pin                                                   #
 # --------------------------------------------------------------------------- #
 
@@ -857,3 +1206,108 @@ def test_v10_regression_pin():
     pairs = {f.measured.get("pair_index") for f in find("transition_dip")}
     assert pairs == {1, 4, 5, 11}, pairs
     assert 2 not in pairs and 9 not in pairs
+
+    # ---- FIX 6 decimal pin (tolerances: t +/-1 s, dB +/-0.2, r +/-0.02,
+    # durations +/-0.5 s). Documented in
+    # Documentation/Reviews/2026-08-20 First Render Check - Mix V10.md and
+    # the calibration comments in render_check.py. Re-running the V10
+    # capture script (_capture_v10.py) refreshes these numbers.
+
+    # Level cliffs: three steps, in order by t0.
+    cliffs = sorted([f for f in find("level_cliff")],
+                    key=lambda f: f.t0)
+    cliff_steps = [(c.t0, c.measured["step_db"]) for c in cliffs]
+    assert len(cliff_steps) >= 3, cliff_steps
+    # Step 1 at 283.1 s -> -6.9 dB (from -17.7 to -24.5).
+    assert abs(cliff_steps[0][0] - 283.1) < 1.0, cliff_steps[0]
+    assert abs(cliff_steps[0][1] - (-6.9)) < 0.2, cliff_steps[0]
+    assert abs(cliffs[0].measured["from_db"] - (-17.7)) < 0.2, cliffs[0].measured
+    assert abs(cliffs[0].measured["to_db"] - (-24.5)) < 0.2, cliffs[0].measured
+    # Step 2 at 1215.0 s -> -8.9 dB (from -17.2 to -26.1).
+    assert abs(cliff_steps[1][0] - 1215.0) < 1.0, cliff_steps[1]
+    assert abs(cliff_steps[1][1] - (-8.9)) < 0.2, cliff_steps[1]
+    assert abs(cliffs[1].measured["from_db"] - (-17.2)) < 0.2, cliffs[1].measured
+    assert abs(cliffs[1].measured["to_db"] - (-26.1)) < 0.2, cliffs[1].measured
+    # Step 3 at 2994.4 s -> -7.6 dB (from -18.1 to -25.6).
+    assert abs(cliff_steps[2][0] - 2994.4) < 1.0, cliff_steps[2]
+    assert abs(cliff_steps[2][1] - (-7.6)) < 0.2, cliff_steps[2]
+    assert abs(cliffs[2].measured["from_db"] - (-18.1)) < 0.2, cliffs[2].measured
+    assert abs(cliffs[2].measured["to_db"] - (-25.6)) < 0.2, cliffs[2].measured
+
+    # Loop period Nappp at ~1464.4: iter_len 12, r ~= 1.00.
+    nappp = [f for f in find("loop_period")
+             if abs(f.measured.get("iter_len", 0) - 12) < 1e-6]
+    assert any(abs(f.t0 - 1464.4) < 1.0 for f in nappp), \
+        [(f.t0, f.measured) for f in nappp]
+    nappp_at = [f for f in nappp if abs(f.t0 - 1464.4) < 1.0][0]
+    assert abs(nappp_at.measured["iter_len"] - 12) < 1e-6, nappp_at.measured
+    assert abs(nappp_at.measured["r"] - 1.00) < 0.02, nappp_at.measured
+
+    # Exposed solo at ~1335.5..1341.5, floor -46.9, duration ~6 s.
+    # NOTE: 2026-08-25 capture measures -46.93 dBFS; the review doc had
+    # -46.7, a 0.23 dB drift from re-render -- tolerance widened to 0.3 dB
+    # to capture the actual measurement rather than pin a stale number.
+    assert len(solos) == 1
+    assert abs(solos[0].t0 - 1335.5) < 1.0
+    assert abs(solos[0].t1 - 1341.5) < 1.0
+    assert abs(solos[0].measured["floor_db"] - (-46.9)) < 0.3, solos[0].measured
+    assert abs(solos[0].measured["duration_s"] - 6.0) < 0.5, solos[0].measured
+
+    # Loop hole Vente tail (2512.5..2535.0): spread 7.3 dB.
+    vente = [f for f in find("loop_hole")
+             if 2512.5 <= f.t0 and f.t1 <= 2535.0]
+    assert vente, [(f.t0, f.t1) for f in find("loop_hole")]
+    assert any(abs(f.measured["spread_db"] - 7.3) < 0.2 for f in vente), \
+        [(f.measured.get("spread_db")) for f in vente]
+
+    # Loop exit jumps at 1222.5, 2535.0, 3020.6 -> documented as the range
+    # +4.3 to +4.7 dB. Pin each exact decimal (within +/-0.05 dB) so a
+    # regression that drifts the jump but keeps it "inside the range"
+    # cannot pass. NOTE: 2026-08-25 capture measures 4.73 at 2535.0, 0.03 dB
+    # above the documented +4.7 ceiling; the documented value is the
+    # coarse rounded range from the review, the measured decimals drift
+    # slightly outside it.
+    jumps = sorted([f for f in find("loop_exit_jump")],
+                   key=lambda f: f.t0)
+    assert len(jumps) == 3, [(f.t0, f.measured) for f in jumps]
+    # V10 measured decimals (captured 2026-08-25):
+    expected_jumps = [
+        (1222.5, 4.55),
+        (2535.0, 4.73),
+        (3020.6, 4.34),
+    ]
+    for (got, measured), (exp_t, exp_db) in zip(
+            [(f.t0, f.measured["step_db"]) for f in jumps],
+            expected_jumps):
+        assert abs(got - exp_t) < 1.0, (got, exp_t)
+        assert abs(measured - exp_db) < 0.05, (measured, exp_db)
+        # All three are within ~0.05 dB of the documented +4.3..+4.7 range
+        # (4.73 is 0.03 above the ceiling - rounding from the coarse doc).
+        assert 4.3 - 0.05 <= measured <= 4.7 + 0.05, measured
+
+    # Transition dip_db under THIS gate's windowing convention:
+    # T1 4.6, T4 5.8, T5 2.8, T11 5.9. Keyed by pair_index.
+    expected_dips = {1: 4.6, 4: 5.8, 5: 2.8, 11: 5.9}
+    got_dips = {f.measured["pair_index"]: f.measured["dip_db"]
+                for f in find("transition_dip")}
+    assert set(got_dips.keys()) == set(expected_dips.keys()), got_dips
+    for pair, exp_db in expected_dips.items():
+        assert abs(got_dips[pair] - exp_db) < 0.2, (pair, got_dips[pair])
+
+    # Integrated LUFS ~ -16.6.
+    assert abs(res.meta["integrated_lufs"] - (-16.6)) < 0.2, \
+        res.meta["integrated_lufs"]
+
+    # Pin: no FAIL findings, no SKIP findings (V10 report has both keys).
+    assert not any(f.level == "FAIL" for f in res.findings), \
+        "V10 should have no FAIL findings: " + "; ".join(
+            f"{f.check}/{f.level}" for f in res.findings
+        )
+    assert not any(f.level == "SKIP" for f in res.findings), \
+        "V10 should have no SKIP findings: " + "; ".join(
+            f"{f.check}/{f.level}" for f in res.findings
+        )
+    assert res.exit_code == 1, (
+        f"V10 should exit 1 (warnings); got {res.exit_code}: "
+        + "; ".join(f"{f.check}/{f.level}" for f in res.findings)
+    )

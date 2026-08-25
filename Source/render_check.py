@@ -132,6 +132,68 @@ def _float(el, tag):
     return float(n.get("Value"))
 
 
+class TempoAutomationUnsupported(Exception):
+    """Raised when the MainTrack carries a tempo AutomationEnvelope that the
+    gate cannot honor. Every beat<->sec conversion in this gate assumes a
+    flat Manual tempo; an automated curve would silently mis-check, so the
+    guard fails the render instead of letting it through.
+
+    Attributes:
+        distinct_values: sorted list of distinct FloatEvent Values (rounded
+            to 6 dp) found on the envelope. None when the envelope is
+            absent. Empty when the envelope has no parseable values.
+    """
+
+    def __init__(self, message: str, distinct_values: list[float] | None):
+        super().__init__(message)
+        self.distinct_values = distinct_values
+
+
+def _find_main_track(root):
+    for tag in ("MainTrack", "MasterTrack"):
+        for el in root.iter(tag):
+            return el
+    return None
+
+
+def parse_tempo_envelope(root) -> list[float]:
+    """FloatEvent Value attributes for the MainTrack tempo AutomationEnvelope,
+    empty list when there is none. The MainTrack Tempo AutomationTarget Id is
+    the envelope target (PointeeId). Falls back to "8" (the Live default for
+    Song tempo) if the AutomationTarget attribute is missing."""
+    mt = _find_main_track(root)
+    if mt is None:
+        return []
+    # .//Tempo, not a direct-child find: the real ALS nests Tempo under
+    # DeviceChain/Mixer; only the test fixture has it as a direct child.
+    tempo = mt.find(".//Tempo")
+    target_id = "8"
+    if tempo is not None:
+        at = tempo.find("AutomationTarget")
+        if at is not None and at.get("Id") is not None:
+            target_id = at.get("Id")
+    values: list[float] = []
+    for env in mt.iter("AutomationEnvelope"):
+        pt = env.find("EnvelopeTarget/PointeeId")
+        if pt is None:
+            continue
+        if pt.get("Value") != target_id:
+            continue
+        for fe in env.iter("FloatEvent"):
+            v = fe.get("Value")
+            if v is None:
+                continue
+            try:
+                values.append(float(v))
+            except ValueError:
+                continue
+        # The MainTrack tempo envelope is unique. If there is more than one
+        # for the same target id, take the first non-empty one we encounter.
+        if values:
+            return values
+    return values
+
+
 def parse_als(path: Path) -> tuple[float, list[dict]]:
     """Return (bpm, clips) where each clip dict carries arrangement span and
     loop metadata in beats. The V10 ALS uses one flat master tempo; multi-tempo
@@ -141,6 +203,28 @@ def parse_als(path: Path) -> tuple[float, list[dict]]:
 
     tempo = root.find(".//Tempo/Manual")
     bpm = float(tempo.get("Value"))
+
+    # CARD (future full fix): replace this interim guard with a piecewise
+    # beat<->time mapping built from the MainTrack tempo FloatEvents curve, and
+    # thread it through sweep bins, boundaries, loops, transitions, solo regions
+    # and grid probes. Until then a tempo-automated render must hard-FAIL: a wrong
+    # beat->time map must never silently mis-check. (Codex review 2026-08-25, C1.)
+    envelope_values = parse_tempo_envelope(root)
+    distinct = sorted({round(v, 6) for v in envelope_values})
+    if len(distinct) > 1:
+        raise TempoAutomationUnsupported(
+            f"MainTrack tempo envelope has multiple distinct values: "
+            f"{distinct}",
+            distinct_values=distinct,
+        )
+    if len(distinct) == 1:
+        v = distinct[0]
+        if abs(v - bpm) > 1e-3:
+            raise TempoAutomationUnsupported(
+                f"MainTrack tempo envelope flat at {v} but Manual={bpm} "
+                "(envelope overrides Manual at playback)",
+                distinct_values=distinct,
+            )
 
     clips: list[dict] = []
     for track in root.iter("AudioTrack"):
@@ -187,10 +271,18 @@ def _parse_source_span(source_beats: str) -> tuple[float, float]:
     return float(a), float(b)
 
 
-def parse_report(path: Path) -> tuple[list[dict], list[dict]]:
-    """Return (loops, transitions) normalised to the keys the checks need."""
+def parse_report(path: Path) -> tuple[list[dict], list[dict], list[str]]:
+    """Return (loops, transitions, missing) where missing is the list of
+    dependent keys absent from the JSON object. An empty list PRESENT in the
+    JSON is an explicit statement ("we checked, nothing found") and is NOT
+    missing - only a missing KEY is missing."""
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
+    missing: list[str] = []
+    if "loops" not in data:
+        missing.append("loops")
+    if "transitions" not in data:
+        missing.append("transitions")
     loops: list[dict] = []
     for lp in data.get("loops", []):
         a, b = _parse_source_span(lp["source_beats"])
@@ -212,7 +304,7 @@ def parse_report(path: Path) -> tuple[list[dict], list[dict]]:
             "overlap_beats": float(tr["overlap_beats"]),
             "swap_progress": tr.get("swap_progress"),
         })
-    return loops, transitions
+    return loops, transitions, missing
 
 
 def derive_v_suffix(render_path: Path, report_path: Path | None) -> str:
@@ -308,8 +400,10 @@ def _flush_frame(state: _SweepState, hop_idx: int,
 
 
 def streaming_sweep(render_path: Path, bpm: float) -> SweepArrays:
-    """One pass: 100 ms RMS, 100 ms K-weighted MS, per-beat RMS. Constant
-    memory: carries filter state and a beat accumulator across reads."""
+    """One pass: 100 ms RMS, 100 ms K-weighted MS, per-beat RMS. O(duration)
+    summary arrays; constant audio memory: carries filter state and a beat
+    accumulator across reads (the per-hop and per-beat arrays grow with the
+    render duration, but no audio block is retained)."""
     sr = float(sf.info(render_path).samplerate)
     n_frames = sf.info(render_path).frames
     channels = sf.info(render_path).channels
@@ -620,9 +714,15 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
     Null set: integer beats 16 each side of the boundary, skipping any beat
     within NULL_EXCLUSION_BEATS of ANY boundary in the input list. One open
     handle + a per-beat metric cache: boundaries cluster around transitions,
-    so neighbouring boundaries share most of their null beats."""
+    so neighbouring boundaries share most of their null beats.
+
+    Any boundary or null window whose requested span extends past EOF is
+    counted (past-EOF only; a request that starts before 0 is just a normal
+    leading-edge clip). The count is surfaced as a FAIL finding so a render
+    cut off mid-mix can never pass by silently skipping its tail windows."""
     findings: list[Finding] = []
     null_cache: dict[int, float] = {}
+    eof_truncated_count = 0
 
     with sf.SoundFile(str(render_path), "r") as fh:
         sr = float(fh.samplerate)
@@ -632,6 +732,9 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
 
         for t_sec, bb in zip(boundaries_sec, boundary_beats):
             center = int(round(t_sec * sr))
+            if center + half > fh.frames:
+                eof_truncated_count += 1
+                continue
             y = _read_window(fh, center, half)
             if y is None:
                 continue
@@ -650,7 +753,13 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
                 if bp in null_cache:
                     null_metrics.append(null_cache[bp])
                     continue
-                y0 = _read_window(fh, int(round(bp * spb)), half)
+                bp_center = int(round(bp * spb))
+                if bp_center + half > fh.frames:
+                    # No null_cache entry: a fake metric must never stand in
+                    # for a real one on a later boundary's null set.
+                    eof_truncated_count += 1
+                    continue
+                y0 = _read_window(fh, bp_center, half)
                 if y0 is None:
                     continue
                 m0 = _boundary_metric(y0)
@@ -681,6 +790,15 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
                     msg=("click-shaped discontinuity at boundary "
                          f"(z={z:.1f}, {metric:.3f} vs null max {null_max:.3f})"),
                 ))
+
+    if eof_truncated_count:
+        findings.append(Finding(
+            check="eof_truncated_reads", level="FAIL",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={"count": eof_truncated_count},
+            msg=(f"{eof_truncated_count} boundary window reads truncated by "
+                 "EOF"),
+        ))
     return findings
 
 
@@ -985,6 +1103,7 @@ def _iteration_envelope(fh: sf.SoundFile, sr: float, spb: float,
 def check_loop_verbatim(render_path: Path, loops: list[dict],
                         bpm: float) -> list[Finding]:
     findings: list[Finding] = []
+    eof_truncated_count = 0
     with sf.SoundFile(str(render_path), "r") as fh:
         sr = float(fh.samplerate)
         spb = sr * 60.0 / bpm
@@ -995,6 +1114,15 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                 continue
             envs = []
             for k in range(count):
+                s0 = int(round((lp["insert_at_beat"] + k * iter_len) * spb))
+                n = int(round(iter_len * spb))
+                # past-EOF reads are counted as truncations; the
+                # _iteration_envelope helper also returns None for very short
+                # (m < 8) envelopes, which is NOT an EOF issue - we only
+                # count when s0 + n > fh.frames.
+                if s0 + n > fh.frames:
+                    eof_truncated_count += 1
+                    continue
                 e = _iteration_envelope(fh, sr, spb, lp["insert_at_beat"],
                                         iter_len, k)
                 if e is None:
@@ -1026,23 +1154,39 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                     msg=(f"loop does not repeat verbatim (min r={min_r:.2f} "
                          f"across {count} iterations)"),
                 ))
+    if eof_truncated_count:
+        findings.append(Finding(
+            check="eof_truncated_reads", level="FAIL",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={"count": eof_truncated_count},
+            msg=(f"{eof_truncated_count} loop iteration reads truncated by "
+                 "EOF"),
+        ))
     return findings
 
 
 def _pick_solo_regions(clips: list[dict], bpm: float,
                        targets_pct: list[float]) -> list[tuple[float, float]]:
     """Solo runs (one active clip) >= GRID_FOLD_REGION_S, pick the one nearest
-    each target percentage of the arrangement span."""
+    each target percentage of the arrangement span. Distinct picks only: if
+    every run is already chosen for an earlier target, skip the later target.
+    Without the dedup, a single eligible solo run masquerades as multiple
+    probes and reports zero drift (one region, three identical phase medians)."""
     arr_start, arr_end = clip_arr_span(clips)
     arr_dur = arr_to_sec(arr_end - arr_start, bpm)
     runs = solo_runs(clips, bpm, GRID_FOLD_REGION_S)
     if not runs:
         return []
     out: list[tuple[float, float]] = []
+    chosen: set[tuple[float, float]] = set()
     for pct in targets_pct:
         target = arr_start * 60.0 / bpm + pct * arr_dur
-        best = min(runs, key=lambda r: abs(((r[0] + r[1]) / 2) - target))
+        remaining = [r for r in runs if r not in chosen]
+        if not remaining:
+            continue
+        best = min(remaining, key=lambda r: abs(((r[0] + r[1]) / 2) - target))
         out.append(best)
+        chosen.add(best)
     return out
 
 
@@ -1159,8 +1303,59 @@ def run_check(render_path: Path, report_path: Path,
     report_path = Path(report_path)
     als_path = Path(als_path)
 
-    bpm, clips = parse_als(als_path)
-    loops, transitions = parse_report(report_path)
+    # Tempo-automation guard. A non-flat envelope means every beat<->sec
+    # conversion in this gate is wrong; running the checks would silently
+    # mis-check. Surface the FAIL with a distinct finding and stop. The
+    # CARD in parse_als documents the future full fix.
+    try:
+        bpm, clips = parse_als(als_path)
+    except TempoAutomationUnsupported as e:
+        distinct = (list(e.distinct_values)
+                    if e.distinct_values is not None else [])
+        finding = Finding(
+            check="tempo_automation_unsupported", level="FAIL",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={"distinct_tempo_values": distinct},
+            msg="tempo-automated render unsupported by this gate version",
+        )
+        return CheckResult(
+            findings=[finding],
+            verdict="FAIL",
+            exit_code=2,
+            meta={
+                "render": str(render_path),
+                "verdict": "FAIL",
+                "integrated_lufs": FLOOR_DB,
+                "duration_sec": 0.0,
+                "v_suffix": derive_v_suffix(render_path, report_path),
+            },
+        )
+    loops, transitions, missing = parse_report(report_path)
+
+    findings: list[Finding] = []
+
+    # Surface missing report keys. A missing key means a whole class of
+    # checks (loops or transitions) was disabled; an empty list is an
+    # explicit "checked, nothing found" and is NOT missing. SKIP does not
+    # affect verdict. When both keys are missing, add a FAIL so the gate
+    # exits 2 - "report had nothing, nothing was checked" is not a pass.
+    for key in missing:
+        findings.append(Finding(
+            check="report_missing_" + key, level="SKIP",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={},
+            msg=(f"report has no '{key}' key - "
+                 f"{key}-dependent checks skipped"),
+        ))
+    if len(missing) == 2:
+        findings.append(Finding(
+            check="report_empty", level="FAIL",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={},
+            msg=("report has neither 'loops' nor 'transitions' - "
+                 "nothing was actually checked"),
+        ))
+
     sweep = streaming_sweep(render_path, bpm)
     st_lufs = short_term_lufs(sweep.kms100)
     int_lufs = integrated_lufs(sweep.kms100)
@@ -1168,9 +1363,29 @@ def run_check(render_path: Path, report_path: Path,
     arr_start_b, arr_end_b = clip_arr_span(clips)
     arr_start_s = arr_to_sec(arr_start_b, bpm)
     arr_end_s = arr_to_sec(arr_end_b, bpm)
+    one_beat = 60.0 / bpm
     fps = int(round(1.0 / HOP_SEC))
 
-    findings: list[Finding] = []
+    # Truncation check: a render that ends before the arrangement end is
+    # broken. Compare stream duration to arrangement end with a one-beat
+    # tolerance (the last beat's worth of audio may legitimately be tail
+    # silence the gate does not need). Keep running the other checks; more
+    # findings are fine and the gate still wants to surface what it could
+    # see.
+    duration = float(sweep.meta.get("duration_sec", 0.0))
+    if duration + one_beat < arr_end_s:
+        shortfall = arr_end_s - duration
+        findings.append(Finding(
+            check="render_truncated", level="FAIL",
+            t0=duration, t1=arr_end_s,
+            beat0=sec_to_arr(duration, bpm), beat1=arr_end_b,
+            measured={"duration_sec": duration,
+                      "arr_end_sec": arr_end_s,
+                      "shortfall_sec": shortfall},
+            msg=(f"render ends {shortfall:.1f}s before the arrangement "
+                 "end"),
+        ))
+
     findings += check_hard_silence(sweep.rms100_db, fps, arr_start_s, arr_end_s)
 
     boundaries_sec = collect_boundaries(clips, loops, arr_end_b, bpm)
@@ -1278,7 +1493,7 @@ def write_report(result: CheckResult, render_path: Path,
     all_checks = {"hard_silence", "boundary_click", "level_cliff",
                   "loop_exit_jump", "loop_period", "exposed_solo",
                   "loop_hole", "transition_dip", "loop_verbatim",
-                  "grid_fold", "kick_flam"}
+                  "grid_fold", "kick_flam", "eof_truncated_reads"}
     fired = {f.check for f in result.findings}
     clean = sorted(all_checks - fired - {"kick_flam"})
     md.append("\n## Checks run clean\n")
@@ -1304,11 +1519,42 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json-out", type=Path, default=None)
     args = p.parse_args(argv)
 
-    result = run_check(args.render, args.report, args.als)
-    write_report(result, args.render, args.json_out)
-    print(f"verdict={result.verdict} exit={result.exit_code} "
-          f"findings={len(result.findings)}")
-    return result.exit_code
+    # Wrap the run-and-report block: any operational exception (missing files,
+    # bad ALS, IO errors, etc.) must exit 2 (FAIL). Without this guard, an
+    # unhandled exception exits with code 1, which mix.md defines as a
+    # non-blocking WARN -- a gate that could not run must read as FAIL.
+    # KeyboardInterrupt/SystemExit are deliberately not caught (Exception alone
+    # excludes them).
+    try:
+        result = run_check(args.render, args.report, args.als)
+        write_report(result, args.render, args.json_out)
+        print(f"verdict={result.verdict} exit={result.exit_code} "
+              f"findings={len(result.findings)}")
+        return result.exit_code
+    except Exception as e:
+        err_result = CheckResult(
+            findings=[Finding(
+                check="gate_error", level="FAIL",
+                t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+                measured={"error": type(e).__name__},
+                msg=f"gate could not run: {e}",
+            )],
+            verdict="FAIL",
+            exit_code=2,
+            meta={
+                "render": str(args.render),
+                "verdict": "FAIL",
+                "error": str(e),
+            },
+        )
+        try:
+            write_report(err_result, args.render, args.json_out)
+        except Exception:
+            # The render dir may not exist; the FAIL on stderr/stdout is the
+            # contract, the report is best-effort.
+            pass
+        print(f"verdict=FAIL exit=2 gate-error: {type(e).__name__}: {e}")
+        return 2
 
 
 if __name__ == "__main__":
