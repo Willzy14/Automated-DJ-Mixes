@@ -51,13 +51,19 @@ def _warp_markers_block() -> str:
     return '<WarpMarkers>' + "".join(WARP_MARKER_PAIRS) + '</WarpMarkers>'
 
 
-def _clip_xml(clip_index: int, time: float, end: float) -> str:
+def _clip_xml(
+    clip_index: int,
+    time: float,
+    end: float,
+    name: str | None = None,
+) -> str:
     """One AudioClip element. Time is an ATTRIBUTE on the element so
     ``clip.get("Time")`` returns it (reconcile reads it that way).
     """
+    clip_name = name or f"clip_{clip_index}"
     return (
         f'<AudioClip Id="{clip_index}" Time="{time}">'
-        f'<Name Value="clip_{clip_index}" />'
+        f'<Name Value="{clip_name}" />'
         f'<CurrentStart Value="{time}" />'
         f'<CurrentEnd Value="{end}" />'
         f'<WarpMode Value="{WARP_MODE_REPITCH}" />'
@@ -66,9 +72,13 @@ def _clip_xml(clip_index: int, time: float, end: float) -> str:
     )
 
 
-def _track_envelopes_xml(pointee_a: int, pointee_b: int) -> str:
+def _track_envelopes_xml(
+    pointee_a: int,
+    pointee_b: int,
+    swap_beat: float,
+) -> str:
     """Two AutomationEnvelope elements with distinct PointeeIds. Each
-    carries FloatEvents at (SWAP_BEAT, 1.0) and (612.0, 0.0) so that the
+    carries FloatEvents at (swap_beat, 1.0) and (swap_beat + 8, 0.0) so that the
     per-track automation check sees >=2 envelopes AND >=2 envelopes
     carrying an event exactly at the swap beat.
     """
@@ -77,15 +87,15 @@ def _track_envelopes_xml(pointee_a: int, pointee_b: int) -> str:
         f'<AutomationEnvelope Id="5000">'
         f'<EnvelopeTarget><PointeeId Value="{pointee_a}" /></EnvelopeTarget>'
         f'<Automation><Events>'
-        f'<FloatEvent Id="1" Time="{SWAP_BEAT}" Value="1.0" />'
-        f'<FloatEvent Id="2" Time="612.0" Value="0.0" />'
+        f'<FloatEvent Id="1" Time="{swap_beat}" Value="1.0" />'
+        f'<FloatEvent Id="2" Time="{swap_beat + 8.0}" Value="0.0" />'
         f'</Events></Automation>'
         f'</AutomationEnvelope>'
         f'<AutomationEnvelope Id="5001">'
         f'<EnvelopeTarget><PointeeId Value="{pointee_b}" /></EnvelopeTarget>'
         f'<Automation><Events>'
-        f'<FloatEvent Id="3" Time="{SWAP_BEAT}" Value="1.0" />'
-        f'<FloatEvent Id="4" Time="612.0" Value="0.0" />'
+        f'<FloatEvent Id="3" Time="{swap_beat}" Value="1.0" />'
+        f'<FloatEvent Id="4" Time="{swap_beat + 8.0}" Value="0.0" />'
         f'</Events></Automation>'
         f'</AutomationEnvelope>'
         '</Envelopes></AutomationEnvelopes>'
@@ -98,6 +108,7 @@ def _track_xml(
     clips_xml: str,
     pointee_a: int,
     pointee_b: int,
+    swap_beat: float,
 ) -> str:
     """One AudioTrack. Name goes into ``EffectiveName`` because reconcile
     extracts names via ``next(track.iter("EffectiveName"), None)``.
@@ -110,7 +121,7 @@ def _track_xml(
         f'{clips_xml}'
         f'</Events></ArrangerAutomation></Sample></MainSequencer>'
         f'</DeviceChain>'
-        f'{_track_envelopes_xml(pointee_a, pointee_b)}'
+        f'{_track_envelopes_xml(pointee_a, pointee_b, swap_beat)}'
         f'</AudioTrack>'
     )
 
@@ -118,6 +129,7 @@ def _track_xml(
 def _build_als_xml(
     track_a_clips: str,
     track_b_clips: str,
+    swap_beat: float,
 ) -> str:
     # MainTrack MUST come before AudioTracks (Live's own order). The
     # tempo AutomationTarget Id is declared but no envelope points at
@@ -131,8 +143,8 @@ def _build_als_xml(
         '<AutomationTarget Id="77" />'
         '</Tempo>'
         '</MainTrack>'
-        + _track_xml(1, "Alpha Track", track_a_clips, 1000, 1001)
-        + _track_xml(2, "Beta Track", track_b_clips, 1010, 1011)
+        + _track_xml(1, "Alpha Track", track_a_clips, 1000, 1001, swap_beat)
+        + _track_xml(2, "Beta Track", track_b_clips, 1010, 1011, swap_beat)
         + '</Ableton>'
     )
 
@@ -143,6 +155,8 @@ def build_reconcile_fixture(
     handoff_kind="paired/section:drop:end->drop",
     incoming_boundary_at_swap=True,
     outgoing_boundary_at_swap=True,
+    swap_beat=SWAP_BEAT,
+    outgoing_loop=None,
 ):
     """Build a synthetic plan+report+ALS triple that reconciles.
 
@@ -150,38 +164,73 @@ def build_reconcile_fixture(
     transition, swap at beat 604.0. Geometry knobs move CLIP EDGES only;
     the plan's arrangement_start/end_beat fields are derived from the
     clips actually written, so a broken-boundary variant fails ONLY the
-    clip-boundary check, never the arrangement-extent check.
+    clip-boundary check, never the arrangement-extent check. An optional
+    outgoing_loop adds the plan contract and matching tail-loop clips.
     """
+
+    outgoing_end = swap_beat + 36.0
+    incoming_end = swap_beat + 676.0
 
     # Track A (outgoing): if a real split is wanted at the swap, two
     # clips share an edge at 604.0; otherwise one continuous clip covers
     # the whole outgoing span (no edge at 604 -> boundary check fails).
     if outgoing_boundary_at_swap:
         track_a_clips = (
-            _clip_xml(101, 0.0, SWAP_BEAT)
-            + _clip_xml(102, SWAP_BEAT, 640.0)
+            _clip_xml(101, 0.0, swap_beat)
+            + _clip_xml(102, swap_beat, outgoing_end)
         )
-        track_a_starts = [0.0, SWAP_BEAT]
-        track_a_ends = [SWAP_BEAT, 640.0]
+        track_a_starts = [0.0, swap_beat]
+        track_a_ends = [swap_beat, outgoing_end]
     else:
-        track_a_clips = _clip_xml(101, 0.0, 640.0)
+        track_a_clips = _clip_xml(101, 0.0, outgoing_end)
         track_a_starts = [0.0]
-        track_a_ends = [640.0]
+        track_a_ends = [outgoing_end]
+
+    plan_loops = []
+    if outgoing_loop is not None:
+        loop = {
+            "loop_id": "loop_t1_out",
+            "transition_id": "t1",
+            "track_instance_id": "trk_a",
+            **outgoing_loop,
+        }
+        period = loop["source_beat_end"] - loop["source_beat_start"]
+        for repeat in range(loop["repeat_count"]):
+            time = loop["insert_at_beat"] + repeat * period
+            track_a_clips += _clip_xml(
+                1000 + repeat,
+                time,
+                time + period,
+                f"loop_t1_out_{repeat}_tail_loop",
+            )
+            track_a_starts.append(time)
+            track_a_ends.append(time + period)
+        if loop["partial_beats"] > 0:
+            time = loop["insert_at_beat"] + loop["repeat_count"] * period
+            track_a_clips += _clip_xml(
+                1100,
+                time,
+                time + loop["partial_beats"],
+                "loop_t1_out_partial_tail_loop",
+            )
+            track_a_starts.append(time)
+            track_a_ends.append(time + loop["partial_beats"])
+        plan_loops.append(loop)
 
     # Track B (incoming): real cue at 604 vs 8 beats early. The "starts
     # early" variant still produces a valid arrangement-extent (596..1280)
     # so the plan passes arrangement-start/end checks; only the clip
     # boundary check at 604 fails.
     if incoming_boundary_at_swap:
-        track_b_clips = _clip_xml(201, SWAP_BEAT, 1280.0)
-        track_b_starts = [SWAP_BEAT]
-        track_b_ends = [1280.0]
+        track_b_clips = _clip_xml(201, swap_beat, incoming_end)
+        track_b_starts = [swap_beat]
+        track_b_ends = [incoming_end]
     else:
-        track_b_clips = _clip_xml(201, 596.0, 1280.0)
-        track_b_starts = [596.0]
-        track_b_ends = [1280.0]
+        track_b_clips = _clip_xml(201, swap_beat - 8.0, incoming_end)
+        track_b_starts = [swap_beat - 8.0]
+        track_b_ends = [incoming_end]
 
-    als_xml = _build_als_xml(track_a_clips, track_b_clips)
+    als_xml = _build_als_xml(track_a_clips, track_b_clips, swap_beat)
 
     # Gate: emitted XML must parse BEFORE we gzip. A bad fixture has
     # burned enough hours already.
@@ -234,7 +283,7 @@ def build_reconcile_fixture(
                 "source_grid_bpm": summary_b.source_grid_bpm,
             },
         ],
-        "loops": [],
+        "loops": plan_loops,
         "transitions": [
             {
                 "transition_id": "t1",
@@ -254,7 +303,7 @@ def build_reconcile_fixture(
             {
                 "out_track": "Alpha Track",
                 "in_track": "Beta Track",
-                "swap_beats": SWAP_BEAT,
+                "swap_beats": swap_beat,
                 "handoff_kind": handoff_kind,
                 "alignment_policy": alignment_policy,
             }
@@ -293,5 +342,73 @@ def test_fixture_broken_incoming_paired_raises(tmp_path):
         validate_mix_plan_als.reconcile(
             *build_reconcile_fixture(
                 tmp_path, incoming_boundary_at_swap=False
+            )
+        )
+
+
+def test_outgoing_loop_entirely_after_swap_passes(tmp_path):
+    transition_id = "t1"
+    result = validate_mix_plan_als.reconcile(
+        *build_reconcile_fixture(
+            tmp_path,
+            swap_beat=9504.0,
+            outgoing_loop={
+                "source_beat_start": 696.0,
+                "source_beat_end": 704.0,
+                "insert_at_beat": 9592.0,
+                "repeat_count": 4,
+                "partial_beats": 0.0,
+            },
+        )
+    )
+
+    assert result["status"] == "PASS"
+    assert f"bass_swap:{transition_id}" in result["checks"]
+    assert (
+        f"loop_after_swap:{transition_id}:tail_plays_under_incoming"
+        in result["checks"]
+    )
+
+
+def test_swap_on_outgoing_loop_boundary_passes_without_skip_entry(tmp_path):
+    transition_id = "t1"
+    result = validate_mix_plan_als.reconcile(
+        *build_reconcile_fixture(
+            tmp_path,
+            swap_beat=9600.0,
+            outgoing_loop={
+                "source_beat_start": 696.0,
+                "source_beat_end": 704.0,
+                "insert_at_beat": 9592.0,
+                "repeat_count": 4,
+                "partial_beats": 0.0,
+            },
+        )
+    )
+
+    assert result["status"] == "PASS"
+    assert f"bass_swap:{transition_id}" in result["checks"]
+    assert not any(
+        check.startswith(f"loop_after_swap:{transition_id}:")
+        for check in result["checks"]
+    )
+
+
+def test_swap_inside_outgoing_loop_off_boundary_still_fails(tmp_path):
+    with pytest.raises(
+        ValueError,
+        match="swap does not match the frozen outgoing loop boundary",
+    ):
+        validate_mix_plan_als.reconcile(
+            *build_reconcile_fixture(
+                tmp_path,
+                swap_beat=9596.0,
+                outgoing_loop={
+                    "source_beat_start": 696.0,
+                    "source_beat_end": 704.0,
+                    "insert_at_beat": 9592.0,
+                    "repeat_count": 4,
+                    "partial_beats": 0.0,
+                },
             )
         )

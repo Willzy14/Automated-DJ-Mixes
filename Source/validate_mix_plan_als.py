@@ -278,15 +278,33 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
             for loop in outgoing_loops
             for repeat in range(loop["repeat_count"] + 1)
         ]
-        if outgoing_loops and not any(
-                math.isclose(swap, boundary, abs_tol=1e-6)
-                for boundary in loop_boundaries):
+        matches_loop_boundary = any(
+            math.isclose(swap, boundary, abs_tol=1e-6)
+            for boundary in loop_boundaries
+        )
+        swap_inside_loop = any(
+            loop["insert_at_beat"] - 1e-6 <= swap <= (
+                loop["insert_at_beat"]
+                + loop["repeat_count"] * (
+                    loop["source_beat_end"] - loop["source_beat_start"]
+                )
+                + loop["partial_beats"]
+                + 1e-6
+            )
+            for loop in outgoing_loops
+        )
+        if outgoing_loops and not matches_loop_boundary and swap_inside_loop:
             errors.append(
                 f"Transition {transition['transition_index'] + 1} swap does not match "
                 "the frozen outgoing loop boundary"
             )
         else:
             checks.append(f"bass_swap:{transition['transition_id']}")
+            if outgoing_loops and not matches_loop_boundary:
+                checks.append(
+                    f"loop_after_swap:{transition['transition_id']}:"
+                    "tail_plays_under_incoming"
+                )
         # Clip-boundary proof for landmark-mode transitions (the check that
         # exposed V9). The final ALS writer splits both tracks at every
         # landmark-policy swap, including a rescue's grid-derived outgoing
