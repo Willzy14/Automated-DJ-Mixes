@@ -613,7 +613,12 @@
       "date": "2026-08-20",
       "brain": "Claude + Codex + MiniMax",
       "summary": "30 commits, suite 344->404. Three adversarial Codex rounds, all BLOCKERs closed. Loop-quality gate + clip splitting fix Sam V10 ear-notes. Rekordbox removed. Demucs 21s->3.5s warm. First render check found both ear-notes + 6 more. allin1 + self-similarity evaluated. Corpus destroyed 2nd time by junction-traversing delete - root-caused, canaried, recovered 20/20. Tier A found to have silently become a decision-maker; fixed, cost documented as Phase 2 evidence. No certified mix - 20-track pool not alignable, longest default chain 15."
+    },
+    {
+      "date": "2026-08-25",
+      "brain": "Claude + Codex + MiniMax",
+      "summary": "V16 certified via Sam-ruled gate fix. Tier A Phase 2 merged flag-gated (Vente catcher + width-step boundary cues, 11 new/0 spurious). Baseline refreshed. Render gate built, Codex DONT SHIP (3 criticals incl truncated-render-passes), fix round in flight. Suite 404->424."
     }
   ],
-  "last_modified": "2026-08-20"
+  "last_modified": "2026-08-25"
 }

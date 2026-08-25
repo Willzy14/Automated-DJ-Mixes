@@ -156,6 +156,8 @@ Key functions: `extract_track_automation()`, `analyse_transitions()`, `_classify
 Key functions: `load_snapshot()`, `analyse()`, `_transition_snapshot()`, `_repeat_groups()`, `_source_at()`.
 
 ### `Source/stem_detector.py`
+**2026-08-25 update (Claude):** `detect(width_cues=True)` (default OFF) — stereo-width sustained-step boundary candidates feeding the same raw_bounds path as `_energy_cues`; phrase-grid + RMS-flat (≤1.5 dB) + min-4-bar-run gates. Corpus-validated: Revoloution bar 148 + 11 evidenced new boundaries, 0 spurious. Companion flag in `align_engine`: `LOOP_SELF_SIMILARITY_TIERA` (default OFF) — tiera-feature similarity term for the loop gate; wire-in semantics (AND vs replacement) undecided, see Master Board.
+
 **2026-08-19 update (Claude):** two additions, both corpus-validated. (1) `_energy_cues()` — sustained low-`mix_norm` runs cut section boundaries the kick/bass paths miss (`MIX_ENERGY_BREAK_FRAC=0.40`, `MIN_ENERGY_RUN_BARS=12`; default-ON, 20-track sweep: 1 correct new cut, 0 false positives; closes the Double Dutch attenuated-kick break). `ef` also joins `_assign_labels`'s break/fill trigger. (2) Sam's soft rules behind a default-OFF flag — R2 kick-less head→intro, R3 kick-less tail→outro, R4 kick-drop cascade (`Tests/test_section_soft_rules.py`; R4 proven, R2 unproven pending a discriminating test).
 
 **2026-07-16 update:** model mode uses smoothed V3 presence for coarse sections/cues and raw V3 presence for `signals.musical_landmarks`; dedicated dropout spans no longer disappear when short gaps are bridged for section stability. DETECT images show the raw pre-drop/dropout strip. Default OFF and bass/vocal/loop/fill behavior remain unchanged. Orchestrator model use requires `--sections-layout --stem-sections --kick-model`.

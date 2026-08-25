@@ -191,6 +191,26 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
+### 2026-08-25 (Latest Session) - V16 CERTIFIED via Sam's gate ruling; Tier A Phase 2 merged; render gate in fix round
+**Brain:** Claude (orchestrator) + Codex (gate fix build + render-gate review) + MiniMax (Tier A Phase 2 + render gate builds). Suite 404 -> 424, all pushed.
+
+**Completed:**
+- **`14.08.26 Mix V16.als` is CERTIFIED** - reconcile PASS, 117 checks, verified by Claude's own run on merged main. No rebuild was needed: Sam's Friday ruling (a tail loop entirely AFTER the swap is legal - it plays under the incoming; only a swap INSIDE the loop span needs boundary coincidence) became the spec, Codex implemented it in `validate_mix_plan_als.py` (f1cae1c), and the T14/V9-T9 errors cleared. V9's other 5 errors correctly REMAIN (that artifact predates clip-splitting). The passing check is named `loop_after_swap:<id>:tail_plays_under_incoming`.
+- **Tier A Phase 2 merged (719be92, both flags default-OFF, byte-identical proofs x2):** (1) `LOOP_SELF_SIMILARITY_TIERA` - catches Vente's defective loop (0.567 < 0.65 vs 0.737 clean-pass); 15,268-window replay, bit-identical vs an independent oracle, every one of 1,262 verdict flips judged. (2) `detect(width_cues=True)` - finds Revoloution bar 148 (width 0.181->0.122 at RMS delta +0.05 dB); corpus sweep: 11 new boundaries, 0 spurious, each independently evidenced, allin1-corroborated where covered.
+- **Alignment baseline refreshed** (55182d4) after verifying Thursday's drift unchanged - suite honestly green again.
+- **Render gate (`Source/render_check.py`) built but NOT merged** - Codex review returned DON'T SHIP with 3 verified criticals: tempo-automation ignored (checks sample the wrong times on any tempo-arc mix; V10 is flat so its own acceptance test couldn't see it), a gate crash exits 1 = "warnings only", and a TRUNCATED RENDER PASSES (no duration-vs-arrangement check). Fix round in flight at session end on branch `feat/render-gate` (worktree adj-rendergate2). NOTE: mix.md Phase 5 in both brains already references render_check.py - live-edit gap until the merge.
+
+**Key Learnings:**
+- **Replacement semantics un-catch:** the tiera similarity term REPLACES the base score, and the replay proved that catches 791 new windows while UN-catching 404 previously-caught ones. Candidate fix is AND semantics (must pass both). Decision carded; flag stays OFF until decided and re-replayed.
+- **The author's acceptance test can be structurally blind:** the render gate validated 8/8 against V10 - which is flat-tempo, so the tempo-handling critical was invisible to its own evidence. Cross-review by a brain that reads the WRITER side (als_generator) caught it.
+- **Courier wait-loops need a nudge:** two couriers idled multiple turns "waiting for watchers" instead of invoking their stall clauses; a direct SendMessage ("stop waiting, act per your brief") unstuck both.
+
+**Pending:**
+- Render-gate fix round (3 criticals + 3 cheap majors) -> V10 pin re-run -> merge. Sam asked for a second /session-end if it lands.
+- Tier A wire-in semantics decision (AND vs replacement) before any default-ON; Codex cross-review of Phase 2 internals queued.
+- Unbuilt: allin1 adapter, hardening batch, render trigger (Producer Pal), Held-Karp segfault, canary hardening + rmtree junction guards, Deep Soulful 10 recover-or-accept.
+
+
 ### 2026-08-20 (Latest Session) - Codex's binding review, 3 adversarial rounds, loop gate + clip splitting, first render check
 **Brain:** Claude (orchestrator/judgment) + Codex (2 review rounds + 2 builds) + MiniMax (builds + 1 review). Kimi unavailable all day — billing-cycle quota exhausted, review staged for retry. **30 commits, suite 344 → 404 passing.**
 
