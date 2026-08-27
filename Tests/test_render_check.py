@@ -1469,22 +1469,23 @@ def test_boundary_click_skipped_on_tempo_arc(tmp_path):
     assert not any(f.check == "boundary_click_skipped_tempo_arc"
                    for f in res_flat.findings)
 
-    # Arc map, EARLY boundary: the click is STILL caught. The residual at
-    # 4.7 s is ~0.09 ms, far inside the +/-2 ms window, so there is no reason
-    # to skip. An earlier version keyed the skip off whole-map flatness and
-    # threw this away, which Codex called a blocker: a short arc render could
-    # return PASS with a real click in it.
+    # Arc map: NO boundary is inspected, and the skip says so by name. An
+    # earlier version inspected "early" boundaries on the grounds that the
+    # 19.5 ppm mean bias stayed under half the window; Codex refuted it - the
+    # scatter around that fit is 5.3 ms RMS, already wider than the whole
+    # +/-2 ms window, so no boundary on an arc can be called trusted until the
+    # map's uncertainty is characterised.
     als_arc = tmp_path / "arc.als"
     _write_als(als_arc, clips, bpm=bpm,
                tempo_envelope=[(0.0, 128.0), (64.0, 130.0)])
     res_arc, tmap_arc = run_with(als_arc, "arc")
     assert not tmap_arc.is_flat, "fixture must be an arc"
-    assert any(f.check == "boundary_click" and f.level == "FAIL"
-               for f in res_arc.findings), \
-        [(f.check, f.level) for f in res_arc.findings]
-    assert not any(f.check == "boundary_click_skipped_tempo_arc"
-                   for f in res_arc.findings), \
-        "an early boundary carries negligible uncertainty and must be checked"
+    skips = [f for f in res_arc.findings
+             if f.check == "boundary_click_skipped_tempo_arc"]
+    assert len(skips) == 1, [(f.check, f.level) for f in res_arc.findings]
+    assert skips[0].measured["inspected_boundaries"] == 0
+    assert not any(f.check == "boundary_click" for f in res_arc.findings), \
+        "no boundary_click verdict may be reported against an arc map"
 
 
 def test_boundary_click_skips_only_late_boundaries_on_an_arc(tmp_path):
@@ -1522,8 +1523,6 @@ def test_boundary_click_skips_only_late_boundaries_on_an_arc(tmp_path):
     assert len(skips) == 1, [(f.check, f.level) for f in res.findings]
     assert skips[0].level == "SKIP"
     assert skips[0].measured["skipped_boundaries"] >= 1
-    assert skips[0].measured["inspected_boundaries"] >= 1, \
-        "early boundaries must still be inspected"
     assert skips[0].measured["skipped_check"] == "boundary_click"
 
     # The report must not list a skipped check as clean. Without this the
@@ -1604,17 +1603,70 @@ def test_grid_fold_drift_warns_not_fails_on_tempo_arc(tmp_path):
     assert arc_drift == pytest.approx(31.0), arc
 
 
-def test_grid_fold_arc_downgrade_is_bounded(tmp_path):
-    """The arc downgrade must be BOUNDED. Drift the known residual cannot
-    account for still FAILs - otherwise an arbitrarily mistimed render ships
-    with only a warning, the blocker Codex found in the first version."""
+def test_map_vs_render_catches_a_wrong_map(tmp_path):
+    """The constant-free defence against a grossly wrong map.
+
+    grid_fold cannot gate on an arc, so this is what stops a mistimed render
+    shipping. It compares where the map says the arrangement ends against
+    where the audio actually stops - no fitted quantity involved.
+
+    Prove-the-test: the SAME render passes under the correct arc map and FAILs
+    under a flat one, so a pass cannot be an artefact of a slack tolerance.
+    """
+    bpm = 120.0
+    arr_end_beats = 240.0
+    # 120 -> 160 BPM across the whole arrangement. Flat would call this 120 s;
+    # the arc integral makes it 103.6 s, so a flat map is ~16 s out.
+    clips = [{"track": "A", "arr_start": 0, "arr_end": int(arr_end_beats),
+              "loop_on": False}]
+    als_arc = tmp_path / "mvr.als"
+    _write_als(als_arc, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 120.0), (arr_end_beats, 160.0)])
+
+    import xml.etree.ElementTree as ET
+    import gzip as _gzip
+    root = ET.fromstring(_gzip.open(als_arc, "rb").read())
+    arc_map = render_check.TempoMap.from_als_root(root)
+    assert not arc_map.is_flat
+    true_end = arc_map.beat_to_sec(arr_end_beats)
+    flat_map = render_check.TempoMap.flat(bpm)
+    assert flat_map.beat_to_sec(arr_end_beats) - true_end > 10.0, \
+        "fixture must separate the two maps by well over the tolerance"
+
+    wav = tmp_path / "mvr.wav"
+    rpt = tmp_path / "mvr.json"
+    _synth_render(wav, true_end, clips=clips)
+    _write_report(rpt)
+
+    sweep = render_check.streaming_sweep(wav, arc_map)
+    fps = int(round(1.0 / render_check.HOP_SEC))
+
+    good = render_check.check_map_vs_render(
+        sweep.rms100_db, fps, true_end, arc_map)
+    assert good and good[0].level == "INFO", \
+        [(f.level, f.measured) for f in good]
+    assert abs(good[0].measured["delta_sec"]) <= good[0].measured["tolerance_sec"]
+
+    bad = render_check.check_map_vs_render(
+        sweep.rms100_db, fps, flat_map.beat_to_sec(arr_end_beats), flat_map)
+    assert bad and bad[0].level == "FAIL", \
+        [(f.level, f.measured) for f in bad]
+    assert abs(bad[0].measured["delta_sec"]) > bad[0].measured["tolerance_sec"]
+
+
+def test_grid_fold_never_gates_on_an_arc(tmp_path):
+    """On an arc grid_fold reports and does not gate, at ANY drift.
+
+    Two earlier attempts at a gating rule were both wrong (an unconditional
+    downgrade, then an allowance derived from the fitted 19.5 ppm mean, which
+    grows without limit and swallows a known-wrong result on a longer mix).
+    Until the map's uncertainty is characterised the honest position is that
+    this check cannot gate an arc - and `check_map_vs_render` is what catches
+    a grossly wrong map instead.
+    """
     seconds = 145.0
     bpm = 120.0
     bps = bpm / 60.0
-    # Two solo regions >= 45 s separated by a 2-clip overlap, so
-    # _pick_solo_regions has two distinct probe windows. A single clip yields
-    # ONE region and check_grid_fold returns its "fewer than 2 regions" INFO
-    # without ever reaching the drift logic - the test would prove nothing.
     clips = [
         {"track": "A", "arr_start": 0, "arr_end": round(70 * bps),
          "loop_on": False},
@@ -1626,14 +1678,15 @@ def test_grid_fold_arc_downgrade_is_bounded(tmp_path):
     als_arc = tmp_path / "arcb.als"
     _write_als(als_arc, clips, bpm=bpm,
                tempo_envelope=[(0.0, 120.0), (128.0, 124.0)])
+    als_flat = tmp_path / "flatb.als"
+    _write_als(als_flat, clips, bpm=bpm)
 
     import xml.etree.ElementTree as ET
     import gzip as _gzip
-    root = ET.fromstring(_gzip.open(als_arc, "rb").read())
-    tmap = render_check.TempoMap.from_als_root(root)
-    assert not tmap.is_flat, "fixture must be an arc for this test to mean anything"
 
-    def grid_fold_with(medians):
+    def grid_fold_with(als_path, medians):
+        root = ET.fromstring(_gzip.open(als_path, "rb").read())
+        tmap = render_check.TempoMap.from_als_root(root)
         real = render_check._grid_fold_median
         seq = iter(medians)
         render_check._grid_fold_median = lambda *a, **k: next(seq)
@@ -1643,17 +1696,18 @@ def test_grid_fold_arc_downgrade_is_bounded(tmp_path):
             render_check._grid_fold_median = real
         return [f for f in out if f.check == "grid_fold"]
 
-    # Drift far past anything the residual can explain -> still FAIL.
-    big = grid_fold_with([0.0, 180.0])
-    assert big and big[0].level == "FAIL", [(f.level, f.measured) for f in big]
-    assert big[0].measured["drift_ms"] > big[0].measured["fail_above_ms"]
+    # Huge drift on an arc: still only a WARN, and it says it is not gating.
+    big = grid_fold_with(als_arc, [0.0, 500.0])
+    assert big and big[0].level == "WARN", [(f.level, f.measured) for f in big]
+    assert big[0].measured["gates"] is False
+    assert "cannot gate" in big[0].msg
 
-    # Over the flat threshold but inside the allowance -> WARN, not FAIL.
-    small = grid_fold_with([0.0, 31.0])
-    assert small and small[0].level == "WARN", \
-        [(f.level, f.measured) for f in small]
-    assert small[0].measured["drift_ms"] > render_check.GRID_FOLD_DRIFT_MS
-    assert small[0].measured["drift_ms"] <= small[0].measured["fail_above_ms"]
+    # The same drift on a FLAT map still FAILs - the flat path is untouched,
+    # so this cannot pass by the check having been disabled outright.
+    flat = grid_fold_with(als_flat, [0.0, 500.0])
+    assert flat and flat[0].level == "FAIL", \
+        [(f.level, f.measured) for f in flat]
+    assert flat[0].measured["gates"] is True
 
 
 # --------------------------------------------------------------------------- #

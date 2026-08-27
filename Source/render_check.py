@@ -938,6 +938,64 @@ def _click_shape(y: np.ndarray) -> bool:
     return width <= CLICK_SHAPE_MAX_WIDTH
 
 
+#: How far the audio may stop from where the map says the arrangement ends.
+#: Deliberately generous and assumption-free: a legitimate reverb/export tail
+#: runs past the last clip, and a fade can stop just short. Measured slack on
+#: real renders is ~0.1-0.2 s against tolerances of 10-15 s, while a wrong map
+#: misses by minutes - the point is to catch the gross case with a margin, not
+#: to measure precision.
+MAP_VS_RENDER_ABS_TOL_SEC = 2.0
+MAP_VS_RENDER_REL_TOL = 0.003
+
+
+def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
+                        tempo_map: "TempoMap") -> list[Finding]:
+    """Does the beat<->time map agree with where the audio actually stops?
+
+    The direct, constant-free test of the map itself. A wrong map mis-predicts
+    the arrangement end by a wide margin - a flat map on the tempo-arc V16 is
+    169.6 s out, against a 15.1 s tolerance - while both correct maps measured
+    to date land within 0.21 s. This is what defends against a grossly wrong
+    map now that grid_fold cannot gate on an arc, and unlike grid_fold it rests
+    on no fitted quantity.
+
+    Measured, 2026-08-27: V10 (flat) +0.117 s of 9.75 s allowed; V16 (arc)
+    +0.204 s of 15.09 s; V16 forced through a flat map -169.574 s -> FAIL.
+    """
+    above = np.nonzero(rms100_db > HARD_SILENCE_DB)[0]
+    if len(above) == 0 or arr_end_sec <= 0:
+        return [Finding(
+            check="map_vs_render", level="INFO",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={"audible_frames": int(len(above))},
+            msg="map_vs_render skipped (no audible material)",
+        )]
+    audio_end = float(above[-1] + 1) / fps
+    delta = audio_end - arr_end_sec
+    tol = max(MAP_VS_RENDER_ABS_TOL_SEC, MAP_VS_RENDER_REL_TOL * arr_end_sec)
+    measured = {"arr_end_sec": arr_end_sec, "audio_end_sec": audio_end,
+                "delta_sec": delta, "tolerance_sec": tol,
+                "tempo_map_flat": tempo_map.is_flat}
+    if abs(delta) > tol:
+        return [Finding(
+            check="map_vs_render", level="FAIL",
+            t0=min(audio_end, arr_end_sec), t1=max(audio_end, arr_end_sec),
+            beat0=0.0, beat1=0.0,
+            measured=measured,
+            msg=(f"the tempo map puts the arrangement end at "
+                 f"{arr_end_sec:.1f}s but the audio stops at "
+                 f"{audio_end:.1f}s ({delta:+.1f}s, tolerance {tol:.1f}s) - "
+                 "the map does not describe this render"),
+        )]
+    return [Finding(
+        check="map_vs_render", level="INFO",
+        t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+        measured=measured,
+        msg=(f"map agrees with the render ({delta:+.2f}s of {tol:.1f}s "
+             "allowed)"),
+    )]
+
+
 def check_boundary_click(render_path: Path, boundaries_sec: list[float],
                          tempo_map: TempoMap) -> list[Finding]:
     """For each boundary: read +/-2 ms, metric vs null on 32 nearest beats.
@@ -1512,45 +1570,49 @@ def check_grid_fold(render_path: Path, clips: list[dict],
                 "drift_ms": drift,
                 "tempo_map_flat": tempo_map.is_flat}
     # GRID_FOLD_DRIFT_MS was calibrated on a flat render, where the map is
-    # exact. On a tempo ARC two confounds inflate the number without any
-    # render defect: the measured map residual, and probes landing on
-    # DIFFERENT tracks whose kick attacks read at different phases.
+    # exact. On a tempo ARC the number is inflated by confounds that are not
+    # render defects - the map's residual, and probes landing on DIFFERENT
+    # tracks whose kick attacks read at different phases - so it cannot gate.
     #
-    # An earlier version of this downgraded EVERY arc drift to WARN, which
-    # Codex correctly called a blocker: it made an arbitrarily wrong map
-    # non-blocking too, so a genuinely mistimed render could ship. The bound
-    # below is DERIVED rather than picked - tolerate exactly the drift the
-    # known residual can explain across the probe span, plus the flat
-    # threshold for cross-track bias. Anything past that is unexplained and
-    # still FAILs. Restore the plain flat threshold once the residual is
-    # explained against a render made from a known-identical ALS.
+    # Two rejected attempts, kept as a caution:
+    #   1. Downgrade every arc drift to WARN. Codex: that makes an
+    #      arbitrarily wrong map non-blocking, so a mistimed render ships.
+    #   2. Allow "the drift the measured 19.5 ppm residual can explain".
+    #      Codex again, and this one is the subtler error: 19.5 ppm is a
+    #      FITTED MEAN from a single unpaired ALS/render with 5.3 ms RMS
+    #      scatter, not a proven maximum. Used as a bound it grows without
+    #      limit (30 + 0.0195 * span_ms), so at a 61-minute span it swallows
+    #      the very 101.9 ms figure a known-wrong map produces, and any
+    #      systematic error at or below 19.5 ppm never fails at all. That is
+    #      an estimate wearing a safety bound's clothes.
+    #
+    # So on an arc this reports and does not gate, and says exactly that. The
+    # defence against a grossly wrong map is check_map_vs_render below, which
+    # compares predicted arrangement end against where the audio actually
+    # stops and needs no fitted constant. Restore gating here once the map's
+    # uncertainty is characterised against a render made from a
+    # known-identical ALS.
     arc = not tempo_map.is_flat
-    span_sec = max(0.0, used[-1][1] - used[0][0])
-    allowance_ms = TEMPO_MAP_RESIDUAL_PPM * span_sec * 1000.0 if arc else 0.0
-    fail_above_ms = GRID_FOLD_DRIFT_MS + allowance_ms
-    measured["fail_above_ms"] = fail_above_ms
-    measured["residual_allowance_ms"] = allowance_ms
-    if drift > fail_above_ms:
-        findings.append(Finding(
-            check="grid_fold", level="FAIL",
-            t0=used[0][0], t1=used[-1][1],
-            beat0=sec_to_arr(used[0][0], tempo_map),
-            beat1=sec_to_arr(used[-1][1], tempo_map),
-            measured=measured,
-            msg=(f"beat grid drifts across the render ({drift:.1f} ms), "
-                 f"past the {fail_above_ms:.1f} ms the known map residual "
-                 "can account for"),
-        ))
-    elif drift > GRID_FOLD_DRIFT_MS:
+    measured["gates"] = not arc
+    if arc:
         findings.append(Finding(
             check="grid_fold", level="WARN",
             t0=used[0][0], t1=used[-1][1],
             beat0=sec_to_arr(used[0][0], tempo_map),
             beat1=sec_to_arr(used[-1][1], tempo_map),
             measured=measured,
-            msg=(f"beat grid drifts across the render ({drift:.1f} ms), "
-                 f"within the {fail_above_ms:.1f} ms the known map residual "
-                 "and cross-track onset bias can account for"),
+            msg=(f"beat grid drift measured at {drift:.1f} ms; on a tempo arc "
+                 "this reports only - the map's uncertainty is not "
+                 "characterised, so the threshold cannot gate"),
+        ))
+    elif drift > GRID_FOLD_DRIFT_MS:
+        findings.append(Finding(
+            check="grid_fold", level="FAIL",
+            t0=used[0][0], t1=used[-1][1],
+            beat0=sec_to_arr(used[0][0], tempo_map),
+            beat1=sec_to_arr(used[-1][1], tempo_map),
+            measured=measured,
+            msg=f"beat grid drifts across the render ({drift:.1f} ms)",
         ))
     else:
         findings.append(Finding(
@@ -1670,6 +1732,7 @@ def run_check(render_path: Path, report_path: Path,
         ))
 
     findings += check_hard_silence(sweep.rms100_db, fps, arr_start_s, arr_end_s)
+    findings += check_map_vs_render(sweep.rms100_db, fps, arr_end_s, tempo_map)
 
     boundaries_sec = collect_boundaries(clips, loops, arr_end_b, tempo_map)
     if boundaries_sec:
@@ -1686,15 +1749,21 @@ def run_check(render_path: Path, report_path: Path,
         # window) and were being thrown away, so a short arc render could
         # return PASS with a real click in it. A boundary is inspected while
         # its expected timing uncertainty stays within half the window.
-        max_unc = CLICK_HALF_WINDOW_SEC * 0.5
-        # A FLAT map is exact - the residual was measured against a tempo arc
-        # and does not apply. Without this the filter skipped most boundaries
-        # of the 54-minute flat V10 control, which its regression pin caught
-        # immediately. Every boundary past ~51 s would have gone unchecked on
-        # exactly the render the gate was calibrated against.
-        residual_ppm = 0.0 if tempo_map.is_flat else TEMPO_MAP_RESIDUAL_PPM
-        trusted = [t for t in boundaries_sec if residual_ppm * t <= max_unc]
-        untrusted = [t for t in boundaries_sec if residual_ppm * t > max_unc]
+        # A FLAT map is exact, so every boundary is inspected - that is the
+        # V10 control the gate was calibrated on.
+        #
+        # On an ARC, none are. An earlier version tried to inspect "early"
+        # boundaries on the grounds that residual_ppm * t stayed under half
+        # the window, and Codex refuted it: 19.5 ppm is the fitted MEAN bias,
+        # while the scatter around that fit is 5.3 ms RMS - already larger
+        # than the whole +/-2 ms search window. So no boundary on an arc can
+        # be called trusted, early ones included, until the map's uncertainty
+        # is actually characterised. Inspecting them anyway would return
+        # falsely clean, which is the failure this skip exists to prevent.
+        if tempo_map.is_flat:
+            trusted, untrusted = list(boundaries_sec), []
+        else:
+            trusted, untrusted = [], list(boundaries_sec)
         if trusted:
             findings += check_boundary_click(render_path, trusted, tempo_map)
         if untrusted:
@@ -1713,9 +1782,9 @@ def run_check(render_path: Path, report_path: Path,
                           "from_sec": min(untrusted),
                           "click_half_window_sec": CLICK_HALF_WINDOW_SEC},
                 msg=(f"boundary_click skipped for {len(untrusted)} of "
-                     f"{len(boundaries_sec)} boundaries from "
-                     f"{min(untrusted):.0f}s on: the map residual there "
-                     "exceeds half the +/-2 ms click window"),
+                     f"{len(boundaries_sec)} boundaries: on a tempo arc the "
+                     "map's timing uncertainty is not characterised and the "
+                     "fit scatter alone exceeds the +/-2 ms click window"),
             ))
 
     findings += check_level_cliff(loops, sweep.beat_rms_db, tempo_map)
@@ -1822,7 +1891,8 @@ def write_report(result: CheckResult, render_path: Path,
     all_checks = {"hard_silence", "boundary_click", "level_cliff",
                   "loop_exit_jump", "loop_period", "exposed_solo",
                   "loop_hole", "transition_dip", "loop_verbatim",
-                  "grid_fold", "kick_flam", "eof_truncated_reads"}
+                  "grid_fold", "kick_flam", "eof_truncated_reads",
+                  "map_vs_render"}
     fired = {f.check for f in result.findings}
     # A check that was SKIPPED must never be listed as clean. The skip finding
     # carries its own name, so without this the report tells the operator that
