@@ -1430,41 +1430,113 @@ def test_boundary_click_skipped_on_tempo_arc(tmp_path):
          "arr_end": round(seconds * bps), "loop_on": False},
     ]
 
-    def click_at_boundary(t, L, R):
-        L = L.copy(); R = R.copy()
-        idx = int(round((boundary_beat / bps) * 44100))
-        L[idx] = L[idx] + 0.7
-        R[idx] = R[idx] + 0.7
-        return L, R
-
-    wav = tmp_path / "arc.wav"
+    import xml.etree.ElementTree as ET
+    import gzip as _gzip
     rpt = tmp_path / "arc.json"
-    _synth_render(wav, seconds, clips=clips, extra_process=click_at_boundary)
     _write_report(rpt)
+
+    def run_with(als_path, tag):
+        """Place the click at the boundary time THIS map predicts.
+
+        Codex caught the earlier version doing otherwise: it injected at the
+        flat map's beat-10 time and then asked the arc map to find it, 5.7 ms
+        away. That tested map disagreement, not the skip logic.
+        """
+        root = ET.fromstring(_gzip.open(als_path, "rb").read())
+        tmap = render_check.TempoMap.from_als_root(root)
+        t_b = tmap.beat_to_sec(float(boundary_beat))
+
+        def click(t, L, R):
+            L = L.copy(); R = R.copy()
+            idx = int(round(t_b * 44100))
+            L[idx] = L[idx] + 0.7
+            R[idx] = R[idx] + 0.7
+            return L, R
+
+        wav = tmp_path / f"{tag}.wav"
+        _synth_render(wav, seconds, clips=clips, extra_process=click)
+        return render_check.run_check(wav, rpt, als_path), tmap
 
     # Flat map: the click is caught. This is the prove-the-test half - without
     # it, the SKIP below could be hiding a check that never worked.
     als_flat = tmp_path / "flat.als"
     _write_als(als_flat, clips)
-    res_flat = render_check.run_check(wav, rpt, als_flat)
+    res_flat, tmap_flat = run_with(als_flat, "flat")
+    assert tmap_flat.is_flat
     assert any(f.check == "boundary_click" and f.level == "FAIL"
                for f in res_flat.findings), \
         [(f.check, f.level) for f in res_flat.findings]
     assert not any(f.check == "boundary_click_skipped_tempo_arc"
                    for f in res_flat.findings)
 
-    # Arc map: named SKIP, and boundary_click does not run at all.
+    # Arc map, EARLY boundary: the click is STILL caught. The residual at
+    # 4.7 s is ~0.09 ms, far inside the +/-2 ms window, so there is no reason
+    # to skip. An earlier version keyed the skip off whole-map flatness and
+    # threw this away, which Codex called a blocker: a short arc render could
+    # return PASS with a real click in it.
     als_arc = tmp_path / "arc.als"
     _write_als(als_arc, clips, bpm=bpm,
                tempo_envelope=[(0.0, 128.0), (64.0, 130.0)])
-    res_arc = render_check.run_check(wav, rpt, als_arc)
-    skips = [f for f in res_arc.findings
+    res_arc, tmap_arc = run_with(als_arc, "arc")
+    assert not tmap_arc.is_flat, "fixture must be an arc"
+    assert any(f.check == "boundary_click" and f.level == "FAIL"
+               for f in res_arc.findings), \
+        [(f.check, f.level) for f in res_arc.findings]
+    assert not any(f.check == "boundary_click_skipped_tempo_arc"
+                   for f in res_arc.findings), \
+        "an early boundary carries negligible uncertainty and must be checked"
+
+
+def test_boundary_click_skips_only_late_boundaries_on_an_arc(tmp_path):
+    """Late boundaries ARE skipped, by name, and the report must not then
+    call boundary_click clean.
+
+    The residual grows with elapsed time, so past roughly 51 s the +/-2 ms
+    window no longer contains the true splice. Those boundaries are announced
+    as skipped; earlier ones in the same render are still inspected.
+    """
+    bpm = 120.0
+    bps = bpm / 60.0
+    seconds = 130.0
+    early_beat = 8              # ~4 s   -> inspected
+    late_beat = round(100 * bps)  # ~100 s -> skipped
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": early_beat,
+         "loop_on": False},
+        {"track": "B", "arr_start": early_beat, "arr_end": late_beat,
+         "loop_on": False},
+        {"track": "C", "arr_start": late_beat,
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+    wav = tmp_path / "long.wav"
+    rpt = tmp_path / "long.json"
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+    als = tmp_path / "long.als"
+    _write_als(als, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 120.0), (128.0, 124.0)])
+
+    res = render_check.run_check(wav, rpt, als)
+    skips = [f for f in res.findings
              if f.check == "boundary_click_skipped_tempo_arc"]
-    assert len(skips) == 1, [(f.check, f.level) for f in res_arc.findings]
+    assert len(skips) == 1, [(f.check, f.level) for f in res.findings]
     assert skips[0].level == "SKIP"
-    assert skips[0].measured["boundaries"] > 0
-    assert not any(f.check == "boundary_click" for f in res_arc.findings), \
-        "boundary_click must not run against an arc map"
+    assert skips[0].measured["skipped_boundaries"] >= 1
+    assert skips[0].measured["inspected_boundaries"] >= 1, \
+        "early boundaries must still be inspected"
+    assert skips[0].measured["skipped_check"] == "boundary_click"
+
+    # The report must not list a skipped check as clean. Without this the
+    # operator is told the very check that did not run came back clean, which
+    # defeats the only safeguard the skip provides (Codex review 2026-08-27).
+    md_path, _ = render_check.write_report(res, wav,
+                                           tmp_path / "out.json")
+    clean_section = md_path.read_text(
+        encoding="utf-8").split("## Checks run clean")[-1]
+    assert "boundary_click" not in clean_section, clean_section
+    # ... and the skip itself must still be visible in the findings table.
+    assert "boundary_click_skipped_tempo_arc" in md_path.read_text(
+        encoding="utf-8")
 
 
 def test_grid_fold_drift_warns_not_fails_on_tempo_arc(tmp_path):
@@ -1475,11 +1547,19 @@ def test_grid_fold_drift_warns_not_fails_on_tempo_arc(tmp_path):
     residual, and probes landing on different tracks), so it must keep
     reporting the number without failing the render on it.
     """
-    seconds = 200.0
+    seconds = 145.0
     bpm = 120.0
     bps = bpm / 60.0
-    clips = [{"track": "A", "arr_start": 0, "arr_end": round(seconds * bps),
-              "loop_on": False}]
+    # Two solo regions >= 45 s separated by a 2-clip overlap, so
+    # _pick_solo_regions has two distinct probe windows. A single clip yields
+    # ONE region and check_grid_fold returns its "fewer than 2 regions" INFO
+    # without ever reaching the drift logic - the test would prove nothing.
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": round(70 * bps),
+         "loop_on": False},
+        {"track": "B", "arr_start": round(65 * bps),
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
     wav = tmp_path / "d.wav"
     rpt = tmp_path / "d.json"
     _synth_render(wav, seconds, clips=clips)
@@ -1497,10 +1577,12 @@ def test_grid_fold_drift_warns_not_fails_on_tempo_arc(tmp_path):
     def grid_fold_level(als_path):
         root = ET.fromstring(_gzip.open(als_path, "rb").read())
         tmap = render_check.TempoMap.from_als_root(root)
-        # Force a drift well past the threshold, identically for both maps, so
-        # the ONLY difference between the two calls is map flatness.
+        # Drift just OVER the flat threshold, identically for both maps, so
+        # the only difference between the two calls is map flatness. It has to
+        # be inside the residual allowance - past that an arc FAILs too, which
+        # is the separate bounded-downgrade contract tested below.
         real = render_check._grid_fold_median
-        seq = iter([0.0, 90.0, 180.0])
+        seq = iter([0.0, 31.0])
         render_check._grid_fold_median = lambda *a, **k: next(seq)
         try:
             out = render_check.check_grid_fold(wav, clips, tmap)
@@ -1510,14 +1592,68 @@ def test_grid_fold_drift_warns_not_fails_on_tempo_arc(tmp_path):
 
     flat = grid_fold_level(als_flat)
     arc = grid_fold_level(als_arc)
-    # Only meaningful if the probe actually produced a grid_fold verdict.
-    assert any(c == "grid_fold" for c, _, _ in flat), flat
     flat_levels = {lvl for c, lvl, _ in flat if c == "grid_fold"}
     arc_levels = {lvl for c, lvl, _ in arc if c == "grid_fold"}
-    if flat_levels == {"FAIL"}:
-        assert arc_levels == {"WARN"}, (flat, arc)
-        arc_drift = [d for c, _, d in arc if c == "grid_fold"][0]
-        assert arc_drift is not None and arc_drift > 0, arc
+    # Unconditional. An earlier version gated the decisive assertions behind
+    # `if flat_levels == {"FAIL"}`, so a regression in the flat path let the
+    # whole test pass without checking anything (Codex review 2026-08-27) -
+    # exactly the vacuous-pass shape this suite exists to prevent.
+    assert flat_levels == {"FAIL"}, flat
+    assert arc_levels == {"WARN"}, (flat, arc)
+    arc_drift = [d for c, _, d in arc if c == "grid_fold"][0]
+    assert arc_drift == pytest.approx(31.0), arc
+
+
+def test_grid_fold_arc_downgrade_is_bounded(tmp_path):
+    """The arc downgrade must be BOUNDED. Drift the known residual cannot
+    account for still FAILs - otherwise an arbitrarily mistimed render ships
+    with only a warning, the blocker Codex found in the first version."""
+    seconds = 145.0
+    bpm = 120.0
+    bps = bpm / 60.0
+    # Two solo regions >= 45 s separated by a 2-clip overlap, so
+    # _pick_solo_regions has two distinct probe windows. A single clip yields
+    # ONE region and check_grid_fold returns its "fewer than 2 regions" INFO
+    # without ever reaching the drift logic - the test would prove nothing.
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": round(70 * bps),
+         "loop_on": False},
+        {"track": "B", "arr_start": round(65 * bps),
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+    wav = tmp_path / "b.wav"
+    _synth_render(wav, seconds, clips=clips)
+    als_arc = tmp_path / "arcb.als"
+    _write_als(als_arc, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 120.0), (128.0, 124.0)])
+
+    import xml.etree.ElementTree as ET
+    import gzip as _gzip
+    root = ET.fromstring(_gzip.open(als_arc, "rb").read())
+    tmap = render_check.TempoMap.from_als_root(root)
+    assert not tmap.is_flat, "fixture must be an arc for this test to mean anything"
+
+    def grid_fold_with(medians):
+        real = render_check._grid_fold_median
+        seq = iter(medians)
+        render_check._grid_fold_median = lambda *a, **k: next(seq)
+        try:
+            out = render_check.check_grid_fold(wav, clips, tmap)
+        finally:
+            render_check._grid_fold_median = real
+        return [f for f in out if f.check == "grid_fold"]
+
+    # Drift far past anything the residual can explain -> still FAIL.
+    big = grid_fold_with([0.0, 180.0])
+    assert big and big[0].level == "FAIL", [(f.level, f.measured) for f in big]
+    assert big[0].measured["drift_ms"] > big[0].measured["fail_above_ms"]
+
+    # Over the flat threshold but inside the allowance -> WARN, not FAIL.
+    small = grid_fold_with([0.0, 31.0])
+    assert small and small[0].level == "WARN", \
+        [(f.level, f.measured) for f in small]
+    assert small[0].measured["drift_ms"] > render_check.GRID_FOLD_DRIFT_MS
+    assert small[0].measured["drift_ms"] <= small[0].measured["fail_above_ms"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1576,7 +1712,7 @@ def test_unidentifiable_envelope_raises_rather_than_going_flat():
                               omit_pointee=True)
     with pytest.raises(render_check.TempoAutomationUnsupported) as e:
         render_check.TempoMap.from_als_root(root)
-    assert "no PointeeId" in str(e.value)
+    assert "no usable PointeeId" in str(e.value)
 
     # Control 1: an envelope on a DIFFERENT, readable target is ignorable -
     # that is not ambiguous, so it must still fall through to flat.

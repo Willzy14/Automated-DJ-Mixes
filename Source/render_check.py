@@ -81,6 +81,17 @@ LOOP_VERBATIM_MIN_R = 0.9
 
 # Grid fold: median-phase drift across solo probes > 30 ms -> FAIL.
 GRID_FOLD_DRIFT_MS = 30.0
+
+#: Measured residual between the tempo map and a real render: the map runs this
+#: much fast. Fitted across all 16 solo runs of the 84-minute V16 bounce,
+#: R^2 0.969, residual RMS 5.3 ms (2026-08-27). Mechanism UNKNOWN - buffer
+#: quantisation (0.37 ms), the linear-in-time interpolation alternative (2 ms)
+#: and float precision are all ruled out by calculation, and the V16 ALS on
+#: disk predates that render by five days so we cannot prove they correspond.
+#: It is used ONLY to size how much timing uncertainty a check must tolerate,
+#: never to correct the map - correcting by an unexplained figure fitted to one
+#: render would be calibrating to noise.
+TEMPO_MAP_RESIDUAL_PPM = 19.5e-6
 GRID_FOLD_REGION_S = 45.0
 GRID_FOLD_PROBE_S = 60.0
 
@@ -234,29 +245,38 @@ class TempoMap:
         # a beat-0 point on a single envelope) but reachable from a hand-edited
         # or foreign ALS, so they fail closed rather than guess.
         # (MiniMax review 2026-08-27, cases 4 and 5; both reproduced first.)
-        matches = [env for env in mt.iter("AutomationEnvelope")
-                   if (pt := env.find("EnvelopeTarget/PointeeId")) is not None
-                   and pt.get("Value") == target_id]
+        matches = []
+        unidentified = []
+        for env in mt.iter("AutomationEnvelope"):
+            pt = env.find("EnvelopeTarget/PointeeId")
+            value = pt.get("Value") if pt is not None else None
+            if value == target_id:
+                matches.append(env)
+            elif ((pt is None or not (value or "").strip())
+                    and next(env.iter("FloatEvent"), None) is not None):
+                # Missing OR blank target, and it carries events. Codex found
+                # both holes in the first version of this: the scan only ran
+                # when there were zero matches (so one identified envelope
+                # plus one unidentified was accepted), and a blank
+                # <PointeeId Value=""> slipped through the `is None` test.
+                # An envelope we cannot identify might BE the tempo envelope,
+                # so it is ambiguous whether a match exists or not.
+                unidentified.append(env)
         if len(matches) > 1:
             raise TempoAutomationUnsupported(
                 f"{len(matches)} tempo envelopes target id {target_id}; "
                 "refusing to guess which one plays",
                 distinct_values=[],
             )
+        if unidentified:
+            raise TempoAutomationUnsupported(
+                f"{len(unidentified)} automation envelope(s) carry events but "
+                "no usable PointeeId, so tempo automation cannot be ruled out",
+                distinct_values=[],
+            )
         if not matches:
-            # An envelope we cannot identify might BE the tempo envelope.
-            # Falling through to flat() would check an arc render against a
-            # flat map. Envelopes that name a different target are fine to
-            # ignore - only an unreadable target is ambiguous.
-            unidentified = [env for env in mt.iter("AutomationEnvelope")
-                            if env.find("EnvelopeTarget/PointeeId") is None
-                            and next(env.iter("FloatEvent"), None) is not None]
-            if unidentified:
-                raise TempoAutomationUnsupported(
-                    f"{len(unidentified)} automation envelope(s) carry events "
-                    "but no PointeeId, so tempo automation cannot be ruled out",
-                    distinct_values=[],
-                )
+            # Envelopes naming a DIFFERENT readable target are unambiguous and
+            # fine to ignore; with none of ours present the session is flat.
             return cls.flat(nominal_bpm)
         envelope = matches[0]
 
@@ -1491,29 +1511,46 @@ def check_grid_fold(render_path: Path, clips: list[dict],
                 "regions": [(round(t0, 1), round(t1, 1)) for t0, t1 in used],
                 "drift_ms": drift,
                 "tempo_map_flat": tempo_map.is_flat}
-    if drift > GRID_FOLD_DRIFT_MS:
-        # GRID_FOLD_DRIFT_MS was calibrated on a flat-tempo render, where the
-        # beat<->time map is exact. On a tempo ARC two confounds are measured
-        # and neither is a render defect: the map carries a ~19.5 ppm residual
-        # of unknown origin (96 ms over an 84-minute mix, fitted across all 16
-        # solo runs at R^2 0.969), and the probes land on DIFFERENT tracks
-        # whose kick attacks read at different phases. V16 measures 53.2 ms
-        # with a correct map against a 30 ms threshold. So on an arc the
-        # number is still worth surfacing - a badly wrong map reads 101.9 ms,
-        # which is plainly distinguishable - but it must not FAIL a render on
-        # a threshold that does not yet mean anything here. Downgrade, say so,
-        # and keep the measurement visible. Restore FAIL once the residual is
-        # explained against a render made from a known-identical ALS.
-        arc = not tempo_map.is_flat
+    # GRID_FOLD_DRIFT_MS was calibrated on a flat render, where the map is
+    # exact. On a tempo ARC two confounds inflate the number without any
+    # render defect: the measured map residual, and probes landing on
+    # DIFFERENT tracks whose kick attacks read at different phases.
+    #
+    # An earlier version of this downgraded EVERY arc drift to WARN, which
+    # Codex correctly called a blocker: it made an arbitrarily wrong map
+    # non-blocking too, so a genuinely mistimed render could ship. The bound
+    # below is DERIVED rather than picked - tolerate exactly the drift the
+    # known residual can explain across the probe span, plus the flat
+    # threshold for cross-track bias. Anything past that is unexplained and
+    # still FAILs. Restore the plain flat threshold once the residual is
+    # explained against a render made from a known-identical ALS.
+    arc = not tempo_map.is_flat
+    span_sec = max(0.0, used[-1][1] - used[0][0])
+    allowance_ms = TEMPO_MAP_RESIDUAL_PPM * span_sec * 1000.0 if arc else 0.0
+    fail_above_ms = GRID_FOLD_DRIFT_MS + allowance_ms
+    measured["fail_above_ms"] = fail_above_ms
+    measured["residual_allowance_ms"] = allowance_ms
+    if drift > fail_above_ms:
         findings.append(Finding(
-            check="grid_fold", level="WARN" if arc else "FAIL",
+            check="grid_fold", level="FAIL",
             t0=used[0][0], t1=used[-1][1],
             beat0=sec_to_arr(used[0][0], tempo_map),
             beat1=sec_to_arr(used[-1][1], tempo_map),
             measured=measured,
-            msg=(f"beat grid drifts across the render ({drift:.1f} ms)"
-                 + ("; threshold not yet calibrated for a tempo arc, so this "
-                    "warns rather than fails" if arc else "")),
+            msg=(f"beat grid drifts across the render ({drift:.1f} ms), "
+                 f"past the {fail_above_ms:.1f} ms the known map residual "
+                 "can account for"),
+        ))
+    elif drift > GRID_FOLD_DRIFT_MS:
+        findings.append(Finding(
+            check="grid_fold", level="WARN",
+            t0=used[0][0], t1=used[-1][1],
+            beat0=sec_to_arr(used[0][0], tempo_map),
+            beat1=sec_to_arr(used[-1][1], tempo_map),
+            measured=measured,
+            msg=(f"beat grid drifts across the render ({drift:.1f} ms), "
+                 f"within the {fail_above_ms:.1f} ms the known map residual "
+                 "and cross-track onset bias can account for"),
         ))
     else:
         findings.append(Finding(
@@ -1635,25 +1672,51 @@ def run_check(render_path: Path, report_path: Path,
     findings += check_hard_silence(sweep.rms100_db, fps, arr_start_s, arr_end_s)
 
     boundaries_sec = collect_boundaries(clips, loops, arr_end_b, tempo_map)
-    if boundaries_sec and not tempo_map.is_flat:
-        # A NAMED skip, never a silent pass. check_boundary_click inspects a
-        # +/-CLICK_HALF_WINDOW_SEC (2 ms) window around each mapped boundary.
-        # The map carries a measured ~19.5 ppm residual, so past roughly 100 s
-        # into an arc render that window sits nowhere near the real splice:
-        # the check would find nothing and report clean. That is a FALSE PASS
-        # on the exact defect class it exists to catch, which is worse than
-        # not running it. Unlike grid_fold it yields no usable number on an
-        # arc, so it is skipped outright rather than downgraded.
-        findings.append(Finding(
-            check="boundary_click_skipped_tempo_arc", level="SKIP",
-            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
-            measured={"boundaries": len(boundaries_sec),
-                      "click_half_window_sec": CLICK_HALF_WINDOW_SEC},
-            msg=("boundary_click skipped: the +/-2 ms window cannot be "
-                 "trusted against a tempo-arc map with a ~19.5 ppm residual"),
-        ))
-    elif boundaries_sec:
-        findings += check_boundary_click(render_path, boundaries_sec, tempo_map)
+    if boundaries_sec:
+        # check_boundary_click reads a +/-CLICK_HALF_WINDOW_SEC (2 ms) window
+        # around each mapped boundary. The map's measured residual grows with
+        # elapsed time, so LATE boundaries on an arc render land outside that
+        # window: the check finds nothing and reports clean - a FALSE PASS on
+        # the exact defect class it exists for.
+        #
+        # This is decided PER BOUNDARY, not per map. An earlier version keyed
+        # off tempo_map.is_flat and skipped the whole check on any arc, which
+        # Codex correctly called a blocker: early boundaries carry negligible
+        # uncertainty (a boundary at 4.7 s is off by ~0.09 ms, far inside the
+        # window) and were being thrown away, so a short arc render could
+        # return PASS with a real click in it. A boundary is inspected while
+        # its expected timing uncertainty stays within half the window.
+        max_unc = CLICK_HALF_WINDOW_SEC * 0.5
+        # A FLAT map is exact - the residual was measured against a tempo arc
+        # and does not apply. Without this the filter skipped most boundaries
+        # of the 54-minute flat V10 control, which its regression pin caught
+        # immediately. Every boundary past ~51 s would have gone unchecked on
+        # exactly the render the gate was calibrated against.
+        residual_ppm = 0.0 if tempo_map.is_flat else TEMPO_MAP_RESIDUAL_PPM
+        trusted = [t for t in boundaries_sec if residual_ppm * t <= max_unc]
+        untrusted = [t for t in boundaries_sec if residual_ppm * t > max_unc]
+        if trusted:
+            findings += check_boundary_click(render_path, trusted, tempo_map)
+        if untrusted:
+            # A NAMED skip, never a silent pass. skipped_check lets the report
+            # keep boundary_click out of "Checks run clean" - without it the
+            # operator is told the very check that did not run came back
+            # clean, which defeats the whole safeguard.
+            findings.append(Finding(
+                check="boundary_click_skipped_tempo_arc", level="SKIP",
+                t0=min(untrusted), t1=max(untrusted),
+                beat0=sec_to_arr(min(untrusted), tempo_map),
+                beat1=sec_to_arr(max(untrusted), tempo_map),
+                measured={"skipped_check": "boundary_click",
+                          "skipped_boundaries": len(untrusted),
+                          "inspected_boundaries": len(trusted),
+                          "from_sec": min(untrusted),
+                          "click_half_window_sec": CLICK_HALF_WINDOW_SEC},
+                msg=(f"boundary_click skipped for {len(untrusted)} of "
+                     f"{len(boundaries_sec)} boundaries from "
+                     f"{min(untrusted):.0f}s on: the map residual there "
+                     "exceeds half the +/-2 ms click window"),
+            ))
 
     findings += check_level_cliff(loops, sweep.beat_rms_db, tempo_map)
     findings += check_loop_exit_jump(loops, sweep.beat_rms_db, clips,
@@ -1761,7 +1824,13 @@ def write_report(result: CheckResult, render_path: Path,
                   "loop_hole", "transition_dip", "loop_verbatim",
                   "grid_fold", "kick_flam", "eof_truncated_reads"}
     fired = {f.check for f in result.findings}
-    clean = sorted(all_checks - fired - {"kick_flam"})
+    # A check that was SKIPPED must never be listed as clean. The skip finding
+    # carries its own name, so without this the report tells the operator that
+    # the very check which did not run came back clean - which defeats the
+    # only safeguard the skip provides (Codex review 2026-08-27).
+    skipped = {f.measured.get("skipped_check") for f in result.findings
+               if f.level == "SKIP" and f.measured.get("skipped_check")}
+    clean = sorted(all_checks - fired - skipped - {"kick_flam"})
     md.append("\n## Checks run clean\n")
     md.append(", ".join(clean) if clean else "(none)")
 
