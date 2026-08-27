@@ -1518,3 +1518,84 @@ def test_grid_fold_drift_warns_not_fails_on_tempo_arc(tmp_path):
         assert arc_levels == {"WARN"}, (flat, arc)
         arc_drift = [d for c, _, d in arc if c == "grid_fold"][0]
         assert arc_drift is not None and arc_drift > 0, arc
+
+
+# --------------------------------------------------------------------------- #
+# Fail-closed set: ambiguities that must not be resolved silently              #
+# (MiniMax review 2026-08-27, cases 2/4/5 - all three reproduced first)        #
+# --------------------------------------------------------------------------- #
+
+def _envelope_als_root(event_sets, manual=120.0, target="8",
+                       omit_pointee=False):
+    """MainTrack with one AutomationEnvelope per entry in event_sets."""
+    from xml.etree.ElementTree import Element, SubElement, tostring, fromstring
+    root = Element("Ableton")
+    t = SubElement(root, "Tempo")
+    SubElement(t, "Manual").set("Value", str(manual))
+    mt = SubElement(root, "MainTrack")
+    mtt = SubElement(mt, "Tempo")
+    SubElement(mtt, "AutomationTarget").set("Id", "8")
+    for events in event_sets:
+        env = SubElement(mt, "AutomationEnvelope")
+        et = SubElement(env, "EnvelopeTarget")
+        if not omit_pointee:
+            SubElement(et, "PointeeId").set("Value", target)
+        ev = SubElement(env, "Events")
+        for beat, value in events:
+            fe = SubElement(ev, "FloatEvent")
+            fe.set("Time", str(beat))
+            fe.set("Value", str(value))
+    return fromstring(tostring(root))
+
+
+def test_two_envelopes_on_one_target_raise():
+    """Which envelope plays is genuinely ambiguous, so refuse rather than
+    silently take the first. Pre-fix this returned the FIRST envelope's map
+    with no diagnostic at all."""
+    root = _envelope_als_root([[(0.0, 120.0), (64.0, 121.0)],
+                               [(0.0, 200.0), (64.0, 250.0)]])
+    with pytest.raises(render_check.TempoAutomationUnsupported) as e:
+        render_check.TempoMap.from_als_root(root)
+    assert "2 tempo envelopes" in str(e.value)
+
+    # Control: one envelope on the target still maps fine.
+    ok = render_check.TempoMap.from_als_root(
+        _envelope_als_root([[(0.0, 120.0), (64.0, 121.0)]]))
+    assert not ok.is_flat
+
+
+def test_unidentifiable_envelope_raises_rather_than_going_flat():
+    """An envelope carrying events but no PointeeId might BE the tempo
+    envelope. Falling through to flat() would check an ARC render against a
+    FLAT map - the 170-second class of error this module exists to stop.
+
+    Pre-fix this silently returned a flat map at the Manual tempo while the
+    envelope said 120 -> 140.
+    """
+    root = _envelope_als_root([[(0.0, 120.0), (64.0, 140.0)]],
+                              omit_pointee=True)
+    with pytest.raises(render_check.TempoAutomationUnsupported) as e:
+        render_check.TempoMap.from_als_root(root)
+    assert "no PointeeId" in str(e.value)
+
+    # Control 1: an envelope on a DIFFERENT, readable target is ignorable -
+    # that is not ambiguous, so it must still fall through to flat.
+    other = _envelope_als_root([[(0.0, 120.0), (64.0, 140.0)]], target="99")
+    flat = render_check.TempoMap.from_als_root(other)
+    assert flat.is_flat and flat.bpm_at(64.0) == pytest.approx(120.0)
+
+    # Control 2: an envelope with no PointeeId AND no events is not evidence
+    # of anything, so it must not raise.
+    empty = _envelope_als_root([[]], omit_pointee=True)
+    assert render_check.TempoMap.from_als_root(empty).is_flat
+
+
+def test_first_breakpoint_after_beat_zero_holds_backwards():
+    """Documented, deliberate semantics: a Live envelope extends its first
+    breakpoint backwards, so with no sentinel the first value applies from
+    beat 0 and Manual does NOT. Pinned so the choice cannot drift silently."""
+    root = _envelope_als_root([[(5.0, 130.0)]], manual=120.0)
+    tmap = render_check.TempoMap.from_als_root(root)
+    assert tmap.bpm_at(0.0) == pytest.approx(130.0)
+    assert tmap.beat_to_sec(2.0) == pytest.approx(2.0 * 60.0 / 130.0)
+    assert tmap.beat_to_sec(2.0) != pytest.approx(2.0 * 60.0 / 120.0)

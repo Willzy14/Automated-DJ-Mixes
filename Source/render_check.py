@@ -227,14 +227,38 @@ class TempoMap:
             if at is not None and at.get("Id") is not None:
                 target_id = at.get("Id")
 
-        envelope = None
-        for env in mt.iter("AutomationEnvelope"):
-            pt = env.find("EnvelopeTarget/PointeeId")
-            if pt is not None and pt.get("Value") == target_id:
-                envelope = env
-                break
-        if envelope is None:
+        # Two ambiguities below used to be resolved silently, and BOTH ended in
+        # a flat or arbitrary map on a session that may well be tempo-automated
+        # - the exact silent mis-check the old guard existed to prevent. They
+        # are unreachable from our own writer (build_tempo_points always emits
+        # a beat-0 point on a single envelope) but reachable from a hand-edited
+        # or foreign ALS, so they fail closed rather than guess.
+        # (MiniMax review 2026-08-27, cases 4 and 5; both reproduced first.)
+        matches = [env for env in mt.iter("AutomationEnvelope")
+                   if (pt := env.find("EnvelopeTarget/PointeeId")) is not None
+                   and pt.get("Value") == target_id]
+        if len(matches) > 1:
+            raise TempoAutomationUnsupported(
+                f"{len(matches)} tempo envelopes target id {target_id}; "
+                "refusing to guess which one plays",
+                distinct_values=[],
+            )
+        if not matches:
+            # An envelope we cannot identify might BE the tempo envelope.
+            # Falling through to flat() would check an arc render against a
+            # flat map. Envelopes that name a different target are fine to
+            # ignore - only an unreadable target is ambiguous.
+            unidentified = [env for env in mt.iter("AutomationEnvelope")
+                            if env.find("EnvelopeTarget/PointeeId") is None
+                            and next(env.iter("FloatEvent"), None) is not None]
+            if unidentified:
+                raise TempoAutomationUnsupported(
+                    f"{len(unidentified)} automation envelope(s) carry events "
+                    "but no PointeeId, so tempo automation cannot be ruled out",
+                    distinct_values=[],
+                )
             return cls.flat(nominal_bpm)
+        envelope = matches[0]
 
         raw_points: list[tuple[float, float]] = []
         parsed_values: list[float] = []
@@ -274,6 +298,18 @@ class TempoMap:
         # every pre-timeline event to beat zero; a real beat-zero event wins
         # when both are present, matching playback and avoiding a 63M-beat
         # integration interval.
+        #
+        # DELIBERATE, and questioned in review (MiniMax 2026-08-27, case 2):
+        # when the earliest event sits at some beat > 0 with no sentinel, the
+        # first value HOLDS backwards to beat 0 rather than Manual applying up
+        # to that point. That is Live's envelope semantics - an envelope is
+        # defined over all time and extends its first breakpoint backwards,
+        # which is precisely why Live bothers to write the sentinel at all -
+        # and it is consistent with the rule adopted here that the envelope
+        # beats Manual. The alternative (Manual until the first breakpoint)
+        # was NOT adopted: there is no evidence Live does that, and it would
+        # contradict the same rule one line away. Unreachable from our own
+        # writer, which always emits a beat-0 point.
         folded: list[tuple[float, float]] = []
         for beat, value in sorted(raw_points, key=lambda p: p[0]):
             beat = max(0.0, beat)
