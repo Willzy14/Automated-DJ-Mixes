@@ -28,6 +28,55 @@ from probe_stem_kick_grid import attack_onsets, stem_audio
 from validate_beatgrid import load_grid_overrides, overrides_path
 
 
+def load_or_separate_stems(wav: Path, project: Path) -> tuple[np.ndarray, np.ndarray, int]:
+    """Drums + bass, sidecar-caches first, one Demucs separation at most.
+
+    Cache path: both stem sidecars (drums float32, bass opus/int16 - Sam's
+    keep-the-bass decision, 2026-08-27) beat a ~21 s re-separation. Any miss,
+    mismatch or exception falls back to `stem_audio`, so a cold or legacy
+    corpus behaves exactly as before.
+
+    Fallback path PERSISTS what it computed (Codex blocker, 2026-08-27: the
+    first version separated and then THREW THE BASS AWAY, so a legacy track
+    with a warm drums cache re-ran Demucs on every single repair). Bass is
+    always saved; drums only when its own sidecar misses, so an existing
+    valid drums cache is never rewritten. `_Stem Analysis` must already
+    exist - a wrong `project` argument must not sprout cache folders in
+    arbitrary places.
+    """
+    try:
+        from kick_model_adapter import _load_drums_cache, load_bass_stem
+        cache_dir = project / "_Stem Analysis"
+        dhit = _load_drums_cache(wav, cache_dir)
+        bhit = load_bass_stem(wav, cache_dir)
+        if dhit is not None and bhit is not None and dhit[1] == bhit[1]:
+            print("  stems from sidecar caches (Demucs skipped)")
+            return dhit[0], bhit[0], dhit[1]
+    except Exception:
+        pass
+    drums, bass, sr = stem_audio(wav)
+    # Independent try per sidecar: a bass failure must not block the drums
+    # backfill (Codex round-2 - one shared try did exactly that).
+    try:
+        from kick_model_adapter import (_load_drums_cache, _save_bass_cache,
+                                        _save_drums_cache)
+        cache_dir = project / "_Stem Analysis"
+        backfill_ok = cache_dir.is_dir()
+    except Exception:
+        backfill_ok = False
+    if backfill_ok:
+        try:
+            _save_bass_cache(wav, cache_dir, bass, sr)
+        except Exception as e:
+            print(f"  warning: bass backfill failed: {type(e).__name__}: {e}")
+        try:
+            if _load_drums_cache(wav, cache_dir) is None:
+                _save_drums_cache(wav, cache_dir, drums, sr)
+        except Exception as e:
+            print(f"  warning: drums backfill failed: {type(e).__name__}: {e}")
+    return drums, bass, sr
+
+
 def lattice_fit(onsets: np.ndarray, period0: float, first0: float
                 ) -> tuple[float, float, np.ndarray]:
     """Least-squares (first, period) so onsets ≈ first + k*period."""
@@ -67,7 +116,7 @@ def main() -> int:
     else:
         period0, first0 = None, None
 
-    drums, bass, sr = stem_audio(wav)
+    drums, bass, sr = load_or_separate_stems(wav, project)
     dur = len(drums) / sr
     kicks = attack_onsets(drums, sr)
     print(f"  {len(kicks)} kick attacks")

@@ -35,15 +35,16 @@ CORPUS_ROOT = ROOT / "Test Project"
 EXEMPT = {
     "Stephanes Playlist": "validation-results corpus; analysed elsewhere, no local Audio/ by design",
     "_Bakeoff Corpus": "policy-comparison fixtures, not a source-audio corpus",
-    # UNRESOLVED, awaiting Sam (found 2026-08-20 by this canary's first run): 8 of 9
-    # analysed tracks have no wav anywhere in the corpus, and there is no Audio/ dir at
-    # all -- the same shape as the destroyed 14.08.26. Either older junction-traversal
-    # damage or the deliberate disk-space clear noted in AI_CONTEXT ("cleaned off disk
-    # for space at some point"). Exempted so the canary stays green-means-green for the
-    # ACTIVE corpus rather than training everyone to ignore a permanently red suite --
-    # NOT because it was judged harmless. Sam decides: recover from the work folders /
-    # G: backups, or accept the loss and delete this entry with the corpus.
-    "12.08.26 Deep Soulful 10": "UNRESOLVED audio loss (8/9) - see comment; Sam to confirm recover-or-accept",
+    # RESOLVED - loss ACCEPTED by Sam, 2026-08-27 ("if it's finding the tracks, don't
+    # bother"). History: found 2026-08-20 by this canary's first run - 8 of 9 analysed
+    # tracks had no wav anywhere in the corpus and no Audio/ dir at all; either older
+    # junction-traversal damage or the deliberate disk-space clear noted in AI_CONTEXT.
+    # Recovery would have meant re-copying from the work folders / G: backups, which is
+    # exactly what Sam declined. The corpus folder is deliberately KEPT (its analysis
+    # artifacts and one surviving wav cost nothing and deleting Sam's data goes beyond
+    # what he asked); this exemption is now permanent unless the corpus is deleted,
+    # in which case delete this entry with it.
+    "12.08.26 Deep Soulful 10": "audio loss (8/9) ACCEPTED by Sam 2026-08-27 - permanent exemption, corpus kept",
 }
 
 
