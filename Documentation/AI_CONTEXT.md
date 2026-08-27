@@ -1235,8 +1235,10 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 > **TOP (2026-08-27): the V16 loop-fix cycle.** Sam hand-fixed 2 of the 3 flagged `loop_verbatim`
 > defects in `Output/14.08.26 Mix V16 Loop Fixes Project/` (Nappp source bar shifted; Vente tail
-> rebuilt as 1-bar on/off gating - both verified structurally sound, unbounced). Remaining: (a) the
-> MIDDLE loop at 760 s (r=0.81) still needs Sam's ears/decision; (b) next bounce comes from the
+> rebuilt as 1-bar on/off gating - both verified structurally sound, unbounced). The MIDDLE loop
+> (760 s, r=0.81) is RESOLVED: Sam listened, it's fine, deliberately unchanged - making V16's first
+> live gate outing 2 real defects / 1 false positive, and proving loop_verbatim's r DETECTS but does
+> not RANK (the r=0.84 flag was real, the r=0.81 flag was fine). Remaining: (b) next bounce comes from the
 > Loop Fixes project - run the render gate against ITS ALS, expecting the Vente region to flag on
 > stale report metadata (known, not a defect) and Nappp to test truthfully; (c) a bounce from a
 > known-identical ALS also settles the ~19.5 ppm tempo-map residual (carded) and could re-arm
