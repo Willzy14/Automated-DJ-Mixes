@@ -81,6 +81,17 @@ LOOP_VERBATIM_MIN_R = 0.9
 
 # Grid fold: median-phase drift across solo probes > 30 ms -> FAIL.
 GRID_FOLD_DRIFT_MS = 30.0
+
+#: Measured residual between the tempo map and a real render: the map runs this
+#: much fast. Fitted across all 16 solo runs of the 84-minute V16 bounce,
+#: R^2 0.969, residual RMS 5.3 ms (2026-08-27). Mechanism UNKNOWN - buffer
+#: quantisation (0.37 ms), the linear-in-time interpolation alternative (2 ms)
+#: and float precision are all ruled out by calculation, and the V16 ALS on
+#: disk predates that render by five days so we cannot prove they correspond.
+#: It is used ONLY to size how much timing uncertainty a check must tolerate,
+#: never to correct the map - correcting by an unexplained figure fitted to one
+#: render would be calibrating to noise.
+TEMPO_MAP_RESIDUAL_PPM = 19.5e-6
 GRID_FOLD_REGION_S = 45.0
 GRID_FOLD_PROBE_S = 60.0
 
@@ -133,10 +144,7 @@ def _float(el, tag):
 
 
 class TempoAutomationUnsupported(Exception):
-    """Raised when the MainTrack carries a tempo AutomationEnvelope that the
-    gate cannot honor. Every beat<->sec conversion in this gate assumes a
-    flat Manual tempo; an automated curve would silently mis-check, so the
-    guard fails the render instead of letting it through.
+    """Raised when the MainTrack tempo envelope cannot be mapped safely.
 
     Attributes:
         distinct_values: sorted list of distinct FloatEvent Values (rounded
@@ -156,75 +164,296 @@ def _find_main_track(root):
     return None
 
 
-def parse_tempo_envelope(root) -> list[float]:
-    """FloatEvent Value attributes for the MainTrack tempo AutomationEnvelope,
-    empty list when there is none. The MainTrack Tempo AutomationTarget Id is
-    the envelope target (PointeeId). Falls back to "8" (the Live default for
-    Song tempo) if the AutomationTarget attribute is missing."""
-    mt = _find_main_track(root)
-    if mt is None:
-        return []
-    # .//Tempo, not a direct-child find: the real ALS nests Tempo under
-    # DeviceChain/Mixer; only the test fixture has it as a direct child.
-    tempo = mt.find(".//Tempo")
-    target_id = "8"
-    if tempo is not None:
-        at = tempo.find("AutomationTarget")
-        if at is not None and at.get("Id") is not None:
-            target_id = at.get("Id")
-    values: list[float] = []
-    for env in mt.iter("AutomationEnvelope"):
-        pt = env.find("EnvelopeTarget/PointeeId")
-        if pt is None:
-            continue
-        if pt.get("Value") != target_id:
-            continue
-        for fe in env.iter("FloatEvent"):
-            v = fe.get("Value")
-            if v is None:
+class TempoMap:
+    """Piecewise beat<->time map from the MainTrack tempo envelope."""
+
+    def __init__(self, beats: np.ndarray, bpms: np.ndarray,
+                 nominal_bpm: float):
+        self._beats = np.asarray(beats, dtype=np.float64)
+        self._bpms = np.asarray(bpms, dtype=np.float64)
+        self._nominal_bpm = float(nominal_bpm)
+        if (self._beats.ndim != 1 or self._bpms.ndim != 1
+                or len(self._beats) == 0
+                or len(self._beats) != len(self._bpms)):
+            raise ValueError("tempo map needs matching non-empty beat/BPM points")
+        if (not np.all(np.isfinite(self._beats))
+                or not np.all(np.isfinite(self._bpms))):
+            raise ValueError("tempo map points must be finite")
+        if np.any(np.diff(self._beats) <= 0):
+            raise ValueError("tempo map beat points must be strictly increasing")
+        if np.any((self._bpms <= 20.0) | (self._bpms >= 300.0)):
+            raise ValueError("tempo map BPM must satisfy 20 < bpm < 300")
+        if not math.isfinite(self._nominal_bpm):
+            raise ValueError("nominal BPM must be finite")
+
+        self._point_secs = np.zeros(len(self._beats), dtype=np.float64)
+        self._point_secs[0] = self._beats[0] * 60.0 / self._bpms[0]
+        for i in range(len(self._beats) - 1):
+            width = self._beats[i + 1] - self._beats[i]
+            v0 = self._bpms[i]
+            v1 = self._bpms[i + 1]
+            slope = (v1 - v0) / width
+            if slope == 0.0:
+                elapsed = width * 60.0 / v0
+            else:
+                elapsed = (60.0 / slope) * math.log(v1 / v0)
+            self._point_secs[i + 1] = self._point_secs[i] + elapsed
+        self._beat_edge_cache: dict[int, np.ndarray] = {}
+
+    @classmethod
+    def flat(cls, bpm: float) -> "TempoMap":
+        bpm = float(bpm)
+        if not math.isfinite(bpm) or not 20.0 < bpm < 300.0:
+            raise TempoAutomationUnsupported(
+                f"Manual tempo is outside 20 < bpm < 300: {bpm}",
+                distinct_values=[bpm] if math.isfinite(bpm) else [],
+            )
+        return cls(np.array([0.0]), np.array([bpm]), bpm)
+
+    @classmethod
+    def from_als_root(cls, root) -> "TempoMap":
+        manual = root.find(".//Tempo/Manual")
+        if manual is None or manual.get("Value") is None:
+            raise TempoAutomationUnsupported(
+                "ALS has no parseable Manual tempo", distinct_values=[])
+        try:
+            nominal_bpm = float(manual.get("Value"))
+        except (TypeError, ValueError) as e:
+            raise TempoAutomationUnsupported(
+                "ALS Manual tempo is not numeric", distinct_values=[]) from e
+        if not math.isfinite(nominal_bpm) or not 20.0 < nominal_bpm < 300.0:
+            distinct = ([nominal_bpm] if math.isfinite(nominal_bpm) else [])
+            raise TempoAutomationUnsupported(
+                f"Manual tempo is outside 20 < bpm < 300: {nominal_bpm}",
+                distinct_values=distinct,
+            )
+
+        mt = _find_main_track(root)
+        if mt is None:
+            return cls.flat(nominal_bpm)
+        tempo = mt.find(".//Tempo")
+        target_id = "8"
+        if tempo is not None:
+            at = tempo.find("AutomationTarget")
+            if at is not None and at.get("Id") is not None:
+                target_id = at.get("Id")
+
+        # Two ambiguities below used to be resolved silently, and BOTH ended in
+        # a flat or arbitrary map on a session that may well be tempo-automated
+        # - the exact silent mis-check the old guard existed to prevent. They
+        # are unreachable from our own writer (build_tempo_points always emits
+        # a beat-0 point on a single envelope) but reachable from a hand-edited
+        # or foreign ALS, so they fail closed rather than guess.
+        # (MiniMax review 2026-08-27, cases 4 and 5; both reproduced first.)
+        matches = []
+        unidentified = []
+        for env in mt.iter("AutomationEnvelope"):
+            pt = env.find("EnvelopeTarget/PointeeId")
+            value = pt.get("Value") if pt is not None else None
+            if value == target_id:
+                matches.append(env)
+            elif ((pt is None or not (value or "").strip())
+                    and next(env.iter("FloatEvent"), None) is not None):
+                # Missing OR blank target, and it carries events. Codex found
+                # both holes in the first version of this: the scan only ran
+                # when there were zero matches (so one identified envelope
+                # plus one unidentified was accepted), and a blank
+                # <PointeeId Value=""> slipped through the `is None` test.
+                # An envelope we cannot identify might BE the tempo envelope,
+                # so it is ambiguous whether a match exists or not.
+                unidentified.append(env)
+        if len(matches) > 1:
+            raise TempoAutomationUnsupported(
+                f"{len(matches)} tempo envelopes target id {target_id}; "
+                "refusing to guess which one plays",
+                distinct_values=[],
+            )
+        if unidentified:
+            raise TempoAutomationUnsupported(
+                f"{len(unidentified)} automation envelope(s) carry events but "
+                "no usable PointeeId, so tempo automation cannot be ruled out",
+                distinct_values=[],
+            )
+        if not matches:
+            # Envelopes naming a DIFFERENT readable target are unambiguous and
+            # fine to ignore; with none of ours present the session is flat.
+            return cls.flat(nominal_bpm)
+        envelope = matches[0]
+
+        raw_points: list[tuple[float, float]] = []
+        parsed_values: list[float] = []
+        for fe in envelope.iter("FloatEvent"):
+            time_text = fe.get("Time")
+            value_text = fe.get("Value")
+            if time_text is None or value_text is None:
                 continue
             try:
-                values.append(float(v))
+                beat = float(time_text)
+                value = float(value_text)
             except ValueError:
                 continue
-        # The MainTrack tempo envelope is unique. If there is more than one
-        # for the same target id, take the first non-empty one we encounter.
-        if values:
-            return values
-    return values
+            parsed_values.append(value)
+            if not math.isfinite(beat) or not math.isfinite(value):
+                distinct = sorted({round(v, 6) for v in parsed_values
+                                   if math.isfinite(v)})
+                raise TempoAutomationUnsupported(
+                    "tempo envelope has a non-finite time or value",
+                    distinct_values=distinct,
+                )
+            if not 20.0 < value < 300.0:
+                distinct = sorted({round(v, 6) for v in parsed_values})
+                raise TempoAutomationUnsupported(
+                    f"tempo envelope value outside 20 < bpm < 300: {value}",
+                    distinct_values=distinct,
+                )
+            raw_points.append((beat, value))
+
+        if not raw_points:
+            raise TempoAutomationUnsupported(
+                "tempo envelope has no parseable FloatEvent after folding",
+                distinct_values=[],
+            )
+
+        # Live writes the value before the timeline at -63072000 beats. Fold
+        # every pre-timeline event to beat zero; a real beat-zero event wins
+        # when both are present, matching playback and avoiding a 63M-beat
+        # integration interval.
+        #
+        # DELIBERATE, and questioned in review (MiniMax 2026-08-27, case 2):
+        # when the earliest event sits at some beat > 0 with no sentinel, the
+        # first value HOLDS backwards to beat 0 rather than Manual applying up
+        # to that point. That is Live's envelope semantics - an envelope is
+        # defined over all time and extends its first breakpoint backwards,
+        # which is precisely why Live bothers to write the sentinel at all -
+        # and it is consistent with the rule adopted here that the envelope
+        # beats Manual. The alternative (Manual until the first breakpoint)
+        # was NOT adopted: there is no evidence Live does that, and it would
+        # contradict the same rule one line away. Unreachable from our own
+        # writer, which always emits a beat-0 point.
+        folded: list[tuple[float, float]] = []
+        for beat, value in sorted(raw_points, key=lambda p: p[0]):
+            beat = max(0.0, beat)
+            if folded and beat == folded[-1][0]:
+                folded[-1] = (beat, value)
+            else:
+                folded.append((beat, value))
+
+        return cls(
+            np.array([p[0] for p in folded], dtype=np.float64),
+            np.array([p[1] for p in folded], dtype=np.float64),
+            nominal_bpm,
+        )
+
+    def _return(self, values: np.ndarray, scalar: bool):
+        return float(values[0]) if scalar else values
+
+    def bpm_at(self, beat: float) -> float:
+        b = float(beat)
+        if not math.isfinite(b):
+            raise ValueError("beat must be finite")
+        if b <= self._beats[0]:
+            return float(self._bpms[0])
+        if b >= self._beats[-1]:
+            return float(self._bpms[-1])
+        i = int(np.searchsorted(self._beats, b, side="right") - 1)
+        width = self._beats[i + 1] - self._beats[i]
+        frac = (b - self._beats[i]) / width
+        return float(self._bpms[i] + frac * (self._bpms[i + 1] - self._bpms[i]))
+
+    def beat_to_sec(self, beat) -> float | np.ndarray:
+        scalar = np.isscalar(beat)
+        values = np.atleast_1d(np.asarray(beat, dtype=np.float64))
+        if not np.all(np.isfinite(values)):
+            raise ValueError("beats must be finite")
+        out = np.empty(values.shape, dtype=np.float64)
+        idx = np.searchsorted(self._beats, values, side="right") - 1
+
+        before = idx < 0
+        out[before] = (self._point_secs[0]
+                       + (values[before] - self._beats[0])
+                       * 60.0 / self._bpms[0])
+        after = idx >= len(self._beats) - 1
+        out[after] = (self._point_secs[-1]
+                      + (values[after] - self._beats[-1])
+                      * 60.0 / self._bpms[-1])
+        middle = ~(before | after)
+        if np.any(middle):
+            mi = idx[middle]
+            delta = values[middle] - self._beats[mi]
+            width = self._beats[mi + 1] - self._beats[mi]
+            v0 = self._bpms[mi]
+            slope = (self._bpms[mi + 1] - v0) / width
+            elapsed = delta * 60.0 / v0
+            ramp = slope != 0.0
+            elapsed[ramp] = ((60.0 / slope[ramp])
+                             * np.log((v0[ramp] + slope[ramp] * delta[ramp])
+                                      / v0[ramp]))
+            out[middle] = self._point_secs[mi] + elapsed
+        return self._return(out, scalar)
+
+    def sec_to_beat(self, sec) -> float | np.ndarray:
+        scalar = np.isscalar(sec)
+        values = np.atleast_1d(np.asarray(sec, dtype=np.float64))
+        if not np.all(np.isfinite(values)):
+            raise ValueError("seconds must be finite")
+        out = np.empty(values.shape, dtype=np.float64)
+        idx = np.searchsorted(self._point_secs, values, side="right") - 1
+
+        before = idx < 0
+        out[before] = (self._beats[0]
+                       + (values[before] - self._point_secs[0])
+                       * self._bpms[0] / 60.0)
+        after = idx >= len(self._point_secs) - 1
+        out[after] = (self._beats[-1]
+                      + (values[after] - self._point_secs[-1])
+                      * self._bpms[-1] / 60.0)
+        middle = ~(before | after)
+        if np.any(middle):
+            mi = idx[middle]
+            elapsed = values[middle] - self._point_secs[mi]
+            width = self._beats[mi + 1] - self._beats[mi]
+            v0 = self._bpms[mi]
+            slope = (self._bpms[mi + 1] - v0) / width
+            delta = elapsed * v0 / 60.0
+            ramp = slope != 0.0
+            delta[ramp] = ((v0[ramp] / slope[ramp])
+                           * np.expm1(slope[ramp] * elapsed[ramp] / 60.0))
+            out[middle] = self._beats[mi] + delta
+        return self._return(out, scalar)
+
+    def beat_edges_sec(self, n_beats: int) -> np.ndarray:
+        if isinstance(n_beats, bool) or int(n_beats) != n_beats or n_beats < 0:
+            raise ValueError("n_beats must be a non-negative integer")
+        n_beats = int(n_beats)
+        if n_beats not in self._beat_edge_cache:
+            beats = np.arange(n_beats + 1, dtype=np.float64)
+            self._beat_edge_cache[n_beats] = self.beat_to_sec(beats)
+        return self._beat_edge_cache[n_beats]
+
+    @property
+    def is_flat(self) -> bool:
+        return bool(np.all(self._bpms == self._bpms[0]))
+
+    @property
+    def nominal_bpm(self) -> float:
+        return self._nominal_bpm
+
+    @property
+    def summary(self) -> dict:
+        return {
+            "n_points": len(self._beats),
+            "min": float(self._bpms.min()),
+            "max": float(self._bpms.max()),
+            "is_flat": self.is_flat,
+        }
 
 
-def parse_als(path: Path) -> tuple[float, list[dict]]:
-    """Return (bpm, clips) where each clip dict carries arrangement span and
-    loop metadata in beats. The V10 ALS uses one flat master tempo; multi-tempo
-    envelopes would need beat-time->sec conversion via the FloatEvents curve."""
+def parse_als(path: Path) -> tuple[TempoMap, list[dict]]:
+    """Return (tempo_map, clips), with clip geometry in arrangement beats."""
     with gzip.open(path, "rb") as fh:
         root = ET.fromstring(fh.read())
 
-    tempo = root.find(".//Tempo/Manual")
-    bpm = float(tempo.get("Value"))
-
-    # CARD (future full fix): replace this interim guard with a piecewise
-    # beat<->time mapping built from the MainTrack tempo FloatEvents curve, and
-    # thread it through sweep bins, boundaries, loops, transitions, solo regions
-    # and grid probes. Until then a tempo-automated render must hard-FAIL: a wrong
-    # beat->time map must never silently mis-check. (Codex review 2026-08-25, C1.)
-    envelope_values = parse_tempo_envelope(root)
-    distinct = sorted({round(v, 6) for v in envelope_values})
-    if len(distinct) > 1:
-        raise TempoAutomationUnsupported(
-            f"MainTrack tempo envelope has multiple distinct values: "
-            f"{distinct}",
-            distinct_values=distinct,
-        )
-    if len(distinct) == 1:
-        v = distinct[0]
-        if abs(v - bpm) > 1e-3:
-            raise TempoAutomationUnsupported(
-                f"MainTrack tempo envelope flat at {v} but Manual={bpm} "
-                "(envelope overrides Manual at playback)",
-                distinct_values=distinct,
-            )
+    tempo_map = TempoMap.from_als_root(root)
 
     clips: list[dict] = []
     for track in root.iter("AudioTrack"):
@@ -263,7 +492,7 @@ def parse_als(path: Path) -> tuple[float, list[dict]]:
                 "start_relative": start_relative,
                 "loop_on": loop_on,
             })
-    return bpm, clips
+    return tempo_map, clips
 
 
 def _parse_source_span(source_beats: str) -> tuple[float, float]:
@@ -399,7 +628,7 @@ def _flush_frame(state: _SweepState, hop_idx: int,
     return hop_idx + 1
 
 
-def streaming_sweep(render_path: Path, bpm: float) -> SweepArrays:
+def streaming_sweep(render_path: Path, tempo_map: TempoMap) -> SweepArrays:
     """One pass: 100 ms RMS, 100 ms K-weighted MS, per-beat RMS. O(duration)
     summary arrays; constant audio memory: carries filter state and a beat
     accumulator across reads (the per-hop and per-beat arrays grow with the
@@ -408,7 +637,6 @@ def streaming_sweep(render_path: Path, bpm: float) -> SweepArrays:
     n_frames = sf.info(render_path).frames
     channels = sf.info(render_path).channels
     duration = n_frames / sr
-    spb = sr * 60.0 / bpm
 
     b_shelf, a_shelf, b_hp, a_hp = k_weight_biquads(sr)
     state = _SweepState(
@@ -422,7 +650,8 @@ def streaming_sweep(render_path: Path, bpm: float) -> SweepArrays:
     rms100_db = np.full(n_hops, FLOOR_DB, dtype=np.float64)
     kms100 = np.zeros(n_hops, dtype=np.float64)
 
-    n_beats = int(math.ceil(duration / (60.0 / bpm))) + 2
+    n_beats = int(math.ceil(tempo_map.sec_to_beat(duration))) + 2
+    beat_edges_sec = tempo_map.beat_edges_sec(n_beats)
     beat_sum_sq = np.zeros(n_beats, dtype=np.float64)
     beat_count = np.zeros(n_beats, dtype=np.int64)
 
@@ -447,7 +676,9 @@ def streaming_sweep(render_path: Path, bpm: float) -> SweepArrays:
             blk_start = sample_pos
             blk_end = sample_pos + len(L)
 
-            beat_idx = ((blk_start + np.arange(len(L))) / spb).astype(np.int64)
+            t_samples = (blk_start + np.arange(len(L))) / sr
+            beat_idx = (np.searchsorted(beat_edges_sec, t_samples,
+                                        side="right") - 1)
             sum_sq = (L.astype(np.float64) ** 2 + R.astype(np.float64) ** 2) / 2.0
             np.add.at(beat_sum_sq, beat_idx, sum_sq)
             np.add.at(beat_count, beat_idx, 1)
@@ -483,7 +714,8 @@ def streaming_sweep(render_path: Path, bpm: float) -> SweepArrays:
         "channels": channels,
         "frames": n_frames,
         "duration_sec": duration,
-        "bpm": bpm,
+        "bpm": tempo_map.nominal_bpm,
+        "tempo_map": tempo_map.summary,
         "hop_sec": HOP_SEC,
         "hop_samples": hop_samples,
         "block_samples": block_samples,
@@ -542,12 +774,12 @@ def integrated_lufs(kms100: np.ndarray) -> float:
 # Geometry helpers                                                            #
 # --------------------------------------------------------------------------- #
 
-def arr_to_sec(beats: float, bpm: float) -> float:
-    return beats * 60.0 / bpm
+def arr_to_sec(beats: float, tempo_map: TempoMap) -> float:
+    return tempo_map.beat_to_sec(beats)
 
 
-def sec_to_arr(sec: float, bpm: float) -> float:
-    return sec * bpm / 60.0
+def sec_to_arr(sec: float, tempo_map: TempoMap) -> float:
+    return tempo_map.sec_to_beat(sec)
 
 
 def clip_arr_span(clips: list[dict]) -> tuple[float, float]:
@@ -558,29 +790,29 @@ def clip_arr_span(clips: list[dict]) -> tuple[float, float]:
     return a, b
 
 
-def active_clips_at(clips: list[dict], t_sec: float, bpm: float) -> int:
+def active_clips_at(clips: list[dict], t_sec: float,
+                    tempo_map: TempoMap) -> int:
     """Number of AudioClips whose [arr_start_sec, arr_end_sec) covers t_sec."""
-    sec_per_beat = 60.0 / bpm
     n = 0
     for c in clips:
-        s = c["arr_start"] * sec_per_beat
-        e = c["arr_end"] * sec_per_beat
+        s = arr_to_sec(c["arr_start"], tempo_map)
+        e = arr_to_sec(c["arr_end"], tempo_map)
         if s <= t_sec < e:
             n += 1
     return n
 
 
-def solo_runs(clips: list[dict], bpm: float, min_s: float) -> list[tuple[float, float]]:
+def solo_runs(clips: list[dict], tempo_map: TempoMap,
+              min_s: float) -> list[tuple[float, float]]:
     """Contiguous intervals where exactly one clip is active, length >= min_s.
 
     Sweeps the sorted clip start/end events. Between events the active
     count is constant; an interval counts as a solo run when active count
     is 1 across its full length."""
-    sec_per_beat = 60.0 / bpm
     events: list[tuple[float, int]] = []
     for c in clips:
-        s = c["arr_start"] * sec_per_beat
-        e = c["arr_end"] * sec_per_beat
+        s = arr_to_sec(c["arr_start"], tempo_map)
+        e = arr_to_sec(c["arr_end"], tempo_map)
         events.append((s, +1))
         events.append((e, -1))
     if not events:
@@ -614,34 +846,33 @@ def solo_runs(clips: list[dict], bpm: float, min_s: float) -> list[tuple[float, 
 # --------------------------------------------------------------------------- #
 
 def collect_boundaries(clips: list[dict], loops: list[dict],
-                       arr_end_beat: float, bpm: float) -> list[float]:
+                       arr_end_beat: float,
+                       tempo_map: TempoMap) -> list[float]:
     """All boundary times in seconds, deduplicated within BOUNDARY_DEDUP_BEATS,
     excluding t=0 and the arrangement end."""
-    sec_per_beat = 60.0 / bpm
-    raw: list[float] = []
+    raw_beats: list[float] = []
     for c in clips:
-        raw.append(c["arr_start"] * sec_per_beat)
-        raw.append(c["arr_end"] * sec_per_beat)
+        raw_beats.append(c["arr_start"])
+        raw_beats.append(c["arr_end"])
     for lp in loops:
         a, b = lp["source_a"], lp["source_b"]
         iter_len = b - a
         total = lp["total_beats"]
         count = max(1, round(total / iter_len))
-        ins = lp["insert_at_beat"] * sec_per_beat
+        ins = lp["insert_at_beat"]
         for k in range(1, count):
-            raw.append(ins + k * iter_len * sec_per_beat)
+            raw_beats.append(ins + k * iter_len)
 
-    arr_end_sec = arr_end_beat * sec_per_beat
-    raw = [t for t in raw if t > 1e-6 and t < arr_end_sec - 1e-6]
-    raw.sort()
-    dedup_window = BOUNDARY_DEDUP_BEATS * sec_per_beat
-    out: list[float] = []
+    raw_beats = [b for b in raw_beats
+                 if b > 1e-6 and b < arr_end_beat - 1e-6]
+    raw_beats.sort()
+    out_beats: list[float] = []
     last = -1e9
-    for t in raw:
-        if t - last >= dedup_window:
-            out.append(t)
-            last = t
-    return out
+    for beat in raw_beats:
+        if beat - last >= BOUNDARY_DEDUP_BEATS:
+            out_beats.append(beat)
+            last = beat
+    return [arr_to_sec(beat, tempo_map) for beat in out_beats]
 
 
 # --------------------------------------------------------------------------- #
@@ -707,8 +938,120 @@ def _click_shape(y: np.ndarray) -> bool:
     return width <= CLICK_SHAPE_MAX_WIDTH
 
 
+#: Endpoint slack worth remarking on. Bounded on purpose - an earlier version
+#: used an uncapped 0.3%, which Codex pointed out is a 3,000 ppm acceptance
+#: envelope that grows without limit: the same unbounded-envelope trap in a
+#: different costume.
+MAP_ENDPOINT_WARN_ABS_SEC = 2.0
+MAP_ENDPOINT_WARN_REL = 0.003
+MAP_ENDPOINT_WARN_CAP_SEC = 10.0
+
+#: Where the gap stops being explicable as an ending artefact at all. A fade,
+#: a silent last clip or a reverb/export tail moves the measured endpoint by
+#: SECONDS; a map that does not describe the render misses by MINUTES (a flat
+#: map on the arc V16 is 169.6 s out). Failing only above this keeps the check
+#: from newly rejecting a legitimate render with an unusual ending.
+#:
+#: HARD CAPPED, and the cap is the point: this threshold IS the merge gate, so
+#: an uncapped relative term is an unbounded acceptance envelope no matter how
+#: reasonable it looks at typical lengths. Codex: at 10 hours a 1% term would
+#: let a SIX MINUTE discrepancy pass. Between 30 s and 60 s, always - no
+#: legitimate ending artefact runs to a minute.
+MAP_ENDPOINT_FAIL_ABS_SEC = 30.0
+MAP_ENDPOINT_FAIL_REL = 0.01
+MAP_ENDPOINT_FAIL_CAP_SEC = 60.0
+
+
+def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
+                        tempo_map: "TempoMap") -> list[Finding]:
+    """ENDPOINT-CONSISTENCY check: does the audio stop near where the map says
+    the arrangement ends?
+
+    Scope, stated precisely because an earlier version of this docstring
+    oversold it as "the direct test of the map itself" and Codex rightly
+    called that a blocker:
+
+    CATCHES an uncompensated total-duration error - the realistic failure,
+    where the wrong tempo model is applied to the whole mix. A flat map on the
+    arc V16 lands 169.6 s out.
+
+    DOES NOT CATCH a compensated interior error. A map that is wrong in the
+    middle but right at the end passes: 120->170 BPM and 170->120 BPM over the
+    same span predict the SAME end time (the log integral is symmetric in
+    v0 <-> v1) while differing by 17.4 s at the midpoint - the figures are
+    measured in test_map_vs_render_misses_a_compensated_interior_error, which
+    pins the miss. Nothing here would see that, and on an arc neither
+    grid_fold nor boundary_click can gate either - so that class of error is
+    currently reachable and is carded, not covered. Closing it needs a render
+    made from a known-identical ALS so the interior can be validated at all.
+
+    The endpoint itself is measured from the last audible frame, which a fade,
+    a silent final clip, a reverb tail or a stray dithered frame can all move
+    by seconds. That is why FAIL sits at the minutes scale and anything
+    smaller only WARNs.
+
+    Measured 2026-08-27: V10 (flat) +0.117 s; V16 (arc) +0.204 s; V16 forced
+    through a flat map -169.574 s.
+    """
+    above = np.nonzero(rms100_db > HARD_SILENCE_DB)[0]
+    if arr_end_sec <= 0:
+        return [Finding(
+            check="map_vs_render", level="INFO",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={"arr_end_sec": arr_end_sec,
+                      "audible_frames": int(len(above))},
+            msg="map_vs_render skipped (arrangement has no length)",
+        )]
+    if len(above) == 0:
+        return [Finding(
+            check="map_vs_render", level="INFO",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={"arr_end_sec": arr_end_sec, "audible_frames": 0},
+            msg="map_vs_render skipped (no audible material)",
+        )]
+    audio_end = float(above[-1] + 1) / fps
+    delta = audio_end - arr_end_sec
+    warn_tol = min(MAP_ENDPOINT_WARN_CAP_SEC,
+                   max(MAP_ENDPOINT_WARN_ABS_SEC,
+                       MAP_ENDPOINT_WARN_REL * arr_end_sec))
+    fail_tol = min(MAP_ENDPOINT_FAIL_CAP_SEC,
+                   max(MAP_ENDPOINT_FAIL_ABS_SEC,
+                       MAP_ENDPOINT_FAIL_REL * arr_end_sec))
+    measured = {"arr_end_sec": arr_end_sec, "audio_end_sec": audio_end,
+                "delta_sec": delta, "warn_above_sec": warn_tol,
+                "fail_above_sec": fail_tol,
+                "tempo_map_flat": tempo_map.is_flat}
+    if abs(delta) > fail_tol:
+        return [Finding(
+            check="map_vs_render", level="FAIL",
+            t0=min(audio_end, arr_end_sec), t1=max(audio_end, arr_end_sec),
+            beat0=0.0, beat1=0.0,
+            measured=measured,
+            msg=(f"the tempo map puts the arrangement end at "
+                 f"{arr_end_sec:.1f}s but the audio stops at "
+                 f"{audio_end:.1f}s ({delta:+.1f}s) - too far to be an "
+                 "ending artefact; the map does not describe this render"),
+        )]
+    if abs(delta) > warn_tol:
+        return [Finding(
+            check="map_vs_render", level="WARN",
+            t0=min(audio_end, arr_end_sec), t1=max(audio_end, arr_end_sec),
+            beat0=0.0, beat1=0.0,
+            measured=measured,
+            msg=(f"audio stops {delta:+.1f}s from the mapped arrangement end; "
+                 "explicable as a fade or tail, but worth an eye"),
+        )]
+    return [Finding(
+        check="map_vs_render", level="INFO",
+        t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+        measured=measured,
+        msg=(f"endpoint consistent ({delta:+.2f}s; warns past "
+             f"{warn_tol:.1f}s, fails past {fail_tol:.1f}s)"),
+    )]
+
+
 def check_boundary_click(render_path: Path, boundaries_sec: list[float],
-                       bpm: float) -> list[Finding]:
+                         tempo_map: TempoMap) -> list[Finding]:
     """For each boundary: read +/-2 ms, metric vs null on 32 nearest beats.
 
     Null set: integer beats 16 each side of the boundary, skipping any beat
@@ -726,9 +1069,8 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
 
     with sf.SoundFile(str(render_path), "r") as fh:
         sr = float(fh.samplerate)
-        spb = sr * 60.0 / bpm
         half = max(2, int(round(CLICK_HALF_WINDOW_SEC * sr)))
-        boundary_beats = [t / (60.0 / bpm) for t in boundaries_sec]
+        boundary_beats = [sec_to_arr(t, tempo_map) for t in boundaries_sec]
 
         for t_sec, bb in zip(boundaries_sec, boundary_beats):
             center = int(round(t_sec * sr))
@@ -753,7 +1095,7 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
                 if bp in null_cache:
                     null_metrics.append(null_cache[bp])
                     continue
-                bp_center = int(round(bp * spb))
+                bp_center = int(round(arr_to_sec(bp, tempo_map) * sr))
                 if bp_center + half > fh.frames:
                     # No null_cache entry: a fake metric must never stand in
                     # for a real one on a later boundary's null set.
@@ -809,7 +1151,7 @@ def _beat_step_db(beat_rms_db: np.ndarray, beat_idx: int) -> float:
 
 
 def check_level_cliff(loops: list[dict], beat_rms_db: np.ndarray,
-                      bpm: float) -> list[Finding]:
+                      tempo_map: TempoMap) -> list[Finding]:
     findings: list[Finding] = []
     for lp in loops:
         b = int(round(lp["insert_at_beat"]))
@@ -819,7 +1161,8 @@ def check_level_cliff(loops: list[dict], beat_rms_db: np.ndarray,
         if step <= LEVEL_CLIFF_DB:
             findings.append(Finding(
                 check="level_cliff", level="WARN",
-                t0=arr_to_sec(b - 1, bpm), t1=arr_to_sec(b, bpm),
+                t0=arr_to_sec(b - 1, tempo_map),
+                t1=arr_to_sec(b, tempo_map),
                 beat0=float(b - 1), beat1=float(b),
                 measured={"step_db": step,
                           "from_db": float(beat_rms_db[b - 1]),
@@ -829,7 +1172,8 @@ def check_level_cliff(loops: list[dict], beat_rms_db: np.ndarray,
     return findings
 
 
-def _source_rewind_beats(clips: list[dict], exit_beat: float, bpm: float) -> float | None:
+def _source_rewind_beats(clips: list[dict],
+                         exit_beat: float) -> float | None:
     """Best-effort: source position jump at the loop exit. Computed from the
     clip starting at exit_beat (the post-loop clip) and the source position
     the looping clip would have reached at the previous beat. Returns None
@@ -862,7 +1206,8 @@ def _source_rewind_beats(clips: list[dict], exit_beat: float, bpm: float) -> flo
 
 
 def check_loop_exit_jump(loops: list[dict], beat_rms_db: np.ndarray,
-                         clips: list[dict], bpm: float) -> list[Finding]:
+                         clips: list[dict],
+                         tempo_map: TempoMap) -> list[Finding]:
     findings: list[Finding] = []
     for lp in loops:
         e = int(round(lp["insert_at_beat"] + lp["total_beats"]))
@@ -873,12 +1218,13 @@ def check_loop_exit_jump(loops: list[dict], beat_rms_db: np.ndarray,
             measured = {"step_db": step,
                         "from_db": float(beat_rms_db[e - 1]),
                         "to_db": float(beat_rms_db[e])}
-            rewind = _source_rewind_beats(clips, e, bpm)
+            rewind = _source_rewind_beats(clips, e)
             if rewind is not None:
                 measured["source_rewind_beats"] = rewind
             findings.append(Finding(
                 check="loop_exit_jump", level="WARN",
-                t0=arr_to_sec(e - 1, bpm), t1=arr_to_sec(e, bpm),
+                t0=arr_to_sec(e - 1, tempo_map),
+                t1=arr_to_sec(e, tempo_map),
                 beat0=float(e - 1), beat1=float(e),
                 measured=measured,
                 msg=(f"jump-back splice at loop exit ({step:+.1f} dB) "
@@ -903,9 +1249,9 @@ def _autocorr_at_lag(values: np.ndarray, lag: int) -> float:
 
 
 def check_loop_period(loops: list[dict], beat_rms_db: np.ndarray,
-                      beat_count: np.ndarray, bpm: float) -> list[Finding]:
+                      beat_count: np.ndarray,
+                      tempo_map: TempoMap) -> list[Finding]:
     findings: list[Finding] = []
-    sec_per_beat = 60.0 / bpm
     for lp in loops:
         iter_len = lp["iter_len"]
         a_beat = lp["insert_at_beat"]
@@ -926,7 +1272,8 @@ def check_loop_period(loops: list[dict], beat_rms_db: np.ndarray,
                 measured["count"] = int(count)
             findings.append(Finding(
                 check="loop_period", level="WARN",
-                t0=arr_to_sec(a_beat, bpm), t1=arr_to_sec(b_beat, bpm),
+                t0=arr_to_sec(a_beat, tempo_map),
+                t1=arr_to_sec(b_beat, tempo_map),
                 beat0=a_beat, beat1=b_beat,
                 measured=measured,
                 msg=(f"off-phrase loop length ({iter_len:g} beats, "
@@ -936,7 +1283,8 @@ def check_loop_period(loops: list[dict], beat_rms_db: np.ndarray,
 
 
 def check_exposed_solo(rms100_db: np.ndarray, fps: int,
-                       clips: list[dict], bpm: float) -> list[Finding]:
+                       clips: list[dict],
+                       tempo_map: TempoMap) -> list[Finding]:
     """THE D5 CALL, judged and recorded: V10's 22:15.5-22:21.5 floor is
     -46.7 dBFS -- in a car that reads as silence, and it IS Sam's second
     ear-note. But it is not digital silence: it sits 13+ dB above the -60
@@ -947,7 +1295,7 @@ def check_exposed_solo(rms100_db: np.ndarray, fps: int,
     findings: list[Finding] = []
     # Solo intervals from the clip list; the >3 s gate applies to the quiet
     # sub-runs inside them.
-    runs = solo_runs(clips, bpm, 0.0)
+    runs = solo_runs(clips, tempo_map, 0.0)
     for t0_sec, t1_sec in runs:
         i0 = max(0, int(round(t0_sec * fps)))
         i1 = min(len(rms100_db), int(round(t1_sec * fps)))
@@ -970,7 +1318,8 @@ def check_exposed_solo(rms100_db: np.ndarray, fps: int,
                 findings.append(Finding(
                     check="exposed_solo", level="WARN",
                     t0=q_t0, t1=q_t1,
-                    beat0=sec_to_arr(q_t0, bpm), beat1=sec_to_arr(q_t1, bpm),
+                    beat0=sec_to_arr(q_t0, tempo_map),
+                    beat1=sec_to_arr(q_t1, tempo_map),
                     measured={"floor_db": floor,
                               "duration_s": float(q_t1 - q_t0)},
                     msg=(f"near-silent source material exposed solo "
@@ -981,7 +1330,7 @@ def check_exposed_solo(rms100_db: np.ndarray, fps: int,
 
 
 def check_loop_hole(loops: list[dict], beat_rms_db: np.ndarray,
-                    bpm: float) -> list[Finding]:
+                    tempo_map: TempoMap) -> list[Finding]:
     findings: list[Finding] = []
     for lp in loops:
         iter_len = lp["iter_len"]
@@ -1028,7 +1377,8 @@ def check_loop_hole(loops: list[dict], beat_rms_db: np.ndarray,
         if max_run >= LOOP_HOLE_MIN_CONSEC:
             findings.append(Finding(
                 check="loop_hole", level="WARN",
-                t0=arr_to_sec(a_beat, bpm), t1=arr_to_sec(b_beat, bpm),
+                t0=arr_to_sec(a_beat, tempo_map),
+                t1=arr_to_sec(b_beat, tempo_map),
                 beat0=a_beat, beat1=b_beat,
                 measured={"spread_db": tmax - tmin,
                           "quiet_run_beats": max_run,
@@ -1041,17 +1391,18 @@ def check_loop_hole(loops: list[dict], beat_rms_db: np.ndarray,
 
 
 def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
-                         fps: int, bpm: float) -> list[Finding]:
+                         fps: int, tempo_map: TempoMap) -> list[Finding]:
     findings: list[Finding] = []
-    sec_per_beat = 60.0 / bpm
     for tr in transitions:
         swap = tr["swap_beats"]
         start_beat = swap
         end_beat = swap + TRANSITION_DIP_SPAN_BEATS
-        start_sec = start_beat * sec_per_beat
-        end_sec = end_beat * sec_per_beat
-        b0 = max(0, int(round((swap - TRANSITION_BASELINE_BEATS) * sec_per_beat * fps)))
-        b1 = max(b0 + 1, int(round((swap - TRANSITION_BASELINE_GAP_BEATS) * sec_per_beat * fps)))
+        start_sec = arr_to_sec(start_beat, tempo_map)
+        end_sec = arr_to_sec(end_beat, tempo_map)
+        b0_sec = arr_to_sec(swap - TRANSITION_BASELINE_BEATS, tempo_map)
+        b1_sec = arr_to_sec(swap - TRANSITION_BASELINE_GAP_BEATS, tempo_map)
+        b0 = max(0, int(round(b0_sec * fps)))
+        b1 = max(b0 + 1, int(round(b1_sec * fps)))
         i0 = max(0, int(round(start_sec * fps)))
         i1 = min(len(st_lufs), int(round(end_sec * fps)))
         if b1 - b0 < 4 or i1 - i0 < 1:
@@ -1077,7 +1428,7 @@ def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
     return findings
 
 
-def _iteration_envelope(fh: sf.SoundFile, sr: float, spb: float,
+def _iteration_envelope(fh: sf.SoundFile, sr: float, tempo_map: TempoMap,
                         insert_beat: float, iter_len: float, k: int,
                         hop_ms: float = 10.0) -> np.ndarray | None:
     """10 ms RMS envelope of iteration k, read at EXACT sample offsets.
@@ -1086,8 +1437,11 @@ def _iteration_envelope(fh: sf.SoundFile, sr: float, spb: float,
     whole number of frames), which wrecks the correlation at kick attacks --
     measured on V10 it reads r 0.29-0.91 where the aligned envelope reads
     0.95-0.99 (the prototype's numbers)."""
-    s0 = int(round((insert_beat + k * iter_len) * spb))
-    n = int(round(iter_len * spb))
+    start_beat = insert_beat + k * iter_len
+    end_beat = start_beat + iter_len
+    s0 = int(round(arr_to_sec(start_beat, tempo_map) * sr))
+    s1 = int(round(arr_to_sec(end_beat, tempo_map) * sr))
+    n = s1 - s0
     if s0 < 0 or s0 + n > fh.frames or n <= 0:
         return None
     fh.seek(s0)
@@ -1101,12 +1455,11 @@ def _iteration_envelope(fh: sf.SoundFile, sr: float, spb: float,
 
 
 def check_loop_verbatim(render_path: Path, loops: list[dict],
-                        bpm: float) -> list[Finding]:
+                        tempo_map: TempoMap) -> list[Finding]:
     findings: list[Finding] = []
     eof_truncated_count = 0
     with sf.SoundFile(str(render_path), "r") as fh:
         sr = float(fh.samplerate)
-        spb = sr * 60.0 / bpm
         for lp in loops:
             iter_len = lp["iter_len"]
             count = max(1, round(lp["total_beats"] / iter_len))
@@ -1114,8 +1467,11 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                 continue
             envs = []
             for k in range(count):
-                s0 = int(round((lp["insert_at_beat"] + k * iter_len) * spb))
-                n = int(round(iter_len * spb))
+                start_beat = lp["insert_at_beat"] + k * iter_len
+                end_beat = start_beat + iter_len
+                s0 = int(round(arr_to_sec(start_beat, tempo_map) * sr))
+                s1 = int(round(arr_to_sec(end_beat, tempo_map) * sr))
+                n = s1 - s0
                 # past-EOF reads are counted as truncations; the
                 # _iteration_envelope helper also returns None for very short
                 # (m < 8) envelopes, which is NOT an EOF issue - we only
@@ -1123,8 +1479,8 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                 if s0 + n > fh.frames:
                     eof_truncated_count += 1
                     continue
-                e = _iteration_envelope(fh, sr, spb, lp["insert_at_beat"],
-                                        iter_len, k)
+                e = _iteration_envelope(fh, sr, tempo_map,
+                                        lp["insert_at_beat"], iter_len, k)
                 if e is None:
                     break
                 envs.append(e)
@@ -1145,8 +1501,9 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
             if min_r < LOOP_VERBATIM_MIN_R:
                 findings.append(Finding(
                     check="loop_verbatim", level="FAIL",
-                    t0=arr_to_sec(lp["insert_at_beat"], bpm),
-                    t1=arr_to_sec(lp["insert_at_beat"] + lp["total_beats"], bpm),
+                    t0=arr_to_sec(lp["insert_at_beat"], tempo_map),
+                    t1=arr_to_sec(lp["insert_at_beat"] + lp["total_beats"],
+                                  tempo_map),
                     beat0=lp["insert_at_beat"],
                     beat1=lp["insert_at_beat"] + lp["total_beats"],
                     measured={"min_r": min_r, "iters": int(count),
@@ -1165,7 +1522,7 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
     return findings
 
 
-def _pick_solo_regions(clips: list[dict], bpm: float,
+def _pick_solo_regions(clips: list[dict], tempo_map: TempoMap,
                        targets_pct: list[float]) -> list[tuple[float, float]]:
     """Solo runs (one active clip) >= GRID_FOLD_REGION_S, pick the one nearest
     each target percentage of the arrangement span. Distinct picks only: if
@@ -1173,14 +1530,15 @@ def _pick_solo_regions(clips: list[dict], bpm: float,
     Without the dedup, a single eligible solo run masquerades as multiple
     probes and reports zero drift (one region, three identical phase medians)."""
     arr_start, arr_end = clip_arr_span(clips)
-    arr_dur = arr_to_sec(arr_end - arr_start, bpm)
-    runs = solo_runs(clips, bpm, GRID_FOLD_REGION_S)
+    arr_start_sec = arr_to_sec(arr_start, tempo_map)
+    arr_dur = arr_to_sec(arr_end, tempo_map) - arr_start_sec
+    runs = solo_runs(clips, tempo_map, GRID_FOLD_REGION_S)
     if not runs:
         return []
     out: list[tuple[float, float]] = []
     chosen: set[tuple[float, float]] = set()
     for pct in targets_pct:
-        target = arr_start * 60.0 / bpm + pct * arr_dur
+        target = arr_start_sec + pct * arr_dur
         remaining = [r for r in runs if r not in chosen]
         if not remaining:
             continue
@@ -1190,7 +1548,8 @@ def _pick_solo_regions(clips: list[dict], bpm: float,
     return out
 
 
-def _grid_fold_median(path: Path, t0_sec: float, dur_sec: float, beat_dur: float) -> float:
+def _grid_fold_median(path: Path, t0_sec: float, dur_sec: float,
+                      tempo_map: TempoMap) -> float:
     """Lazy librosa: load mono at 22050, lowpass 150 Hz, fold onsets, return
     median phase in ms."""
     import librosa
@@ -1205,7 +1564,9 @@ def _grid_fold_median(path: Path, t0_sec: float, dur_sec: float, beat_dur: float
     if len(on) < 5:
         return 0.0
     times = on + t0_sec
-    phase_ms = ((times / beat_dur + 0.5) % 1.0 - 0.5) * beat_dur * 1000.0
+    onset_beats = sec_to_arr(times, tempo_map)
+    beat_dur = 60.0 / tempo_map.bpm_at(float(onset_beats.mean()))
+    phase_ms = ((onset_beats + 0.5) % 1.0 - 0.5) * beat_dur * 1000.0
     # Dominant-cluster median, not the raw median: solo house program has
     # offbeat percussion whose onsets fold to +/-half-beat and drag the raw
     # median tens of ms off (V10 region at 7:13 reads -31.9 raw vs +49.6
@@ -1223,12 +1584,13 @@ def _grid_fold_median(path: Path, t0_sec: float, dur_sec: float, beat_dur: float
     return float(np.median(near))
 
 
-def check_grid_fold(render_path: Path, clips: list[dict], bpm: float) -> list[Finding]:
+def check_grid_fold(render_path: Path, clips: list[dict],
+                    tempo_map: TempoMap) -> list[Finding]:
     """Up to 3 solo regions at 15/50/85% of the arrangement, >= 45 s each.
     Drift = max - min of median onset phase across regions; > 30 ms -> FAIL.
     The constant librosa bias is fine; only drift fails."""
     findings: list[Finding] = []
-    regions = _pick_solo_regions(clips, bpm, [0.15, 0.5, 0.85])
+    regions = _pick_solo_regions(clips, tempo_map, [0.15, 0.5, 0.85])
     if len(regions) < 2:
         findings.append(Finding(
             check="grid_fold", level="INFO",
@@ -1238,12 +1600,11 @@ def check_grid_fold(render_path: Path, clips: list[dict], bpm: float) -> list[Fi
             msg="grid_fold skipped (fewer than 2 solo regions >= 45 s)",
         ))
         return findings
-    beat_dur = 60.0 / bpm
     medians: list[float] = []
     used: list[tuple[float, float]] = []
     for t0, t1 in regions:
         try:
-            m = _grid_fold_median(render_path, t0, t1 - t0, beat_dur)
+            m = _grid_fold_median(render_path, t0, t1 - t0, tempo_map)
         except Exception:
             continue
         medians.append(m)
@@ -1260,12 +1621,50 @@ def check_grid_fold(render_path: Path, clips: list[dict], bpm: float) -> list[Fi
     drift = max(medians) - min(medians)
     measured = {"medians_ms": medians,
                 "regions": [(round(t0, 1), round(t1, 1)) for t0, t1 in used],
-                "drift_ms": drift}
-    if drift > GRID_FOLD_DRIFT_MS:
+                "drift_ms": drift,
+                "tempo_map_flat": tempo_map.is_flat}
+    # GRID_FOLD_DRIFT_MS was calibrated on a flat render, where the map is
+    # exact. On a tempo ARC the number is inflated by confounds that are not
+    # render defects - the map's residual, and probes landing on DIFFERENT
+    # tracks whose kick attacks read at different phases - so it cannot gate.
+    #
+    # Two rejected attempts, kept as a caution:
+    #   1. Downgrade every arc drift to WARN. Codex: that makes an
+    #      arbitrarily wrong map non-blocking, so a mistimed render ships.
+    #   2. Allow "the drift the measured 19.5 ppm residual can explain".
+    #      Codex again, and this one is the subtler error: 19.5 ppm is a
+    #      FITTED MEAN from a single unpaired ALS/render with 5.3 ms RMS
+    #      scatter, not a proven maximum. Used as a bound it grows without
+    #      limit (30 + 0.0195 * span_ms), so at a 61-minute span it swallows
+    #      the very 101.9 ms figure a known-wrong map produces, and any
+    #      systematic error at or below 19.5 ppm never fails at all. That is
+    #      an estimate wearing a safety bound's clothes.
+    #
+    # So on an arc this reports and does not gate, and says exactly that.
+    # check_map_vs_render below catches the realistic gross case - the wrong
+    # tempo model applied to the whole mix - but only via the ENDPOINT, so a
+    # compensated interior error passes both. That gap is real, carded, and
+    # not papered over here. Restore gating once the map's uncertainty is
+    # characterised against a render made from a known-identical ALS.
+    arc = not tempo_map.is_flat
+    measured["gates"] = not arc
+    if arc:
+        findings.append(Finding(
+            check="grid_fold", level="WARN",
+            t0=used[0][0], t1=used[-1][1],
+            beat0=sec_to_arr(used[0][0], tempo_map),
+            beat1=sec_to_arr(used[-1][1], tempo_map),
+            measured=measured,
+            msg=(f"beat grid drift measured at {drift:.1f} ms; on a tempo arc "
+                 "this reports only - the map's uncertainty is not "
+                 "characterised, so the threshold cannot gate"),
+        ))
+    elif drift > GRID_FOLD_DRIFT_MS:
         findings.append(Finding(
             check="grid_fold", level="FAIL",
             t0=used[0][0], t1=used[-1][1],
-            beat0=sec_to_arr(used[0][0], bpm), beat1=sec_to_arr(used[-1][1], bpm),
+            beat0=sec_to_arr(used[0][0], tempo_map),
+            beat1=sec_to_arr(used[-1][1], tempo_map),
             measured=measured,
             msg=f"beat grid drifts across the render ({drift:.1f} ms)",
         ))
@@ -1273,7 +1672,8 @@ def check_grid_fold(render_path: Path, clips: list[dict], bpm: float) -> list[Fi
         findings.append(Finding(
             check="grid_fold", level="INFO",
             t0=used[0][0], t1=used[-1][1],
-            beat0=sec_to_arr(used[0][0], bpm), beat1=sec_to_arr(used[-1][1], bpm),
+            beat0=sec_to_arr(used[0][0], tempo_map),
+            beat1=sec_to_arr(used[-1][1], tempo_map),
             measured=measured,
             msg=f"beat grid consistent (drift {drift:.1f} ms)",
         ))
@@ -1303,12 +1703,11 @@ def run_check(render_path: Path, report_path: Path,
     report_path = Path(report_path)
     als_path = Path(als_path)
 
-    # Tempo-automation guard. A non-flat envelope means every beat<->sec
-    # conversion in this gate is wrong; running the checks would silently
-    # mis-check. Surface the FAIL with a distinct finding and stop. The
-    # CARD in parse_als documents the future full fix.
+    # Fail closed when the tempo envelope cannot produce a trustworthy map.
+    # Running any audio check with a partial or invalid map would silently
+    # mis-check the render.
     try:
-        bpm, clips = parse_als(als_path)
+        tempo_map, clips = parse_als(als_path)
     except TempoAutomationUnsupported as e:
         distinct = (list(e.distinct_values)
                     if e.distinct_values is not None else [])
@@ -1316,7 +1715,7 @@ def run_check(render_path: Path, report_path: Path,
             check="tempo_automation_unsupported", level="FAIL",
             t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
             measured={"distinct_tempo_values": distinct},
-            msg="tempo-automated render unsupported by this gate version",
+            msg=f"tempo envelope cannot be mapped safely: {e}",
         )
         return CheckResult(
             findings=[finding],
@@ -1356,14 +1755,14 @@ def run_check(render_path: Path, report_path: Path,
                  "nothing was actually checked"),
         ))
 
-    sweep = streaming_sweep(render_path, bpm)
+    sweep = streaming_sweep(render_path, tempo_map)
     st_lufs = short_term_lufs(sweep.kms100)
     int_lufs = integrated_lufs(sweep.kms100)
 
     arr_start_b, arr_end_b = clip_arr_span(clips)
-    arr_start_s = arr_to_sec(arr_start_b, bpm)
-    arr_end_s = arr_to_sec(arr_end_b, bpm)
-    one_beat = 60.0 / bpm
+    arr_start_s = arr_to_sec(arr_start_b, tempo_map)
+    arr_end_s = arr_to_sec(arr_end_b, tempo_map)
+    one_beat = 60.0 / tempo_map.bpm_at(arr_end_b)
     fps = int(round(1.0 / HOP_SEC))
 
     # Truncation check: a render that ends before the arrangement end is
@@ -1378,7 +1777,7 @@ def run_check(render_path: Path, report_path: Path,
         findings.append(Finding(
             check="render_truncated", level="FAIL",
             t0=duration, t1=arr_end_s,
-            beat0=sec_to_arr(duration, bpm), beat1=arr_end_b,
+            beat0=sec_to_arr(duration, tempo_map), beat1=arr_end_b,
             measured={"duration_sec": duration,
                       "arr_end_sec": arr_end_s,
                       "shortfall_sec": shortfall},
@@ -1387,19 +1786,71 @@ def run_check(render_path: Path, report_path: Path,
         ))
 
     findings += check_hard_silence(sweep.rms100_db, fps, arr_start_s, arr_end_s)
+    findings += check_map_vs_render(sweep.rms100_db, fps, arr_end_s, tempo_map)
 
-    boundaries_sec = collect_boundaries(clips, loops, arr_end_b, bpm)
+    boundaries_sec = collect_boundaries(clips, loops, arr_end_b, tempo_map)
     if boundaries_sec:
-        findings += check_boundary_click(render_path, boundaries_sec, bpm)
+        # check_boundary_click reads a +/-CLICK_HALF_WINDOW_SEC (2 ms) window
+        # around each mapped boundary. The map's measured residual grows with
+        # elapsed time, so LATE boundaries on an arc render land outside that
+        # window: the check finds nothing and reports clean - a FALSE PASS on
+        # the exact defect class it exists for.
+        #
+        # This is decided PER BOUNDARY, not per map. An earlier version keyed
+        # off tempo_map.is_flat and skipped the whole check on any arc, which
+        # Codex correctly called a blocker: early boundaries carry negligible
+        # uncertainty (a boundary at 4.7 s is off by ~0.09 ms, far inside the
+        # window) and were being thrown away, so a short arc render could
+        # return PASS with a real click in it. A boundary is inspected while
+        # its expected timing uncertainty stays within half the window.
+        # A FLAT map is exact, so every boundary is inspected - that is the
+        # V10 control the gate was calibrated on.
+        #
+        # On an ARC, none are. An earlier version tried to inspect "early"
+        # boundaries on the grounds that residual_ppm * t stayed under half
+        # the window, and Codex refuted it: 19.5 ppm is the fitted MEAN bias,
+        # while the scatter around that fit is 5.3 ms RMS - already larger
+        # than the whole +/-2 ms search window. So no boundary on an arc can
+        # be called trusted, early ones included, until the map's uncertainty
+        # is actually characterised. Inspecting them anyway would return
+        # falsely clean, which is the failure this skip exists to prevent.
+        if tempo_map.is_flat:
+            trusted, untrusted = list(boundaries_sec), []
+        else:
+            trusted, untrusted = [], list(boundaries_sec)
+        if trusted:
+            findings += check_boundary_click(render_path, trusted, tempo_map)
+        if untrusted:
+            # A NAMED skip, never a silent pass. skipped_check lets the report
+            # keep boundary_click out of "Checks run clean" - without it the
+            # operator is told the very check that did not run came back
+            # clean, which defeats the whole safeguard.
+            findings.append(Finding(
+                check="boundary_click_skipped_tempo_arc", level="SKIP",
+                t0=min(untrusted), t1=max(untrusted),
+                beat0=sec_to_arr(min(untrusted), tempo_map),
+                beat1=sec_to_arr(max(untrusted), tempo_map),
+                measured={"skipped_check": "boundary_click",
+                          "skipped_boundaries": len(untrusted),
+                          "inspected_boundaries": len(trusted),
+                          "from_sec": min(untrusted),
+                          "click_half_window_sec": CLICK_HALF_WINDOW_SEC},
+                msg=(f"boundary_click skipped for {len(untrusted)} of "
+                     f"{len(boundaries_sec)} boundaries: on a tempo arc the "
+                     "map's timing uncertainty is not characterised and the "
+                     "fit scatter alone exceeds the +/-2 ms click window"),
+            ))
 
-    findings += check_level_cliff(loops, sweep.beat_rms_db, bpm)
-    findings += check_loop_exit_jump(loops, sweep.beat_rms_db, clips, bpm)
-    findings += check_loop_period(loops, sweep.beat_rms_db, sweep.beat_count, bpm)
-    findings += check_exposed_solo(sweep.rms100_db, fps, clips, bpm)
-    findings += check_loop_hole(loops, sweep.beat_rms_db, bpm)
-    findings += check_transition_dip(transitions, st_lufs, fps, bpm)
-    findings += check_loop_verbatim(render_path, loops, bpm)
-    findings += check_grid_fold(render_path, clips, bpm)
+    findings += check_level_cliff(loops, sweep.beat_rms_db, tempo_map)
+    findings += check_loop_exit_jump(loops, sweep.beat_rms_db, clips,
+                                     tempo_map)
+    findings += check_loop_period(loops, sweep.beat_rms_db, sweep.beat_count,
+                                  tempo_map)
+    findings += check_exposed_solo(sweep.rms100_db, fps, clips, tempo_map)
+    findings += check_loop_hole(loops, sweep.beat_rms_db, tempo_map)
+    findings += check_transition_dip(transitions, st_lufs, fps, tempo_map)
+    findings += check_loop_verbatim(render_path, loops, tempo_map)
+    findings += check_grid_fold(render_path, clips, tempo_map)
     # check_kick_flam is disabled; not invoked.
 
     levels_present = {f.level for f in findings}
@@ -1415,7 +1866,8 @@ def run_check(render_path: Path, report_path: Path,
 
     meta = dict(sweep.meta)
     meta.update({
-        "bpm": bpm,
+        "bpm": tempo_map.nominal_bpm,
+        "tempo_map": tempo_map.summary,
         "clip_count": len(clips),
         "integrated_lufs": int_lufs,
         "verdict": verdict,
@@ -1493,9 +1945,16 @@ def write_report(result: CheckResult, render_path: Path,
     all_checks = {"hard_silence", "boundary_click", "level_cliff",
                   "loop_exit_jump", "loop_period", "exposed_solo",
                   "loop_hole", "transition_dip", "loop_verbatim",
-                  "grid_fold", "kick_flam", "eof_truncated_reads"}
+                  "grid_fold", "kick_flam", "eof_truncated_reads",
+                  "map_vs_render"}
     fired = {f.check for f in result.findings}
-    clean = sorted(all_checks - fired - {"kick_flam"})
+    # A check that was SKIPPED must never be listed as clean. The skip finding
+    # carries its own name, so without this the report tells the operator that
+    # the very check which did not run came back clean - which defeats the
+    # only safeguard the skip provides (Codex review 2026-08-27).
+    skipped = {f.measured.get("skipped_check") for f in result.findings
+               if f.level == "SKIP" and f.measured.get("skipped_check")}
+    clean = sorted(all_checks - fired - skipped - {"kick_flam"})
     md.append("\n## Checks run clean\n")
     md.append(", ".join(clean) if clean else "(none)")
 

@@ -191,7 +191,17 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-25 (Latest Session) - V16 CERTIFIED via Sam's gate ruling; Tier A Phase 2 merged; render gate in fix round
+### 2026-08-27 (Latest Session) - Piecewise tempo map built; V16 grid-fold brief discrepancy measured
+**Brain:** Codex
+
+**Completed:**
+- Added the exact logarithmic `TempoMap` beat-to-seconds integral and inverse, Live sentinel folding, cached integer beat edges, fail-closed envelope validation, and threaded map geometry through every render-check call site.
+- The untouched V10 decimal regression pin passes. V16 maps beat 10524 to 5031.098277 s; the full read-only gate has neither `tempo_automation_unsupported` nor `render_truncated`.
+- The brief's V16 grid-fold PASS claim does not reproduce on the actual render: the arc map reports 53.2 ms drift at the existing probes (flat negative control: 101.9 ms), above the unchanged 30 ms threshold. Merging adjacent clip fragments reproduces the brief's claimed 16 solo runs and 776/2378/4086 probe set, but makes the protected V10 pin fail and still leaves V16 at 56.5 ms drift, so that unrelated change was reverted.
+
+**Validation:** `Tests/test_render_check.py`: 37 passed. Full isolated-worktree run: 403 passed, 38 corpus skips, 1 unrelated sibling-path failure; deselecting only that environment-dependent Kick Detector test gives 403 passed / 38 skipped. Expected full-corpus count is 461 (= 450 baseline + 11 new cases), but the hard no-copy/no-junction rule leaves 19 corpus-generated cases uncollected in this worktree.
+
+### 2026-08-25 - V16 CERTIFIED via Sam's gate ruling; Tier A Phase 2 merged; render gate in fix round
 **Brain:** Claude (orchestrator) + Codex (gate fix build + render-gate review) + MiniMax (Tier A Phase 2 + render gate builds). Suite 404 -> 424, all pushed.
 
 **Completed:**

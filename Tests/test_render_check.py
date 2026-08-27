@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -36,7 +37,8 @@ def _als_xml(clips, bpm=128.0, tempo_envelope=None):
 
     If tempo_envelope is not None, a MainTrack is added at the end with a
     Tempo/AutomationTarget (Id="8") and an AutomationEnvelope whose PointeeId
-    is "8" and whose FloatEvent Values are the supplied list. The LiveSet
+    is "8" and whose FloatEvents are supplied as values (64 beats apart) or
+    explicit (time, value) pairs. The LiveSet
     Tempo/Manual remains the canonical Manual source (the envelope does not
     carry its own Manual)."""
     root = Element("Ableton")
@@ -97,10 +99,14 @@ def _als_xml(clips, bpm=128.0, tempo_envelope=None):
         pid.set("Value", "8")
         auto = SubElement(env, "Automation")
         events = SubElement(auto, "Events")
-        for v in tempo_envelope:
+        for i, item in enumerate(tempo_envelope):
+            if isinstance(item, (tuple, list)):
+                event_time, value = item
+            else:
+                event_time, value = i * 64.0, item
             fe = SubElement(events, "FloatEvent")
-            fe.set("Time", "0")
-            fe.set("Value", str(v))
+            fe.set("Time", str(event_time))
+            fe.set("Value", str(value))
     return gzip.compress(tostring(root, encoding="utf-8"))
 
 
@@ -814,32 +820,27 @@ def test_grid_fold_drift(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# FIX 1 - tempo-automation guard                                              #
+# Tempo-map mapping and fail-closed envelope handling                         #
 # --------------------------------------------------------------------------- #
 
-def test_tempo_automation_ramped_fails(tmp_path):
-    """Ramped envelope (128 -> 130) must hard-FAIL the gate: any beat<->sec
-    conversion under a non-flat envelope is wrong, and silent mis-check is
-    the failure mode the guard exists to stop."""
+def test_tempo_automation_ramped_maps_and_runs(tmp_path):
+    """A finite, in-range ramp is mapped and the audio checks run."""
     als = tmp_path / "m.als"
     wav = tmp_path / "m.wav"
     rpt = tmp_path / "r.json"
     seconds = 30.0
     clips = _single_track_clips(seconds)
-    _write_als(als, clips, bpm=128.0, tempo_envelope=[128.0, 130.0])
+    _write_als(als, clips, bpm=128.0,
+               tempo_envelope=[(0.0, 128.0), (64.0, 130.0)])
     _synth_render(wav, seconds, clips=clips)
     _write_report(rpt)
     res = render_check.run_check(wav, rpt, als)
-    assert res.exit_code == 2
-    assert res.verdict == "FAIL"
-    tempo_findings = [f for f in res.findings
-                      if f.check == "tempo_automation_unsupported"]
-    assert len(tempo_findings) == 1
-    assert tempo_findings[0].level == "FAIL"
-    distinct = tempo_findings[0].measured["distinct_tempo_values"]
-    assert set(distinct) == {128.0, 130.0}
-    # No other checks ran - a wrong map would have mis-checked.
-    assert not any(f.check != "tempo_automation_unsupported"
+    assert res.exit_code == 0
+    assert res.verdict == "PASS"
+    assert res.meta["tempo_map"] == {
+        "n_points": 2, "min": 128.0, "max": 130.0, "is_flat": False,
+    }
+    assert not any(f.check == "tempo_automation_unsupported"
                    for f in res.findings)
 
 
@@ -861,9 +862,9 @@ def test_tempo_automation_flat_envelope_passes(tmp_path):
                    for f in res.findings)
 
 
-def test_tempo_automation_mismatch_fails(tmp_path):
+def test_tempo_automation_mismatch_envelope_wins(tmp_path):
     """Flat envelope at a DIFFERENT value than Manual: the envelope overrides
-    Manual at playback, so Manual is the wrong map source. Hard-FAIL."""
+    Manual at playback, so it is the map source and is no longer an error."""
     als = tmp_path / "m.als"
     wav = tmp_path / "m.wav"
     rpt = tmp_path / "r.json"
@@ -873,20 +874,19 @@ def test_tempo_automation_mismatch_fails(tmp_path):
     _synth_render(wav, seconds, clips=clips)
     _write_report(rpt)
     res = render_check.run_check(wav, rpt, als)
-    assert res.exit_code == 2
-    tempo_findings = [f for f in res.findings
-                      if f.check == "tempo_automation_unsupported"]
-    assert len(tempo_findings) == 1
-    assert tempo_findings[0].level == "FAIL"
-    distinct = tempo_findings[0].measured["distinct_tempo_values"]
-    assert distinct == [130.0]
+    assert res.exit_code == 0
+    assert res.meta["bpm"] == 128.0
+    assert res.meta["tempo_map"] == {
+        "n_points": 1, "min": 130.0, "max": 130.0, "is_flat": True,
+    }
+    assert not any(f.check == "tempo_automation_unsupported"
+                   for f in res.findings)
 
 
 def test_tempo_automation_raises_library():
-    """As a library, run_check is NOT supposed to swallow the
-    TempoAutomationUnsupported - only main() catches it. Pin the helper."""
+    """An unmappable envelope still raises at the parser boundary."""
     root_xml = _als_xml(_single_track_clips(30), bpm=128.0,
-                        tempo_envelope=[128.0, 130.0])
+                        tempo_envelope=[(float("nan"), 128.0)])
     try:
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".als", delete=False) as fh:
@@ -899,6 +899,68 @@ def test_tempo_automation_raises_library():
             tmp_path.unlink()
         except Exception:
             pass
+
+
+def test_tempo_map_exact_log_inverse_holds_and_cache():
+    root_xml = _als_xml(
+        _single_track_clips(30), bpm=128.0,
+        tempo_envelope=[(4.0, 120.0), (12.0, 132.0)],
+    )
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(gzip.decompress(root_xml))
+    tempo_map = render_check.TempoMap.from_als_root(root)
+
+    ramp_sec = (60.0 / 1.5) * math.log(132.0 / 120.0)
+    assert tempo_map.beat_to_sec(4.0) == pytest.approx(2.0)
+    assert tempo_map.beat_to_sec(12.0) == pytest.approx(2.0 + ramp_sec)
+    assert tempo_map.beat_to_sec(16.0) == pytest.approx(
+        2.0 + ramp_sec + 4.0 * 60.0 / 132.0)
+    beats = np.array([-2.0, 0.0, 4.0, 7.5, 12.0, 20.0])
+    assert np.allclose(tempo_map.sec_to_beat(tempo_map.beat_to_sec(beats)),
+                       beats, atol=1e-12)
+    assert tempo_map.bpm_at(-1.0) == 120.0
+    assert tempo_map.bpm_at(8.0) == 126.0
+    assert tempo_map.bpm_at(20.0) == 132.0
+    assert tempo_map.beat_edges_sec(24) is tempo_map.beat_edges_sec(24)
+
+
+def test_tempo_map_folds_live_sentinel_to_zero():
+    root_xml = _als_xml(
+        _single_track_clips(30), bpm=128.0,
+        tempo_envelope=[(-63072000.0, 120.0), (0.0, 120.0),
+                        (8.0, 124.0)],
+    )
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(gzip.decompress(root_xml))
+    tempo_map = render_check.TempoMap.from_als_root(root)
+    assert tempo_map.summary["n_points"] == 2
+    assert tempo_map.beat_to_sec(0.0) == 0.0
+    assert tempo_map.beat_to_sec(8.0) == pytest.approx(
+        (60.0 / 0.5) * math.log(124.0 / 120.0))
+
+
+@pytest.mark.parametrize("tempo_envelope", [
+    [],
+    [(0.0, 20.0)],
+    [(0.0, 300.0)],
+    [(0.0, float("nan"))],
+    [(float("inf"), 128.0)],
+])
+def test_tempo_map_invalid_envelope_fails_closed(tmp_path, tempo_envelope):
+    als = tmp_path / "bad.als"
+    _write_als(als, _single_track_clips(30), bpm=128.0,
+               tempo_envelope=tempo_envelope)
+    with pytest.raises(render_check.TempoAutomationUnsupported):
+        render_check.parse_als(als)
+
+
+@pytest.mark.parametrize("manual", [20.0, 300.0, float("nan")])
+def test_tempo_map_invalid_manual_fails_closed(tmp_path, manual):
+    als = tmp_path / "bad-manual.als"
+    _write_als(als, _single_track_clips(30), bpm=manual,
+               tempo_envelope=[(0.0, 128.0)])
+    with pytest.raises(render_check.TempoAutomationUnsupported):
+        render_check.parse_als(als)
 
 
 # --------------------------------------------------------------------------- #
@@ -1050,7 +1112,8 @@ def test_pick_solo_regions_dedupes_with_one_run():
         {"track": "D", "arr_start": 150, "arr_end": 200, "loop_on": False},
         {"track": "E", "arr_start": 200, "arr_end": 300, "loop_on": False},
     ]
-    regions_one = render_check._pick_solo_regions(clips_one, 128.0,
+    tempo_map = render_check.TempoMap.flat(128.0)
+    regions_one = render_check._pick_solo_regions(clips_one, tempo_map,
                                                   [0.15, 0.5, 0.85])
     assert len(regions_one) == 1, regions_one
     # The single region is E alone from 200..300 beats = 93.75..140.625 sec.
@@ -1063,7 +1126,7 @@ def test_pick_solo_regions_dedupes_with_one_run():
         {"track": "A", "arr_start": 0, "arr_end": 100, "loop_on": False},
         {"track": "B", "arr_start": 100, "arr_end": 200, "loop_on": False},
     ]
-    regions_two = render_check._pick_solo_regions(clips_two, 128.0,
+    regions_two = render_check._pick_solo_regions(clips_two, tempo_map,
                                                   [0.15, 0.5, 0.85])
     assert len(regions_two) == 2, regions_two
     assert regions_two[0] != regions_two[1]
@@ -1140,11 +1203,14 @@ def test_report_both_keys_no_skip_findings(tmp_path):
 # V10 corpus regression pin                                                   #
 # --------------------------------------------------------------------------- #
 
-V10_WAV = (ROOT / "Test Project" / "14.08.26" / "Output"
+CORPUS_ROOT = Path(os.environ.get("DJ_MIX_TEST_PROJECT",
+                                  str(ROOT / "Test Project")))
+
+V10_WAV = (CORPUS_ROOT / "14.08.26" / "Output"
            / "14.08.26 Mix V10.wav")
-V10_ALS = (ROOT / "Test Project" / "14.08.26" / "Output"
+V10_ALS = (CORPUS_ROOT / "14.08.26" / "Output"
            / "14.08.26 Mix V10.als")
-V10_REPORT = (ROOT / "Test Project" / "14.08.26" / "Output"
+V10_REPORT = (CORPUS_ROOT / "14.08.26" / "Output"
               / "ARRANGEMENT_REPORT_V10.json")
 
 
@@ -1311,3 +1377,518 @@ def test_v10_regression_pin():
         f"V10 should exit 1 (warnings); got {res.exit_code}: "
         + "; ".join(f"{f.check}/{f.level}" for f in res.findings)
     )
+
+
+# --------------------------------------------------------------------------- #
+# V16 tempo-arc corpus pins                                                   #
+# --------------------------------------------------------------------------- #
+
+V16_ALS = (CORPUS_ROOT / "14.08.26" / "Output"
+           / "14.08.26 Mix V16.als")
+
+
+@pytest.mark.skipif(not V16_ALS.exists(),
+                    reason="V16 ALS corpus not present (gitignored)")
+def test_v16_tempo_map_measured_truth():
+    import xml.etree.ElementTree as ET
+    with gzip.open(V16_ALS, "rb") as fh:
+        root = ET.fromstring(fh.read())
+    tempo_map = render_check.TempoMap.from_als_root(root)
+    mapped_end = tempo_map.beat_to_sec(10524.0)
+    assert mapped_end == pytest.approx(5031.098, abs=0.0005)
+    assert abs(mapped_end - 5031.3018) < 0.250
+    assert tempo_map.summary == {
+        "n_points": 31,
+        "min": 121.41032298384611,
+        "max": 129.52242915838903,
+        "is_flat": False,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Tempo-arc guards: two checks whose tolerances the map residual invalidates   #
+# --------------------------------------------------------------------------- #
+
+def test_boundary_click_skipped_on_tempo_arc(tmp_path):
+    """A real click at a boundary FAILs under a flat map and is SKIPPED - by
+    name - under an arc map.
+
+    boundary_click reads a +/-2 ms window around each mapped boundary. The
+    tempo map carries a measured ~19.5 ppm residual, so on a long arc render
+    that window is nowhere near the true splice and the check reports clean:
+    a false PASS on the one defect class it exists for. It must announce that
+    it did not look, never quietly pass.
+    """
+    bpm = 128.0
+    seconds = 30.0
+    bps = bpm / 60.0
+    boundary_beat = 10
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": boundary_beat,
+         "loop_on": False},
+        {"track": "B", "arr_start": boundary_beat,
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+
+    import xml.etree.ElementTree as ET
+    import gzip as _gzip
+    rpt = tmp_path / "arc.json"
+    _write_report(rpt)
+
+    def run_with(als_path, tag):
+        """Place the click at the boundary time THIS map predicts.
+
+        Codex caught the earlier version doing otherwise: it injected at the
+        flat map's beat-10 time and then asked the arc map to find it, 5.7 ms
+        away. That tested map disagreement, not the skip logic.
+        """
+        root = ET.fromstring(_gzip.open(als_path, "rb").read())
+        tmap = render_check.TempoMap.from_als_root(root)
+        t_b = tmap.beat_to_sec(float(boundary_beat))
+
+        def click(t, L, R):
+            L = L.copy(); R = R.copy()
+            idx = int(round(t_b * 44100))
+            L[idx] = L[idx] + 0.7
+            R[idx] = R[idx] + 0.7
+            return L, R
+
+        wav = tmp_path / f"{tag}.wav"
+        _synth_render(wav, seconds, clips=clips, extra_process=click)
+        return render_check.run_check(wav, rpt, als_path), tmap
+
+    # Flat map: the click is caught. This is the prove-the-test half - without
+    # it, the SKIP below could be hiding a check that never worked.
+    als_flat = tmp_path / "flat.als"
+    _write_als(als_flat, clips)
+    res_flat, tmap_flat = run_with(als_flat, "flat")
+    assert tmap_flat.is_flat
+    assert any(f.check == "boundary_click" and f.level == "FAIL"
+               for f in res_flat.findings), \
+        [(f.check, f.level) for f in res_flat.findings]
+    assert not any(f.check == "boundary_click_skipped_tempo_arc"
+                   for f in res_flat.findings)
+
+    # Arc map: NO boundary is inspected, and the skip says so by name. An
+    # earlier version inspected "early" boundaries on the grounds that the
+    # 19.5 ppm mean bias stayed under half the window; Codex refuted it - the
+    # scatter around that fit is 5.3 ms RMS, already wider than the whole
+    # +/-2 ms window, so no boundary on an arc can be called trusted until the
+    # map's uncertainty is characterised.
+    als_arc = tmp_path / "arc.als"
+    _write_als(als_arc, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 128.0), (64.0, 130.0)])
+    res_arc, tmap_arc = run_with(als_arc, "arc")
+    assert not tmap_arc.is_flat, "fixture must be an arc"
+    skips = [f for f in res_arc.findings
+             if f.check == "boundary_click_skipped_tempo_arc"]
+    assert len(skips) == 1, [(f.check, f.level) for f in res_arc.findings]
+    assert skips[0].measured["inspected_boundaries"] == 0
+    assert not any(f.check == "boundary_click" for f in res_arc.findings), \
+        "no boundary_click verdict may be reported against an arc map"
+
+
+def test_boundary_click_skips_only_late_boundaries_on_an_arc(tmp_path):
+    """Late boundaries ARE skipped, by name, and the report must not then
+    call boundary_click clean.
+
+    The residual grows with elapsed time, so past roughly 51 s the +/-2 ms
+    window no longer contains the true splice. Those boundaries are announced
+    as skipped; earlier ones in the same render are still inspected.
+    """
+    bpm = 120.0
+    bps = bpm / 60.0
+    seconds = 130.0
+    early_beat = 8              # ~4 s   -> inspected
+    late_beat = round(100 * bps)  # ~100 s -> skipped
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": early_beat,
+         "loop_on": False},
+        {"track": "B", "arr_start": early_beat, "arr_end": late_beat,
+         "loop_on": False},
+        {"track": "C", "arr_start": late_beat,
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+    wav = tmp_path / "long.wav"
+    rpt = tmp_path / "long.json"
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+    als = tmp_path / "long.als"
+    _write_als(als, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 120.0), (128.0, 124.0)])
+
+    res = render_check.run_check(wav, rpt, als)
+    skips = [f for f in res.findings
+             if f.check == "boundary_click_skipped_tempo_arc"]
+    assert len(skips) == 1, [(f.check, f.level) for f in res.findings]
+    assert skips[0].level == "SKIP"
+    assert skips[0].measured["skipped_boundaries"] >= 1
+    assert skips[0].measured["skipped_check"] == "boundary_click"
+
+    # The report must not list a skipped check as clean. Without this the
+    # operator is told the very check that did not run came back clean, which
+    # defeats the only safeguard the skip provides (Codex review 2026-08-27).
+    md_path, _ = render_check.write_report(res, wav,
+                                           tmp_path / "out.json")
+    clean_section = md_path.read_text(
+        encoding="utf-8").split("## Checks run clean")[-1]
+    assert "boundary_click" not in clean_section, clean_section
+    # ... and the skip itself must still be visible in the findings table.
+    assert "boundary_click_skipped_tempo_arc" in md_path.read_text(
+        encoding="utf-8")
+
+
+def test_grid_fold_drift_warns_not_fails_on_tempo_arc(tmp_path):
+    """Excess grid-fold drift FAILs under a flat map and WARNs under an arc.
+
+    The 30 ms threshold was calibrated on a flat render. On an arc it is
+    tripped by two measured confounds that are not render defects (the map
+    residual, and probes landing on different tracks), so it must keep
+    reporting the number without failing the render on it.
+    """
+    seconds = 145.0
+    bpm = 120.0
+    bps = bpm / 60.0
+    # Two solo regions >= 45 s separated by a 2-clip overlap, so
+    # _pick_solo_regions has two distinct probe windows. A single clip yields
+    # ONE region and check_grid_fold returns its "fewer than 2 regions" INFO
+    # without ever reaching the drift logic - the test would prove nothing.
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": round(70 * bps),
+         "loop_on": False},
+        {"track": "B", "arr_start": round(65 * bps),
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+    wav = tmp_path / "d.wav"
+    rpt = tmp_path / "d.json"
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+
+    als_flat = tmp_path / "flat.als"
+    _write_als(als_flat, clips, bpm=bpm)
+    als_arc = tmp_path / "arc.als"
+    _write_als(als_arc, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 120.0), (128.0, 124.0)])
+
+    import xml.etree.ElementTree as ET
+    import gzip as _gzip
+
+    def grid_fold_level(als_path):
+        root = ET.fromstring(_gzip.open(als_path, "rb").read())
+        tmap = render_check.TempoMap.from_als_root(root)
+        # Drift just OVER the flat threshold, identically for both maps, so
+        # the only difference between the two calls is map flatness. It has to
+        # be inside the residual allowance - past that an arc FAILs too, which
+        # is the separate bounded-downgrade contract tested below.
+        real = render_check._grid_fold_median
+        seq = iter([0.0, 31.0])
+        render_check._grid_fold_median = lambda *a, **k: next(seq)
+        try:
+            out = render_check.check_grid_fold(wav, clips, tmap)
+        finally:
+            render_check._grid_fold_median = real
+        return [(f.check, f.level, f.measured.get("drift_ms")) for f in out]
+
+    flat = grid_fold_level(als_flat)
+    arc = grid_fold_level(als_arc)
+    flat_levels = {lvl for c, lvl, _ in flat if c == "grid_fold"}
+    arc_levels = {lvl for c, lvl, _ in arc if c == "grid_fold"}
+    # Unconditional. An earlier version gated the decisive assertions behind
+    # `if flat_levels == {"FAIL"}`, so a regression in the flat path let the
+    # whole test pass without checking anything (Codex review 2026-08-27) -
+    # exactly the vacuous-pass shape this suite exists to prevent.
+    assert flat_levels == {"FAIL"}, flat
+    assert arc_levels == {"WARN"}, (flat, arc)
+    arc_drift = [d for c, _, d in arc if c == "grid_fold"][0]
+    assert arc_drift == pytest.approx(31.0), arc
+
+
+def test_map_vs_render_catches_a_wrong_map(tmp_path):
+    """The constant-free defence against a grossly wrong map.
+
+    grid_fold cannot gate on an arc, so this is what stops a mistimed render
+    shipping. It compares where the map says the arrangement ends against
+    where the audio actually stops - no fitted quantity involved.
+
+    Prove-the-test: the SAME render passes under the correct arc map and FAILs
+    under a flat one, so a pass cannot be an artefact of a slack tolerance.
+    """
+    bpm = 120.0
+    arr_end_beats = 480.0
+    # 120 -> 170 BPM across the arrangement. Flat calls this 240 s; the arc
+    # integral makes it ~200.6 s, so a flat map is ~39 s out - past the
+    # minutes-scale FAIL floor, which is deliberately set above anything a
+    # fade or reverb tail could produce.
+    clips = [{"track": "A", "arr_start": 0, "arr_end": int(arr_end_beats),
+              "loop_on": False}]
+    als_arc = tmp_path / "mvr.als"
+    _write_als(als_arc, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 120.0), (arr_end_beats, 170.0)])
+
+    import xml.etree.ElementTree as ET
+    import gzip as _gzip
+    root = ET.fromstring(_gzip.open(als_arc, "rb").read())
+    arc_map = render_check.TempoMap.from_als_root(root)
+    assert not arc_map.is_flat
+    true_end = arc_map.beat_to_sec(arr_end_beats)
+    flat_map = render_check.TempoMap.flat(bpm)
+    assert flat_map.beat_to_sec(arr_end_beats) - true_end > \
+        render_check.MAP_ENDPOINT_FAIL_ABS_SEC, \
+        "fixture must separate the two maps by more than the FAIL floor"
+
+    wav = tmp_path / "mvr.wav"
+    _synth_render(wav, true_end, clips=clips)
+    sweep = render_check.streaming_sweep(wav, arc_map)
+    fps = int(round(1.0 / render_check.HOP_SEC))
+
+    good = render_check.check_map_vs_render(
+        sweep.rms100_db, fps, true_end, arc_map)
+    assert good and good[0].level == "INFO", \
+        [(f.level, f.measured) for f in good]
+    assert abs(good[0].measured["delta_sec"]) <= good[0].measured["warn_above_sec"]
+
+    bad = render_check.check_map_vs_render(
+        sweep.rms100_db, fps, flat_map.beat_to_sec(arr_end_beats), flat_map)
+    assert bad and bad[0].level == "FAIL", \
+        [(f.level, f.measured) for f in bad]
+    assert abs(bad[0].measured["delta_sec"]) > bad[0].measured["fail_above_sec"]
+
+
+def test_map_vs_render_misses_a_compensated_interior_error(tmp_path):
+    """PINS A KNOWN LIMITATION rather than a capability.
+
+    check_map_vs_render only compares ENDPOINTS. A map that is wrong in the
+    middle but right at the end sails through: 120->170 and 170->120 across
+    the same span predict end times within a second of each other while
+    differing hugely at the midpoint. Codex raised this in round 3; it is real,
+    it is carded, and this test exists so nobody later mistakes the check for
+    a general map-correctness gate.
+
+    If a future change makes this test FAIL, that is good news - the interior
+    is being validated. Update the card, do not delete the test.
+    """
+    arr_end_beats = 480.0
+    up = render_check.TempoMap(np.array([0.0, arr_end_beats]),
+                               np.array([120.0, 170.0]), 120.0)
+    down = render_check.TempoMap(np.array([0.0, arr_end_beats]),
+                                 np.array([170.0, 120.0]), 170.0)
+    end_up = up.beat_to_sec(arr_end_beats)
+    end_down = down.beat_to_sec(arr_end_beats)
+    # Same total, by construction: the log integral is symmetric in v0 <-> v1.
+    assert abs(end_up - end_down) < 1e-6, (end_up, end_down)
+    # ... but grossly different in the middle: 17.4 s apart on this fixture,
+    # comfortably past the endpoint check's 10 s warn cap, and it sees none
+    # of it.
+    mid_gap = abs(up.beat_to_sec(arr_end_beats / 2)
+                  - down.beat_to_sec(arr_end_beats / 2))
+    assert mid_gap > render_check.MAP_ENDPOINT_WARN_CAP_SEC, mid_gap
+
+    clips = [{"track": "A", "arr_start": 0, "arr_end": int(arr_end_beats),
+              "loop_on": False}]
+    wav = tmp_path / "comp.wav"
+    _synth_render(wav, end_up, clips=clips)
+    sweep = render_check.streaming_sweep(wav, up)
+    fps = int(round(1.0 / render_check.HOP_SEC))
+
+    # The WRONG (reversed) map still passes the endpoint check.
+    out = render_check.check_map_vs_render(sweep.rms100_db, fps, end_down, down)
+    assert out and out[0].level == "INFO", \
+        [(f.level, f.measured) for f in out]
+
+
+def test_map_vs_render_tolerates_a_fading_ending(tmp_path):
+    """A render whose audio dies before its clips do must not be newly FAILED.
+
+    The endpoint is measured from the last audible frame, so a fade, a silent
+    final clip or a reverb tail moves it by seconds. Codex flagged that an
+    earlier tolerance made this a FAIL and so could reject valid FLAT renders
+    the gate previously accepted. Seconds warn; only minutes fail.
+    """
+    fps = int(round(1.0 / render_check.HOP_SEC))
+    tmap = render_check.TempoMap.flat(120.0)
+    arr_end = 600.0
+    # Audio stops 6 s early - a long fade. Frames are 100 ms.
+    rms = np.full(int(arr_end * fps), -20.0)
+    rms[int((arr_end - 6.0) * fps):] = render_check.FLOOR_DB
+    out = render_check.check_map_vs_render(rms, fps, arr_end, tmap)
+    assert out and out[0].level == "WARN", \
+        [(f.level, f.measured) for f in out]
+
+    # A minutes-scale gap on the same shape still FAILs.
+    rms2 = np.full(int(arr_end * fps), -20.0)
+    rms2[int((arr_end - 120.0) * fps):] = render_check.FLOOR_DB
+    out2 = render_check.check_map_vs_render(rms2, fps, arr_end, tmap)
+    assert out2 and out2[0].level == "FAIL", \
+        [(f.level, f.measured) for f in out2]
+
+
+def test_grid_fold_never_gates_on_an_arc(tmp_path):
+    """On an arc grid_fold reports and does not gate, at ANY drift.
+
+    Two earlier attempts at a gating rule were both wrong (an unconditional
+    downgrade, then an allowance derived from the fitted 19.5 ppm mean, which
+    grows without limit and swallows a known-wrong result on a longer mix).
+    Until the map's uncertainty is characterised the honest position is that
+    this check cannot gate an arc - and `check_map_vs_render` is what catches
+    a grossly wrong map instead.
+    """
+    seconds = 145.0
+    bpm = 120.0
+    bps = bpm / 60.0
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": round(70 * bps),
+         "loop_on": False},
+        {"track": "B", "arr_start": round(65 * bps),
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+    wav = tmp_path / "b.wav"
+    _synth_render(wav, seconds, clips=clips)
+    als_arc = tmp_path / "arcb.als"
+    _write_als(als_arc, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 120.0), (128.0, 124.0)])
+    als_flat = tmp_path / "flatb.als"
+    _write_als(als_flat, clips, bpm=bpm)
+
+    import xml.etree.ElementTree as ET
+    import gzip as _gzip
+
+    def grid_fold_with(als_path, medians):
+        root = ET.fromstring(_gzip.open(als_path, "rb").read())
+        tmap = render_check.TempoMap.from_als_root(root)
+        real = render_check._grid_fold_median
+        seq = iter(medians)
+        render_check._grid_fold_median = lambda *a, **k: next(seq)
+        try:
+            out = render_check.check_grid_fold(wav, clips, tmap)
+        finally:
+            render_check._grid_fold_median = real
+        return [f for f in out if f.check == "grid_fold"]
+
+    # Huge drift on an arc: still only a WARN, and it says it is not gating.
+    big = grid_fold_with(als_arc, [0.0, 500.0])
+    assert big and big[0].level == "WARN", [(f.level, f.measured) for f in big]
+    assert big[0].measured["gates"] is False
+    assert "cannot gate" in big[0].msg
+
+    # The same drift on a FLAT map still FAILs - the flat path is untouched,
+    # so this cannot pass by the check having been disabled outright.
+    flat = grid_fold_with(als_flat, [0.0, 500.0])
+    assert flat and flat[0].level == "FAIL", \
+        [(f.level, f.measured) for f in flat]
+    assert flat[0].measured["gates"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Fail-closed set: ambiguities that must not be resolved silently              #
+# (MiniMax review 2026-08-27, cases 2/4/5 - all three reproduced first)        #
+# --------------------------------------------------------------------------- #
+
+def _envelope_als_root(event_sets, manual=120.0, target="8",
+                       omit_pointee=False):
+    """MainTrack with one AutomationEnvelope per entry in event_sets."""
+    from xml.etree.ElementTree import Element, SubElement, tostring, fromstring
+    root = Element("Ableton")
+    t = SubElement(root, "Tempo")
+    SubElement(t, "Manual").set("Value", str(manual))
+    mt = SubElement(root, "MainTrack")
+    mtt = SubElement(mt, "Tempo")
+    SubElement(mtt, "AutomationTarget").set("Id", "8")
+    for events in event_sets:
+        env = SubElement(mt, "AutomationEnvelope")
+        et = SubElement(env, "EnvelopeTarget")
+        if not omit_pointee:
+            SubElement(et, "PointeeId").set("Value", target)
+        ev = SubElement(env, "Events")
+        for beat, value in events:
+            fe = SubElement(ev, "FloatEvent")
+            fe.set("Time", str(beat))
+            fe.set("Value", str(value))
+    return fromstring(tostring(root))
+
+
+def test_two_envelopes_on_one_target_raise():
+    """Which envelope plays is genuinely ambiguous, so refuse rather than
+    silently take the first. Pre-fix this returned the FIRST envelope's map
+    with no diagnostic at all."""
+    root = _envelope_als_root([[(0.0, 120.0), (64.0, 121.0)],
+                               [(0.0, 200.0), (64.0, 250.0)]])
+    with pytest.raises(render_check.TempoAutomationUnsupported) as e:
+        render_check.TempoMap.from_als_root(root)
+    assert "2 tempo envelopes" in str(e.value)
+
+    # Control: one envelope on the target still maps fine.
+    ok = render_check.TempoMap.from_als_root(
+        _envelope_als_root([[(0.0, 120.0), (64.0, 121.0)]]))
+    assert not ok.is_flat
+
+
+def test_unidentifiable_envelope_raises_rather_than_going_flat():
+    """An envelope carrying events but no PointeeId might BE the tempo
+    envelope. Falling through to flat() would check an ARC render against a
+    FLAT map - the 170-second class of error this module exists to stop.
+
+    Pre-fix this silently returned a flat map at the Manual tempo while the
+    envelope said 120 -> 140.
+    """
+    root = _envelope_als_root([[(0.0, 120.0), (64.0, 140.0)]],
+                              omit_pointee=True)
+    with pytest.raises(render_check.TempoAutomationUnsupported) as e:
+        render_check.TempoMap.from_als_root(root)
+    assert "no usable PointeeId" in str(e.value)
+
+    # Control 1: an envelope on a DIFFERENT, readable target is ignorable -
+    # that is not ambiguous, so it must still fall through to flat.
+    other = _envelope_als_root([[(0.0, 120.0), (64.0, 140.0)]], target="99")
+    flat = render_check.TempoMap.from_als_root(other)
+    assert flat.is_flat and flat.bpm_at(64.0) == pytest.approx(120.0)
+
+    # Control 2: an envelope with no PointeeId AND no events is not evidence
+    # of anything, so it must not raise.
+    empty = _envelope_als_root([[]], omit_pointee=True)
+    assert render_check.TempoMap.from_als_root(empty).is_flat
+
+
+def test_first_breakpoint_after_beat_zero_holds_backwards():
+    """Documented, deliberate semantics: a Live envelope extends its first
+    breakpoint backwards, so with no sentinel the first value applies from
+    beat 0 and Manual does NOT. Pinned so the choice cannot drift silently."""
+    root = _envelope_als_root([[(5.0, 130.0)]], manual=120.0)
+    tmap = render_check.TempoMap.from_als_root(root)
+    assert tmap.bpm_at(0.0) == pytest.approx(130.0)
+    assert tmap.beat_to_sec(2.0) == pytest.approx(2.0 * 60.0 / 130.0)
+    assert tmap.beat_to_sec(2.0) != pytest.approx(2.0 * 60.0 / 120.0)
+
+
+def test_map_endpoint_fail_tolerance_is_capped_at_long_duration():
+    """The FAIL threshold IS the merge gate, so it must be bounded.
+
+    An uncapped relative term looks reasonable at normal lengths and quietly
+    becomes an unbounded acceptance envelope: Codex worked out that at 10
+    hours a 1% term would let a SIX MINUTE discrepancy pass. The cap is what
+    stops that, so it gets a test at a duration where it actually bites.
+    """
+    fps = int(round(1.0 / render_check.HOP_SEC))
+    tmap = render_check.TempoMap.flat(120.0)
+    ten_hours = 36000.0
+
+    # Uncapped, 1% of 10 hours would be 360 s. The cap must hold it to 60.
+    rms = np.full(10, -20.0)
+    out = render_check.check_map_vs_render(rms, fps, ten_hours, tmap)
+    assert out[0].measured["fail_above_sec"] == pytest.approx(
+        render_check.MAP_ENDPOINT_FAIL_CAP_SEC)
+    assert out[0].measured["warn_above_sec"] == pytest.approx(
+        render_check.MAP_ENDPOINT_WARN_CAP_SEC)
+
+    # A 6-minute discrepancy at that duration must FAIL, not pass.
+    six_min_short = ten_hours - 360.0
+    rms2 = np.full(int(six_min_short * fps), -20.0)
+    out2 = render_check.check_map_vs_render(rms2, fps, ten_hours, tmap)
+    assert out2 and out2[0].level == "FAIL", \
+        [(f.level, f.measured) for f in out2]
+
+    # The cap never rises above itself, and never drops below the floor.
+    for dur in (10.0, 600.0, 5031.0, 36000.0, 360000.0):
+        got = render_check.check_map_vs_render(
+            np.full(5, -20.0), fps, dur, tmap)[0].measured["fail_above_sec"]
+        assert (render_check.MAP_ENDPOINT_FAIL_ABS_SEC <= got
+                <= render_check.MAP_ENDPOINT_FAIL_CAP_SEC), (dur, got)
