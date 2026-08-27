@@ -938,45 +938,80 @@ def _click_shape(y: np.ndarray) -> bool:
     return width <= CLICK_SHAPE_MAX_WIDTH
 
 
-#: How far the audio may stop from where the map says the arrangement ends.
-#: Deliberately generous and assumption-free: a legitimate reverb/export tail
-#: runs past the last clip, and a fade can stop just short. Measured slack on
-#: real renders is ~0.1-0.2 s against tolerances of 10-15 s, while a wrong map
-#: misses by minutes - the point is to catch the gross case with a margin, not
-#: to measure precision.
-MAP_VS_RENDER_ABS_TOL_SEC = 2.0
-MAP_VS_RENDER_REL_TOL = 0.003
+#: Endpoint slack worth remarking on. Bounded on purpose - an earlier version
+#: used an uncapped 0.3%, which Codex pointed out is a 3,000 ppm acceptance
+#: envelope that grows without limit: the same unbounded-envelope trap in a
+#: different costume.
+MAP_ENDPOINT_WARN_ABS_SEC = 2.0
+MAP_ENDPOINT_WARN_REL = 0.003
+MAP_ENDPOINT_WARN_CAP_SEC = 10.0
+
+#: Where the gap stops being explicable as an ending artefact at all. A fade,
+#: a silent last clip or a reverb/export tail moves the measured endpoint by
+#: SECONDS; a map that does not describe the render misses by MINUTES (a flat
+#: map on the arc V16 is 169.6 s out). Failing only above this keeps the check
+#: from newly rejecting a legitimate render with an unusual ending.
+MAP_ENDPOINT_FAIL_ABS_SEC = 30.0
+MAP_ENDPOINT_FAIL_REL = 0.01
 
 
 def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
                         tempo_map: "TempoMap") -> list[Finding]:
-    """Does the beat<->time map agree with where the audio actually stops?
+    """ENDPOINT-CONSISTENCY check: does the audio stop near where the map says
+    the arrangement ends?
 
-    The direct, constant-free test of the map itself. A wrong map mis-predicts
-    the arrangement end by a wide margin - a flat map on the tempo-arc V16 is
-    169.6 s out, against a 15.1 s tolerance - while both correct maps measured
-    to date land within 0.21 s. This is what defends against a grossly wrong
-    map now that grid_fold cannot gate on an arc, and unlike grid_fold it rests
-    on no fitted quantity.
+    Scope, stated precisely because an earlier version of this docstring
+    oversold it as "the direct test of the map itself" and Codex rightly
+    called that a blocker:
 
-    Measured, 2026-08-27: V10 (flat) +0.117 s of 9.75 s allowed; V16 (arc)
-    +0.204 s of 15.09 s; V16 forced through a flat map -169.574 s -> FAIL.
+    CATCHES an uncompensated total-duration error - the realistic failure,
+    where the wrong tempo model is applied to the whole mix. A flat map on the
+    arc V16 lands 169.6 s out.
+
+    DOES NOT CATCH a compensated interior error. A map that is wrong in the
+    middle but right at the end passes: 120->130 BPM and 130->120 BPM over the
+    same span predict the SAME end time while differing by ~100 s at the
+    midpoint. Nothing here would see that, and on an arc neither grid_fold nor
+    boundary_click can gate either - so that class of error is currently
+    reachable and is carded, not covered. Closing it needs a render made from
+    a known-identical ALS so the map's interior can be validated at all.
+
+    The endpoint itself is measured from the last audible frame, which a fade,
+    a silent final clip, a reverb tail or a stray dithered frame can all move
+    by seconds. That is why FAIL sits at the minutes scale and anything
+    smaller only WARNs.
+
+    Measured 2026-08-27: V10 (flat) +0.117 s; V16 (arc) +0.204 s; V16 forced
+    through a flat map -169.574 s.
     """
     above = np.nonzero(rms100_db > HARD_SILENCE_DB)[0]
-    if len(above) == 0 or arr_end_sec <= 0:
+    if arr_end_sec <= 0:
         return [Finding(
             check="map_vs_render", level="INFO",
             t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
-            measured={"audible_frames": int(len(above))},
+            measured={"arr_end_sec": arr_end_sec,
+                      "audible_frames": int(len(above))},
+            msg="map_vs_render skipped (arrangement has no length)",
+        )]
+    if len(above) == 0:
+        return [Finding(
+            check="map_vs_render", level="INFO",
+            t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+            measured={"arr_end_sec": arr_end_sec, "audible_frames": 0},
             msg="map_vs_render skipped (no audible material)",
         )]
     audio_end = float(above[-1] + 1) / fps
     delta = audio_end - arr_end_sec
-    tol = max(MAP_VS_RENDER_ABS_TOL_SEC, MAP_VS_RENDER_REL_TOL * arr_end_sec)
+    warn_tol = min(MAP_ENDPOINT_WARN_CAP_SEC,
+                   max(MAP_ENDPOINT_WARN_ABS_SEC,
+                       MAP_ENDPOINT_WARN_REL * arr_end_sec))
+    fail_tol = max(MAP_ENDPOINT_FAIL_ABS_SEC,
+                   MAP_ENDPOINT_FAIL_REL * arr_end_sec)
     measured = {"arr_end_sec": arr_end_sec, "audio_end_sec": audio_end,
-                "delta_sec": delta, "tolerance_sec": tol,
+                "delta_sec": delta, "warn_above_sec": warn_tol,
+                "fail_above_sec": fail_tol,
                 "tempo_map_flat": tempo_map.is_flat}
-    if abs(delta) > tol:
+    if abs(delta) > fail_tol:
         return [Finding(
             check="map_vs_render", level="FAIL",
             t0=min(audio_end, arr_end_sec), t1=max(audio_end, arr_end_sec),
@@ -984,15 +1019,24 @@ def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
             measured=measured,
             msg=(f"the tempo map puts the arrangement end at "
                  f"{arr_end_sec:.1f}s but the audio stops at "
-                 f"{audio_end:.1f}s ({delta:+.1f}s, tolerance {tol:.1f}s) - "
-                 "the map does not describe this render"),
+                 f"{audio_end:.1f}s ({delta:+.1f}s) - too far to be an "
+                 "ending artefact; the map does not describe this render"),
+        )]
+    if abs(delta) > warn_tol:
+        return [Finding(
+            check="map_vs_render", level="WARN",
+            t0=min(audio_end, arr_end_sec), t1=max(audio_end, arr_end_sec),
+            beat0=0.0, beat1=0.0,
+            measured=measured,
+            msg=(f"audio stops {delta:+.1f}s from the mapped arrangement end; "
+                 "explicable as a fade or tail, but worth an eye"),
         )]
     return [Finding(
         check="map_vs_render", level="INFO",
         t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
         measured=measured,
-        msg=(f"map agrees with the render ({delta:+.2f}s of {tol:.1f}s "
-             "allowed)"),
+        msg=(f"endpoint consistent ({delta:+.2f}s; warns past "
+             f"{warn_tol:.1f}s, fails past {fail_tol:.1f}s)"),
     )]
 
 
@@ -1586,12 +1630,12 @@ def check_grid_fold(render_path: Path, clips: list[dict],
     #      systematic error at or below 19.5 ppm never fails at all. That is
     #      an estimate wearing a safety bound's clothes.
     #
-    # So on an arc this reports and does not gate, and says exactly that. The
-    # defence against a grossly wrong map is check_map_vs_render below, which
-    # compares predicted arrangement end against where the audio actually
-    # stops and needs no fitted constant. Restore gating here once the map's
-    # uncertainty is characterised against a render made from a
-    # known-identical ALS.
+    # So on an arc this reports and does not gate, and says exactly that.
+    # check_map_vs_render below catches the realistic gross case - the wrong
+    # tempo model applied to the whole mix - but only via the ENDPOINT, so a
+    # compensated interior error passes both. That gap is real, carded, and
+    # not papered over here. Restore gating once the map's uncertainty is
+    # characterised against a render made from a known-identical ALS.
     arc = not tempo_map.is_flat
     measured["gates"] = not arc
     if arc:

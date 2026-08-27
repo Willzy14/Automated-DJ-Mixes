@@ -1614,14 +1614,16 @@ def test_map_vs_render_catches_a_wrong_map(tmp_path):
     under a flat one, so a pass cannot be an artefact of a slack tolerance.
     """
     bpm = 120.0
-    arr_end_beats = 240.0
-    # 120 -> 160 BPM across the whole arrangement. Flat would call this 120 s;
-    # the arc integral makes it 103.6 s, so a flat map is ~16 s out.
+    arr_end_beats = 480.0
+    # 120 -> 170 BPM across the arrangement. Flat calls this 240 s; the arc
+    # integral makes it ~200.6 s, so a flat map is ~39 s out - past the
+    # minutes-scale FAIL floor, which is deliberately set above anything a
+    # fade or reverb tail could produce.
     clips = [{"track": "A", "arr_start": 0, "arr_end": int(arr_end_beats),
               "loop_on": False}]
     als_arc = tmp_path / "mvr.als"
     _write_als(als_arc, clips, bpm=bpm,
-               tempo_envelope=[(0.0, 120.0), (arr_end_beats, 160.0)])
+               tempo_envelope=[(0.0, 120.0), (arr_end_beats, 170.0)])
 
     import xml.etree.ElementTree as ET
     import gzip as _gzip
@@ -1630,14 +1632,12 @@ def test_map_vs_render_catches_a_wrong_map(tmp_path):
     assert not arc_map.is_flat
     true_end = arc_map.beat_to_sec(arr_end_beats)
     flat_map = render_check.TempoMap.flat(bpm)
-    assert flat_map.beat_to_sec(arr_end_beats) - true_end > 10.0, \
-        "fixture must separate the two maps by well over the tolerance"
+    assert flat_map.beat_to_sec(arr_end_beats) - true_end > \
+        render_check.MAP_ENDPOINT_FAIL_ABS_SEC, \
+        "fixture must separate the two maps by more than the FAIL floor"
 
     wav = tmp_path / "mvr.wav"
-    rpt = tmp_path / "mvr.json"
     _synth_render(wav, true_end, clips=clips)
-    _write_report(rpt)
-
     sweep = render_check.streaming_sweep(wav, arc_map)
     fps = int(round(1.0 / render_check.HOP_SEC))
 
@@ -1645,13 +1645,81 @@ def test_map_vs_render_catches_a_wrong_map(tmp_path):
         sweep.rms100_db, fps, true_end, arc_map)
     assert good and good[0].level == "INFO", \
         [(f.level, f.measured) for f in good]
-    assert abs(good[0].measured["delta_sec"]) <= good[0].measured["tolerance_sec"]
+    assert abs(good[0].measured["delta_sec"]) <= good[0].measured["warn_above_sec"]
 
     bad = render_check.check_map_vs_render(
         sweep.rms100_db, fps, flat_map.beat_to_sec(arr_end_beats), flat_map)
     assert bad and bad[0].level == "FAIL", \
         [(f.level, f.measured) for f in bad]
-    assert abs(bad[0].measured["delta_sec"]) > bad[0].measured["tolerance_sec"]
+    assert abs(bad[0].measured["delta_sec"]) > bad[0].measured["fail_above_sec"]
+
+
+def test_map_vs_render_misses_a_compensated_interior_error(tmp_path):
+    """PINS A KNOWN LIMITATION rather than a capability.
+
+    check_map_vs_render only compares ENDPOINTS. A map that is wrong in the
+    middle but right at the end sails through: 120->170 and 170->120 across
+    the same span predict end times within a second of each other while
+    differing hugely at the midpoint. Codex raised this in round 3; it is real,
+    it is carded, and this test exists so nobody later mistakes the check for
+    a general map-correctness gate.
+
+    If a future change makes this test FAIL, that is good news - the interior
+    is being validated. Update the card, do not delete the test.
+    """
+    arr_end_beats = 480.0
+    up = render_check.TempoMap(np.array([0.0, arr_end_beats]),
+                               np.array([120.0, 170.0]), 120.0)
+    down = render_check.TempoMap(np.array([0.0, arr_end_beats]),
+                                 np.array([170.0, 120.0]), 170.0)
+    end_up = up.beat_to_sec(arr_end_beats)
+    end_down = down.beat_to_sec(arr_end_beats)
+    # Same total, by construction: the log integral is symmetric in v0 <-> v1.
+    assert abs(end_up - end_down) < 1e-6, (end_up, end_down)
+    # ... but grossly different in the middle: 17.4 s apart on this fixture,
+    # comfortably past the endpoint check's 10 s warn cap, and it sees none
+    # of it.
+    mid_gap = abs(up.beat_to_sec(arr_end_beats / 2)
+                  - down.beat_to_sec(arr_end_beats / 2))
+    assert mid_gap > render_check.MAP_ENDPOINT_WARN_CAP_SEC, mid_gap
+
+    clips = [{"track": "A", "arr_start": 0, "arr_end": int(arr_end_beats),
+              "loop_on": False}]
+    wav = tmp_path / "comp.wav"
+    _synth_render(wav, end_up, clips=clips)
+    sweep = render_check.streaming_sweep(wav, up)
+    fps = int(round(1.0 / render_check.HOP_SEC))
+
+    # The WRONG (reversed) map still passes the endpoint check.
+    out = render_check.check_map_vs_render(sweep.rms100_db, fps, end_down, down)
+    assert out and out[0].level == "INFO", \
+        [(f.level, f.measured) for f in out]
+
+
+def test_map_vs_render_tolerates_a_fading_ending(tmp_path):
+    """A render whose audio dies before its clips do must not be newly FAILED.
+
+    The endpoint is measured from the last audible frame, so a fade, a silent
+    final clip or a reverb tail moves it by seconds. Codex flagged that an
+    earlier tolerance made this a FAIL and so could reject valid FLAT renders
+    the gate previously accepted. Seconds warn; only minutes fail.
+    """
+    fps = int(round(1.0 / render_check.HOP_SEC))
+    tmap = render_check.TempoMap.flat(120.0)
+    arr_end = 600.0
+    # Audio stops 6 s early - a long fade. Frames are 100 ms.
+    rms = np.full(int(arr_end * fps), -20.0)
+    rms[int((arr_end - 6.0) * fps):] = render_check.FLOOR_DB
+    out = render_check.check_map_vs_render(rms, fps, arr_end, tmap)
+    assert out and out[0].level == "WARN", \
+        [(f.level, f.measured) for f in out]
+
+    # A minutes-scale gap on the same shape still FAILs.
+    rms2 = np.full(int(arr_end * fps), -20.0)
+    rms2[int((arr_end - 120.0) * fps):] = render_check.FLOOR_DB
+    out2 = render_check.check_map_vs_render(rms2, fps, arr_end, tmap)
+    assert out2 and out2[0].level == "FAIL", \
+        [(f.level, f.measured) for f in out2]
 
 
 def test_grid_fold_never_gates_on_an_arc(tmp_path):
