@@ -236,23 +236,24 @@ _OPUS_VERIFY_MIN_CORR = 0.98
 #: branch scored achieved=1.0 and passed silence straight through the gate).
 _OPUS_PROBE_MIN_RMS = 1e-5
 
-#: PAYLOAD CHOICE - AWAITING SAM'S ARBITRATION (2026-08-27, after 14 review
-#: rounds). Sam picked Opus for size (2.95 vs 29.7 MB/track). The Opus path
-#: below is fully built and carries an 18-pin adversarial suite: pilot-chirp
-#: alignment (matched-filter over a buffer that physically ends at the data
-#: boundary, signed-response threshold, edge refusal), length reconciliation,
-#: and up to five timeline-spread source-excerpt anchors verified on every
-#: load. Every REACHABLE decoder fault found in review (rounds 4-11:
-#: asymmetric delay, trim, inversion, NaN, gain, forged/duplicated pilots,
-#: net-shift splices) is refused. What no finite check can refuse - proven
-#: by construction in rounds 12-14 - is surgical zero-net-length fabrication
-#: at ever-finer scale by a decoder acting as a sample-level adversary,
-#: which no real codec resembles. Codex holds DON'T SHIP on that residual;
-#: Claude holds it unreachable. Per the charter (5-round cap, exceeded), the
-#: call is Sam's: flip this to True to accept the documented residual for
-#: 10x smaller sidecars. int16 (this default) has NO decoder and therefore
-#: no member of the objection class; it carries MiniMax's round-1 SHIP.
-OPUS_PAYLOAD_ENABLED = False
+#: PAYLOAD CHOICE - ARBITRATED BY SAM, 2026-08-27: "flip the switch. 3 mb."
+#: Opus payload ON (2.95 vs 29.7 MB/track). Context the next reader needs:
+#: this flag exists because a 14-round adversarial review ended in a
+#: standoff. The Opus path carries a 19-pin suite - pilot-chirp alignment
+#: (matched-filter over a buffer that physically ends at the data boundary,
+#: signed-response threshold, edge refusal, re-located on EVERY load),
+#: length reconciliation, and up to five timeline-spread source-excerpt
+#: anchors - refusing every REACHABLE decoder fault found in rounds 4-11
+#: (asymmetric delay, trim, inversion, NaN, gain, forged/duplicated pilots,
+#: net-shift splices). What no finite check can refuse - proven by
+#: construction in rounds 12-14 - is surgical zero-net-length fabrication at
+#: ever-finer scale by a decoder acting as a sample-level adversary, which
+#: no real codec resembles. Codex held DON'T SHIP on that theoretical
+#: residual; Claude held it unreachable; per the charter's 5-round cap the
+#: call went to Sam, who accepted the residual for 10x smaller sidecars.
+#: Flip to False to fall back to int16 (no decoder, no objection class) -
+#: existing opus sidecars keep loading either way; the flag gates SAVES.
+OPUS_PAYLOAD_ENABLED = True
 
 # Alignment is NOT inferred from the bass - it is anchored to a known PILOT.
 #

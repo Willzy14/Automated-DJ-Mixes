@@ -1727,10 +1727,17 @@ def test_opus_midstream_splice_is_a_miss(tmp_path, monkeypatch):
         "a mid-stream splice must MISS, never serve 100 ms-late audio"
 
 
-def test_default_payload_is_int16_pending_arbitration(tmp_path, monkeypatch):
-    """The SHIPPED default: OPUS_PAYLOAD_ENABLED is False, so saves take the
-    int16 payload - no decoder, no member of the round-12..14 objection
-    class - until Sam arbitrates the opus residual and flips the flag."""
+def test_default_payload_is_opus_per_sams_arbitration(tmp_path, monkeypatch):
+    """The SHIPPED default: OPUS_PAYLOAD_ENABLED is True - Sam's arbitration
+    of the 14-round standoff (2026-08-27: "flip the switch. 3 mb"), accepting
+    the documented theoretical residual for 10x smaller sidecars. The flag
+    must stay a deliberate, visible act in the source, and flipping it OFF
+    must still yield a working int16 save (the fallback is the escape hatch
+    the arbitration rests on)."""
+    src = Path(kick_model_adapter.__file__).read_text(encoding="utf-8")
+    assert "OPUS_PAYLOAD_ENABLED = True" in src
+
+    # Escape hatch: flag off -> int16, sample-exact.
     monkeypatch.setattr(kick_model_adapter, "OPUS_PAYLOAD_ENABLED", False)
     wav = _make_wav(tmp_path)
     cache_dir = tmp_path / "_Stem Analysis"
@@ -1742,9 +1749,3 @@ def test_default_payload_is_int16_pending_arbitration(tmp_path, monkeypatch):
     loaded, _ = kick_model_adapter._load_bass_cache(wav, cache_dir)
     step = float(np.abs(bass).max()) / 32767.0
     assert np.max(np.abs(loaded - bass)) <= step * 1.01
-
-    # And the module-level default itself, so a flag flip is always a
-    # deliberate, visible act:
-    import importlib, sys as _sys
-    src = Path(kick_model_adapter.__file__).read_text(encoding="utf-8")
-    assert "OPUS_PAYLOAD_ENABLED = False" in src
