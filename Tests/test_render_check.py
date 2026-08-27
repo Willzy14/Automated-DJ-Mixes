@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -36,7 +37,8 @@ def _als_xml(clips, bpm=128.0, tempo_envelope=None):
 
     If tempo_envelope is not None, a MainTrack is added at the end with a
     Tempo/AutomationTarget (Id="8") and an AutomationEnvelope whose PointeeId
-    is "8" and whose FloatEvent Values are the supplied list. The LiveSet
+    is "8" and whose FloatEvents are supplied as values (64 beats apart) or
+    explicit (time, value) pairs. The LiveSet
     Tempo/Manual remains the canonical Manual source (the envelope does not
     carry its own Manual)."""
     root = Element("Ableton")
@@ -97,10 +99,14 @@ def _als_xml(clips, bpm=128.0, tempo_envelope=None):
         pid.set("Value", "8")
         auto = SubElement(env, "Automation")
         events = SubElement(auto, "Events")
-        for v in tempo_envelope:
+        for i, item in enumerate(tempo_envelope):
+            if isinstance(item, (tuple, list)):
+                event_time, value = item
+            else:
+                event_time, value = i * 64.0, item
             fe = SubElement(events, "FloatEvent")
-            fe.set("Time", "0")
-            fe.set("Value", str(v))
+            fe.set("Time", str(event_time))
+            fe.set("Value", str(value))
     return gzip.compress(tostring(root, encoding="utf-8"))
 
 
@@ -814,32 +820,27 @@ def test_grid_fold_drift(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# FIX 1 - tempo-automation guard                                              #
+# Tempo-map mapping and fail-closed envelope handling                         #
 # --------------------------------------------------------------------------- #
 
-def test_tempo_automation_ramped_fails(tmp_path):
-    """Ramped envelope (128 -> 130) must hard-FAIL the gate: any beat<->sec
-    conversion under a non-flat envelope is wrong, and silent mis-check is
-    the failure mode the guard exists to stop."""
+def test_tempo_automation_ramped_maps_and_runs(tmp_path):
+    """A finite, in-range ramp is mapped and the audio checks run."""
     als = tmp_path / "m.als"
     wav = tmp_path / "m.wav"
     rpt = tmp_path / "r.json"
     seconds = 30.0
     clips = _single_track_clips(seconds)
-    _write_als(als, clips, bpm=128.0, tempo_envelope=[128.0, 130.0])
+    _write_als(als, clips, bpm=128.0,
+               tempo_envelope=[(0.0, 128.0), (64.0, 130.0)])
     _synth_render(wav, seconds, clips=clips)
     _write_report(rpt)
     res = render_check.run_check(wav, rpt, als)
-    assert res.exit_code == 2
-    assert res.verdict == "FAIL"
-    tempo_findings = [f for f in res.findings
-                      if f.check == "tempo_automation_unsupported"]
-    assert len(tempo_findings) == 1
-    assert tempo_findings[0].level == "FAIL"
-    distinct = tempo_findings[0].measured["distinct_tempo_values"]
-    assert set(distinct) == {128.0, 130.0}
-    # No other checks ran - a wrong map would have mis-checked.
-    assert not any(f.check != "tempo_automation_unsupported"
+    assert res.exit_code == 0
+    assert res.verdict == "PASS"
+    assert res.meta["tempo_map"] == {
+        "n_points": 2, "min": 128.0, "max": 130.0, "is_flat": False,
+    }
+    assert not any(f.check == "tempo_automation_unsupported"
                    for f in res.findings)
 
 
@@ -861,9 +862,9 @@ def test_tempo_automation_flat_envelope_passes(tmp_path):
                    for f in res.findings)
 
 
-def test_tempo_automation_mismatch_fails(tmp_path):
+def test_tempo_automation_mismatch_envelope_wins(tmp_path):
     """Flat envelope at a DIFFERENT value than Manual: the envelope overrides
-    Manual at playback, so Manual is the wrong map source. Hard-FAIL."""
+    Manual at playback, so it is the map source and is no longer an error."""
     als = tmp_path / "m.als"
     wav = tmp_path / "m.wav"
     rpt = tmp_path / "r.json"
@@ -873,20 +874,19 @@ def test_tempo_automation_mismatch_fails(tmp_path):
     _synth_render(wav, seconds, clips=clips)
     _write_report(rpt)
     res = render_check.run_check(wav, rpt, als)
-    assert res.exit_code == 2
-    tempo_findings = [f for f in res.findings
-                      if f.check == "tempo_automation_unsupported"]
-    assert len(tempo_findings) == 1
-    assert tempo_findings[0].level == "FAIL"
-    distinct = tempo_findings[0].measured["distinct_tempo_values"]
-    assert distinct == [130.0]
+    assert res.exit_code == 0
+    assert res.meta["bpm"] == 128.0
+    assert res.meta["tempo_map"] == {
+        "n_points": 1, "min": 130.0, "max": 130.0, "is_flat": True,
+    }
+    assert not any(f.check == "tempo_automation_unsupported"
+                   for f in res.findings)
 
 
 def test_tempo_automation_raises_library():
-    """As a library, run_check is NOT supposed to swallow the
-    TempoAutomationUnsupported - only main() catches it. Pin the helper."""
+    """An unmappable envelope still raises at the parser boundary."""
     root_xml = _als_xml(_single_track_clips(30), bpm=128.0,
-                        tempo_envelope=[128.0, 130.0])
+                        tempo_envelope=[(float("nan"), 128.0)])
     try:
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".als", delete=False) as fh:
@@ -899,6 +899,68 @@ def test_tempo_automation_raises_library():
             tmp_path.unlink()
         except Exception:
             pass
+
+
+def test_tempo_map_exact_log_inverse_holds_and_cache():
+    root_xml = _als_xml(
+        _single_track_clips(30), bpm=128.0,
+        tempo_envelope=[(4.0, 120.0), (12.0, 132.0)],
+    )
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(gzip.decompress(root_xml))
+    tempo_map = render_check.TempoMap.from_als_root(root)
+
+    ramp_sec = (60.0 / 1.5) * math.log(132.0 / 120.0)
+    assert tempo_map.beat_to_sec(4.0) == pytest.approx(2.0)
+    assert tempo_map.beat_to_sec(12.0) == pytest.approx(2.0 + ramp_sec)
+    assert tempo_map.beat_to_sec(16.0) == pytest.approx(
+        2.0 + ramp_sec + 4.0 * 60.0 / 132.0)
+    beats = np.array([-2.0, 0.0, 4.0, 7.5, 12.0, 20.0])
+    assert np.allclose(tempo_map.sec_to_beat(tempo_map.beat_to_sec(beats)),
+                       beats, atol=1e-12)
+    assert tempo_map.bpm_at(-1.0) == 120.0
+    assert tempo_map.bpm_at(8.0) == 126.0
+    assert tempo_map.bpm_at(20.0) == 132.0
+    assert tempo_map.beat_edges_sec(24) is tempo_map.beat_edges_sec(24)
+
+
+def test_tempo_map_folds_live_sentinel_to_zero():
+    root_xml = _als_xml(
+        _single_track_clips(30), bpm=128.0,
+        tempo_envelope=[(-63072000.0, 120.0), (0.0, 120.0),
+                        (8.0, 124.0)],
+    )
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(gzip.decompress(root_xml))
+    tempo_map = render_check.TempoMap.from_als_root(root)
+    assert tempo_map.summary["n_points"] == 2
+    assert tempo_map.beat_to_sec(0.0) == 0.0
+    assert tempo_map.beat_to_sec(8.0) == pytest.approx(
+        (60.0 / 0.5) * math.log(124.0 / 120.0))
+
+
+@pytest.mark.parametrize("tempo_envelope", [
+    [],
+    [(0.0, 20.0)],
+    [(0.0, 300.0)],
+    [(0.0, float("nan"))],
+    [(float("inf"), 128.0)],
+])
+def test_tempo_map_invalid_envelope_fails_closed(tmp_path, tempo_envelope):
+    als = tmp_path / "bad.als"
+    _write_als(als, _single_track_clips(30), bpm=128.0,
+               tempo_envelope=tempo_envelope)
+    with pytest.raises(render_check.TempoAutomationUnsupported):
+        render_check.parse_als(als)
+
+
+@pytest.mark.parametrize("manual", [20.0, 300.0, float("nan")])
+def test_tempo_map_invalid_manual_fails_closed(tmp_path, manual):
+    als = tmp_path / "bad-manual.als"
+    _write_als(als, _single_track_clips(30), bpm=manual,
+               tempo_envelope=[(0.0, 128.0)])
+    with pytest.raises(render_check.TempoAutomationUnsupported):
+        render_check.parse_als(als)
 
 
 # --------------------------------------------------------------------------- #
@@ -1050,7 +1112,8 @@ def test_pick_solo_regions_dedupes_with_one_run():
         {"track": "D", "arr_start": 150, "arr_end": 200, "loop_on": False},
         {"track": "E", "arr_start": 200, "arr_end": 300, "loop_on": False},
     ]
-    regions_one = render_check._pick_solo_regions(clips_one, 128.0,
+    tempo_map = render_check.TempoMap.flat(128.0)
+    regions_one = render_check._pick_solo_regions(clips_one, tempo_map,
                                                   [0.15, 0.5, 0.85])
     assert len(regions_one) == 1, regions_one
     # The single region is E alone from 200..300 beats = 93.75..140.625 sec.
@@ -1063,7 +1126,7 @@ def test_pick_solo_regions_dedupes_with_one_run():
         {"track": "A", "arr_start": 0, "arr_end": 100, "loop_on": False},
         {"track": "B", "arr_start": 100, "arr_end": 200, "loop_on": False},
     ]
-    regions_two = render_check._pick_solo_regions(clips_two, 128.0,
+    regions_two = render_check._pick_solo_regions(clips_two, tempo_map,
                                                   [0.15, 0.5, 0.85])
     assert len(regions_two) == 2, regions_two
     assert regions_two[0] != regions_two[1]
@@ -1140,11 +1203,14 @@ def test_report_both_keys_no_skip_findings(tmp_path):
 # V10 corpus regression pin                                                   #
 # --------------------------------------------------------------------------- #
 
-V10_WAV = (ROOT / "Test Project" / "14.08.26" / "Output"
+CORPUS_ROOT = Path(os.environ.get("DJ_MIX_TEST_PROJECT",
+                                  str(ROOT / "Test Project")))
+
+V10_WAV = (CORPUS_ROOT / "14.08.26" / "Output"
            / "14.08.26 Mix V10.wav")
-V10_ALS = (ROOT / "Test Project" / "14.08.26" / "Output"
+V10_ALS = (CORPUS_ROOT / "14.08.26" / "Output"
            / "14.08.26 Mix V10.als")
-V10_REPORT = (ROOT / "Test Project" / "14.08.26" / "Output"
+V10_REPORT = (CORPUS_ROOT / "14.08.26" / "Output"
               / "ARRANGEMENT_REPORT_V10.json")
 
 
@@ -1311,3 +1377,29 @@ def test_v10_regression_pin():
         f"V10 should exit 1 (warnings); got {res.exit_code}: "
         + "; ".join(f"{f.check}/{f.level}" for f in res.findings)
     )
+
+
+# --------------------------------------------------------------------------- #
+# V16 tempo-arc corpus pins                                                   #
+# --------------------------------------------------------------------------- #
+
+V16_ALS = (CORPUS_ROOT / "14.08.26" / "Output"
+           / "14.08.26 Mix V16.als")
+
+
+@pytest.mark.skipif(not V16_ALS.exists(),
+                    reason="V16 ALS corpus not present (gitignored)")
+def test_v16_tempo_map_measured_truth():
+    import xml.etree.ElementTree as ET
+    with gzip.open(V16_ALS, "rb") as fh:
+        root = ET.fromstring(fh.read())
+    tempo_map = render_check.TempoMap.from_als_root(root)
+    mapped_end = tempo_map.beat_to_sec(10524.0)
+    assert mapped_end == pytest.approx(5031.098, abs=0.0005)
+    assert abs(mapped_end - 5031.3018) < 0.250
+    assert tempo_map.summary == {
+        "n_points": 31,
+        "min": 121.41032298384611,
+        "max": 129.52242915838903,
+        "is_flat": False,
+    }

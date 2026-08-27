@@ -618,7 +618,12 @@
       "date": "2026-08-25",
       "brain": "Claude + Codex + MiniMax",
       "summary": "V16 certified via Sam-ruled gate fix. Tier A Phase 2 merged flag-gated (Vente catcher + width-step boundary cues, 11 new/0 spurious). Baseline refreshed. Render gate built, Codex DONT SHIP (3 criticals incl truncated-render-passes), fix round in flight. Suite 404->424."
+    },
+    {
+      "date": "2026-08-27",
+      "brain": "Codex",
+      "summary": "Built exact piecewise beat<->time TempoMap for render_check, including Live sentinel folding, log integration/inverse, cached beat edges, and fail-closed invalid-envelope handling. V10 pin passes; V16 beat 10524 maps to 5031.098277 s and no longer reports unsupported tempo or truncation. The brief's grid-fold PASS claim did not reproduce: arc 53.2 ms drift vs unchanged 30 ms gate; flat control 101.9 ms."
     }
   ],
-  "last_modified": "2026-08-25"
+  "last_modified": "2026-08-27"
 }

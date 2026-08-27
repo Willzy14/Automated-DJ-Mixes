@@ -176,6 +176,9 @@ Safe standalone landmark refresh for certified stem JSONs. Hashes section geomet
 ### `Source/align_engine.py`
 **Added 2026-06-08; paired-landmark V2 2026-07-16; tail-loop swap gate 2026-08-14.** Bass-to-bass alignment engine used by `propose_arrangement`. `paired_landmarks_v2` preserves odd-bar cues, requires paired incoming/outgoing landmarks, suppresses arbitrary incoming-intro loops, and can extend to a named cue up to 64 bars. Cue-bounded tail loops select a clean phrase length that preserves an intermediate swap boundary as well as the final target; candidates whose actual loop interval ends before the locked swap are skipped, with a clear failure if no later named cue fits the repeat/extension caps. Legacy selection retains the 16-48 bar safety gate. Reads `SECTIONS_STEM_*.json` and retains the transition visualizer.
 
+### `Source/render_check.py`
+**Tempo-map reader added 2026-08-27 by Codex.** Streams a bounced WAV and checks it against ALS/report geometry. `TempoMap` parses the MainTrack tempo envelope, folds Live's negative-time sentinel to beat zero, integrates piecewise-linear BPM exactly in the beat domain, provides the inverse seconds-to-beats map, and caches the integer beat grid used by the streaming sweep. Invalid/non-finite/out-of-range tempo envelopes fail closed as `tempo_automation_unsupported`; a valid envelope overrides Manual tempo at playback.
+
 ### Diagnostic / Research Scripts
 
 - `Source/analyze_real_mix.py` — Decompresses a real Sam DJ mix `.als` and lists tracks/clips. Used 2026-05-19 to learn transition patterns from Bargrooves Summer 2015 Mix 1.
