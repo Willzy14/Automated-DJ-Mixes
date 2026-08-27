@@ -625,6 +625,20 @@
                          "date":  "2026-08-27",
                          "brain":  "Claude + Codex + MiniMax",
                          "summary":  "Tempo-arc beat\u003c-\u003etime mapping MERGED (7 commits). The gate hard-refused every real mix; it now carries a piecewise TempoMap. Model settled by MEASUREMENT: Live interpolates tempo linearly over the BEAT axis, so beat-\u003etime is a log integral - on the real V16 bounce that takes a 169.6s error down to 0.204s. Verified by an independently written oracle (separate parser + integral, checked against a closed form and a 2M-step Riemann sum) over 42,128 probes, zero measurable error. Honest limits SHIPPED: a ~19.5 ppm residual of unknown mechanism remains and NO scale correction was applied (the ALS predates the render by 5 days), so on an arc grid_fold does not gate and boundary_click skips by name; new check_map_vs_render catches the gross case with no fitted constant and its compensated-interior blind spot is pinned by a test. Five review rounds, four returned DON\u0027T SHIP, every round found something real - three of them Claude\u0027s own errors, incl. using a fitted MEAN as a safety bound. The V10 pin caught a regression no review did. Suite 450 -\u003e 472 passed / 6 skipped / 0 failed. First real V16 results: 3 loop_verbatim FAILs needing Sam\u0027s ears."
+                     },
+                     {
+                         "date":  "2026-08-27",
+                         "brain":  "Claude + Codex + MiniMax (session 2)",
+                         "summary":  "Away-work batch + extraction audit + bass sidecar. Junction safety: the carded rmtree-guard fix was aimed at the wrong mechanism (measured: robocopy /MIR and hand-rolled os.walk/iterdir deletes wipe junction targets; stdlib/shells are safe on Py3.12+) - pinned as tests incl. the hazard itself. Canary hardened (multi-witness, decode check, recursive sweep excluding Output/). Beat-grid pass now serves from the drums sidecar (21s -\u003e 0.18s for the separator call) and caches key on full-content sha1 so copies hit. Extraction audit v2 shipped (Codex completeness review found 6 missed groups + 8 wrong statuses, folded). Sam ruled 4x: MIK cues are auto (unwired, closed); Deep Soulful 10 accepted; keep bass as Opus-in-npz; and after a 14-round adversarial standoff on Opus decode integrity (rounds 1-11 real faults all pinned, 12-14 impossible-decoder constructions), arbitrated \u0027flip the switch. 3 mb\u0027 - OPUS_PAYLOAD_ENABLED=True with a tested int16 escape hatch. Sam\u0027s hand loop-fixes in the V16 Loop Fixes ALS verified structurally (Nappp source bar shift; Vente 1-bar gating rebuild); middle loop still needs ears; Vente report metadata stale for next bounce. Suite 472 -\u003e 521 passed / 0 failed.",
+                         "pending":  [
+                                         "V16 middle loop (760s r=0.81) needs Sam\u0027s ears",
+                                         "bounce the Loop Fixes project then gate it (Vente region will flag on stale report - known)",
+                                         "O1 entry-extension host-density gate",
+                                         "O2 vocal-clash report",
+                                         "O3 invoke existing hint derivation from /mix",
+                                         "O4 major_cues starvation fallback",
+                                         "~19.5ppm tempo-map residual: settle with a render from a known-identical ALS"
+                                     ]
                      }
                  ],
     "last_modified":  "2026-08-27"

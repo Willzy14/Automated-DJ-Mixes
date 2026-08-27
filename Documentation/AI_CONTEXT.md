@@ -81,6 +81,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+**[Claude, 2026-08-27]: THE RENDER GATE READS REAL (tempo-arc) MIXES, AND THE PIPELINE KEEPS DRUMS + BASS STEMS ON DISK.** `render_check.py` carries a piecewise `TempoMap` (169.6 s end-prediction error reduced to 0.204 s on the real V16 bounce; oracle-verified to zero measurable error over 42k probes). On a tempo arc, `grid_fold` reports-without-gating and `boundary_click` skips by name (a measured ~19.5 ppm map residual of unknown mechanism makes their tolerances untrustworthy there - carded; a render from a known-identical ALS settles it). V16's verdict is now driven by three genuine `loop_verbatim` defects; Sam hand-fixed the first and last in `Output/14.08.26 Mix V16 Loop Fixes Project/` (verified structurally sound; unbounced; the Vente region's report metadata is stale so `loop_verbatim` will flag it on the next bounce - known, not a defect). Bass stems now persist as `__bassstem.npz` **Opus-in-npz (~3 MB/track, `OPUS_PAYLOAD_ENABLED=True` - Sam's arbitration of a 14-round Codex standoff; int16 escape hatch tested)**; the beat-grid pass serves from the drums sidecar (no duplicate Demucs) and all stem caches key on full-content sha1 so copies hit. Suite 521 passed / 6 skipped / 0 failed.
+
 **[Claude, 2026-08-20]: REKORDBOX REMOVAL COMPLETE (Top-10 item #10, Sam 2026-08-18: "done away with").** The canonical pipeline is stem-only end-to-end. Moved to `Source/Archive/` (git mv): `rekordbox_reader.py`, `rekordbox_waveform.py`, `features.py`, `report.py`, `test_rb_driver.py`, `regress_section_detection.py`. Deleted: `analysis.enrich_from_rekordbox`, `orchestrator.enforce_rekordbox_coverage` + the RB-enrichment loop + the RB desktop-analysis branch, `desktop_analyzer`'s entire RB half (driver/launch/agent-health), `phrase_viz`'s Interval/refinement layer (`segments_from_stem_sections` is the only surviving section-clip producer), `cue_candidates.find_cue_candidates`/`first_drop_candidate`, `waveform_preview`'s RB phrase strip, `validate_beatgrid`'s RB-library CLI (`write_phase_override` with it), `stem_grid.main_compare`'s RB cross-check, and the `pyrekordbox` dependency. The grid-carrier dataclass survives as `automated_dj_mixes/grid_carrier.TrackGrid` (field-compatible with the old `RekordboxAnalysis`); the coverage gate for every mode is `enforce_owned_grid_coverage`. `--allow-partial-rekordbox` is accepted-but-ignored with a deprecation warning (documented invocations keep working); `--skip-desktop-analyze` now means "skip MIK". KEPT ALIVE against the review's list: `desktop_analyzer._drive_modern_folder_dialog` — reachable from the MIK path (`analyze_folder_with_mik` -> `_select_folder_in_browse_dialog` -> auto-detect). The console line "Rekordbox disabled: owned stem-grid + stem-sections are authoritative" is kept verbatim (the /mix skill greps for it). `Tests/test_rekordbox_health.py` rewritten as removal pins (owned-grid gate, MIK-only desktop drive, no-RB-import package sweep, deprecation shim); suite 318/6/0 -> 308/6/0 (10 RB agent/launch tests deleted with their subject). End-to-end Phase 1a smoke on 14.08.26 Audio Mix 12 + validate_als: see ai-activity-log 2026-08-20.
 
 **[Codex, 2026-08-14]:** The paired-landmark outgoing-tail planner now rejects cues whose loop region would end before the locked bass swap. The held-out Saison & Miss Yankey -> Benny Mussa transition proved the bug: the ascending cue search accepted a 2-bar chunk x8 to an earlier break, ending 6 bars/24 beats before the swap; its old guard only checked the extension against that wrongly selected cue. The planner now tries later safe cues, independently checks the loop end against `handoff_bar_out`, and raises with the exact shortfall/repeat requirement when no valid later cue fits. `arr_offset_bars` and `swap_beats` remain untouched; `propose_arrangement.py` was not changed.
@@ -191,7 +193,25 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-27 (Latest Session) - Tempo-arc mapping MERGED; the gate can finally read a real mix
+### 2026-08-27 (Latest Session, 2nd) - Away-work batch, extraction audit, bass sidecar via a 14-round standoff Sam arbitrated
+**Brain:** Claude (measurement, builds, judgment; Opus then Fable) + Codex (~24 calls: audit completeness review + 14 adversarial bass rounds) + MiniMax (narrow fail-closed review + bass diff review, both delivered). Suite **472 -> 521 passed / 6 skipped / 0 failed**. ~13 commits, all pushed at session end.
+
+**Safety batch (while Sam was away):**
+- **Junction safety** ([Tests/test_junction_safety.py](../Tests/test_junction_safety.py)): the twice-carded "add guards to the four `shutil.rmtree` sites" fix was aimed at the WRONG THING - measured in a sandbox, rmtree/Remove-Item/rmdir/rm -rf/git-clean are all junction-safe on Python 3.14; what wipes the target is **robocopy /MIR and hand-rolled `os.walk`/`iterdir` deletes**. The trap: `islink()` is False on a junction while `is_dir()` is True. Pinned in executable form incl. the HAZARD itself; source swept clean of both idioms. Lesson recorded: reproduce an incident's mechanism before implementing its carded remedy.
+- **Canary hardening** (test_corpus_audio_canary): a wipe taking `_Stem Analysis` too used to make the canary SKIP (green on a destroyed corpus) - any derived artifact is now a witness (all 7 corpora carry 3-5 each); zero-byte/truncated wavs now rejected (size + decode check); sweep recursive with `Output/` excluded so a RENDER can't masquerade as source audio.
+- **Speed** (Sam's "getting this faster"): the beat-grid pass ran its OWN Demucs while the drums sidecar sat unused - now served via the registered separator hook (21 s -> 0.18 s for that call; per-track grid detection ~48 s -> ~21.5 s; the remaining ~21 s is the grid algorithm itself, carded). Cache keys upgraded mtime -> full-content sha1 so COPIES into `Audio Mix N/` hit (sha1 ~1330 MB/s: a 20-track corpus fingerprints in ~1.3 s vs ~420 s of cold Demucs).
+
+**Extraction audit** (Sam's ask; [Documentation/Reviews/2026-08-27 Analysis Extraction Audit.md](Reviews/2026-08-27%20Analysis%20Extraction%20Audit.md), v2 after Codex found 6 missed signal groups + 8 wrong statuses - including two reversals of v1's own corrections). Thesis: extraction is rich and cached, decisions read a narrow slice; the win is WIRING. Ranked: O1 entry-extension host-density gate > O2 vocal-clash report > O3 invoke existing hint derivation > O4 major_cues starvation fallback.
+
+**Sam's four same-day rulings:** MIK cues are AUTO cue areas (stay unwired, closed); Deep Soulful 10 loss ACCEPTED (canary exemption permanent, folder kept); keep the bass stem -> "Opus encoded bytes inside the npz sounds like the win"; and after the standoff below, **"flip the switch. 3 mb"**.
+
+**Bass sidecar** (`__bassstem.npz`, kick_model_adapter): saved opportunistically beside the drums sidecar (warm drums caches pinned byte-identical); `refit_grid_from_stem` reads both cache-first AND backfills on separation. Payload: **Opus bytes in-npz, ~3 MB/track (flag `OPUS_PAYLOAD_ENABLED`)**, int16 (~29 MB) as the tested escape hatch. The Opus path survived a **14-round adversarial Codex review**: rounds 1-11 found real faults (discarded backfill bass; OSError-only containment; a lag heuristic killed by a period==delay construction; save-time-position trust; a runner-up ratio with its polarity BACKWARDS; a fail-open preamble belt; a correlation span that read into the bass; edge-apex acceptance; a false monotonicity claim exposed by polarity inversion; duplicate-pilot + NaN fail-opens; length-band forgeries) - each closed structurally and pinned (19 counterexample tests). Rounds 12-14 proved by construction that NO finite check refuses surgical zero-net-length fabrication at ever-finer scale (no real codec resembles it); per the charter's 5-round cap the standoff went to Sam, who accepted the documented residual for 10x smaller files. Final design: pilot chirp matched-filtered over a buffer that PHYSICALLY ends at the data boundary, re-located on every load, signed absolute-energy threshold, edge refusal, length reconciliation vs stored n48, and up to five timeline-spread 100 ms source-excerpt anchors (admission >= 2% of the loudest window - an outro-fade anchor at rms 5e-5 false-refused every load until the floor went relative).
+
+**Sam's hand loop-fixes verified** (no bounce; `Output/14.08.26 Mix V16 Loop Fixes Project/`): Nappp loop source shifted one bar earlier ([656,660], well inside the hidden range) - report metadata still accurate, verbatim check will test it truthfully next bounce; Vente tail rebuilt as 1-bar on/off gating then solid to the exit (2 clips added) - all bar-aligned and in-range, but the ARRANGEMENT_REPORT still says 4x8 beats there, so `loop_verbatim` will flag that region on the next bounce (stale report, not a defect). Middle loop (760 s, r=0.81) untouched - still needs Sam's ears.
+
+**Room plumbing found + logged in Known Workarounds:** `room_peer_review.ps1 -TimeoutSec` never reaches the peer (pass `-PeerArgs '-TimeoutSec N'`); `pi` dies MUTE on ~127 KB input (send the DIFF); `quota_check.ps1` reports the stale %LOCALAPPDATA% codex 0.130 version on STUDIO-2 (dispatch helper unaffected); Kimi weekly quota exhausted (billing 403, top-up needed).
+
+### 2026-08-27 (1st) - Tempo-arc mapping MERGED; the gate can finally read a real mix
 **Brain:** Claude (spec, measurement, oracle, judgment, 5 of 7 commits) + Codex (TempoMap build, 4 review rounds) + MiniMax (fail-closed review). Suite 450 -> **472 passed / 6 skipped / 0 failed** on merged main.
 
 **The headline:** the render gate hard-refused every real mix, because it converted beats to seconds with one scalar. It now carries a piecewise `TempoMap`. Merge of `feat/render-gate-tempo-map` (7 commits).
@@ -1212,6 +1232,24 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 **Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation. V1-V8.
 
 ## What's Next
+
+> **TOP (2026-08-27): the V16 loop-fix cycle.** Sam hand-fixed 2 of the 3 flagged `loop_verbatim`
+> defects in `Output/14.08.26 Mix V16 Loop Fixes Project/` (Nappp source bar shifted; Vente tail
+> rebuilt as 1-bar on/off gating - both verified structurally sound, unbounced). Remaining: (a) the
+> MIDDLE loop at 760 s (r=0.81) still needs Sam's ears/decision; (b) next bounce comes from the
+> Loop Fixes project - run the render gate against ITS ALS, expecting the Vente region to flag on
+> stale report metadata (known, not a defect) and Nappp to test truthfully; (c) a bounce from a
+> known-identical ALS also settles the ~19.5 ppm tempo-map residual (carded) and could re-arm
+> grid_fold/boundary_click gating on arcs.
+>
+> **NEXT BUILD TARGETS (extraction audit, 2026-08-27, Codex-verified):** O1 entry-extension
+> host-density gate (Sam's blind-A/B card; the per-stem envelopes it needs are cached and idle) >
+> O2 vocal-clash REPORT on existing builds (12/245 pairs overlap vocals-on-vocals; report first,
+> scoring only with evidence) > O3 invoke the EXISTING hint derivation (`--write-hints`) from
+> canonical `/mix` > O4 `major_cues` as a starvation-only fallback. Also carded: `_grid_fold_median`
+> offbeat-lattice aliasing (strength-weighting DOESN'T work - negative result recorded; try
+> phase-unwrap across regions), and the grid algorithm's own ~21 s/track transient pass (the
+> remaining speed bottleneck after the sidecar reuse).
 
 > **RESOLVED (2026-08-19 evening): all 9 WAVs recovered from `G:\Everything` shortcut index** (see
 > latest session entry - `-LiteralPath` + "Cristoph" spelling gotchas). 2 of the 9 (Fish Go Deep,
