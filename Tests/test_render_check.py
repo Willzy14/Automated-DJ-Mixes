@@ -1857,3 +1857,38 @@ def test_first_breakpoint_after_beat_zero_holds_backwards():
     assert tmap.bpm_at(0.0) == pytest.approx(130.0)
     assert tmap.beat_to_sec(2.0) == pytest.approx(2.0 * 60.0 / 130.0)
     assert tmap.beat_to_sec(2.0) != pytest.approx(2.0 * 60.0 / 120.0)
+
+
+def test_map_endpoint_fail_tolerance_is_capped_at_long_duration():
+    """The FAIL threshold IS the merge gate, so it must be bounded.
+
+    An uncapped relative term looks reasonable at normal lengths and quietly
+    becomes an unbounded acceptance envelope: Codex worked out that at 10
+    hours a 1% term would let a SIX MINUTE discrepancy pass. The cap is what
+    stops that, so it gets a test at a duration where it actually bites.
+    """
+    fps = int(round(1.0 / render_check.HOP_SEC))
+    tmap = render_check.TempoMap.flat(120.0)
+    ten_hours = 36000.0
+
+    # Uncapped, 1% of 10 hours would be 360 s. The cap must hold it to 60.
+    rms = np.full(10, -20.0)
+    out = render_check.check_map_vs_render(rms, fps, ten_hours, tmap)
+    assert out[0].measured["fail_above_sec"] == pytest.approx(
+        render_check.MAP_ENDPOINT_FAIL_CAP_SEC)
+    assert out[0].measured["warn_above_sec"] == pytest.approx(
+        render_check.MAP_ENDPOINT_WARN_CAP_SEC)
+
+    # A 6-minute discrepancy at that duration must FAIL, not pass.
+    six_min_short = ten_hours - 360.0
+    rms2 = np.full(int(six_min_short * fps), -20.0)
+    out2 = render_check.check_map_vs_render(rms2, fps, ten_hours, tmap)
+    assert out2 and out2[0].level == "FAIL", \
+        [(f.level, f.measured) for f in out2]
+
+    # The cap never rises above itself, and never drops below the floor.
+    for dur in (10.0, 600.0, 5031.0, 36000.0, 360000.0):
+        got = render_check.check_map_vs_render(
+            np.full(5, -20.0), fps, dur, tmap)[0].measured["fail_above_sec"]
+        assert (render_check.MAP_ENDPOINT_FAIL_ABS_SEC <= got
+                <= render_check.MAP_ENDPOINT_FAIL_CAP_SEC), (dur, got)

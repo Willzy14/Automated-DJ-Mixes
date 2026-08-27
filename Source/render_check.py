@@ -951,8 +951,15 @@ MAP_ENDPOINT_WARN_CAP_SEC = 10.0
 #: SECONDS; a map that does not describe the render misses by MINUTES (a flat
 #: map on the arc V16 is 169.6 s out). Failing only above this keeps the check
 #: from newly rejecting a legitimate render with an unusual ending.
+#:
+#: HARD CAPPED, and the cap is the point: this threshold IS the merge gate, so
+#: an uncapped relative term is an unbounded acceptance envelope no matter how
+#: reasonable it looks at typical lengths. Codex: at 10 hours a 1% term would
+#: let a SIX MINUTE discrepancy pass. Between 30 s and 60 s, always - no
+#: legitimate ending artefact runs to a minute.
 MAP_ENDPOINT_FAIL_ABS_SEC = 30.0
 MAP_ENDPOINT_FAIL_REL = 0.01
+MAP_ENDPOINT_FAIL_CAP_SEC = 60.0
 
 
 def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
@@ -969,12 +976,14 @@ def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
     arc V16 lands 169.6 s out.
 
     DOES NOT CATCH a compensated interior error. A map that is wrong in the
-    middle but right at the end passes: 120->130 BPM and 130->120 BPM over the
-    same span predict the SAME end time while differing by ~100 s at the
-    midpoint. Nothing here would see that, and on an arc neither grid_fold nor
-    boundary_click can gate either - so that class of error is currently
-    reachable and is carded, not covered. Closing it needs a render made from
-    a known-identical ALS so the map's interior can be validated at all.
+    middle but right at the end passes: 120->170 BPM and 170->120 BPM over the
+    same span predict the SAME end time (the log integral is symmetric in
+    v0 <-> v1) while differing by 17.4 s at the midpoint - the figures are
+    measured in test_map_vs_render_misses_a_compensated_interior_error, which
+    pins the miss. Nothing here would see that, and on an arc neither
+    grid_fold nor boundary_click can gate either - so that class of error is
+    currently reachable and is carded, not covered. Closing it needs a render
+    made from a known-identical ALS so the interior can be validated at all.
 
     The endpoint itself is measured from the last audible frame, which a fade,
     a silent final clip, a reverb tail or a stray dithered frame can all move
@@ -1005,8 +1014,9 @@ def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
     warn_tol = min(MAP_ENDPOINT_WARN_CAP_SEC,
                    max(MAP_ENDPOINT_WARN_ABS_SEC,
                        MAP_ENDPOINT_WARN_REL * arr_end_sec))
-    fail_tol = max(MAP_ENDPOINT_FAIL_ABS_SEC,
-                   MAP_ENDPOINT_FAIL_REL * arr_end_sec)
+    fail_tol = min(MAP_ENDPOINT_FAIL_CAP_SEC,
+                   max(MAP_ENDPOINT_FAIL_ABS_SEC,
+                       MAP_ENDPOINT_FAIL_REL * arr_end_sec))
     measured = {"arr_end_sec": arr_end_sec, "audio_end_sec": audio_end,
                 "delta_sec": delta, "warn_above_sec": warn_tol,
                 "fail_above_sec": fail_tol,
