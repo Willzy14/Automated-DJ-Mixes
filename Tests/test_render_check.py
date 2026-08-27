@@ -1403,3 +1403,118 @@ def test_v16_tempo_map_measured_truth():
         "max": 129.52242915838903,
         "is_flat": False,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Tempo-arc guards: two checks whose tolerances the map residual invalidates   #
+# --------------------------------------------------------------------------- #
+
+def test_boundary_click_skipped_on_tempo_arc(tmp_path):
+    """A real click at a boundary FAILs under a flat map and is SKIPPED - by
+    name - under an arc map.
+
+    boundary_click reads a +/-2 ms window around each mapped boundary. The
+    tempo map carries a measured ~19.5 ppm residual, so on a long arc render
+    that window is nowhere near the true splice and the check reports clean:
+    a false PASS on the one defect class it exists for. It must announce that
+    it did not look, never quietly pass.
+    """
+    bpm = 128.0
+    seconds = 30.0
+    bps = bpm / 60.0
+    boundary_beat = 10
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": boundary_beat,
+         "loop_on": False},
+        {"track": "B", "arr_start": boundary_beat,
+         "arr_end": round(seconds * bps), "loop_on": False},
+    ]
+
+    def click_at_boundary(t, L, R):
+        L = L.copy(); R = R.copy()
+        idx = int(round((boundary_beat / bps) * 44100))
+        L[idx] = L[idx] + 0.7
+        R[idx] = R[idx] + 0.7
+        return L, R
+
+    wav = tmp_path / "arc.wav"
+    rpt = tmp_path / "arc.json"
+    _synth_render(wav, seconds, clips=clips, extra_process=click_at_boundary)
+    _write_report(rpt)
+
+    # Flat map: the click is caught. This is the prove-the-test half - without
+    # it, the SKIP below could be hiding a check that never worked.
+    als_flat = tmp_path / "flat.als"
+    _write_als(als_flat, clips)
+    res_flat = render_check.run_check(wav, rpt, als_flat)
+    assert any(f.check == "boundary_click" and f.level == "FAIL"
+               for f in res_flat.findings), \
+        [(f.check, f.level) for f in res_flat.findings]
+    assert not any(f.check == "boundary_click_skipped_tempo_arc"
+                   for f in res_flat.findings)
+
+    # Arc map: named SKIP, and boundary_click does not run at all.
+    als_arc = tmp_path / "arc.als"
+    _write_als(als_arc, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 128.0), (64.0, 130.0)])
+    res_arc = render_check.run_check(wav, rpt, als_arc)
+    skips = [f for f in res_arc.findings
+             if f.check == "boundary_click_skipped_tempo_arc"]
+    assert len(skips) == 1, [(f.check, f.level) for f in res_arc.findings]
+    assert skips[0].level == "SKIP"
+    assert skips[0].measured["boundaries"] > 0
+    assert not any(f.check == "boundary_click" for f in res_arc.findings), \
+        "boundary_click must not run against an arc map"
+
+
+def test_grid_fold_drift_warns_not_fails_on_tempo_arc(tmp_path):
+    """Excess grid-fold drift FAILs under a flat map and WARNs under an arc.
+
+    The 30 ms threshold was calibrated on a flat render. On an arc it is
+    tripped by two measured confounds that are not render defects (the map
+    residual, and probes landing on different tracks), so it must keep
+    reporting the number without failing the render on it.
+    """
+    seconds = 200.0
+    bpm = 120.0
+    bps = bpm / 60.0
+    clips = [{"track": "A", "arr_start": 0, "arr_end": round(seconds * bps),
+              "loop_on": False}]
+    wav = tmp_path / "d.wav"
+    rpt = tmp_path / "d.json"
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+
+    als_flat = tmp_path / "flat.als"
+    _write_als(als_flat, clips, bpm=bpm)
+    als_arc = tmp_path / "arc.als"
+    _write_als(als_arc, clips, bpm=bpm,
+               tempo_envelope=[(0.0, 120.0), (128.0, 124.0)])
+
+    import xml.etree.ElementTree as ET
+    import gzip as _gzip
+
+    def grid_fold_level(als_path):
+        root = ET.fromstring(_gzip.open(als_path, "rb").read())
+        tmap = render_check.TempoMap.from_als_root(root)
+        # Force a drift well past the threshold, identically for both maps, so
+        # the ONLY difference between the two calls is map flatness.
+        real = render_check._grid_fold_median
+        seq = iter([0.0, 90.0, 180.0])
+        render_check._grid_fold_median = lambda *a, **k: next(seq)
+        try:
+            out = render_check.check_grid_fold(wav, clips, tmap)
+        finally:
+            render_check._grid_fold_median = real
+        return [(f.check, f.level, f.measured.get("drift_ms")) for f in out]
+
+    flat = grid_fold_level(als_flat)
+    arc = grid_fold_level(als_arc)
+    # Only meaningful if the probe actually produced a grid_fold verdict.
+    assert any(c == "grid_fold" for c, _, _ in flat), flat
+    flat_levels = {lvl for c, lvl, _ in flat if c == "grid_fold"}
+    arc_levels = {lvl for c, lvl, _ in arc if c == "grid_fold"}
+    if flat_levels == {"FAIL"}:
+        assert arc_levels == {"WARN"}, (flat, arc)
+        arc_drift = [d for c, _, d in arc if c == "grid_fold"][0]
+        assert arc_drift is not None and arc_drift > 0, arc
