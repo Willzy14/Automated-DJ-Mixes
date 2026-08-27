@@ -7,6 +7,7 @@ when the --kick-model path is explicitly enabled.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 from dataclasses import dataclass
@@ -111,6 +112,30 @@ def _drums_cache_path(wav_path: Path, cache_dir: Path) -> Path:
     return cache_dir / f"{wav_path.stem}__drumsstem.npz"
 
 
+def _content_fingerprint(wav_path: Path) -> str | None:
+    """Full-content sha1 - the file's actual identity, not a proxy for it.
+
+    Exists because mtime alone made the cache useless the moment a track was
+    COPIED. Building a mix subset copies tracks into `Audio Mix N/`, which
+    preserves every byte and resets mtime, so each copied track re-separated
+    from scratch (a courier lost ~10 minutes to exactly this on 2026-08-20).
+
+    Measured before choosing whole-file over a cheaper edge sample: sha1 runs
+    at ~1330 MB/s here, so fingerprinting all 20 masters of a corpus costs
+    ~1.3 s against ~420 s of cold Demucs. An edge-sampled hash would have been
+    marginally faster and carried a real blind spot - a same-size change in the
+    middle of a file would fingerprint identical - so it was a false economy.
+    """
+    try:
+        h = hashlib.sha1()
+        with open(wav_path, "rb") as fh:
+            while chunk := fh.read(1 << 20):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
 def _save_drums_cache(wav_path: Path, cache_dir: Path, drums: np.ndarray, sr: int) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
     st = os.stat(wav_path)
@@ -122,6 +147,7 @@ def _save_drums_cache(wav_path: Path, cache_dir: Path, drums: np.ndarray, sr: in
         sr=np.array(int(sr)),
         src_size=np.array(int(st.st_size)),
         src_mtime_ns=np.array(int(st.st_mtime_ns)),
+        src_fingerprint=np.array(_content_fingerprint(wav_path) or ""),
         demucs_model=np.array(DEMUCS_MODEL_NAME),
         cache_version=np.array(int(DRUMS_CACHE_VERSION)),
     )
@@ -151,10 +177,23 @@ def _load_drums_cache(wav_path: Path, cache_dir: Path) -> tuple[np.ndarray, int]
             if not wav_path.exists():
                 return None
             st = os.stat(wav_path)
+            # Size must always match; it is the cheapest possible reject.
             if int(st.st_size) != int(d["src_size"]):
                 return None
             if int(st.st_mtime_ns) != int(d["src_mtime_ns"]):
-                return None
+                # Same bytes, different timestamp - the shape a COPY leaves.
+                # Building a mix subset copies tracks into `Audio Mix N/`, and
+                # under mtime-only validation every one of them re-separated
+                # from scratch. Fall back to a content fingerprint: strictly
+                # STRONGER evidence than a timestamp, so this only widens the
+                # hit rate, never loosens correctness. Caches written before
+                # the fingerprint existed carry "" and still require mtime.
+                cached_fp = (str(d["src_fingerprint"])
+                             if "src_fingerprint" in d.files else "")
+                if not cached_fp:
+                    return None
+                if _content_fingerprint(wav_path) != cached_fp:
+                    return None
             drums = np.asarray(d["drums"], dtype=np.float32)
             sr = int(d["sr"])
     except Exception:

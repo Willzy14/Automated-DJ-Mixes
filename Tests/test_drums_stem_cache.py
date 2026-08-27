@@ -72,18 +72,98 @@ def test_save_load_round_trip(tmp_path):
 # 2. mtime invalidation
 # ---------------------------------------------------------------------------
 
-def test_mtime_invalidation(tmp_path):
+def test_mtime_alone_no_longer_invalidates_identical_content(tmp_path):
+    """A changed timestamp over IDENTICAL bytes is a hit, deliberately.
+
+    This test previously asserted the opposite. mtime was standing in for
+    "has the audio changed?", and it answered wrongly in the case that costs
+    real time: copying a track into a mix subset (`Audio Mix N/`) preserves
+    every byte and resets mtime, so the whole corpus re-separated from
+    scratch. Validation now falls back to a full content hash, which is
+    STRICTLY STRONGER evidence than a timestamp - the audio genuinely has not
+    changed, so the cached stem is genuinely valid.
+
+    The property mtime was protecting is tested directly below.
+    """
     wav = _make_wav(tmp_path)
     cache_dir = tmp_path / "_Stem Analysis"
     kick_model_adapter._save_drums_cache(wav, cache_dir, np.zeros(100, dtype=np.float32), 44100)
     assert kick_model_adapter._load_drums_cache(wav, cache_dir) is not None
 
-    # bump mtime only (keep size the same)
+    # bump mtime only (keep size AND content the same)
     st = os.stat(wav)
-    new_mtime = st.st_mtime_ns + 10_000_000
-    os.utime(wav, ns=(st.st_atime_ns, new_mtime))
+    os.utime(wav, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
 
-    assert kick_model_adapter._load_drums_cache(wav, cache_dir) is None
+    assert kick_model_adapter._load_drums_cache(wav, cache_dir) is not None, \
+        "identical bytes with a new timestamp must still serve the cache"
+
+
+def test_changed_content_at_identical_size_still_invalidates(tmp_path):
+    """The property mtime was really protecting: different audio, no stale stem.
+
+    Same byte count, different bytes - the one case a size check cannot catch
+    and where serving a cached stem would silently analyse the wrong audio.
+    """
+    wav = _make_wav(tmp_path)
+    cache_dir = tmp_path / "_Stem Analysis"
+    kick_model_adapter._save_drums_cache(wav, cache_dir, np.zeros(100, dtype=np.float32), 44100)
+    assert kick_model_adapter._load_drums_cache(wav, cache_dir) is not None
+
+    original = wav.read_bytes()
+    mutated = bytearray(original)
+    mutated[len(mutated) // 2] ^= 0xFF          # flip one byte, mid-file
+    wav.write_bytes(bytes(mutated))
+    assert wav.stat().st_size == len(original), "fixture must keep size constant"
+
+    assert kick_model_adapter._load_drums_cache(wav, cache_dir) is None, \
+        "different audio must never be served from cache"
+
+
+def test_a_copy_of_a_track_hits_the_cache(tmp_path):
+    """The 10 minutes lost on 2026-08-20, as a regression test.
+
+    A mix subset is built by COPYING tracks into `Audio Mix N/`. The copy is
+    byte-identical and carries a fresh mtime, and under the old rule every one
+    re-separated. It must hit.
+    """
+    wav = _make_wav(tmp_path)
+    cache_dir = tmp_path / "_Stem Analysis"
+    drums = np.linspace(-1.0, 1.0, 4410, dtype=np.float32)
+    kick_model_adapter._save_drums_cache(wav, cache_dir, drums, 44100)
+
+    subset = tmp_path / "Audio Mix 12"
+    subset.mkdir()
+    copied = subset / wav.name
+    copied.write_bytes(wav.read_bytes())
+    os.utime(copied, ns=(os.stat(wav).st_atime_ns,
+                         os.stat(wav).st_mtime_ns + 5_000_000_000))
+
+    hit = kick_model_adapter._load_drums_cache(copied, cache_dir)
+    assert hit is not None, "a byte-identical copy must reuse the cached stem"
+    loaded, sr = hit
+    assert sr == 44100
+    assert np.array_equal(loaded, drums)
+
+
+def test_legacy_cache_without_a_fingerprint_still_requires_mtime(tmp_path):
+    """Backward compatibility: caches written before the fingerprint existed
+    carry no hash, so they must keep the old, stricter rule rather than being
+    trusted on size alone."""
+    wav = _make_wav(tmp_path)
+    cache_dir = tmp_path / "_Stem Analysis"
+    kick_model_adapter._save_drums_cache(wav, cache_dir, np.zeros(100, dtype=np.float32), 44100)
+
+    # Rewrite the sidecar without the fingerprint key, as an old build would.
+    path = kick_model_adapter._drums_cache_path(wav, cache_dir)
+    with np.load(path, allow_pickle=False) as d:
+        payload = {k: d[k] for k in d.files if k != "src_fingerprint"}
+    np.savez(path, **payload)
+
+    assert kick_model_adapter._load_drums_cache(wav, cache_dir) is not None
+    st = os.stat(wav)
+    os.utime(wav, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
+    assert kick_model_adapter._load_drums_cache(wav, cache_dir) is None, \
+        "a legacy cache has no content evidence, so mtime must still gate it"
 
 
 # ---------------------------------------------------------------------------

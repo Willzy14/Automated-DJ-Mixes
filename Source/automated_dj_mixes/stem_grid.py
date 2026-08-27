@@ -19,9 +19,51 @@ from audio_analysis.stem_grid import (  # noqa: F401
 import audio_analysis.stem_grid as _aa_stem_grid
 
 
-def _lazy_stem_audio(*args, **kwargs):
+def _sidecar_dir(wav_path: Path) -> Path | None:
+    """The corpus `_Stem Analysis` folder for a wav, or None.
+
+    Handles both homes a track legitimately has: `<corpus>/Audio/x.wav` and a
+    mix subset like `<corpus>/Audio Mix 12/x.wav`. In both cases the sidecar
+    sits at `<corpus>/_Stem Analysis`, i.e. two levels up from the file.
+    """
+    candidate = wav_path.parent.parent / "_Stem Analysis"
+    return candidate if candidate.is_dir() else None
+
+
+def _lazy_stem_audio(wav, *args, **kwargs):
+    """Serve the beat-grid pass from the drums sidecar instead of re-separating.
+
+    Sam, 2026-08-20: "we need to look at getting this faster next time" - a
+    15-track build spent 22+ minutes here. The drums-stem sidecar written by
+    `kick_model_adapter` (2026-08-20) already took Demucs from 21 s to 3.5 s
+    for the kick-model pass, but the beat-grid detector ran its OWN separation
+    through this hook and the cache never served it. Same model, same file,
+    twice.
+
+    The toolkit's `detect_beat_grid` does `drums, _bass, sr = _stem_separator(...)`
+    and discards the bass, so a drums-only cache satisfies it completely - the
+    None below is never read. Verified against the library source rather than
+    assumed, because returning None for a channel a caller DID use would be a
+    silent corruption rather than a crash.
+
+    Falls through to real separation on any miss, so behaviour is unchanged
+    whenever the cache is absent, stale or unreadable.
+    """
+    wav_path = Path(wav)
+    cache_dir = _sidecar_dir(wav_path)
+    if cache_dir is not None:
+        try:
+            # Import is lazy AND cheap: kick_model_adapter is written so that
+            # importing it never pulls torch or demucs.
+            from kick_model_adapter import _load_drums_cache
+            hit = _load_drums_cache(wav_path, cache_dir)
+        except Exception:
+            hit = None
+        if hit is not None:
+            drums, sr = hit
+            return drums, None, sr
     from probe_stem_kick_grid import stem_audio
-    return stem_audio(*args, **kwargs)
+    return stem_audio(wav, *args, **kwargs)
 
 
 _aa_stem_grid.set_stem_separator(_lazy_stem_audio)
