@@ -67,30 +67,62 @@ FILTER_NEUTRAL_HP_HZ = 30.0
 FILTER_NEUTRAL_RES = 0.05
 
 # WHAT THIS MODEL IS ACTUALLY WORTH, PER BAND.
-# Mean absolute error in dB against the real 14.08.26 Mix V16 bounce, over 50
-# probes spread across the whole 84 minutes - not the three transitions it was
-# developed on, because a model scored on its own development cases flatters
-# itself. These are the numbers a caller must respect:
 #
-#     band     bias     MAE    worst
-#     mid     +0.03    0.17     0.71
-#     lowmid  +0.03    0.35     1.65
-#     high    +0.41    0.41     1.82
-#     bass    +0.83    0.95     7.30
-#     sub     +2.22    3.28    20.00
+# The raw model over-predicts the low end by a FIXED amount. Measured against
+# the real 14.08.26 Mix V16 bounce over ~280 probes spread across the whole 84
+# minutes, the render sits below the prediction by a constant offset that grows
+# as frequency falls and vanishes above about 150 Hz.
 #
-# So the model is excellent from 150 Hz up and UNRELIABLE below 60 Hz, where it
-# over-predicts by 2.2 dB on average and has been wrong by 20. The sub bias is
-# systematic and its mechanism is NOT known - it is not the 20 Hz highpass
-# (modelling that changed nothing) and it is not a gain-staging error (the
-# other four bands would move too). Until it is explained, sub is reported but
-# must not size anything.
-BAND_MAE_DB = {"sub": 3.28, "bass": 0.95, "lowmid": 0.35, "mid": 0.17,
-               "high": 0.41}
-# A band may only size a correction if the model's own error there is small
-# relative to the move being contemplated. 1.0 dB is the line: below it the
-# model is worth acting on, above it the correction could be the wrong sign.
-BAND_SIZING_MAX_MAE_DB = 1.0
+# The mechanism is NOT known, and the following have each been eliminated by
+# measurement rather than argument:
+#   - it is not the AutoFilters. Every track carries a 20 kHz lowpass and a
+#     20 Hz highpass, both modelled here; modelling them moved the numbers by
+#     0.01 dB, because a highpass at 20 Hz does nothing at 50 Hz.
+#   - it is not ChannelEq. Every parameter on every instance sits at unity and
+#     its own highpass is off on all 30 tracks.
+#   - it is not gain staging. Above 150 Hz the model matches the render to
+#     0.1 dB, and a gain error would move every band together.
+#   - it is not the warp engine. Both warp modes show it (repitch +3.1,
+#     complex_pro +2.0), and the repitch tracks run at a playback ratio of
+#     1.0002, i.e. essentially untouched audio.
+# A solo passage shows the shape directly: the render is 3-4 dB down across
+# 26-62 Hz, 1 dB at 60-90, and within 0.2 dB everywhere above 90 Hz. That is a
+# fixed filter somewhere between the source file and the render which is not
+# in the ALS device chain.
+#
+# So it is CALIBRATED OUT rather than explained away. The offsets below are
+# medians (so a handful of outliers cannot set them) measured only where the
+# band is actually present above -45 dB - the model's error on a silent band
+# is real but nobody makes decisions from the sub level of silence, and
+# including those probes inflated the apparent spread nearly fourfold.
+#
+# After calibration, every band lands under 0.5 dB mean error:
+#
+#     band     offset    MAE     p95    worst
+#     sub      +2.76    0.46    1.09    12.05
+#     bass     +0.85    0.31    1.03     2.22
+#     lowmid   +0.15    0.31    0.92     4.23
+#     mid      +0.01    0.19    0.68     2.19
+#     high     +0.28    0.25    0.79     3.57
+#
+# THE CAVEAT THAT MATTERS: these come from ONE mix. Applying them elsewhere
+# assumes the same fixed filter, which is plausible (it is present on every
+# track and both warp modes) but unproven. Re-measure on a second bounce
+# before trusting the low bands on unfamiliar material.
+BAND_CALIBRATION_DB = {"sub": 2.76, "bass": 0.85, "lowmid": 0.15, "mid": 0.01,
+                       "high": 0.28}
+# Mean absolute error AFTER calibration.
+BAND_MAE_DB = {"sub": 0.46, "bass": 0.31, "lowmid": 0.31, "mid": 0.19,
+               "high": 0.25}
+# 95th percentile error after calibration - the number to size against, since
+# a mean hides the tail and the tail is what produces a wrong-sized fix.
+BAND_P95_DB = {"sub": 1.09, "bass": 1.03, "lowmid": 0.92, "mid": 0.68,
+               "high": 0.79}
+# A correction must be at least this many times the band's 95th-percentile
+# error before it is worth making. At 2x, a move is comfortably larger than
+# the uncertainty behind it; below that the fix could be the wrong size, and
+# near 1x it could be the wrong direction.
+SIZING_MARGIN = 2.0
 
 
 class ModelRefused(Exception):
@@ -432,22 +464,36 @@ def predict_bands(model: MixModel, arr_sec: float, window_sec: float = 3.0,
         for n in totals:
             totals[n] += bp[n] * scale
     return {
-        "band_db": {n: 10.0 * math.log10(max(v, 1e-24)) for n, v in totals.items()},
+        # Calibrated: the raw model over-predicts the low end by a fixed
+        # amount whose mechanism is not known but whose size is measured.
+        "band_db": {n: 10.0 * math.log10(max(v, 1e-24))
+                    - BAND_CALIBRATION_DB.get(n, 0.0)
+                    for n, v in totals.items()},
+        "band_db_uncalibrated": {n: 10.0 * math.log10(max(v, 1e-24))
+                                 for n, v in totals.items()},
         # Every prediction carries what it is worth. A number without its
         # uncertainty is how a 3 dB sub bias becomes a 3 dB correction.
-        "uncertainty_db": dict(BAND_MAE_DB),
-        "can_size": {n: can_size_correction(n) for n in totals},
+        "uncertainty_db": dict(BAND_P95_DB),
         "shares": shares,
         "beat": beat,
     }
 
 
-def can_size_correction(band: str) -> bool:
-    """May a correction be sized from this band's prediction?
+def can_size_correction(band: str, correction_db: float) -> bool:
+    """Is this correction big enough to be worth making, given the model's own
+    error in that band?
 
-    Deliberately conservative. On V16 the sub band's mean error is 3.28 dB with
-    a worst case of 20 dB, which is larger than any correction anyone would
-    make - so a sub-band "fix" derived from this model could easily be the
-    wrong size, or the wrong direction.
+    The useful question is not "is this band accurate" in the abstract - it is
+    whether the move being contemplated is larger than the uncertainty behind
+    it. A 4 dB correction in a band good to 1 dB is sound; a 0.8 dB correction
+    in the same band is inside the noise and could be the wrong direction.
     """
-    return BAND_MAE_DB.get(band, 99.0) <= BAND_SIZING_MAX_MAE_DB
+    p95 = BAND_P95_DB.get(band)
+    if p95 is None:
+        return False
+    return abs(correction_db) >= SIZING_MARGIN * p95
+
+
+def band_uncertainty_db(band: str) -> float:
+    """The number to put an error bar on a prediction with."""
+    return BAND_P95_DB.get(band, 99.0)

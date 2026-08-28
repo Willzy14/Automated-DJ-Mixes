@@ -184,15 +184,43 @@ def test_a_muted_track_contributes_nothing(tmp_path):
 # Knowing what it is worth                                                    #
 # --------------------------------------------------------------------------- #
 
-def test_sub_may_not_size_a_correction():
-    """Measured against the real V16 bounce over 50 probes, sub's mean error is
-    3.28 dB with a worst case of 20 - larger than any correction anyone would
-    make. It is reported, never acted on, until the bias is explained."""
-    assert MP.can_size_correction("sub") is False
-    assert MP.can_size_correction("bass") is True
-    assert MP.can_size_correction("mid") is True
-    assert MP.BAND_MAE_DB["sub"] > MP.BAND_SIZING_MAX_MAE_DB
-    assert MP.BAND_MAE_DB["mid"] < MP.BAND_MAE_DB["bass"] < MP.BAND_MAE_DB["sub"]
+def test_sizing_asks_whether_the_move_beats_the_error_bar():
+    """The useful question is not "is this band accurate" but "is this
+    correction bigger than the uncertainty behind it".
+
+    The raw model over-predicts the low end by a fixed amount whose mechanism
+    is unknown; calibrating it out takes every band under 0.5 dB mean error.
+    What is left is a tail, and the tail is what produces a wrong-sized fix -
+    so sizing is judged against the 95th percentile, not the mean.
+    """
+    C = MP.can_size_correction
+    # A big move in a band good to about 1 dB: worth making.
+    assert C("sub", -6.0) is True
+    assert C("bass", -5.0) is True
+    # A move inside the noise: not worth making, in ANY band.
+    assert C("sub", -1.0) is False
+    assert C("mid", -1.0) is False
+    # Sign must not matter - a boost and a cut carry the same uncertainty.
+    assert C("bass", 5.0) == C("bass", -5.0)
+    # An unknown band can never size anything.
+    assert C("nonsense", -20.0) is False
+    # The margin is real: just under it fails, just over it passes.
+    p95 = MP.BAND_P95_DB["mid"]
+    assert C("mid", -(MP.SIZING_MARGIN * p95 * 0.99)) is False
+    assert C("mid", -(MP.SIZING_MARGIN * p95 * 1.01)) is True
+
+
+def test_calibration_is_applied_and_the_raw_value_is_kept(tmp_path):
+    """The offset is empirical, so the uncalibrated number stays visible - a
+    correction derived from a fudge nobody can inspect is not auditable."""
+    _tone(tmp_path / "src.wav")
+    out = MP.predict_bands(MP.load_model(_als(tmp_path), tmp_path), 10.0)
+    for band, off in MP.BAND_CALIBRATION_DB.items():
+        raw = out["band_db_uncalibrated"][band]
+        assert out["band_db"][band] == pytest.approx(raw - off, abs=1e-9), band
+    # The low end is where the offset lives; the top is untouched.
+    assert MP.BAND_CALIBRATION_DB["sub"] > 2.0
+    assert abs(MP.BAND_CALIBRATION_DB["mid"]) < 0.1
 
 
 def test_every_prediction_carries_its_uncertainty(tmp_path):
@@ -200,8 +228,8 @@ def test_every_prediction_carries_its_uncertainty(tmp_path):
     _tone(tmp_path / "src.wav")
     out = MP.predict_bands(MP.load_model(_als(tmp_path), tmp_path), 10.0)
     assert set(out["uncertainty_db"]) == set(out["band_db"])
-    assert set(out["can_size"]) == set(out["band_db"])
-    assert out["can_size"]["sub"] is False
+    assert out["uncertainty_db"]["sub"] == MP.BAND_P95_DB["sub"]
+    assert MP.band_uncertainty_db("mid") < MP.band_uncertainty_db("sub")
 
 
 @pytest.mark.skipif(
