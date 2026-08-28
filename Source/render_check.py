@@ -101,6 +101,23 @@ DIP_BAND_NAME_DB = 1.5
 DIP_BAND_AUDIBLE_WITHIN_DB = 40.0
 # Shortest baseline that still means something as a reference.
 DIP_BAND_MIN_BASELINE_SEC = 3.0
+# A dip is only worth repairing if the band COMES BACK. Two different mastered
+# records simply differ in spectrum, and comparing a post-swap window against a
+# pre-swap baseline reports that difference as a transition defect - on V16,
+# 6.5 of pair 15's 6.71 dB "lowmid deficit" is exactly that. So measure a third
+# window well after the transition and separate the two cases: a MOMENTARY hole
+# is a real event to fix, a PERSISTENT one is just the next record sounding
+# different and must be reported, never corrected (Sam's ruling, 2026-08-28).
+# Wide on purpose. A short probe lands wherever it lands: at 64 beats past the
+# swap it dropped into a quiet bar of V16 pair 14's incoming record and read a
+# one-bar hole as the track's normal level, calling a momentary event
+# persistent. Averaging over 128 beats means no single bar can define the
+# steady state.
+DIP_STEADY_OFFSET_BEATS = 32
+DIP_STEADY_SPAN_BEATS = 128
+# Still down by this much at steady state, AND still holding at least half the
+# original deficit, means persistent rather than momentary.
+DIP_PERSISTENT_DB = 3.0
 # short_term_lufs is a 3 s TRAILING window at a 100 ms hop, so frame i covers
 # hops [i-29, i] and its energy is centred 14.5 hops EARLIER. Reading frame i
 # as an instant put the analysis window ~1.45 s past the defect, replacing the
@@ -1442,6 +1459,22 @@ def _worst_audible_band(delta: dict, base: dict) -> str:
     return min(audible, key=lambda k: delta[k])
 
 
+def _classify_dip(dip_delta: float, steady_delta: float | None) -> str:
+    """momentary (a real hole that recovers) vs persistent (records differ).
+
+    Two conditions, because either alone misfires: still meaningfully down at
+    steady state, AND still holding at least half the original deficit. A deep
+    transient that recovers most of the way (V16 pair 9: -15.2 dB at the dip,
+    -3.4 dB after) is momentary; a shallow one that never recovers (pair 15:
+    -6.7 then -6.6) is persistent.
+    """
+    if steady_delta is None:
+        return "unknown"
+    if steady_delta <= -DIP_PERSISTENT_DB and steady_delta <= 0.5 * dip_delta:
+        return "persistent"
+    return "momentary"
+
+
 def _band_rms_db(y: np.ndarray, sr: float,
                  lo: float, hi: float | None) -> float:
     """RMS of one band, in dB, over ALL channels.
@@ -1467,7 +1500,9 @@ def _band_rms_db(y: np.ndarray, sr: float,
 
 
 def _dip_band_deficit(render_path: Path, dip_sec: float,
-                      base0_sec: float, base1_sec: float) -> dict | None:
+                      base0_sec: float, base1_sec: float,
+                      steady0_sec: float | None = None,
+                      steady1_sec: float | None = None) -> dict | None:
     """Per-band change at the dip vs the pre-swap baseline, plus the baseline
     levels the caller needs to ignore inaudible bands.
 
@@ -1508,12 +1543,21 @@ def _dip_band_deficit(render_path: Path, dip_sec: float,
             base = read(base0_sec, base1_sec, whole=False)
             if dip is None or base is None:
                 return None
-            delta, base_db = {}, {}
+            steady = None
+            if steady0_sec is not None and steady1_sec is not None:
+                steady = read(steady0_sec, steady1_sec, whole=False)
+            delta, base_db, steady_db = {}, {}, {}
             for name, lo, hi in DIP_BANDS:
                 b_db = _band_rms_db(base, sr, lo, hi)
                 base_db[name] = round(b_db, 2)
                 delta[name] = round(_band_rms_db(dip, sr, lo, hi) - b_db, 2)
-            return {"delta": delta, "base": base_db}
+                if steady is not None:
+                    steady_db[name] = round(
+                        _band_rms_db(steady, sr, lo, hi) - b_db, 2)
+            out = {"delta": delta, "base": base_db}
+            if steady_db:
+                out["steady"] = steady_db
+            return out
     except (OSError, RuntimeError, ValueError, ZeroDivisionError):
         return None
 
@@ -1560,7 +1604,12 @@ def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
                         "pair_index": tr["pair_index"]}
             where = ""
             if render_path is not None:
-                res = _dip_band_deficit(render_path, dip_sec, b0_sec, b1_sec)
+                st0 = arr_to_sec(swap + DIP_STEADY_OFFSET_BEATS, tempo_map)
+                st1 = arr_to_sec(
+                    swap + DIP_STEADY_OFFSET_BEATS + DIP_STEADY_SPAN_BEATS,
+                    tempo_map)
+                res = _dip_band_deficit(render_path, dip_sec, b0_sec, b1_sec,
+                                        st0, st1)
                 if res is None:
                     measured["band_error"] = "band diagnosis unavailable"
                 else:
@@ -1576,7 +1625,20 @@ def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
                                  f"({bands[worst]:+.1f} dB)")
                     else:
                         measured["deficit_band"] = "broadband"
+                        worst = None
                         where = ", broadband"
+                    steady = res.get("steady")
+                    if steady:
+                        measured["steady_db"] = steady
+                    if worst is not None:
+                        kind = _classify_dip(
+                            bands[worst],
+                            steady.get(worst) if steady else None)
+                        measured["dip_kind"] = kind
+                        where += f", {kind}"
+                        if kind == "persistent":
+                            where += (" - the two records differ here, "
+                                      "not a transition fault")
             findings.append(Finding(
                 check="transition_dip", level="WARN",
                 t0=start_sec, t1=end_sec,

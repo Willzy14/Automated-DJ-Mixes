@@ -2169,3 +2169,48 @@ def test_failed_band_diagnosis_is_named_not_silent(tmp_path):
     m = out[0].measured
     assert "band_db" not in m, m            # it genuinely could not measure
     assert m.get("band_error"), m           # and it says so
+
+
+def test_classify_dip_separates_momentary_from_persistent():
+    """A hole that comes back is repairable; two records that simply differ
+    are not (Sam's ruling on V16 pair 15, 2026-08-28).
+
+    Both real V16 cases are pinned here so the thresholds cannot drift
+    silently into "repair everything" or "repair nothing".
+    """
+    C = render_check._classify_dip
+    # V16 pair 9: deep transient, recovers almost completely -> momentary.
+    assert C(-15.23, -3.40) == "momentary"
+    # V16 pair 15: shallow, never recovers -> persistent, do not repair.
+    assert C(-6.71, -6.60) == "persistent"
+    # No steady-state measurement means no claim.
+    assert C(-6.71, None) == "unknown"
+    # Fully recovered.
+    assert C(-8.0, 0.0) == "momentary"
+    # Deep AND still deep.
+    assert C(-12.0, -11.0) == "persistent"
+    # Both conditions are required: still down, but recovered more than half.
+    assert C(-12.0, -4.0) == "momentary"      # past half, so momentary
+    assert C(-12.0, -7.0) == "persistent"     # under half, still down
+    # Shallow residual below the floor is momentary even if unrecovered.
+    assert C(-4.0, -2.5) == "momentary"
+
+
+def test_dip_finding_carries_kind_and_steady(tmp_path):
+    """The classification must reach the finding, not just exist as logic."""
+    fps = int(round(1.0 / render_check.HOP_SEC))
+    notch_at = 78.0
+    wav = tmp_path / "dip2.wav"
+    _tone_render(wav, 160.0, notch=(notch_at - 1.5, notch_at + 1.5, 1000.0, -12.0))
+    lag = (render_check.ST_WINDOW_HOPS - 1) / 2.0 / fps
+    st = np.full(int(160.0 * fps), -17.0)
+    st[int(round((notch_at + lag) * fps))] = -22.0
+    out = render_check.check_transition_dip(
+        [{"swap_beats": 140.0, "pair_index": 1}], st, fps,
+        render_check.TempoMap.flat(120.0), render_path=wav)
+    assert len(out) == 1, out
+    m = out[0].measured
+    assert "steady_db" in m, m
+    # The notch is 3 s long inside a 160 s tone, so the band recovers.
+    assert m["dip_kind"] == "momentary", m
+    assert "momentary" in out[0].msg, out[0].msg
