@@ -75,6 +75,37 @@ TRANSITION_DIP_DB = 2.5
 TRANSITION_BASELINE_BEATS = 64
 TRANSITION_BASELINE_GAP_BEATS = 8
 TRANSITION_DIP_SPAN_BEATS = 32
+# Bands for diagnosing WHERE a transition dip loses its energy. "pair 15 dips
+# 3.8 dB" does not tell an operator (or a repair pass) what to change; "the
+# 150-400 Hz body is gone while the bass held" does. On V16 the three flagged
+# pairs turned out to have THREE different mechanisms - pair 9 loses sub
+# (-6.5 dB), pair 14 loses bass (-5.4), pair 15 loses lowmid (-6.2) - so a
+# single repair would have been wrong for two of the three. That is the
+# reason this reports the band instead of assuming one.
+#
+# Measure at the LUFS minimum, never over the window: locating the dip with a
+# broadband RMS average instead reported pair 9 as flat across every band and
+# pair 15 as a midrange hole, both wrong.
+DIP_BANDS = (("sub", 20.0, 60.0), ("bass", 60.0, 150.0),
+             ("lowmid", 150.0, 400.0), ("mid", 400.0, 2000.0),
+             ("high", 2000.0, None))
+# Half-width of the window analysed around the dip minimum.
+DIP_BAND_HALF_SEC = 1.5
+# A band must lose at least this much, relative to the same band's pre-swap
+# level, before it is named as the deficit. Below it the dip reads broadband.
+DIP_BAND_NAME_DB = 1.5
+# A band whose baseline sits this far under the loudest band is inaudible, and
+# must not win the diagnosis: an empty sub band drifting -130 -> -150 dB is a
+# 20 dB "deficit" that outranks a musically real -6 dB low-mid loss unless it
+# is excluded (Codex review 2026-08-28).
+DIP_BAND_AUDIBLE_WITHIN_DB = 40.0
+# Shortest baseline that still means something as a reference.
+DIP_BAND_MIN_BASELINE_SEC = 3.0
+# short_term_lufs is a 3 s TRAILING window at a 100 ms hop, so frame i covers
+# hops [i-29, i] and its energy is centred 14.5 hops EARLIER. Reading frame i
+# as an instant put the analysis window ~1.45 s past the defect, replacing the
+# dip with recovered audio (Codex review 2026-08-28).
+ST_WINDOW_HOPS = 30
 
 # Loop verbatim: min consecutive-iteration envelope r < 0.9 -> FAIL.
 LOOP_VERBATIM_MIN_R = 0.9
@@ -1390,8 +1421,106 @@ def check_loop_hole(loops: list[dict], beat_rms_db: np.ndarray,
     return findings
 
 
+
+def _worst_audible_band(delta: dict, base: dict) -> str:
+    """The band with the largest drop, ignoring bands too quiet to matter.
+
+    An empty band's noise floor drifting is not a repair target: a sub band
+    sliding -130 -> -150 dB is a 20 dB "deficit" that would outrank a
+    musically real -6 dB low-mid loss (Codex review 2026-08-28). Pure
+    selection logic, kept separate so it can be tested without synthesising
+    audio - a 4th-order Butterworth leaks about 50 dB, so a band 80 dB down
+    cannot actually be built out of tones.
+    """
+    if not delta:
+        raise ValueError("no bands")
+    loudest = max(base.values())
+    audible = [k for k in delta
+               if base.get(k, loudest) >= loudest - DIP_BAND_AUDIBLE_WITHIN_DB]
+    if not audible:
+        audible = list(delta)
+    return min(audible, key=lambda k: delta[k])
+
+
+def _band_rms_db(y: np.ndarray, sr: float,
+                 lo: float, hi: float | None) -> float:
+    """RMS of one band, in dB, over ALL channels.
+
+    Channels are filtered separately and combined as mean-square. Averaging
+    L and R first would let a width or polarity change cancel in the sum and
+    read as a huge band deficit that no one can hear (Codex review
+    2026-08-28) - a real hazard here, since Sam has flagged stereo width
+    collapsing at a transition as an audible event in its own right.
+    """
+    if hi is None:
+        sos = butter(4, lo, btype="high", fs=sr, output="sos")
+    else:
+        sos = butter(4, [lo, hi], btype="band", fs=sr, output="sos")
+    if y.ndim == 1:
+        y = y[:, None]
+    ms = 0.0
+    for ch in range(y.shape[1]):
+        yb = sosfiltfilt(sos, y[:, ch])
+        ms += float(np.mean(yb.astype(np.float64) ** 2))
+    ms /= max(1, y.shape[1])
+    return 10.0 * math.log10(max(ms, 1e-24))
+
+
+def _dip_band_deficit(render_path: Path, dip_sec: float,
+                      base0_sec: float, base1_sec: float) -> dict | None:
+    """Per-band change at the dip vs the pre-swap baseline, plus the baseline
+    levels the caller needs to ignore inaudible bands.
+
+    A targeted re-read, the same pattern check_boundary_click uses: the
+    streaming sweep carries no spectral detail, and adding a filterbank to it
+    would cost every render for a diagnostic only a few transitions need.
+    Returns None rather than raising - a diagnostic must never fail the gate -
+    but only for the I/O and signal errors that are expected here, so a
+    genuine programming fault still surfaces instead of being swallowed.
+    """
+    try:
+        with sf.SoundFile(str(render_path)) as fh:
+            sr = float(fh.samplerate)
+
+            def read(t0: float, t1: float, *, whole: bool) -> np.ndarray | None:
+                a = max(0, int(t0 * sr))
+                b = min(int(t1 * sr), fh.frames)
+                if a >= fh.frames or b <= a:
+                    return None
+                # The DIP window must be complete: a truncated one compares an
+                # off-centre fragment against the baseline and reports the
+                # truncation itself as a band deficit. The BASELINE may be
+                # short - it is a reference, and the LUFS baseline above
+                # already clamps it at the head of the file the same way -
+                # but it still has to be long enough to mean anything.
+                got = (b - a) / sr
+                if whole:
+                    if got < 0.9 * (t1 - t0):
+                        return None
+                elif got < DIP_BAND_MIN_BASELINE_SEC:
+                    return None
+                fh.seek(a)
+                y = fh.read(b - a, dtype="float32", always_2d=True)
+                return y if len(y) else None
+
+            dip = read(dip_sec - DIP_BAND_HALF_SEC,
+                       dip_sec + DIP_BAND_HALF_SEC, whole=True)
+            base = read(base0_sec, base1_sec, whole=False)
+            if dip is None or base is None:
+                return None
+            delta, base_db = {}, {}
+            for name, lo, hi in DIP_BANDS:
+                b_db = _band_rms_db(base, sr, lo, hi)
+                base_db[name] = round(b_db, 2)
+                delta[name] = round(_band_rms_db(dip, sr, lo, hi) - b_db, 2)
+            return {"delta": delta, "base": base_db}
+    except (OSError, RuntimeError, ValueError, ZeroDivisionError):
+        return None
+
+
 def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
-                         fps: int, tempo_map: TempoMap) -> list[Finding]:
+                         fps: int, tempo_map: TempoMap,
+                         render_path: Path | None = None) -> list[Finding]:
     findings: list[Finding] = []
     for tr in transitions:
         swap = tr["swap_beats"]
@@ -1414,16 +1543,48 @@ def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
         dip_min = float(seg.min())
         dip = baseline - dip_min
         if dip > TRANSITION_DIP_DB:
+            # The exact frame of the minimum, not the window centre: the
+            # defect is a momentary hole, and averaging over the 32-beat
+            # window washes it out (measured: it hid the midrange deficit
+            # on 2 of V16's 3 flagged pairs).
+            # The ST LUFS frame is a TRAILING 3 s window, so its energy is
+            # centred earlier than the frame index. Use the window's centre,
+            # clamped for the growing window at the very start of the file.
+            arg = i0 + int(np.argmin(seg))
+            w_start = max(0, arg - (ST_WINDOW_HOPS - 1))
+            dip_sec = ((w_start + arg) / 2.0) / float(fps)
+            measured = {"baseline_lufs": baseline,
+                        "dip_lufs": dip_min,
+                        "dip_db": dip,
+                        "dip_at_sec": round(dip_sec, 2),
+                        "pair_index": tr["pair_index"]}
+            where = ""
+            if render_path is not None:
+                res = _dip_band_deficit(render_path, dip_sec, b0_sec, b1_sec)
+                if res is None:
+                    measured["band_error"] = "band diagnosis unavailable"
+                else:
+                    bands, base = res["delta"], res["base"]
+                    measured["band_db"] = bands
+                    # Only bands that are actually audible in the baseline may
+                    # win: an empty band's noise floor drifting is not a
+                    # repair target.
+                    worst = _worst_audible_band(bands, base)
+                    if bands[worst] <= -DIP_BAND_NAME_DB:
+                        measured["deficit_band"] = worst
+                        where = (f", deficit in {worst} "
+                                 f"({bands[worst]:+.1f} dB)")
+                    else:
+                        measured["deficit_band"] = "broadband"
+                        where = ", broadband"
             findings.append(Finding(
                 check="transition_dip", level="WARN",
                 t0=start_sec, t1=end_sec,
                 beat0=start_beat, beat1=end_beat,
-                measured={"baseline_lufs": baseline,
-                          "dip_lufs": dip_min,
-                          "dip_db": dip,
-                          "pair_index": tr["pair_index"]},
+                measured=measured,
                 msg=(f"transition pair {tr['pair_index']} dips "
-                     f"{dip:.1f} dB vs baseline ({baseline:.1f} LUFS)"),
+                     f"{dip:.1f} dB vs baseline ({baseline:.1f} LUFS)"
+                     f"{where}"),
             ))
     return findings
 
@@ -1726,6 +1887,11 @@ def run_check(render_path: Path, report_path: Path,
                 "verdict": "FAIL",
                 "integrated_lufs": FLOOR_DB,
                 "duration_sec": 0.0,
+                # No audio was opened on this path, so NO check ran. Without
+                # this flag write_report lists every check as "run clean" -
+                # the same silently-clean failure the SKIP handling exists to
+                # prevent, on the one path that never reads a sample.
+                "checks_ran": False,
                 "v_suffix": derive_v_suffix(render_path, report_path),
             },
         )
@@ -1848,7 +2014,8 @@ def run_check(render_path: Path, report_path: Path,
                                   tempo_map)
     findings += check_exposed_solo(sweep.rms100_db, fps, clips, tempo_map)
     findings += check_loop_hole(loops, sweep.beat_rms_db, tempo_map)
-    findings += check_transition_dip(transitions, st_lufs, fps, tempo_map)
+    findings += check_transition_dip(transitions, st_lufs, fps, tempo_map,
+                                    render_path=render_path)
     findings += check_loop_verbatim(render_path, loops, tempo_map)
     findings += check_grid_fold(render_path, clips, tempo_map)
     # check_kick_flam is disabled; not invoked.
@@ -1954,7 +2121,11 @@ def write_report(result: CheckResult, render_path: Path,
     # only safeguard the skip provides (Codex review 2026-08-27).
     skipped = {f.measured.get("skipped_check") for f in result.findings
                if f.level == "SKIP" and f.measured.get("skipped_check")}
-    clean = sorted(all_checks - fired - skipped - {"kick_flam"})
+    if result.meta.get("checks_ran", True):
+        clean = sorted(all_checks - fired - skipped - {"kick_flam"})
+    else:
+        # Bailed before opening the audio: nothing ran, so nothing is clean.
+        clean = []
     md.append("\n## Checks run clean\n")
     md.append(", ".join(clean) if clean else "(none)")
 
@@ -2004,6 +2175,12 @@ def main(argv: list[str] | None = None) -> int:
                 "render": str(args.render),
                 "verdict": "FAIL",
                 "error": str(e),
+                # Same reason as the tempo bail: the gate died before (or
+                # during) the audio pass, so NO check completed. Without this
+                # the report lists all twelve as clean next to the error -
+                # the identical failure, one path over (MiniMax review
+                # 2026-08-28, found after only the tempo path was fixed).
+                "checks_ran": False,
             },
         )
         try:

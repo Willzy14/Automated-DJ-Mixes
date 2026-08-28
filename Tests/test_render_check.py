@@ -694,6 +694,13 @@ def test_transition_dip(tmp_path):
     dips = [f for f in res.findings if f.check == "transition_dip"]
     assert dips, [f.check for f in res.findings]
     assert any(f.measured.get("pair_index") == 1 for f in dips)
+    # run_check must pass render_path through, or the band diagnosis silently
+    # vanishes from every real run while the unit tests still pass.
+    assert "band_db" in dips[0].measured, dips[0].measured
+    assert set(dips[0].measured["band_db"]) == {
+        n for n, _, _ in render_check.DIP_BANDS}, dips[0].measured["band_db"]
+    assert dips[0].measured["deficit_band"], dips[0].measured
+    assert "dip_at_sec" in dips[0].measured, dips[0].measured
 
     # Control: 1 dB dip -> no finding.
     wav_b = tmp_path / "sm.wav"
@@ -1892,3 +1899,273 @@ def test_map_endpoint_fail_tolerance_is_capped_at_long_duration():
             np.full(5, -20.0), fps, dur, tmap)[0].measured["fail_above_sec"]
         assert (render_check.MAP_ENDPOINT_FAIL_ABS_SEC <= got
                 <= render_check.MAP_ENDPOINT_FAIL_CAP_SEC), (dur, got)
+
+
+def test_unmappable_tempo_bail_lists_no_check_as_clean(tmp_path):
+    """The early-bail path never opens the audio, so NO check ran.
+
+    Before this pin, run_check's TempoAutomationUnsupported return produced a
+    report whose "Checks run clean" section named all eleven real checks -
+    the exact silently-clean failure the SKIP handling exists to prevent, on
+    the one path that never reads a sample. This is not hypothetical: the
+    shipped RENDER_CHECK_V16.md of 2026-08-25 listed boundary_click,
+    grid_fold, loop_verbatim and eight others as clean for a render whose
+    reported duration was 0.00 s and whose clip count was 0.
+    """
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    seconds = 10.0
+    clips = _single_track_clips(seconds)
+    # Manual tempo of 0 is outside the 20-300 BPM band, so the map refuses.
+    _write_als(als, clips, bpm=0.0)
+    _synth_render(wav, seconds, clips=clips)
+    _write_report(rpt)
+
+    res = render_check.run_check(wav, rpt, als)
+    assert res.verdict == "FAIL" and res.exit_code == 2
+    assert [f.check for f in res.findings] == ["tempo_automation_unsupported"]
+    assert res.meta["checks_ran"] is False
+
+    md_path, js_path = render_check.write_report(res, wav)
+    md = md_path.read_text(encoding="utf-8")
+    clean_section = md.split("## Checks run clean", 1)[1]
+    assert "(none)" in clean_section, clean_section
+    # No real check may be named as clean on a path that read no audio.
+    for name in ("boundary_click", "grid_fold", "loop_verbatim",
+                 "hard_silence", "transition_dip", "level_cliff",
+                 "loop_hole", "loop_period", "loop_exit_jump",
+                 "exposed_solo", "eof_truncated_reads", "map_vs_render"):
+        assert name not in clean_section, (name, clean_section)
+
+    # A normal run is unaffected: it still reports its clean checks.
+    als2 = tmp_path / "ok.als"
+    wav2 = tmp_path / "ok.wav"
+    rpt2 = tmp_path / "ok.json"
+    _write_als(als2, clips)
+    _synth_render(wav2, seconds, clips=clips)
+    _write_report(rpt2)
+    res2 = render_check.run_check(wav2, rpt2, als2)
+    assert res2.meta.get("checks_ran", True) is True
+    md2 = render_check.write_report(res2, wav2)[0].read_text(encoding="utf-8")
+    assert "hard_silence" in md2.split("## Checks run clean", 1)[1]
+
+
+def _tone_render(path, seconds, notch=None, sr=44100):
+    """Equal-amplitude sines, one per DIP_BANDS band. `notch` is
+    (t0, t1, component_hz, gain_db): that component alone is attenuated over
+    that span, so the expected per-band deficit is known exactly.
+    """
+    n = int(seconds * sr)
+    t = np.arange(n, dtype=np.float64) / sr
+    y = np.zeros(n, dtype=np.float64)
+    for hz in (40.0, 100.0, 250.0, 1000.0, 4000.0):
+        comp = np.sin(2 * math.pi * hz * t)
+        if notch and abs(hz - notch[2]) < 1e-9:
+            g = np.ones(n)
+            i0, i1 = int(notch[0] * sr), int(notch[1] * sr)
+            g[i0:i1] = 10.0 ** (notch[3] / 20.0)
+            comp = comp * g
+        y += comp
+    y *= 0.12  # keep well clear of clipping
+    sf.write(str(path), np.stack([y, y], axis=1), sr, subtype="PCM_24")
+
+
+def test_dip_band_deficit_names_the_band_that_actually_dropped(tmp_path):
+    """The diagnosis must identify WHICH band lost energy, not just that the
+    level fell. Built with a known -12 dB notch on the 1 kHz component only.
+    """
+    wav = tmp_path / "tone.wav"
+    _tone_render(wav, 40.0, notch=(30.0, 33.0, 1000.0, -12.0))
+
+    res = render_check._dip_band_deficit(
+        wav, dip_sec=31.5, base0_sec=5.0, base1_sec=25.0)
+    assert res is not None
+    bands = res["delta"]
+
+    # The notched band takes the hit, close to the -12 dB applied.
+    assert bands["mid"] == pytest.approx(-12.0, abs=1.0), bands
+    # Every other band is essentially untouched.
+    for name in ("sub", "bass", "lowmid", "high"):
+        assert abs(bands[name]) < 1.0, (name, bands)
+    # And the worst band is the one that actually dropped.
+    assert min(bands, key=lambda k: bands[k]) == "mid", bands
+
+
+def test_dip_band_deficit_survives_an_unreadable_render(tmp_path):
+    """A diagnostic must never take the gate down with it."""
+    missing = tmp_path / "nope.wav"
+    assert render_check._dip_band_deficit(missing, 10.0, 1.0, 5.0) is None
+    # A real file, but a window past the end: no data, no crash, no claim.
+    wav = tmp_path / "short.wav"
+    _tone_render(wav, 5.0)
+    assert render_check._dip_band_deficit(wav, 900.0, 800.0, 850.0) is None
+
+
+def test_transition_dip_full_path_locates_and_names_the_band(tmp_path):
+    """Drive check_transition_dip END TO END, not just its band helper.
+
+    The previous band test called _dip_band_deficit with hand-supplied
+    coordinates, so the argmin -> seconds conversion, the naming threshold and
+    the message were all untested. MiniMax's review named five mutants that
+    survived it; this pins the four that matter:
+      A  dip_sec off by one LUFS frame
+      B  argmin dropped (dip_sec pinned to the window start)
+      C  deficit_band hardcoded to "broadband"
+      E  the naming threshold inverted
+    """
+    fps = int(round(1.0 / render_check.HOP_SEC))
+    tmap = render_check.TempoMap.flat(120.0)          # 0.5 s per beat
+    swap_beat = 140.0                                 # swap at 70.0 s
+    swap_sec = 70.0
+    notch_at = 78.0                                   # inside the 32-beat span
+    wav = tmp_path / "dip.wav"
+    _tone_render(wav, 92.0, notch=(notch_at - 1.5, notch_at + 1.5, 1000.0, -12.0))
+
+    # Short-term LUFS is a TRAILING 3 s window, so a notch centred at
+    # notch_at shows its minimum one half-window LATER. Build the array that
+    # way, and require the code to correct back to the real defect time - a
+    # flat spike at notch_at would let the uncorrected version pass.
+    lag_sec = (render_check.ST_WINDOW_HOPS - 1) / 2.0 / fps
+    st = np.full(int(92.0 * fps), -17.0)
+    st[int(round((notch_at + lag_sec) * fps))] = -22.0   # > TRANSITION_DIP_DB
+    out = render_check.check_transition_dip(
+        [{"swap_beats": swap_beat, "pair_index": 1}], st, fps, tmap,
+        render_path=wav)
+
+    assert len(out) == 1, out
+    m = out[0].measured
+    # Kills A and B: the reported dip time must be the LUFS minimum, not the
+    # window start (70.0) and not one frame off.
+    # Exact, not a tolerance: the expected value is computable from the frame
+    # the minimum was placed at, and a half-frame tolerance let a one-frame
+    # mutant sit on the far edge and pass.
+    min_frame = int(round((notch_at + lag_sec) * fps))
+    expected = (min_frame - (render_check.ST_WINDOW_HOPS - 1) / 2.0) / fps
+    assert m["dip_at_sec"] == pytest.approx(expected, abs=1e-6), (m, expected)
+    assert abs(expected - notch_at) < 0.1, expected   # and it IS the notch
+    assert abs(m["dip_at_sec"] - swap_sec) > 1.0, m
+    # Kills C and E: the band that actually dropped must be named.
+    assert m["deficit_band"] == "mid", m
+    assert m["band_db"]["mid"] == pytest.approx(-12.0, abs=1.5), m
+    for other in ("sub", "bass", "lowmid", "high"):
+        assert abs(m["band_db"][other]) < 1.5, (other, m["band_db"])
+    assert "deficit in mid" in out[0].msg, out[0].msg
+
+
+def test_gate_error_path_lists_no_check_as_clean(tmp_path, monkeypatch):
+    """main()'s exception path is the SECOND bail that reads no audio.
+
+    Fixing only the tempo-envelope bail left this one reporting all twelve
+    checks as clean beside a gate error (MiniMax review 2026-08-28). Driven
+    through main() on purpose: an earlier version of this test built the
+    CheckResult by hand, which proved write_report honours the flag but not
+    that main() sets it - and a mutant that dropped it from main() survived.
+    """
+    wav = tmp_path / "m V1.wav"
+    rpt = tmp_path / "r.json"
+    als = tmp_path / "m.als"
+    _write_report(rpt)
+    als.write_bytes(b"this is not gzipped XML")   # parse_als raises
+    _synth_render(wav, 5.0, clips=_single_track_clips(5.0))
+
+    monkeypatch.setattr(sys, "argv",
+                        ["render_check.py", str(wav), str(rpt), str(als)])
+    assert render_check.main() == 2
+
+    # main()'s error meta carries no v_suffix, so the report lands as
+    # RENDER_CHECK.md rather than RENDER_CHECK_V1.md. Glob rather than pin
+    # that detail - what matters here is what the report SAYS.
+    reports = sorted(tmp_path.glob("RENDER_CHECK*.md"))
+    assert len(reports) == 1, reports
+    md = reports[0].read_text(encoding="utf-8")
+    clean = md.split("## Checks run clean", 1)[1]
+    assert "(none)" in clean, md
+    for name in ("boundary_click", "grid_fold", "loop_verbatim",
+                 "hard_silence", "transition_dip", "map_vs_render"):
+        assert name not in clean, (name, md)
+
+
+def test_band_rms_is_immune_to_stereo_cancellation(tmp_path):
+    """Anti-phase channels must not read as a band deficit.
+
+    Averaging L and R before filtering lets a width or polarity change cancel
+    in the sum, inventing a huge deficit no one can hear (Codex review
+    2026-08-28). Sam has flagged stereo width collapsing at a transition as an
+    audible event in its own right, so this is a live case, not a contrivance.
+    """
+    sr = 44100
+    t = np.arange(int(3.0 * sr), dtype=np.float64) / sr
+    tone = 0.2 * np.sin(2 * math.pi * 1000.0 * t)
+    in_phase = np.stack([tone, tone], axis=1)
+    anti_phase = np.stack([tone, -tone], axis=1)
+
+    a = render_check._band_rms_db(in_phase, sr, 400.0, 2000.0)
+    b = render_check._band_rms_db(anti_phase, sr, 400.0, 2000.0)
+    # Same energy per channel, so the same answer - within a hair.
+    assert a == pytest.approx(b, abs=0.1), (a, b)
+    assert a > -30.0, a          # and a real level, not a cancelled floor
+
+
+def test_inaudible_band_cannot_win_the_diagnosis():
+    """An empty band's noise floor drifting is not a repair target."""
+    W = render_check._worst_audible_band
+    # Sub is 80 dB down and falls 20 dB; mid is full level and falls 4.
+    delta = {"sub": -20.0, "bass": -0.1, "lowmid": 0.0, "mid": -4.0, "high": 0.0}
+    base = {"sub": -100.0, "bass": -22.0, "lowmid": -21.0, "mid": -21.0,
+            "high": -21.0}
+    assert W(delta, base) == "mid", W(delta, base)
+
+    # Once that same band is audible, the biggest drop wins again.
+    base_loud = dict(base, sub=-24.0)
+    assert W(delta, base_loud) == "sub"
+
+    # Exactly at the boundary counts as audible (>= loudest - threshold).
+    edge = dict(base, sub=-21.0 - render_check.DIP_BAND_AUDIBLE_WITHIN_DB)
+    assert W(delta, edge) == "sub"
+    just_under = dict(base, sub=-21.01 - render_check.DIP_BAND_AUDIBLE_WITHIN_DB)
+    assert W(delta, just_under) == "mid"
+
+    # Every band inaudible (a near-silent passage): fall back rather than
+    # raise, so the diagnostic still says something.
+    allquiet = {k: -130.0 for k in delta}
+    assert W(delta, allquiet) == "sub"
+
+
+def test_partially_out_of_range_window_is_refused(tmp_path):
+    """A window that runs off the end must return None, not a short fragment.
+
+    Comparing 2 s of a requested 3 s against the full baseline reports the
+    truncation as a band deficit.
+    """
+    wav = tmp_path / "short.wav"
+    _tone_render(wav, 10.0)
+    # Centred at 9.5 s: [8.0, 11.0) against a 10 s file -> only 2 of 3 s.
+    assert render_check._dip_band_deficit(wav, 9.5, 1.0, 6.0) is None
+    # Fully inside is still fine.
+    assert render_check._dip_band_deficit(wav, 5.0, 1.0, 4.0) is not None
+
+
+def test_failed_band_diagnosis_is_named_not_silent(tmp_path):
+    """A diagnostic that could not run must say so on the finding.
+
+    Silence is indistinguishable from "no deficit found", which is exactly the
+    silently-clean class this file keeps closing (Codex + MiniMax, 2026-08-28).
+    """
+    fps = int(round(1.0 / render_check.HOP_SEC))
+    wav = tmp_path / "short.wav"
+    _tone_render(wav, 30.0)
+    lag = (render_check.ST_WINDOW_HOPS - 1) / 2.0 / fps
+    # The LUFS array runs past the audio (the arrangement is longer than the
+    # render), so the dip minimum sits near EOF and its +/-1.5 s window
+    # overruns the file.
+    st = np.full(int(45.0 * fps), -17.0)
+    st[int(round((29.55 + lag) * fps))] = -23.0
+    out = render_check.check_transition_dip(
+        [{"swap_beats": 56.0, "pair_index": 1}], st, fps,
+        render_check.TempoMap.flat(120.0), render_path=wav)
+
+    assert len(out) == 1, out
+    m = out[0].measured
+    assert "band_db" not in m, m            # it genuinely could not measure
+    assert m.get("band_error"), m           # and it says so
