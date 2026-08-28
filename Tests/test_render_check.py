@@ -2214,3 +2214,65 @@ def test_dip_finding_carries_kind_and_steady(tmp_path):
     # The notch is 3 s long inside a 160 s tone, so the band recovers.
     assert m["dip_kind"] == "momentary", m
     assert "momentary" in out[0].msg, out[0].msg
+
+
+def test_edge_minimum_is_reported_as_unbracketed(tmp_path):
+    """A minimum on the search-window edge is not the defect's location.
+
+    The curve is still falling where the search stopped, so the real trough
+    lies outside. Measured on V16, 7 of 15 transitions land on an edge and
+    extending to +128 beats deepens pair 15 from 3.78 to 7.90 dB - so a
+    repair sized from that anchor would be sized from the wrong instant
+    (Codex/workflow verifier, 2026-08-28).
+    """
+    fps = int(round(1.0 / render_check.HOP_SEC))
+    tmap = render_check.TempoMap.flat(120.0)
+    wav = tmp_path / "ramp.wav"
+    _tone_render(wav, 160.0)
+
+    # Monotone decline across the whole [swap, swap+32 beats] window: the
+    # minimum can only be the last frame.
+    st = np.full(int(160.0 * fps), -17.0)
+    i0, i1 = int(70.0 * fps), int(86.0 * fps)   # the [swap, swap+32] window
+    st[i0:i1] = np.linspace(-17.0, -24.0, i1 - i0)
+    st[i1:] = -24.0
+    out = render_check.check_transition_dip(
+        [{"swap_beats": 140.0, "pair_index": 1}], st, fps, tmap,
+        render_path=wav)
+    assert len(out) == 1, out
+    assert out[0].measured["unbracketed"] is True, out[0].measured
+    assert "UNBRACKETED" in out[0].msg, out[0].msg
+    # An anchor the search never bracketed must not yield a classification.
+    assert out[0].measured["dip_kind"] == "unknown", out[0].measured
+
+    # The LEADING edge too - V16 pair 9 is exactly this: the curve is already
+    # at its lowest when the window opens, so the defect began before the swap
+    # and argmin lands on frame 0. Notched as well, so a band IS named and the
+    # refusal to classify from an unbracketed anchor is actually exercised.
+    wav3 = tmp_path / "rise_notched.wav"
+    _tone_render(wav3, 160.0, notch=(66.0, 72.0, 1000.0, -12.0))
+    st3 = np.full(int(160.0 * fps), -17.0)
+    st3[:i0] = -17.0
+    st3[i0:i1] = np.linspace(-24.0, -17.0, i1 - i0)   # rising: min at frame 0
+    out3 = render_check.check_transition_dip(
+        [{"swap_beats": 140.0, "pair_index": 1}], st3, fps, tmap,
+        render_path=wav3)
+    assert len(out3) == 1, out3
+    assert out3[0].measured["unbracketed"] is True, out3[0].measured
+    assert out3[0].measured["deficit_band"] == "mid", out3[0].measured
+    # A band was named, so only the unbracketed guard can keep this "unknown".
+    assert out3[0].measured["dip_kind"] == "unknown", out3[0].measured
+
+    # Control: a trough strictly inside the window is bracketed AND, given a
+    # real band deficit to name, classified rather than left unknown.
+    wav2 = tmp_path / "ramp_notched.wav"
+    _tone_render(wav2, 160.0, notch=(76.5, 79.5, 1000.0, -12.0))
+    st2 = np.full(int(160.0 * fps), -17.0)
+    st2[int(78.0 * fps)] = -23.0
+    out2 = render_check.check_transition_dip(
+        [{"swap_beats": 140.0, "pair_index": 1}], st2, fps, tmap,
+        render_path=wav2)
+    assert len(out2) == 1, out2
+    assert out2[0].measured["unbracketed"] is False, out2[0].measured
+    assert "UNBRACKETED" not in out2[0].msg
+    assert out2[0].measured["dip_kind"] in ("momentary", "persistent")

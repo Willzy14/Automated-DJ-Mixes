@@ -1594,10 +1594,20 @@ def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
             # The ST LUFS frame is a TRAILING 3 s window, so its energy is
             # centred earlier than the frame index. Use the window's centre,
             # clamped for the growing window at the very start of the file.
-            arg = i0 + int(np.argmin(seg))
+            # If the minimum sits on an EDGE of the search window, the curve
+            # is still falling where the search stopped: the true trough is
+            # outside and this is not the instant of the defect. Measured on
+            # V16, 7 of 15 transitions land on an edge, and extending the
+            # search to +128 beats deepens pair 15 from 3.78 to 7.90 dB. Say
+            # so rather than anchoring a band diagnosis - or a repair - to a
+            # position the search never bracketed.
+            arg_rel = int(np.argmin(seg))
+            unbracketed = arg_rel == 0 or arg_rel == len(seg) - 1
+            arg = i0 + arg_rel
             w_start = max(0, arg - (ST_WINDOW_HOPS - 1))
             dip_sec = ((w_start + arg) / 2.0) / float(fps)
-            measured = {"baseline_lufs": baseline,
+            measured = {"unbracketed": unbracketed,
+                        "baseline_lufs": baseline,
                         "dip_lufs": dip_min,
                         "dip_db": dip,
                         "dip_at_sec": round(dip_sec, 2),
@@ -1630,15 +1640,18 @@ def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
                     steady = res.get("steady")
                     if steady:
                         measured["steady_db"] = steady
-                    if worst is not None:
+                    # Always present once a band diagnosis ran, so its
+                    # absence is never ambiguous: "unknown" is a statement.
+                    kind = "unknown"
+                    if worst is not None and not unbracketed:
                         kind = _classify_dip(
                             bands[worst],
                             steady.get(worst) if steady else None)
-                        measured["dip_kind"] = kind
-                        where += f", {kind}"
-                        if kind == "persistent":
-                            where += (" - the two records differ here, "
-                                      "not a transition fault")
+                    measured["dip_kind"] = kind
+                    where += f", {kind}"
+                    if kind == "persistent":
+                        where += (" - the two records differ here, "
+                                  "not a transition fault")
             findings.append(Finding(
                 check="transition_dip", level="WARN",
                 t0=start_sec, t1=end_sec,
@@ -1646,7 +1659,11 @@ def check_transition_dip(transitions: list[dict], st_lufs: np.ndarray,
                 measured=measured,
                 msg=(f"transition pair {tr['pair_index']} dips "
                      f"{dip:.1f} dB vs baseline ({baseline:.1f} LUFS)"
-                     f"{where}"),
+                     f"{where}"
+                     + (" [UNBRACKETED: the minimum is on the edge of the "
+                        "search window, so the real trough lies beyond it - "
+                        "do not size a repair from this]"
+                        if unbracketed else "")),
             ))
     return findings
 
