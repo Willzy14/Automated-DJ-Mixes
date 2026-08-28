@@ -81,6 +81,10 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+**[Claude, 2026-08-28]: THE GATE STOPPED POINTING AT THE WRONG PLACE, AND THE PIPELINE CAN NOW PREDICT A BOUNCE WITHOUT BOUNCING.** Four things shipped. (1) `transition_dip` names WHICH BAND lost the energy (`band_db`, `deficit_band`), measured at the exact short-term-LUFS minimum - the ST window is TRAILING, so reading its argmin frame as an instant had put the analysis window ~1.45 s past the defect. (2) It separates a MOMENTARY hole from a PERSISTENT difference between two mastered records, via a third window 32-160 beats past the swap; `_dip_band_deficit` compares post-swap against pre-swap, so any two records with different spectra were being reported as a transition defect (6.5 of pair 15's 6.71 dB was exactly that). (3) **UNBRACKETED DETECTION - the most important fix of the day.** `check_transition_dip` searches `[swap, swap+32]` and takes the minimum; when that argmin lands on a window EDGE the curve is still falling where the search stopped, so `dip_at_sec` is where the search ended, not where the defect is. **7 of 15 V16 transitions land on an edge, including all three flagged pairs.** Extending to +128 beats deepens pair 15 from 3.78 to 7.90 dB and takes pair 1 from a clean 0.70 to 10.00. The gate now names it and refuses to classify from it. (4) **`Source/mix_predict.py` (new)** predicts per-band level from source audio + the ALS with no render: per-band power = sum over tracks of `(master*trim)^2 * gain(t)^2 * band_power(source, low-shelf APPLIED AS A FILTER)`, source instant via warp markers. Calibrated, every band lands under 0.5 dB MAE (sub 0.46, bass 0.31, lowmid 0.31, mid 0.19, high 0.25). Also fixed: BOTH silently-clean bail paths (the tempo-envelope bail AND `main()`'s generic exception path) listed all twelve checks as "run clean" after reading zero samples. Suite 521 -> 544 passed / 6 skipped / 0 failed.
+
+**[Claude, 2026-08-28]: V16 WAS NEVER ACTUALLY CHECKED UNTIL TODAY.** The shipped `RENDER_CHECK_V16.md` was a FAIL from the old gate at `duration 0.00 s`, `clip count 0` - no audio was ever read. Fresh run: 5047.87 s, 170 clips, -17.08 LUFS, endpoint +0.10 s over 84 minutes. 11 findings = 3 `loop_verbatim` FAILs (the three Sam already adjudicated) + 3 `transition_dip` WARNs (pairs 9/14/15) + 2 `exposed_solo` + `grid_fold` 53.2 ms reports-only + **`boundary_click` SKIPPED for 162 of 162 boundaries** - the click check has never run on any real (tempo-arc) mix.
+
 **[Claude, 2026-08-27]: THE RENDER GATE READS REAL (tempo-arc) MIXES, AND THE PIPELINE KEEPS DRUMS + BASS STEMS ON DISK.** `render_check.py` carries a piecewise `TempoMap` (169.6 s end-prediction error reduced to 0.204 s on the real V16 bounce; oracle-verified to zero measurable error over 42k probes). On a tempo arc, `grid_fold` reports-without-gating and `boundary_click` skips by name (a measured ~19.5 ppm map residual of unknown mechanism makes their tolerances untrustworthy there - carded; a render from a known-identical ALS settles it). V16's verdict is now driven by three genuine `loop_verbatim` defects; Sam hand-fixed the first and last in `Output/14.08.26 Mix V16 Loop Fixes Project/` (verified structurally sound; unbounced; the Vente region's report metadata is stale so `loop_verbatim` will flag it on the next bounce - known, not a defect). Bass stems now persist as `__bassstem.npz` **Opus-in-npz (~3 MB/track, `OPUS_PAYLOAD_ENABLED=True` - Sam's arbitration of a 14-round Codex standoff; int16 escape hatch tested)**; the beat-grid pass serves from the drums sidecar (no duplicate Demucs) and all stem caches key on full-content sha1 so copies hit. Suite 521 passed / 6 skipped / 0 failed.
 
 **[Claude, 2026-08-20]: REKORDBOX REMOVAL COMPLETE (Top-10 item #10, Sam 2026-08-18: "done away with").** The canonical pipeline is stem-only end-to-end. Moved to `Source/Archive/` (git mv): `rekordbox_reader.py`, `rekordbox_waveform.py`, `features.py`, `report.py`, `test_rb_driver.py`, `regress_section_detection.py`. Deleted: `analysis.enrich_from_rekordbox`, `orchestrator.enforce_rekordbox_coverage` + the RB-enrichment loop + the RB desktop-analysis branch, `desktop_analyzer`'s entire RB half (driver/launch/agent-health), `phrase_viz`'s Interval/refinement layer (`segments_from_stem_sections` is the only surviving section-clip producer), `cue_candidates.find_cue_candidates`/`first_drop_candidate`, `waveform_preview`'s RB phrase strip, `validate_beatgrid`'s RB-library CLI (`write_phase_override` with it), `stem_grid.main_compare`'s RB cross-check, and the `pyrekordbox` dependency. The grid-carrier dataclass survives as `automated_dj_mixes/grid_carrier.TrackGrid` (field-compatible with the old `RekordboxAnalysis`); the coverage gate for every mode is `enforce_owned_grid_coverage`. `--allow-partial-rekordbox` is accepted-but-ignored with a deprecation warning (documented invocations keep working); `--skip-desktop-analyze` now means "skip MIK". KEPT ALIVE against the review's list: `desktop_analyzer._drive_modern_folder_dialog` — reachable from the MIK path (`analyze_folder_with_mik` -> `_select_folder_in_browse_dialog` -> auto-detect). The console line "Rekordbox disabled: owned stem-grid + stem-sections are authoritative" is kept verbatim (the /mix skill greps for it). `Tests/test_rekordbox_health.py` rewritten as removal pins (owned-grid gate, MIK-only desktop drive, no-RB-import package sweep, deprecation shim); suite 318/6/0 -> 308/6/0 (10 RB agent/launch tests deleted with their subject). End-to-end Phase 1a smoke on 14.08.26 Audio Mix 12 + validate_als: see ai-activity-log 2026-08-20.
@@ -193,7 +197,17 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-27 (Latest Session, 2nd) - Away-work batch, extraction audit, bass sidecar via a 14-round standoff Sam arbitrated
+### 2026-08-28 (Latest Session) - the gate stopped pointing at the wrong place; a bounce can now be predicted
+**Brain:** Claude (+ Codex, MiniMax, 18 workflow agents)
+**Focus:** Sam asked whether bouncing transitions, analysing them and fixing before presenting would give better information than the current predict-from-source review. It would - but three independent reviews found the closed loop unsafe as conceived, and the investigation found a defect in the gate itself that invalidated every dip location it had ever reported.
+
+- **MP3: NO** (Sam's direct question). His own 320k masters carry no gapless header, so the 25.06 ms encoder shift is the real-world state, not a hypothetical; on a headerless file `grid_fold` drift moved 69.1 -> 91.6 ms IN THE FAIL DIRECTION, i.e. MP3 can MANUFACTURE defects and cause spurious rebounces. Click detection at threshold amplitude loses 40% (WAV 20/60 vs 320k 12/60); digital silence reads -120 dBFS in WAV against -63.4 after 320k, versus a -60 threshold. And the bounce IS the 84-minute master.
+- **DISK:** bounces belong outside the Dropbox tree (runtime-resolved, never a hardcoded drive letter - `G:` is a backup drive here and Dropbox on the Home PC); full bounce once per version then region re-bounces (~25x cheaper per iteration); delete the audio, keep the JSON verdict (12 KB vs 3.85 GB). The lane's auto-deleter was REFUSED: the verifier made it delete `IRREPLACEABLE MASTER.wav` out of a Dropbox-like tree with all four safety gates green.
+- **FLAM: ABANDONED, and the question closed permanently.** Sam's ears killed it - both loud predictions (pair 13 +27.9 ms at 71:29, pair 14 -17.2 ms at 75:58) came back "cool and locked". Root cause then verified in code: the beat grid IS the kick lattice (`refit_grid_from_stem.py` least-squares-fits to kick attack edges; `stem_grid` exports `refine_to_click` / `_first_kick_phase` / `grid_vs_kick`), so each track's kick phase against its own grid is ~0 by construction and flam is structurally prevented here in a way it never is on CDJs. Every non-zero phase measured (+4 to +93 ms) was detector error. Sam's domain correction en route was right and worth keeping: a flam is audible through the kick's TOP TRANSIENT even when the bass has been swapped out, so the verifier's 40-90 Hz co-presence test had been measuring the wrong band.
+- **THE DAY'S BIGGEST FIND:** the repair-design workflow's adversarial verifier found the unbracketed-argmin defect in code committed hours earlier in the same session. See Current State.
+- **Room:** MiniMax and Codex EACH independently found that the early-bail fix was HALF DONE (`main()`'s exception path carried the identical bug) and that the first band tests never exercised `check_transition_dip`. Codex alone found the trailing-ST-window error, the stereo-cancellation hazard (L+R averaged before filtering, so a width or polarity change can invent a deficit), inaudible bands winning the diagnosis, and partially out-of-range windows silently accepted. 18 workflow agents across 2 workflows; ~40 mutants built from the reviewers' own named failure modes, all killed.
+
+### 2026-08-27 (2nd) - Away-work batch, extraction audit, bass sidecar via a 14-round standoff Sam arbitrated
 **Brain:** Claude (measurement, builds, judgment; Opus then Fable) + Codex (~24 calls: audit completeness review + 14 adversarial bass rounds) + MiniMax (narrow fail-closed review + bass diff review, both delivered). Suite **472 -> 521 passed / 6 skipped / 0 failed**. ~13 commits, all pushed at session end.
 
 **Safety batch (while Sam was away):**
@@ -1232,6 +1246,38 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 **Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation. V1-V8.
 
 ## What's Next
+
+> **TOP (2026-08-28): size Sam's option-2 bass fix with `mix_predict`, feed-forward, no bounce.**
+> Sam's own technique, in his words: when energy drops after the bass switch (usually the incoming's
+> kick and bass being less powerful, or the incoming being a little too quiet) he does one of two
+> things - (a) turn the incoming up through the transition and automate it back down to its levelled
+> position by the time the transition is over, or (b) instead of a full bass cut, leave a little bass
+> in from the OUTGOING so it does not feel hollow. **He chose (b), scaled to the measured shortfall**,
+> and ruled pair 15 leave-alone. `EQ_BASS_PARTIAL = 0.52` (-5.68 dB) already exists and is already
+> wired, so the lever is calibrated and in production. The build: at build time, measure the incoming's
+> band shortfall against the outgoing from SOURCE audio, scale the outgoing's residual bass to it, and
+> taper to full kill by the end of the transition. `mix_predict.can_size_correction(band, dB)` gates it.
+> **Nothing on V16 qualifies** (all three flagged pairs are unbracketed and/or persistent), so the first
+> real momentary post-swap hole is what this needs validating against.
+>
+> **WHY THE CLOSED LOOP WAS NOT BUILT (Codex + MiniMax, both fatal, 2026-08-28).** The gate measures the
+> SUMMED bounce and cannot infer cause: boosting the incoming at pair 9's swap moves sub only 1.84 dB of
+> a 15 dB hole while still clearing the gate, because K-weighting de-emphasises the very band that is
+> missing - "the loop has then optimized its measurement rather than the music". Also: no identity chain
+> between render, set and report (version matching is a filename regex, so a stale WAV can be gated
+> against a newer set); `apply_automation.py` expects a set with NO automation and appends envelopes
+> without merging, so a second pass can duplicate a `PointeeId`; `compress_als` writes the gzip and
+> validates afterwards, so a failed validation leaves the bad file in place; and there is no convergence
+> guarantee. Sam's feed-forward reframe removes the first, second and fourth by construction.
+>
+> **CARDED, from today:** (a) `boundary_click` has ZERO coverage on every real mix - unblocking it needs
+> the ~19.5 ppm map residual settled; (b) the ~3 dB low-band offset in `mix_predict` is measured and
+> calibrated but its MECHANISM IS UNKNOWN - not the AutoFilters, not ChannelEq, not gain staging, not
+> the warp engine, not misalignment, all eliminated by measurement - and the calibration comes from ONE
+> mix, so re-measure on a second bounce before trusting the low bands on unfamiliar material;
+> (c) ChannelEq's Mid band is automatable (+/-12 dB, sweepable 120 Hz-7.5 kHz) with unique target Ids
+> already present on every track, simply unwired, and a third lane needs no template change and no ID
+> allocation; (d) ~6 GB of superseded renders sit in Dropbox with no ignore flag on `Output/`.
 
 > **TOP (2026-08-27): the V16 loop-fix cycle.** Sam hand-fixed 2 of the 3 flagged `loop_verbatim`
 > defects in `Output/14.08.26 Mix V16 Loop Fixes Project/` (Nappp source bar shifted; Vente tail
