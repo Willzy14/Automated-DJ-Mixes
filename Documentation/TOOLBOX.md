@@ -216,3 +216,9 @@ Safe standalone landmark refresh for certified stem JSONs. Hashes section geomet
 | `Source/build_ab_comparison.py` | Builds two policy sides from one input, separate dirs and subprocesses so neither can contaminate the other. |
 | `Source/seal_listening_test.py` | Randomised blind clips + sealed mapping + an A-vs-A noise twin. |
 | `Source/setup_heldout_replay.py` | Stages verified held-out tracks (copies, never moves). |
+
+## Added 2026-08-28
+
+| Module | Purpose |
+| --- | --- |
+| `Source/mix_predict.py` | **Predicts a bounce's per-band level from SOURCE audio + the .als, with no render.** Per-band power = sum over tracks of `(master*trim)^2 * gain(t)^2 * band_power(source, low-shelf APPLIED AS A FILTER)`, source instant via the clip's own warp markers. The gate stays the authority on what a render actually contains; this answers "what would happen if" before anything is exported. REFUSES rather than approximating when the path is not the linear one it models: a non-empty master chain, an automated AutoFilter, or filter resonance. Static filters are modelled instead. Calibrated per band against the real V16 bounce (sub 0.46 dB MAE, bass 0.31, lowmid 0.31, mid 0.19, high 0.25); `can_size_correction(band, dB)` asks whether a move beats the band's p95 error rather than whether a band is accurate in the abstract. **Caveat: the low-band calibration comes from ONE mix and its mechanism is unexplained — re-measure on a second bounce.** Added by: Claude. |
