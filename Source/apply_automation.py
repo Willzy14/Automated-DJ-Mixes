@@ -60,7 +60,9 @@ BOUNDARY_MARGIN = 64  # 16 bars — must have this much room after swap
 # calibrated for share-differences rather than borrowing the summed-bounce p95
 # (see Source/bass_residual.py). While it is off a residual of None is written,
 # which is exactly today's full kill — nothing downstream changes.
-BASS_RESIDUAL_ENABLED = False
+# `BASS_RESIDUAL=1` in the environment turns it on for one run, so the feature
+# can be A/B'd against an otherwise identical build without editing this file.
+BASS_RESIDUAL_ENABLED = os.environ.get("BASS_RESIDUAL") == "1"
 
 
 # ── ID allocation ─────────────────────────────────────────────────────────────
