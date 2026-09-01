@@ -47,7 +47,7 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import sosfiltfilt
+from scipy.signal import sosfilt, sosfiltfilt
 
 # Bands are the gate's, deliberately: a prediction that cannot be compared
 # against a measurement is not much use.
@@ -413,14 +413,40 @@ def _source_band_power(clip: Clip, src_sec: float, window_sec: float,
         fh.seek(a)
         y = fh.read(b - a, dtype="float64", always_2d=True)
     from scipy.signal import butter
-    chain = []
     if abs(shelf - 1.0) > 1e-6:
-        chain.append(_low_shelf_sos(shelf, sr))
+        # ONE pass, deliberately. The shelf models a ChannelEq parameter, and a
+        # real device filters once and causally. sosfiltfilt runs the filter
+        # forward AND backward, squaring its magnitude response and DOUBLING the
+        # shelf's effect in dB - measured, band-integrated over sub: a
+        # LowShelfGain of 0.52 designs to -5.5 dB and was being applied as
+        # -10.1 dB, and 0.18 as -19.7 instead of -14.3.
+        #
+        # This was invisible for as long as the pipeline only ever WROTE 0.18 or
+        # 1.0: at unity the shelf is not in the chain at all, and at the kill the
+        # track's low bands sit 20+ dB below the other track's and contribute
+        # essentially nothing to a summed prediction. It goes live the moment an
+        # INTERMEDIATE value is written - which `two_stage_bass` already does
+        # (EQ_BASS_PARTIAL = 0.52) and which the bass-residual sizing does by
+        # design.
+        sos = _low_shelf_sos(shelf, sr)
+        y = np.stack([sosfilt(sos, y[:, c]) for c in range(y.shape[1])], 1)
+    # NO warm-up lead is read before the window, and that is deliberate. A
+    # causal biquad at 100 Hz settles in a few milliseconds, so over a 3 s
+    # window the cold start is worth 0.03 dB on noise and 0.00 dB on kick-shaped
+    # material - measured on four signal shapes. An earlier version of this fix
+    # DID read a 1 s lead, on the strength of a 1.22 dB reading that turned out
+    # to be a bug in the probe itself (it called sosfilt on a 2-D array without
+    # an axis, so it filtered across the two CHANNELS instead of across time).
+    # With shelf == 1.0 nothing above runs at all, so every unity-shelf
+    # prediction is bit-identical to the pre-fix model - which is what keeps the
+    # published band calibration valid.
     for kind, hz in filters:
-        # Ableton slope 1 is 24 dB/oct, i.e. 4th order.
-        chain.append(butter(4, hz, btype=("high" if kind == "high" else "low"),
-                            fs=sr, output="sos"))
-    for sos in chain:
+        # Ableton slope 1 is 24 dB/oct, i.e. 4th order. Left zero-phase: these
+        # sit at 20 Hz and 20 kHz where the double-application was measured to
+        # move the result 0.01 dB, and changing them WOULD move every calibration
+        # probe. Recorded as a known imprecision rather than fixed blind.
+        sos = butter(4, hz, btype=("high" if kind == "high" else "low"),
+                     fs=sr, output="sos")
         y = np.stack([sosfiltfilt(sos, y[:, c]) for c in range(y.shape[1])], 1)
     out = {}
     for name, lo, hi in DIP_BANDS:

@@ -54,6 +54,14 @@ SENTINEL_TIME = -63072000  # Ableton "before-all-time" default event
 # [Rule 1: V21→V22 T3+T4 — boundary swaps ALWAYS corrected by Sam]
 BOUNDARY_MARGIN = 64  # 16 bars — must have this much room after swap
 
+# Sam's "option 2": leave some of the OUTGOING's bass in across the swap rather
+# than killing it outright, sized to the measured shortfall. DEFAULT OFF, and it
+# stays off until (a) Sam has heard it on a real mix and (b) the sizing gate is
+# calibrated for share-differences rather than borrowing the summed-bounce p95
+# (see Source/bass_residual.py). While it is off a residual of None is written,
+# which is exactly today's full kill — nothing downstream changes.
+BASS_RESIDUAL_ENABLED = False
+
 
 # ── ID allocation ─────────────────────────────────────────────────────────────
 
@@ -395,6 +403,13 @@ class TransitionPlan:
     two_stage_kill_beat: float = 0.0   # beat where full kill happens
     two_stage_volume: bool = False     # Rule 3: instant partial vol drop at swap
     low_sneak: bool = False            # Rule 4: use VOL_SNEAK_LOW for this incoming
+    # Sam's "option 2": instead of a full bass kill at the swap, hold the
+    # OUTGOING's low shelf here and let it taper to the kill by the overlap end,
+    # so the mix does not feel hollow when the incoming's bass is weaker. None
+    # means today's behaviour — a full kill at the swap — and is the default.
+    # Sized feed-forward by `bass_residual.size_residual`; never hand-set.
+    bass_residual: float | None = None
+    bass_residual_note: str = ""       # why it fired, or why it did not
     # Every transform that MOVED bass_swap after the report/heuristic chose it
     # ("clamped", "snapped"). Written back into the arrangement report so a
     # moved beat is always visible provenance, never a silent edit (Codex
@@ -807,6 +822,64 @@ def write_final_swaps_to_report(report_path: Path | None,
 #   Rule 5: Volume follows swap → structural (fade_start = swap position)
 #
 
+def _size_bass_residuals(plans: list[TransitionPlan], tracks,
+                         als_path: Path, audio_dir: Path) -> None:
+    """Fill in `plan.bass_residual` for every transition that qualifies.
+
+    Fails closed as a whole: if the model refuses the set, or the module will
+    not import, every plan keeps `bass_residual = None` and the build writes the
+    same envelopes it writes today. A sizing pass that cannot run must never be
+    the reason a mix changes.
+    """
+    try:
+        import bass_residual as br
+        import mix_predict as mp
+    except ImportError as exc:
+        print(f"\n  [bass residual] skipped — {exc}")
+        return
+    try:
+        model = mp.load_model(als_path, audio_dir)
+    except mp.ModelRefused as exc:
+        # The signal path carries something the model cannot represent, so it
+        # cannot stand behind a number. Refusing loudly is the whole point.
+        print(f"\n  [bass residual] model refused this set — {exc}")
+        return
+    except Exception as exc:
+        print(f"\n  [bass residual] model unavailable — {type(exc).__name__}: {exc}")
+        return
+
+    offsets = measure_track_levelling(tracks, audio_dir)
+    if not offsets:
+        print("\n  [bass residual] levelling not measurable — skipped, because "
+              "sizing against unlevelled faders is the exact error this avoids")
+        return
+
+    by_name = {_normalise(t.name): t for t in model.tracks}
+    cache: dict = {}
+    print("\nBass residual (Sam's option 2 — outgoing bass held across the swap):")
+    for plan in plans:
+        out_t = by_name.get(_normalise(plan.outgoing.name))
+        in_t = by_name.get(_normalise(plan.incoming.name))
+        if out_t is None or in_t is None:
+            plan.bass_residual_note = "track not found in the model"
+        elif plan.style == TransitionStyle.QUICK_SWAP:
+            plan.bass_residual_note = ("quick swap — the outgoing is silenced at "
+                                       "the swap, so a residual would be inaudible")
+        else:
+            decision = br.size_residual(
+                model, out_t, in_t, plan.bass_swap, plan.overlap_end, cache,
+                out_trim_db=offsets.get(plan.outgoing.name, 0.0),
+                in_trim_db=offsets.get(plan.incoming.name, 0.0))
+            plan.bass_residual_note = decision.reason
+            if decision.fired:
+                plan.bass_residual = decision.gain
+        tag = (f"{plan.bass_residual:.3f}" if plan.bass_residual is not None
+               else "full kill")
+        print(f"  {_short(plan.outgoing.name):20s} -> "
+              f"{_short(plan.incoming.name):20s}  {tag:>9s}  "
+              f"{plan.bass_residual_note}")
+
+
 def build_track_automation(plans: list[TransitionPlan],
                            tracks: list[TrackInfo],
                            ) -> dict[str, dict[str, list[tuple[float, float]]]]:
@@ -820,6 +893,22 @@ def build_track_automation(plans: list[TransitionPlan],
         ov_e = plan.overlap_end
         swap = plan.bass_swap
         pre  = swap - 1  # 1-beat ramp for EQ
+
+        # Sam's option 2. `out_post_swap_bass` is what the OUTGOING's low shelf
+        # holds from the swap onward: normally the full kill, but when a residual
+        # has been sized it holds that instead, and the existing
+        # (ov_e, EQ_BASS_KILL) point turns the straight line between them into
+        # the taper. No extra envelope point is needed — the interpolation IS
+        # the taper.
+        #
+        # QUICK_SWAP is excluded deliberately: it drops the outgoing's Utility
+        # Gain to zero AT the swap, so any shelf value after that is multiplied
+        # by silence and the residual would be written but inaudible (Codex
+        # MAJOR 2, 2026-09-01).
+        residual = plan.bass_residual
+        if plan.style == TransitionStyle.QUICK_SWAP:
+            residual = None
+        out_post_swap_bass = EQ_BASS_KILL if residual is None else residual
 
         # Volume fade starts AT the bass cut (swap), fades through to ov_e.
         # The outro between swap and ov_e is the fade zone.
@@ -838,7 +927,7 @@ def build_track_automation(plans: list[TransitionPlan],
             auto[plan.outgoing.name]["eq_bass"].extend([
                 (ov_s - 1, EQ_BASS_UNITY),
                 (pre,      EQ_BASS_UNITY),
-                (swap,     EQ_BASS_KILL),
+                (swap,     out_post_swap_bass),
                 (ov_e,     EQ_BASS_KILL),
             ])
             auto[plan.incoming.name]["volume"].extend([
@@ -871,7 +960,7 @@ def build_track_automation(plans: list[TransitionPlan],
                 (ov_s - 1, EQ_BASS_UNITY),
                 (ov_s,     EQ_BASS_UNITY),
                 (pre,      EQ_BASS_UNITY),
-                (swap,     EQ_BASS_KILL),  # full bass kill at swap
+                (swap,     out_post_swap_bass),
                 (ov_e,     EQ_BASS_KILL),
             ])
             # Incoming: ramp from sneak at ov_s up to full at the bass switch
@@ -919,7 +1008,7 @@ def build_track_automation(plans: list[TransitionPlan],
                     (partial_beat - 1, EQ_BASS_UNITY),
                     (partial_beat,     EQ_BASS_PARTIAL),
                     (kill_beat - 1,    EQ_BASS_PARTIAL),
-                    (kill_beat,        EQ_BASS_KILL),
+                    (kill_beat,        out_post_swap_bass),
                     (ov_e,             EQ_BASS_KILL),
                 ])
             else:
@@ -927,7 +1016,7 @@ def build_track_automation(plans: list[TransitionPlan],
                     (ov_s - 1, EQ_BASS_UNITY),
                     (ov_s,     EQ_BASS_UNITY),
                     (pre,      EQ_BASS_UNITY),
-                    (swap,     EQ_BASS_KILL),
+                    (swap,     out_post_swap_bass),
                     (ov_e,     EQ_BASS_KILL),
                 ])
 
@@ -1018,6 +1107,47 @@ def _wav_for_track(track_name: str, wavs: list[Path]) -> Path | None:
     if m is None:
         return None
     return wavs[m[0]]
+
+
+def measure_track_levelling(tracks, audio_dir: Path) -> dict[str, float]:
+    """The levelling offsets in dB, per track name, WITHOUT writing anything.
+
+    Split out so the bass-residual sizing can see the faders the mix will
+    actually ship with. It used to size against the arranged set, where every
+    fader is still 0 dB, while levelling ran ~60 lines later and moved them to
+    between -0.5 and -3.2 dB — up to 1.96 dB of change in a pairwise shortfall,
+    i.e. a residual sized for a mix that is never emitted (Codex FATAL 1,
+    2026-09-01).
+
+    Returns {} when levelling cannot run — the same condition under which the
+    writer below skips. Callers must read that as "no levelling happened", not
+    as "offsets of zero were measured".
+    """
+    try:
+        import numpy as _np
+        import soundfile as _sf
+        import pyloudnorm as _pyln
+    except ImportError:
+        return {}
+    wavs = sorted(Path(audio_dir).glob("*.wav"))
+    if not wavs:
+        return {}
+    lufs: list[float | None] = []
+    for t in tracks:
+        w = _wav_for_track(t.name, wavs)
+        if w is None:
+            lufs.append(None)
+            continue
+        y, sr = _sf.read(str(w))
+        if y.ndim == 1:
+            y = _np.stack([y, y], axis=1)
+        lufs.append(float(_pyln.Meter(sr).integrated_loudness(y)))
+    if len([l for l in lufs if l is not None]) < 2:
+        return {}
+    from automated_dj_mixes.automation import calculate_gain_offsets
+    off_iter = iter(calculate_gain_offsets([l for l in lufs if l is not None]))
+    return {t.name: (next(off_iter) if l is not None else 0.0)
+            for t, l in zip(tracks, lufs)}
 
 
 def _apply_track_levelling(lines: list[str], tracks, audio_dir: Path) -> None:
@@ -1189,6 +1319,21 @@ def main() -> None:
     # automation construction / target validation / the ALS write failed
     # (Codex round-2 BLOCKER 1).
 
+    # ── size Sam's option-2 bass residual (flag-gated, default OFF) ────
+    # Runs BEFORE build_track_automation, because the residual is an input to
+    # the outgoing's bass envelope, and before the writer touches anything, so a
+    # refusal costs nothing. It needs the levelling offsets the mix will ship
+    # with, which is why they are measured here rather than read off the
+    # arranged set, where every fader is still 0 dB.
+    audio_dir = next((c / "Audio" for c in
+                      (als_path.parent.parent, als_path.parent.parent.parent,
+                       als_path.parent)
+                      if (c / "Audio").is_dir()), None)
+    if BASS_RESIDUAL_ENABLED and audio_dir is not None:
+        _size_bass_residuals(plans, tracks, als_path, audio_dir)
+    elif BASS_RESIDUAL_ENABLED:
+        print("\n  [bass residual] Audio folder not found near the .als — skipped")
+
     # ── generate automation ───────────────────────────────────────────
     track_auto = build_track_automation(plans, tracks)
     print(f"\nAutomation points per track:")
@@ -1247,9 +1392,6 @@ def main() -> None:
         offset += delta
 
     # ── per-track levelling (LUFS-matched mixer faders) ───────────────
-    audio_dir = next((c / "Audio" for c in
-                      (als_path.parent.parent, als_path.parent.parent.parent, als_path.parent)
-                      if (c / "Audio").is_dir()), None)
     if audio_dir is not None:
         _apply_track_levelling(lines, tracks, audio_dir)
     else:
