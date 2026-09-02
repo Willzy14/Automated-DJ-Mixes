@@ -81,6 +81,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+**[Claude, 2026-09-01]: OPTION 2 IS BUILT, EAR-APPROVED, AND WAITING ON ONE FULL MIX.** `Source/bass_residual.py` sizes how much of the OUTGOING's bass to leave in across a swap, feed-forward from source audio + the arranged ALS, consuming the real levelling trims. Cap is **Sam's ear-set -9.5 dB** (0.335) - a listening ruling, pinned by test, refined from the launch value after he called -5.7 "clashy" on the Apetite -> DHB proof. Cross-band rule is his too: refuse rather than fill a sub hole by bulging 60-150 Hz. Flag `BASS_RESIDUAL_ENABLED` default OFF, `BASS_RESIDUAL=1` to A/B; **next step is one full-size mix build with it on**. En route, a shipped defect was found and fixed: `mix_predict` double-applied the low shelf via `sosfiltfilt` (dB doubled; `two_stage_bass` mixes were affected); now one-pass, unity-shelf parity bit-identical so the calibration stands. Standing blocker (Codex FATAL 2): the firing gate borrows summed-bounce p95 for a share-difference quantity - held-out solo renders from a second mix would settle it. Suite 560/6/0.
+
 **[Claude, 2026-08-28]: THE GATE STOPPED POINTING AT THE WRONG PLACE, AND THE PIPELINE CAN NOW PREDICT A BOUNCE WITHOUT BOUNCING.** Four things shipped. (1) `transition_dip` names WHICH BAND lost the energy (`band_db`, `deficit_band`), measured at the exact short-term-LUFS minimum - the ST window is TRAILING, so reading its argmin frame as an instant had put the analysis window ~1.45 s past the defect. (2) It separates a MOMENTARY hole from a PERSISTENT difference between two mastered records, via a third window 32-160 beats past the swap; `_dip_band_deficit` compares post-swap against pre-swap, so any two records with different spectra were being reported as a transition defect (6.5 of pair 15's 6.71 dB was exactly that). (3) **UNBRACKETED DETECTION - the most important fix of the day.** `check_transition_dip` searches `[swap, swap+32]` and takes the minimum; when that argmin lands on a window EDGE the curve is still falling where the search stopped, so `dip_at_sec` is where the search ended, not where the defect is. **7 of 15 V16 transitions land on an edge, including all three flagged pairs.** Extending to +128 beats deepens pair 15 from 3.78 to 7.90 dB and takes pair 1 from a clean 0.70 to 10.00. The gate now names it and refuses to classify from it. (4) **`Source/mix_predict.py` (new)** predicts per-band level from source audio + the ALS with no render: per-band power = sum over tracks of `(master*trim)^2 * gain(t)^2 * band_power(source, low-shelf APPLIED AS A FILTER)`, source instant via warp markers. Calibrated, every band lands under 0.5 dB MAE (sub 0.46, bass 0.31, lowmid 0.31, mid 0.19, high 0.25). Also fixed: BOTH silently-clean bail paths (the tempo-envelope bail AND `main()`'s generic exception path) listed all twelve checks as "run clean" after reading zero samples. Suite 521 -> 544 passed / 6 skipped / 0 failed.
 
 **[Claude, 2026-08-28]: V16 WAS NEVER ACTUALLY CHECKED UNTIL TODAY.** The shipped `RENDER_CHECK_V16.md` was a FAIL from the old gate at `duration 0.00 s`, `clip count 0` - no audio was ever read. Fresh run: 5047.87 s, 170 clips, -17.08 LUFS, endpoint +0.10 s over 84 minutes. 11 findings = 3 `loop_verbatim` FAILs (the three Sam already adjudicated) + 3 `transition_dip` WARNs (pairs 9/14/15) + 2 `exposed_solo` + `grid_fold` 53.2 ms reports-only + **`boundary_click` SKIPPED for 162 of 162 boundaries** - the click check has never run on any real (tempo-arc) mix.
@@ -197,7 +199,22 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-08-28 (Latest Session) - the gate stopped pointing at the wrong place; a bounce can now be predicted
+### 2026-09-01 (Latest Session) - option 2 built, first live firing, and Sam's ear set the cap
+**Brain:** Claude (Opus, then Fable from the ear-verdict fold-in; + Codex, MiniMax)
+**Focus:** Build Sam's option-2 bass fix end-to-end: leave some of the OUTGOING's bass in across the swap, sized feed-forward via `mix_predict`, no bounce. Built, dual-peer-reviewed, fired on real audio, listened to by Sam, and re-sized to his ear.
+
+- **`Source/bass_residual.py` (new) + `apply_automation.py` wiring**, behind `BASS_RESIDUAL_ENABLED` (default OFF; `BASS_RESIDUAL=1` env override for A/B). The sized quantity is what the LISTENER hears across the swap - `out_unity+in_kill` vs `out_kill+in_unity` - not "outgoing minus incoming". Ladder search takes the smallest residual that closes the hole, capped; absolute cross-band overshoot guard at 5 probes across the taper; QUICK_SWAP refused (its Utility Gain is zero at the swap, a residual there is inaudible); sizing consumes the LUFS levelling trims the mix ships with (`measure_track_levelling` split out for this).
+- **A REAL DEFECT IN SHIPPED CODE found en route:** `mix_predict` applied the ChannelEq low shelf through `sosfiltfilt` - forward AND backward - DOUBLING its dB (0.52 designed -5.5, applied -10.1). Invisible while only 0.18/1.0 were ever written; `two_stage_bass` already writes 0.52, so its mixes had mis-predicted low bands. Fixed to one-pass `sosfilt`; unity-shelf parity proven bit-identical (185 band-cells, worst delta 0.000000000 dB), so the published calibration stands by construction.
+- **Dual peer review:** Codex REJECTED the plan with 4 fatals - 3 fixed (sizing ran against 0 dB pre-levelling faders; one-instant guard; QUICK_SWAP inaudibility), 1 STANDS as the honest blocker: `BAND_P95_DB` was measured on SUMMED predictions but gates a difference of two per-track SHARES; widened by sqrt(2) as a stand-in, needs held-out solo renders from a second mix. Codex also caught Claude weakening its own overshoot guard to make the feature fire (reverted). MiniMax: no fatals, but its M2 (balance-at-swap vs fill-the-hole) was the sharpest question of the day.
+- **First live firing:** test project `Test Project/01.09.26 Bass Residual/` (gitignored), masters COPIED from `1. Stereo Masters`: **Ahmed Spins - Apetite -> Edd x Rayne - DHB** (8.9 dB sub drop across the swap). Three pairs refused first, and the third taught the real lesson: **LUFS levelling already does most of "the incoming is a little too quiet"** - the residual only has work when a record is weak in the low end RELATIVE TO ITS OWN LOUDNESS. Screening 79 masters on (band - LUFS) found only 4 qualifying pairs; the rarity is consistent mastering, not a broken feature.
+- **SAM'S EAR VERDICT (the day's ruling):** -5.7 dB residual = "still too much bass in, feels clashy"; his hand-set **-9.5 dB is right** - *"you've lost the bass tone, but you've still kept that kind of warmth... you're after the weight, but not the sound."* `RESIDUAL_CEILING` = 0.335, recorded as a LISTENING result with the quote and pinned by `test_the_ceiling_is_sams_ear_ruling`. Lowering the cap exposed a design contradiction: the worth-writing gate demanded >=3.08 dB predicted recovery, but a -9.5 cap bounds recovery near 2-3 dB by construction - it refused the exact transition Sam approved. Fixed on the evidence hierarchy (ears > arithmetic): a CLEAN run to the cap fires regardless of predicted recovery; a guard-stopped run keeps the bound. `Output/Mix V4.als` verified in-file: 0.3350 at the swap.
+- **Also fixed at session start:** `~/.claude/Memory` was never symlinked on STUDIO-2, so `quota_check`'s cross-machine daily read was silently blind on this box (posture recorded 1 h earlier by another project was invisible). Symlink created; logged to Known Workarounds; other two machines likely have the same gap.
+- **Carded friction:** `t.bpm` populated ONLY from the MIK database, so fresh projects can't use `--tempo-arc` even though `--stem-grid` already detected both BPMs; `apply_loops` stem-cache lookup fails closed when a track's cache exists in two projects (blocks corpus-copy test builds).
+- Tests 13 -> 15 new in `Tests/test_bass_residual.py`, ALL 8 MUTANTS KILLED. Suite 544 -> 560 passed / 6 skipped / 0 failed.
+
+**Decision (Sam):** flag stays OFF; test with `BASS_RESIDUAL=1` on the next full mix build, and if it behaves on whatever pairs qualify, flip the default.
+
+### 2026-08-28 - the gate stopped pointing at the wrong place; a bounce can now be predicted
 **Brain:** Claude (+ Codex, MiniMax, 18 workflow agents)
 **Focus:** Sam asked whether bouncing transitions, analysing them and fixing before presenting would give better information than the current predict-from-source review. It would - but three independent reviews found the closed loop unsafe as conceived, and the investigation found a defect in the gate itself that invalidated every dip location it had ever reported.
 
@@ -1247,37 +1264,25 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
-> **TOP (2026-08-28): size Sam's option-2 bass fix with `mix_predict`, feed-forward, no bounce.**
-> Sam's own technique, in his words: when energy drops after the bass switch (usually the incoming's
-> kick and bass being less powerful, or the incoming being a little too quiet) he does one of two
-> things - (a) turn the incoming up through the transition and automate it back down to its levelled
-> position by the time the transition is over, or (b) instead of a full bass cut, leave a little bass
-> in from the OUTGOING so it does not feel hollow. **He chose (b), scaled to the measured shortfall**,
-> and ruled pair 15 leave-alone. `EQ_BASS_PARTIAL = 0.52` (-5.68 dB) already exists and is already
-> wired, so the lever is calibrated and in production. The build: at build time, measure the incoming's
-> band shortfall against the outgoing from SOURCE audio, scale the outgoing's residual bass to it, and
-> taper to full kill by the end of the transition. `mix_predict.can_size_correction(band, dB)` gates it.
-> **Nothing on V16 qualifies** (all three flagged pairs are unbracketed and/or persistent), so the first
-> real momentary post-swap hole is what this needs validating against.
+> **TOP (2026-09-01): run one full-size mix build with `BASS_RESIDUAL=1` - the flag's flip-on gate.**
+> Option 2 is BUILT and EAR-APPROVED (see Current State / the 2026-09-01 session entry): residual
+> capped at Sam's -9.5 dB, cross-band refuse per his ruling, cap-pinned firings justified by his
+> listen rather than the recovery arithmetic. Sam's decision: leave `BASS_RESIDUAL_ENABLED = False`,
+> A/B it on the NEXT full mix via the env override, and flip the default if it behaves on whatever
+> pairs qualify. Expect it to fire RARELY - LUFS levelling already closes most loudness gaps, so only
+> records weak in the low end RELATIVE TO THEIR OWN LOUDNESS qualify (4 pairs in 79 masters screened).
 >
-> **WHY THE CLOSED LOOP WAS NOT BUILT (Codex + MiniMax, both fatal, 2026-08-28).** The gate measures the
-> SUMMED bounce and cannot infer cause: boosting the incoming at pair 9's swap moves sub only 1.84 dB of
-> a 15 dB hole while still clearing the gate, because K-weighting de-emphasises the very band that is
-> missing - "the loop has then optimized its measurement rather than the music". Also: no identity chain
-> between render, set and report (version matching is a filename regex, so a stale WAV can be gated
-> against a newer set); `apply_automation.py` expects a set with NO automation and appends envelopes
-> without merging, so a second pass can duplicate a `PointeeId`; `compress_als` writes the gzip and
-> validates afterwards, so a failed validation leaves the bad file in place; and there is no convergence
-> guarantee. Sam's feed-forward reframe removes the first, second and fourth by construction.
+> **STILL OPEN under it (Codex FATAL 2, 2026-09-01):** the firing gate borrows `BAND_P95_DB`
+> (measured on SUMMED bounce predictions) to gate a DIFFERENCE of two per-track shares - errors that
+> cancel in a sum can add in a difference. Widened by sqrt(2) as a stand-in. Clearing it needs
+> held-out SOLO renders from a second mix compared against their predicted shares.
 >
-> **CARDED, from today:** (a) `boundary_click` has ZERO coverage on every real mix - unblocking it needs
-> the ~19.5 ppm map residual settled; (b) the ~3 dB low-band offset in `mix_predict` is measured and
-> calibrated but its MECHANISM IS UNKNOWN - not the AutoFilters, not ChannelEq, not gain staging, not
-> the warp engine, not misalignment, all eliminated by measurement - and the calibration comes from ONE
-> mix, so re-measure on a second bounce before trusting the low bands on unfamiliar material;
-> (c) ChannelEq's Mid band is automatable (+/-12 dB, sweepable 120 Hz-7.5 kHz) with unique target Ids
-> already present on every track, simply unwired, and a third lane needs no template change and no ID
-> allocation; (d) ~6 GB of superseded renders sit in Dropbox with no ignore flag on `Output/`.
+> **CARDED, 2026-09-01 friction:** (a) `t.bpm` is populated ONLY from the Mixed In Key database, so a
+> fresh project that skipped Phase 0b dies on `--tempo-arc` (`float(None)`) even though `--stem-grid`
+> already measured both BPMs - fall back to the stem-grid BPM or fail with "run Phase 0b";
+> (b) `apply_loops._quality_cache_for_track` fails closed when a track's stem cache exists in two
+> projects, blocking corpus-copy test builds - wants a scoped-to-this-project search or an override.
+
 
 > **TOP (2026-08-27): the V16 loop-fix cycle.** Sam hand-fixed 2 of the 3 flagged `loop_verbatim`
 > defects in `Output/14.08.26 Mix V16 Loop Fixes Project/` (Nappp source bar shifted; Vente tail
