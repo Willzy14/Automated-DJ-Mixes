@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import html
 import json
 import math
 import re
@@ -956,6 +957,83 @@ def check_hard_silence(rms100_db: np.ndarray, fps: int,
     return findings
 
 
+def _source_floor_db(wav_path: Path, t0: float, t1: float) -> float | None:
+    """50 ms frame-RMS floor of the source WAV between t0..t1 seconds, or
+    None when the window is unreadable."""
+    try:
+        with sf.SoundFile(str(wav_path), "r") as fh:
+            sr = fh.samplerate
+            a = max(0, int(t0 * sr))
+            b = min(fh.frames, int(t1 * sr))
+            if b - a < sr // 20:
+                return None
+            fh.seek(a)
+            y = fh.read(b - a, dtype="float64", always_2d=True).mean(axis=1)
+        n = max(1, int(0.05 * sr))
+        m = len(y) // n
+        if m < 1:
+            return None
+        rms = np.sqrt((y[:m * n].reshape(m, n) ** 2).mean(axis=1))
+        return float(20.0 * np.log10(max(float(rms.min()), 1e-10)))
+    except Exception:
+        return None
+
+
+def reclassify_source_faithful_silence(findings: list[Finding],
+                                       clips: list[dict],
+                                       tempo_map: TempoMap,
+                                       audio_dir: Path,
+                                       track_bpms: dict[str, float]) -> None:
+    """Downgrade a hard_silence FAIL to INFO when the SOURCE audio is itself
+    near-silent at the mapped position - a track-intrinsic stop (a written-in
+    breakdown halt, a natural end tail) is the track, not a render defect.
+
+    2026-09-02 evidence (02.09.26 House 10): both hard_silence FAILs mapped to
+    source floors of -62.7 and -74.2 dBFS in the tracks' own audio. Fails
+    closed: no active clip, unmappable source, or a source that is NOT silent
+    all keep the FAIL."""
+    for f in findings:
+        if f.check != "hard_silence" or f.level != "FAIL":
+            continue
+        t_mid = (f.t0 + f.t1) / 2.0
+        mid_beat = sec_to_beat_safe(t_mid, tempo_map)
+        floors: dict[str, float] = {}
+        verdict_faithful = None
+        for c in clips:
+            if not (c["arr_start"] <= mid_beat < c["arr_end"]):
+                continue
+            name = html.unescape(c["track"])
+            bpm = track_bpms.get(name) or track_bpms.get(c["track"])
+            if not bpm:
+                verdict_faithful = False
+                break
+            src_beat0 = c["loop_start"] + (
+                sec_to_beat_safe(f.t0, tempo_map) - c["arr_start"])
+            src_beat1 = c["loop_start"] + (
+                sec_to_beat_safe(f.t1, tempo_map) - c["arr_start"])
+            wav = audio_dir / (name + ".wav")
+            floor = _source_floor_db(wav, src_beat0 * 60.0 / bpm,
+                                     src_beat1 * 60.0 / bpm)
+            if floor is None or floor >= HARD_SILENCE_DB:
+                verdict_faithful = False
+                break
+            floors[name] = round(floor, 1)
+            verdict_faithful = True
+        if verdict_faithful:
+            f.level = "INFO"
+            f.measured["source_floors_db"] = floors
+            f.msg += (" - SOURCE-FAITHFUL: the active track's own audio is "
+                      "near-silent here (a written-in stop, not a render "
+                      "defect)")
+
+
+def sec_to_beat_safe(sec: float, tempo_map: TempoMap) -> float:
+    try:
+        return float(sec_to_arr(sec, tempo_map))
+    except Exception:
+        return -1.0
+
+
 def _read_window(fh: sf.SoundFile, center_sample: int, half: int) -> np.ndarray | None:
     a = max(0, center_sample - half)
     b = min(fh.frames, center_sample + half)
@@ -1694,8 +1772,47 @@ def _iteration_envelope(fh: sf.SoundFile, sr: float, tempo_map: TempoMap,
     return np.sqrt(e[:m * hop].reshape(m, hop).mean(axis=1))
 
 
+def _loop_swap_beat(lp: dict, transitions: list[dict]) -> float | None:
+    """The swap beat of the transition whose automation covers this loop, or
+    None. A tail loop sits inside its transition's overlap; from the swap
+    onward the outgoing carries volume/EQ automation (and under a quick swap
+    it is silenced outright), so rendered iterations legitimately stop
+    repeating verbatim there. Overlap bounds are reconstructed from
+    swap_beats + overlap_beats + swap_progress; when progress is absent,
+    fall back to "swap within 256 beats of the loop"."""
+    span_a = lp["insert_at_beat"]
+    span_b = span_a + lp["total_beats"]
+    for tr in transitions or []:
+        swap = tr["swap_beats"]
+        prog = tr.get("swap_progress")
+        if prog is not None and tr.get("overlap_beats"):
+            ov_a = swap - float(prog) * float(tr["overlap_beats"])
+            ov_b = ov_a + float(tr["overlap_beats"])
+            if ov_a - 1e-6 <= span_a and span_b <= ov_b + lp["iter_len"] + 1e-6:
+                return swap
+        elif abs(swap - span_a) <= 256.0 or abs(swap - span_b) <= 256.0:
+            return swap
+    return None
+
+
+def _verbatim_gated_pairs(insert_beat: float, iter_len: float, count: int,
+                          swap_beat: float | None) -> list[int]:
+    """Indices of adjacent-iteration pairs that may GATE (fail the check).
+    Pair k compares iterations k and k+1, spanning
+    [insert + k*L, insert + (k+2)*L]. A pair whose later iteration reaches
+    past the swap beat plays under transition automation - excluded from
+    gating (2026-09-02: all four loop_verbatim FAILs on the House 10 render
+    were exactly these pairs; pre-swap pairs on the same loops read
+    r 0.94-0.97)."""
+    if swap_beat is None:
+        return list(range(count - 1))
+    return [k for k in range(count - 1)
+            if insert_beat + (k + 2) * iter_len <= swap_beat + 1e-6]
+
+
 def check_loop_verbatim(render_path: Path, loops: list[dict],
-                        tempo_map: TempoMap) -> list[Finding]:
+                        tempo_map: TempoMap,
+                        transitions: list[dict] | None = None) -> list[Finding]:
     findings: list[Finding] = []
     eof_truncated_count = 0
     with sf.SoundFile(str(render_path), "r") as fh:
@@ -1705,6 +1822,9 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
             count = max(1, round(lp["total_beats"] / iter_len))
             if count < 2:
                 continue
+            swap_beat = _loop_swap_beat(lp, transitions or [])
+            gated = set(_verbatim_gated_pairs(
+                lp["insert_at_beat"], iter_len, count, swap_beat))
             envs = []
             for k in range(count):
                 start_beat = lp["insert_at_beat"] + k * iter_len
@@ -1728,16 +1848,35 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                 continue
             min_len = min(len(e) for e in envs)
             envs = [e[:min_len] for e in envs]
-            rs: list[float] = []
+            rs_gate: list[float] = []
+            rs_auto: list[float] = []
             for k in range(len(envs) - 1):
                 a, b = envs[k], envs[k + 1]
                 if a.std() < 1e-12 or b.std() < 1e-12:
                     continue
                 r = float(np.corrcoef(a, b)[0, 1])
-                rs.append(r)
-            if not rs:
+                (rs_gate if k in gated else rs_auto).append(r)
+            if not rs_gate and not rs_auto:
                 continue
-            min_r = min(rs)
+            if not rs_gate:
+                # Every pair plays under the transition's automation - a
+                # verbatim gate has nothing valid to measure. Report, never
+                # gate: the automation SHOULD change these iterations.
+                findings.append(Finding(
+                    check="loop_verbatim_under_automation", level="INFO",
+                    t0=arr_to_sec(lp["insert_at_beat"], tempo_map),
+                    t1=arr_to_sec(lp["insert_at_beat"] + lp["total_beats"],
+                                  tempo_map),
+                    beat0=lp["insert_at_beat"],
+                    beat1=lp["insert_at_beat"] + lp["total_beats"],
+                    measured={"swap_beat": swap_beat, "iters": int(count),
+                              "rs": [round(r, 3) for r in rs_auto]},
+                    msg=("loop plays entirely under transition automation "
+                         f"(swap at beat {swap_beat:.0f}) - verbatim check "
+                         "not applicable"),
+                ))
+                continue
+            min_r = min(rs_gate)
             if min_r < LOOP_VERBATIM_MIN_R:
                 findings.append(Finding(
                     check="loop_verbatim", level="FAIL",
@@ -1747,9 +1886,12 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                     beat0=lp["insert_at_beat"],
                     beat1=lp["insert_at_beat"] + lp["total_beats"],
                     measured={"min_r": min_r, "iters": int(count),
-                              "rs": [round(r, 3) for r in rs]},
+                              "rs": [round(r, 3) for r in rs_gate],
+                              "rs_under_automation":
+                                  [round(r, 3) for r in rs_auto],
+                              "swap_beat": swap_beat},
                     msg=(f"loop does not repeat verbatim (min r={min_r:.2f} "
-                         f"across {count} iterations)"),
+                         f"across {len(rs_gate) + 1} pre-swap iterations)"),
                 ))
     if eof_truncated_count:
         findings.append(Finding(
@@ -2031,6 +2173,23 @@ def run_check(render_path: Path, report_path: Path,
         ))
 
     findings += check_hard_silence(sweep.rms100_db, fps, arr_start_s, arr_end_s)
+    # Consult the SOURCE audio before letting a silence finding gate: a
+    # track-intrinsic stop (written-in breakdown halt, natural end tail) is
+    # the track, not a render defect. Fails closed - see the reclassifier.
+    try:
+        with open(report_path, "r", encoding="utf-8") as _fh:
+            _rep_raw = json.load(_fh)
+        track_bpms = {
+            html.unescape(t["name"]): float(t.get("source_grid_bpm")
+                                            or t.get("bpm") or 0.0)
+            for t in _rep_raw.get("tracks", [])
+        }
+    except Exception:
+        track_bpms = {}
+    audio_dir = render_path.parent.parent / "Audio"
+    if track_bpms and audio_dir.is_dir():
+        reclassify_source_faithful_silence(findings, clips, tempo_map,
+                                           audio_dir, track_bpms)
     findings += check_map_vs_render(sweep.rms100_db, fps, arr_end_s, tempo_map)
 
     boundaries_sec = collect_boundaries(clips, loops, arr_end_b, tempo_map)
@@ -2095,7 +2254,7 @@ def run_check(render_path: Path, report_path: Path,
     findings += check_loop_hole(loops, sweep.beat_rms_db, tempo_map)
     findings += check_transition_dip(transitions, st_lufs, fps, tempo_map,
                                     render_path=render_path)
-    findings += check_loop_verbatim(render_path, loops, tempo_map)
+    findings += check_loop_verbatim(render_path, loops, tempo_map, transitions)
     findings += check_grid_fold(render_path, clips, tempo_map)
     # check_kick_flam is disabled; not invoked.
 

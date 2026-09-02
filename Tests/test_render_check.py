@@ -2276,3 +2276,68 @@ def test_edge_minimum_is_reported_as_unbracketed(tmp_path):
     assert out2[0].measured["unbracketed"] is False, out2[0].measured
     assert "UNBRACKETED" not in out2[0].msg
     assert out2[0].measured["dip_kind"] in ("momentary", "persistent")
+
+
+# --------------------------------------------------------------------------- #
+# 2026-09-02 pins: automation-aware loop_verbatim + source-faithful silence   #
+# (four false loop FAILs and two false silence FAILs on the House 10 render)  #
+# --------------------------------------------------------------------------- #
+
+def test_verbatim_gated_pairs_exclude_post_swap():
+    """T1 House 10 geometry: loop 16b x 7 at 640, swap 720. Pairs 0-3 end at
+    or before the swap and gate; pairs 4-5 reach past it and are excluded."""
+    gated = render_check._verbatim_gated_pairs(640.0, 16.0, 7, 720.0)
+    assert gated == [0, 1, 2, 3]
+
+
+def test_verbatim_gated_pairs_all_excluded_when_loop_starts_at_swap():
+    """T9 geometry: loop starts AT the swap - nothing may gate."""
+    assert render_check._verbatim_gated_pairs(5536.0, 32.0, 4, 5536.0) == []
+
+
+def test_verbatim_gated_pairs_no_swap_gates_everything():
+    assert render_check._verbatim_gated_pairs(100.0, 8.0, 4, None) == [0, 1, 2]
+
+
+def test_loop_swap_beat_matches_containing_overlap():
+    lp = {"insert_at_beat": 640.0, "total_beats": 112.0, "iter_len": 16.0}
+    transitions = [
+        {"swap_beats": 720.0, "overlap_beats": 256.0,
+         "swap_progress": 0.5},   # ov 592-848 contains the loop
+        {"swap_beats": 5000.0, "overlap_beats": 68.0,
+         "swap_progress": 0.9},
+    ]
+    assert render_check._loop_swap_beat(lp, transitions) == 720.0
+
+
+def test_source_faithful_silence_downgrades_to_info(tmp_path):
+    """A hard_silence FAIL whose active clip maps to near-silent SOURCE audio
+    becomes INFO; one mapping to loud source stays FAIL."""
+    sr = 44100
+    audio_dir = tmp_path / "Audio"
+    audio_dir.mkdir()
+    # Track A: 4 s of tone with a truly silent hole at 2.0-2.5 s.
+    t = np.linspace(0, 4.0, 4 * sr, endpoint=False)
+    y = 0.5 * np.sin(2 * np.pi * 220 * t)
+    y[2 * sr:int(2.5 * sr)] = 0.0
+    sf.write(str(audio_dir / "Track A.wav"), y, sr)
+
+    tempo_map = render_check.TempoMap.flat(120.0)  # 0.5 s/beat
+    clips = [{"track": "Track A", "arr_start": 0.0, "arr_end": 8.0,
+              "loop_start": 0.0, "loop_end": 8.0, "start_relative": 0.0,
+              "loop_on": False}]
+    bpms = {"Track A": 120.0}
+
+    silent_hit = render_check.Finding(
+        check="hard_silence", level="FAIL", t0=2.05, t1=2.45,
+        beat0=0.0, beat1=0.0, measured={}, msg="hard silence (0.4s)")
+    loud_hit = render_check.Finding(
+        check="hard_silence", level="FAIL", t0=1.0, t1=1.4,
+        beat0=0.0, beat1=0.0, measured={}, msg="hard silence (0.4s)")
+
+    render_check.reclassify_source_faithful_silence(
+        [silent_hit, loud_hit], clips, tempo_map, audio_dir, bpms)
+
+    assert silent_hit.level == "INFO"
+    assert "SOURCE-FAITHFUL" in silent_hit.msg
+    assert loud_hit.level == "FAIL"

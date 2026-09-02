@@ -133,8 +133,33 @@ all sourced from `1. Stereo Masters/*/MASTER RENDERS/` (copied, never moved).
   is honest.
 - **P4-3. Loop PNGs fine** (5/5 rendered, quality 0.58-0.64, all clean) — three listen-flags
   recorded in REVIEW_V3.md (1-bar cell ×7; early-drop-sourced tail; fade-edge region).
-- **P4-4. Render gate not run** — no bounce exists yet (Sam bounces by hand; gate fires when
-  `02.09.26 House 10 Mix V3.wav` appears beside the ALS).
+- **P4-4. Render gate RAN on Sam's bounce (2976s, -17.2 LUFS) and its FAIL decomposed into two
+  gate-blindness classes, both fixed + pinned same day:**
+  - *loop_verbatim under automation:* all 4 FAILs were tail loops inside their transition's
+    post-swap automation span (a loop under a volume ramp cannot correlate verbatim by design);
+    pre-swap pairs on the same loops read r 0.94-0.97. Fix: pair-level exclusion past the swap
+    beat (`_verbatim_gated_pairs`), all-excluded loops report INFO `loop_verbatim_under_automation`.
+  - *source-faithful silence:* both hard_silence FAILs mapped to the tracks' OWN near-silent audio
+    (Deetron's written-in stop, -62.7 dBFS source floor; Demarkus' end tail, -74.2). Fix:
+    `reclassify_source_faithful_silence` consults the source WAV at the mapped position and
+    downgrades to INFO; fails closed on any doubt.
+  - Re-run verdict: **WARN (exit 1)** — the honest state. Remaining ears-items: T3's momentary
+    5.5 dB sub dip (the exact spot the bass-residual guard refused to fill — direct evidence for
+    Sam's option-2 case on a future bass-light pairing), T4's +6.5 dB loop-exit rewind splice,
+    4 musical exposed-solos, and the uncharacterised tempo-arc drift report.
+
+## Burn round (same day, Sam's directive: "use it as a burn list, spin up the team")
+
+| Burn item | Owner | Status |
+|---|---|---|
+| B1 learn_from_correction reads Phase-1 sequential geometry — vacuous 0-transition pass on Sam's first real tweak set | Codex (worktree `burn/learner-geometry`) | in flight |
+| B2 render_check loop_verbatim automation-blindness | Claude | **DONE + pinned (6 tests)** |
+| B3 render_check source-faithful silence | Claude | **DONE + pinned** |
+| B4 extract_sections_als V1_baseline naming | MiniMax (worktree `burn/mechanical-cluster`) | in flight |
+| B6 librosa-BPM console honesty | MiniMax | in flight |
+| B7 '&amp;' escape sweep across ALS-name consumers | MiniMax | in flight |
+| B10 Sam-tweaks lessons distilled | Claude | **DONE** — `Documentation/Mix Patterns Library/02.09.26 House 10 Sam Tweaks.md`; learner rerun pending B1; Crusy grid change uninspected |
+| Team tooling: three Home-PC hardcoded paths in run_seat/queue_runner killed the first launch silently | Claude | **FIXED** (USERPROFILE resolution) + ledger + Known Workarounds |
 
 ---
 
