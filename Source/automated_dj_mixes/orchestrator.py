@@ -491,7 +491,15 @@ def run_pipeline(
 
     for a in analyses:
         src = f"[{a.analysis_source}]" if a.analysis_source != "librosa" else ""
-        print(f"  {a.path.name}: {a.camelot or '?'} | {a.bpm:.1f} BPM | {a.lufs:.1f} LUFS {src}")
+        # Provisional flag when the BPM came from the librosa lattice fallback
+        # rather than an authoritative source (ID3 tag or MIK DB). The 02.09.26
+        # House 10-track run printed four 129.2 BPMs side-by-side with tag/MIK
+        # values at the same confidence; same confidence, different trust, and
+        # the stem grid later replaces it anyway. Display-only (2026-09-02 sweep).
+        librosa_bpm = any(w.startswith("BPM detected by librosa") for w in a.warnings)
+        bpm_str = (f"~{a.bpm:.1f} BPM (librosa, provisional)"
+                   if librosa_bpm else f"{a.bpm:.1f} BPM")
+        print(f"  {a.path.name}: {a.camelot or '?'} | {bpm_str} | {a.lufs:.1f} LUFS {src}")
         for w in a.warnings:
             print(f"    WARNING: {w}")
 
