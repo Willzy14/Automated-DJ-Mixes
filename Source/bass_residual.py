@@ -57,13 +57,15 @@ rather than at whatever the arithmetic wants, and why the last gate is his ears.
 
 SAM'S TWO RULINGS, 2026-09-01 - both settled, do not re-litigate:
 
-  1. HOW MUCH BASS. "Meet it halfway." Size to the shortfall but cap at
-     EQ_BASS_PARTIAL, which recovers roughly half a typical hole. The
-     alternative on the table was to match the level across the swap, which on
-     his material means barely cutting the outgoing at all (about -1 to -2 dB
-     rather than -6) - MiniMax argued that is the truer reading of "don't let
-     it feel hollow". He chose the conservative one: every value this writes is
-     a value he has already heard in a shipped mix.
+  1. HOW MUCH BASS. "Meet it halfway." Size to the shortfall, capped - and the
+     cap is his ears' number, refined by listening on 2026-09-01: launched at
+     EQ_BASS_PARTIAL (-5.68 dB), which his first listen ruled "too much bass
+     in, feels clashy"; he hand-set -9.5 dB and ruled THAT right - "you're
+     after the weight, but not the sound". The alternative on the table was to
+     match the level across the swap, which on his material means barely
+     cutting the outgoing at all (about -1 to -2 dB) - MiniMax argued that is
+     the truer reading of "don't let it feel hollow". His listen settled it
+     the other way: the residual keeps warmth, it must not keep the bass LINE.
 
   2. THE CROSS-BAND TRADE. "Refuse - don't trade one problem for another."
      When filling a sub hole would push 60-150 Hz above where it sat before the
@@ -92,13 +94,30 @@ WINDOW_SEC = 3.0
 DRIVING_BANDS = ("sub", "bass")
 
 # The residual ladder, in ChannelEq LowShelfGain (a LINEAR AMPLITUDE RATIO).
-# The floor is the full kill the pipeline writes today; the ceiling is
-# EQ_BASS_PARTIAL, the -5.68 dB partial cut that is already in production and
-# that Sam has heard. Deliberately NOT higher: the arithmetic would happily ask
-# for two full basslines at once, which is the exact mud this technique exists
-# to avoid, and no one has ever listened to that.
+# The floor is the full kill the pipeline writes today. The ceiling is SET BY
+# SAM'S EARS, and it has already moved once, so treat it as a listening result,
+# not an arithmetic one:
+#
+#   - Launched at EQ_BASS_PARTIAL (0.52, -5.68 dB) on the "already heard in a
+#     shipped mix" rationale.
+#   - First real listen (Apetite -> DHB proof, 2026-09-01): -5.7 dB left "still
+#     too much bass in, and it feels clashy". He pulled the swap point down to
+#     -9.5 dB by hand and ruled it right: "you've lost the bass tone, but
+#     you've still kept that kind of warmth at the bottom... you're after the
+#     weight, but not the sound."
+#
+# So the cap is 0.335 (-9.5 dB): enough of the outgoing's low end to keep the
+# WEIGHT, quiet enough that its bass line no longer reads as a note against the
+# incoming's. Deliberately not higher - two audible basslines at once is the
+# exact mud this technique exists to avoid.
+#
+# Note the cap matters more than it looks: the search takes the SMALLEST
+# residual that closes the hole, so small holes resolve below the cap, but any
+# hole bigger than the cap can recover pins to the cap exactly - and the first
+# real firing was one of those. On big holes, this value IS the sound of the
+# feature.
 RESIDUAL_FLOOR = 0.18      # EQ_BASS_KILL
-RESIDUAL_CEILING = 0.52    # EQ_BASS_PARTIAL
+RESIDUAL_CEILING = 0.335   # -9.5 dB, Sam's ear-set cap (2026-09-01)
 RESIDUAL_STEPS = 24
 
 # A residual may not push a band ABOVE where it sat before the swap by more
@@ -286,14 +305,37 @@ def size_residual(model, out_track, in_track, swap_beat: float,
             return made
         best = made
 
-    # The ladder ran out, or the guard stopped it, before the hole closed.
-    # Partial help is still help - but only when the recovery is itself bigger
-    # than the model's error, otherwise this writes an envelope for a move it
-    # cannot stand behind.
+    if blocked is None and best is not None:
+        # The ladder reached the ear-set ceiling cleanly: the hole is proven
+        # real (it cleared the shortfall gate) and no band overshot anywhere in
+        # the taper, so fire at the cap even though the PREDICTED energy
+        # recovery may be small. This branch used to demand the recovery itself
+        # beat the model's error bound, and Sam's first listen refuted that
+        # arithmetic directly: at his -9.5 dB cap the predicted recovery on the
+        # Apetite -> DHB proof was 2.3 dB - under the bound - and his ears
+        # ruled it RIGHT ("you're after the weight, but not the sound",
+        # 2026-09-01). A cap this low caps the measurable recovery near 2-3 dB
+        # by construction, so keeping that demand would have silently refused
+        # every cap-pinned firing forever, including the one he approved. The
+        # cap-pinned write is justified by his listening verdict, not by the
+        # recovery arithmetic; the recovery number is still reported honestly.
+        return ResidualDecision(
+            True,
+            f"{band} drops {best.shortfall_db:.1f} dB across the swap; the "
+            f"ear-set cap ({20 * math.log10(best.gain):.1f} dB) keeps the "
+            f"outgoing's weight, recovering {best.recovered_db:.1f} dB of it",
+            best.gain, best.band, best.shortfall_db, best.recovered_db)
+
+    # The overshoot guard stopped the ladder early: a bigger residual would
+    # trade the hole for a bulge in the other band. A partial write below the
+    # cap is only worth making if its recovery is itself bigger than the
+    # model's error - otherwise this writes an envelope for a move it cannot
+    # stand behind, on exactly the pairs Sam ruled "don't trade one problem
+    # for another".
     if best is not None and _worth_sizing(band, best.recovered_db):
         return best
     got = f"{best.recovered_db:.1f}" if best is not None else "0.0"
-    why = blocked or "the residual ceiling was reached"
+    why = blocked or "no residual step was admissible"
     return ResidualDecision(
         False,
         f"{band} drops {target:.1f} dB but only {got} dB is recoverable ({why})")

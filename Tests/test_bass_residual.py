@@ -135,13 +135,13 @@ def test_matched_tracks_get_no_residual(tmp_path):
 def test_weak_incoming_fires_and_says_why(tmp_path):
     """A much quieter incoming low end is the case this exists for."""
     a = _track("out", _write_tone(tmp_path / "a.wav", 0.5))
-    b = _track("in", _write_tone(tmp_path / "b.wav", 0.16))
+    b = _track("in", _write_tone(tmp_path / "b.wav", 0.10))
     d = BR.size_residual(_Model([a, b]), a, b, 200.0, 320.0)
     assert d.fired is True
     assert BR.RESIDUAL_FLOOR < d.gain <= BR.RESIDUAL_CEILING
     assert d.band == "sub"
     assert d.recovered_db > 0
-    assert "recovers" in d.reason
+    assert "recover" in d.reason   # "recovers N dB" or "recovering N dB of it"
 
 
 def test_every_decision_carries_a_reason(tmp_path):
@@ -154,8 +154,9 @@ def test_every_decision_carries_a_reason(tmp_path):
 
 
 def test_residual_never_exceeds_the_heard_ceiling(tmp_path):
-    """Even a huge hole may not push past EQ_BASS_PARTIAL: above that nobody has
-    listened to the result, and two full basslines is the mud this avoids."""
+    """Even a huge hole may not push past the ear-set cap: above it the outgoing's
+    bass line reads as a note against the incoming's, and two audible basslines
+    is the mud this avoids."""
     a = _track("out", _write_tone(tmp_path / "a.wav", 0.9))
     b = _track("in", _write_tone(tmp_path / "b.wav", 0.02))
     d = BR.size_residual(_Model([a, b]), a, b, 200.0, 320.0)
@@ -163,15 +164,55 @@ def test_residual_never_exceeds_the_heard_ceiling(tmp_path):
         assert d.gain <= BR.RESIDUAL_CEILING
 
 
+def test_cap_pinned_firing_survives_a_small_predicted_recovery(tmp_path):
+    """The live regression Sam's -9.5 dB cap exposed, pinned.
+
+    A huge, real hole whose recovery AT THE CAP is small must still fire: the
+    cap-pinned write is justified by Sam's listening verdict (the Apetite ->
+    DHB proof, where predicted recovery was 2.3 dB and his ears ruled the
+    result right), not by the recovery arithmetic. Requiring the recovery to
+    beat the model's error bound here would refuse every cap-pinned firing
+    forever, because a -9.5 dB cap bounds the measurable recovery near 2-3 dB
+    by construction.
+    """
+    a = _track("out", _write_tone(tmp_path / "a.wav", 0.9))
+    b = _track("in", _write_tone(tmp_path / "b.wav", 0.02))
+    d = BR.size_residual(_Model([a, b]), a, b, 200.0, 320.0)
+    assert d.fired is True
+    assert d.gain == pytest.approx(BR.RESIDUAL_CEILING)
+    assert d.shortfall_db > 8.0, "fixture must present a big, real hole"
+    assert "ear-set cap" in d.reason
+    # And the honest part: the reported recovery may sit under the sizing
+    # bound - the point is that it is REPORTED, not that it is large.
+    assert d.recovered_db > 0
+
+
+def test_the_ceiling_is_sams_ear_ruling():
+    """The cap is a LISTENING result, not a tunable: Sam heard -5.7 dB on the
+    Apetite -> DHB proof, called it "too much bass in, feels clashy", hand-set
+    -9.5 dB and ruled that right ("the weight, but not the sound",
+    2026-09-01). Changing this constant means a NEW listening verdict exists -
+    update the ruling in the module docstring in the same commit, or revert.
+    """
+    assert BR.RESIDUAL_CEILING == pytest.approx(0.335, abs=1e-3)
+    assert 20 * math.log10(BR.RESIDUAL_CEILING) == pytest.approx(-9.5, abs=0.1)
+
+
 def test_levelling_trims_change_the_sizing(tmp_path):
     """The offsets the mix ships with are an input, not a detail. Dropping the
     outgoing by 6 dB must not leave the residual unchanged (Codex FATAL 1)."""
     a = _track("out", _write_tone(tmp_path / "a.wav", 0.5))
-    b = _track("in", _write_tone(tmp_path / "b.wav", 0.16))
+    b = _track("in", _write_tone(tmp_path / "b.wav", 0.10))
     flat = BR.size_residual(_Model([a, b]), a, b, 200.0, 320.0)
+    # -12 dB, not -6: the cap-pinned branch means a merely-shrunk hole still
+    # fires at the cap, so the trim must be deep enough to take the hole under
+    # the shortfall gate and flip the DECISION, which is the property Codex's
+    # finding was about. Measured on this fixture: -9 leaves a 4.5 dB hole
+    # (still fires); -12 turns the shortfall negative (refuses).
     trimmed = BR.size_residual(_Model([a, b]), a, b, 200.0, 320.0,
-                               out_trim_db=-6.0)
-    assert (flat.fired, flat.gain) != (trimmed.fired, trimmed.gain)
+                               out_trim_db=-12.0)
+    assert flat.fired is True
+    assert trimmed.fired is False, trimmed.reason
 
 
 def test_a_sub_hole_is_refused_when_bass_is_already_hot(tmp_path):
