@@ -668,7 +668,15 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             # coincide with an outgoing loop boundary. Only the overlap end needs
             # a margin so the outgoing fade has room to complete.
             swap = rep["swap_beats"]
-            margin = 8.0
+            # The margin protects the outgoing's post-swap FADE — but the
+            # style this overlap will select (purely from its length, see
+            # style selection below) determines whether a fade exists at
+            # all. QUICK_SWAP (<24 bars) silences the outgoing AT the swap
+            # ((swap, VOL_ZERO)), so it needs one bar for the instant cut,
+            # not eight beats of fade room. A cold-ending outgoing (Crusy
+            # 1-bar outro, 2026-09-02) legitimately hands off on its final
+            # bar under a quick swap.
+            margin = 4.0 if (ov_end - ov_start) / 4 < 24 else 8.0
             aligner_chosen = rep.get("alignment_policy") in LANDMARK_POLICIES
             clamped = min(max(swap, ov_start), ov_end - margin)
             if aligner_chosen:

@@ -17,6 +17,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import sys
@@ -90,8 +91,6 @@ def _expected_for_hint(hint_key: str, secs: list[dict]) -> dict | None:
     pre-drop intro break (long kick-out before the drop) which is NOT the
     energy-drop the hint describes (2026-06-11, Hyzteria).
     """
-    if hint_key == "first_drop_sec":
-        return _first_section_of(secs, "drop")
     if hint_key == "first_break_sec":
         first_drop = _first_section_of(secs, "drop")
         if first_drop is not None:
@@ -138,14 +137,22 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
     has_error = False
     has_warn = False
     rows = 0
-    for track_name, secs in sections_data.items():
-        if not track_name or "Audio" in track_name or not secs:
+    matched_hint_keys: set[str] = set()
+    for raw_track_name, secs in sections_data.items():
+        if not raw_track_name or "Audio" in raw_track_name or not secs:
             continue
+        # Sections JSON keys come straight from ALS XML, so "&" arrives as
+        # "&amp;" (2026-09-02: three of ten tracks silently skipped on it).
+        track_name = html.unescape(raw_track_name)
         # Resolve hint entry: filenames in track_hints.json typically end in
         # .wav; sections JSON keys are usually the stem.
-        hint_entry = hints_data.get(track_name) \
-            or hints_data.get(track_name + ".wav") \
-            or hints_data.get(track_name.replace(".wav", ""))
+        hint_entry = None
+        for candidate in (track_name, track_name + ".wav",
+                          track_name.replace(".wav", "")):
+            hint_entry = hints_data.get(candidate)
+            if hint_entry:
+                matched_hint_keys.add(candidate)
+                break
         if not hint_entry:
             continue
         bpm = bpms.get(track_name)
@@ -156,14 +163,38 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
             continue
         sec_per_bar = 4 * 60.0 / bpm
 
+        anchor_drop: dict | None = None
         for hint_key in ("first_drop_sec", "first_break_sec", "outro_start_sec"):
             hint_val = hint_entry.get(hint_key)
             if hint_val is None:
                 continue
-            expected = _expected_for_hint(hint_key, secs)
-            if expected is None:
-                continue
             hint_bar = float(hint_val) / sec_per_bar
+            if hint_key == "first_drop_sec":
+                # Nearest drop-section start, not only the first: a hint
+                # deliberately placed on a LATER drop boundary (early
+                # drums-only "drop" with no bass yet — RUZE/Crvvcks,
+                # 2026-09-02) is a choice, not a silent disagreement.
+                drops = [s for s in secs if _label(s) == "drop"]
+                if not drops:
+                    continue
+                expected = min(
+                    drops,
+                    key=lambda s: abs(hint_bar - s["source_start_beats"] / 4))
+                anchor_drop = expected
+            elif hint_key == "first_break_sec" and anchor_drop is not None:
+                # First break AFTER the drop the first_drop hint anchored to
+                # (the two hints are a coherent pair — RUZE, 2026-09-02).
+                after = [s for s in secs if _label(s) == "break"
+                         and s["source_start_beats"]
+                         > anchor_drop["source_start_beats"]]
+                expected = after[0] if after \
+                    else _expected_for_hint(hint_key, secs)
+                if expected is None:
+                    continue
+            else:
+                expected = _expected_for_hint(hint_key, secs)
+                if expected is None:
+                    continue
             sec_bar = expected["source_start_beats"] / 4
             diff = hint_bar - sec_bar
             v = _verdict(diff)
@@ -197,6 +228,14 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
                 f"{last_bar:.1f} | window {window_lo:.1f}-{outro_end:.1f} | "
                 f"{'-' if window_lo <= last_bar <= outro_end else 'OUT'} | {v} |")
             rows += 1
+
+    # A hint entry that matched NO sections track is a silent coverage hole
+    # (2026-09-02: "&amp;" keys dropped 3 of 10 tracks with no trace).
+    unmatched = sorted(set(hints_data) - matched_hint_keys)
+    for name in unmatched:
+        has_error = True
+        lines.append(f"| {name[:40]} | (no matching sections track) | - | - | - | - "
+                     f"| ✗ error |")
 
     summary = (
         f"\n**Total checks:** {rows} | "

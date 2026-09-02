@@ -199,9 +199,12 @@ def main() -> int:
         print(f"No loops in {report_path.name} — nothing to render.")
         return 0
 
-    # Derive version from filename
+    # Derive version from filename. Fall back to "V0", never "V?" —
+    # "?" is an invalid path character on Windows, and an unversioned
+    # ARRANGEMENT_REPORT.json (the Phase 2c --report convention) crashed
+    # mkdir here (2026-09-02).
     stem = report_path.stem  # ARRANGEMENT_REPORT_V12
-    version = "V?"
+    version = "V0"
     for token in stem.split("_"):
         if token.startswith("V") and token[1:].isdigit():
             version = token

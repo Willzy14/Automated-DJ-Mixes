@@ -19,6 +19,8 @@ import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 
+from extract_sections_als import parse_sections_als
+
 
 LABEL_COLOURS = {
     "intro":  "#7ec850",
@@ -151,9 +153,12 @@ def render_transition_full_context(out_name, out_secs, out_bpm, out_audio,
     out_full, out_low, out_mid, out_hi, bin_sec = _compute_bands(out_audio, sr)
     in_full,  in_low,  in_mid,  in_hi,  _       = _compute_bands(in_audio, sr)
 
-    # X range covers both tracks end-to-end
+    # X range covers both tracks end-to-end (max over clip ends — the last
+    # clip by START is not necessarily the latest END once loop clips and
+    # shifted outros are in play)
     x_lo = min(out_secs[0]["arr_time"], in_secs[0]["arr_time"]) - 8
-    x_hi = max(out_secs[-1]["arr_end"], in_secs[-1]["arr_end"]) + 8
+    x_hi = max(max(s["arr_end"] for s in out_secs),
+               max(s["arr_end"] for s in in_secs)) + 8
     span_bars = (x_hi - x_lo) / 4
 
     # Width scales with span — keep ~30 bars per inch so it stays readable
@@ -166,7 +171,7 @@ def render_transition_full_context(out_name, out_secs, out_bpm, out_audio,
         (ax_in, in_name, in_secs, in_bpm, in_full, in_low, in_mid, in_hi),
     ]:
         arr_start = float(secs[0]["arr_time"])
-        arr_end = float(secs[-1]["arr_end"])
+        arr_end = float(max(s["arr_end"] for s in secs))
         n_points = max(2000, min(50000, int((arr_end - arr_start) * 20)))
         arr_times = np.linspace(arr_start, arr_end, n_points, endpoint=False)
         full = _sample_envelope_at_arrangement(
@@ -205,7 +210,7 @@ def render_transition_full_context(out_name, out_secs, out_bpm, out_audio,
 
     # Overlap zone shading on both axes
     ov_start = in_secs[0]["arr_time"]
-    ov_end   = out_secs[-1]["arr_end"]
+    ov_end   = max(s["arr_end"] for s in out_secs)
     out_outro = next((s for s in out_secs if s["label"].lower() == "outro"), None)
     in_rise = next((s for s in in_secs if s["label"].lower() in ("build", "drop")), None)
 
@@ -250,7 +255,7 @@ def render_transition(out_name, out_secs, out_bpm, out_audio,
                       contract: dict | None = None):
     # Overlap zone in arrangement beats
     ov_start = in_secs[0]["arr_time"]
-    ov_end = out_secs[-1]["arr_end"]
+    ov_end = max(s["arr_end"] for s in out_secs)
     ctx_bars = 8  # context before & after
     view_start = ov_start - ctx_bars * 4
     view_end = ov_end + ctx_bars * 4
@@ -337,12 +342,41 @@ def main():
     json_path = Path(sys.argv[1])
     audio_dir = Path(sys.argv[2])
     version = sys.argv[3] if len(sys.argv) >= 4 else "V13"
-
-    with open(json_path, encoding="utf-8") as f:
-        sections = json.load(f)
-    tracks = list(sections.keys())
+    als_override = None
+    if "--als" in sys.argv:
+        als_override = Path(sys.argv[sys.argv.index("--als") + 1])
 
     project_dir = json_path.parent.parent
+
+    # Geometry comes from the ARRANGED ALS whenever one exists. The sections
+    # JSON is extracted from the Phase-1 layout, where tracks sit end-to-end;
+    # Phase 2 then shifts tracks into their overlaps and inserts loop clips,
+    # none of which the JSON ever sees. Rendering from the JSON drew every
+    # transition as "overlap 0 beats" with the incoming placed after the
+    # outgoing's last clip (proven 2026-09-02, 02.09.26 House 10: RUZE drawn
+    # at 1408 vs its real ALS position 1188). parse_sections_als on the
+    # arranged ALS yields the same record schema with TRUE arr_time/arr_end
+    # per clip — loop clips are stamped as separate AudioClips, so each
+    # record's linear arrangement->source map stays valid.
+    als_candidates = [als_override] if als_override else [
+        project_dir / "Output" / f"Sections {version}.als",
+        project_dir / "Output" / f"Sections {version} Project" / f"Sections {version}.als",
+    ]
+    arranged_als = next((p for p in als_candidates if p and p.exists()), None)
+    if arranged_als is not None:
+        sections = {name: clips
+                    for name, clips in parse_sections_als(arranged_als).items()
+                    if clips and "Audio" not in name}
+        print(f"Geometry from arranged ALS: {arranged_als.name}")
+    else:
+        with open(json_path, encoding="utf-8") as f:
+            sections = json.load(f)
+        print(f"WARNING: no arranged ALS found for {version} — using "
+              f"{json_path.name} geometry, which is PRE-arrangement (tracks "
+              f"end-to-end). Overlaps and positions will be wrong; pass --als "
+              f"<arranged .als> for true positions.")
+    tracks = list(sections.keys())
+
     out_dir = project_dir / "Output" / "Visualisations" / f"Transitions_{version}"
     out_dir.mkdir(parents=True, exist_ok=True)
 

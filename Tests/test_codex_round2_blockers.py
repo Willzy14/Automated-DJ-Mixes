@@ -61,13 +61,17 @@ def _sec(name, label, start, end):
 
 
 def _tight_pair():
-    """Overlap 560..605 -> safe clamp bound ov_end - 8 = 597. Codex's
+    """Overlap 500..605 (26.25 bars -> fade-margin territory, not
+    quick-swap) -> safe clamp bound ov_end - 8 = 597. Codex's
     reproduction: an aligner-approved swap at 600 was moved to 597 while
-    keeping its paired/landmark provenance."""
+    keeping its paired/landmark provenance. (Overlap widened from 45
+    beats on 2026-09-02 when the end margin became style-aware — a <24
+    bar overlap now selects QUICK_SWAP whose margin is one bar; these
+    pins are about the FADE margin, so the geometry must stay a fade.)"""
     out_t = TrackInfo("OutT", [_sec("drop_2", "drop", 400.0, 500.0),
                                _sec("outro_1", "outro", 500.0, 605.0)],
                       0.0, 605.0)
-    in_t = TrackInfo("InT", [], 560.0, 1200.0)
+    in_t = TrackInfo("InT", [], 500.0, 1200.0)
     return out_t, in_t
 
 
@@ -100,7 +104,39 @@ def test_rescue_swap_in_end_margin_is_hard_error():
 
 def test_aligner_swap_before_overlap_is_hard_error():
     out_t, in_t = _tight_pair()
-    swaps = _swaps_for(out_t, in_t, 550.0, "paired_landmarks_v2",
+    swaps = _swaps_for(out_t, in_t, 490.0, "paired_landmarks_v2",
+                       "paired/section:drop:end->drop")
+    with pytest.raises(ValueError, match="outside the safe overlap"):
+        plan_transitions([out_t, in_t], swaps)
+
+
+# --- 2026-09-02: the end margin is style-aware -------------------------------
+
+def _quick_swap_pair():
+    """Overlap 528..596 (17 bars -> QUICK_SWAP) with the outgoing ending
+    4 beats after the aligner's cue — the Crusy 'Kids' cold-ender: its
+    final drop ends one bar before the track does. QUICK_SWAP silences
+    the outgoing AT the swap, so the margin is one bar, not eight beats
+    of fade room."""
+    out_t = TrackInfo("OutT", [_sec("drop_9", "drop", 400.0, 592.0),
+                               _sec("outro_1", "outro", 592.0, 596.0)],
+                      0.0, 596.0)
+    in_t = TrackInfo("InT", [], 528.0, 1200.0)
+    return out_t, in_t
+
+
+def test_quick_swap_overlap_allows_swap_one_bar_from_end():
+    out_t, in_t = _quick_swap_pair()
+    swaps = _swaps_for(out_t, in_t, 592.0, "paired_landmarks_v2",
+                       "paired/section:drop:end->drop")
+    plans = plan_transitions([out_t, in_t], swaps)
+    assert plans[0].bass_swap == 592.0
+    assert plans[0].swap_transforms == []
+
+
+def test_quick_swap_overlap_still_errors_inside_final_bar():
+    out_t, in_t = _quick_swap_pair()
+    swaps = _swaps_for(out_t, in_t, 594.0, "paired_landmarks_v2",
                        "paired/section:drop:end->drop")
     with pytest.raises(ValueError, match="outside the safe overlap"):
         plan_transitions([out_t, in_t], swaps)
