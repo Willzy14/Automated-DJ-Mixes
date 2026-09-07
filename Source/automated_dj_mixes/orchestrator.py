@@ -19,6 +19,34 @@ from automated_dj_mixes.mik_reader import enrich_from_mik
 from automated_dj_mixes.waveform_preview import PreviewContext, render_preview
 
 
+def _bpm_still_provisional(bpm: float, warnings: list[str]) -> bool:
+    """True only when the DISPLAYED bpm is still the librosa lattice
+    fallback a "BPM detected by librosa" warning named - not merely when
+    that warning is PRESENT in the list.
+
+    Nothing removes the warning once bpm is later overwritten by an
+    authoritative source (the stem-grid overwrite in run_pipeline, which
+    runs whenever stem_grid=True and not previews_only - i.e. every
+    production Phase 1a run - or MIK enrichment). A presence-only check
+    flags the AUTHORITATIVE grid bpm as provisional in exactly the runs
+    that matter most (found 2026-09-02, Fable second-lens review of the
+    2026-09-02 sweep fix - the bug never fired in the previews-only Phase
+    0b run the original sweep observed, because the grid overwrite is
+    skipped there). Parse the number the warning actually named and
+    compare it to the CURRENT bpm: still equal means nothing has
+    overwritten it yet - genuinely provisional; different means an
+    authoritative source already replaced it - stop flagging."""
+    for w in warnings:
+        if not w.startswith("BPM detected by librosa"):
+            continue
+        try:
+            warned_bpm = float(w.rsplit(":", 1)[-1].strip())
+        except ValueError:
+            return True  # unparseable - assume still provisional
+        return abs(warned_bpm - bpm) < 0.05
+    return False
+
+
 def _post_write_als_gate(path: Path) -> None:
     """Explicit post-write corruption gate for the orchestrator's write path.
 
@@ -491,12 +519,10 @@ def run_pipeline(
 
     for a in analyses:
         src = f"[{a.analysis_source}]" if a.analysis_source != "librosa" else ""
-        # Provisional flag when the BPM came from the librosa lattice fallback
-        # rather than an authoritative source (ID3 tag or MIK DB). The 02.09.26
-        # House 10-track run printed four 129.2 BPMs side-by-side with tag/MIK
-        # values at the same confidence; same confidence, different trust, and
-        # the stem grid later replaces it anyway. Display-only (2026-09-02 sweep).
-        librosa_bpm = any(w.startswith("BPM detected by librosa") for w in a.warnings)
+        # Provisional only when the DISPLAYED bpm is still the flagged
+        # librosa fallback - see _bpm_still_provisional's docstring for why
+        # a presence-only check (2026-09-02 sweep) was wrong.
+        librosa_bpm = _bpm_still_provisional(a.bpm, a.warnings)
         bpm_str = (f"~{a.bpm:.1f} BPM (librosa, provisional)"
                    if librosa_bpm else f"{a.bpm:.1f} BPM")
         print(f"  {a.path.name}: {a.camelot or '?'} | {bpm_str} | {a.lufs:.1f} LUFS {src}")
