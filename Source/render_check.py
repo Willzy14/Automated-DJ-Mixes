@@ -532,6 +532,26 @@ def parse_als(path: Path) -> tuple[TempoMap, list[dict]]:
                     loop_end = le
                 if sr is not None:
                     start_relative = sr
+            # The clip's warp anchor: the SOURCE second the pipeline's own
+            # warp markers map to source beat 0 (2026-09-02, Fable
+            # second-lens review of 32efa36, Finding 6). Beat 0 is not
+            # generally sample 0 in the source WAV - warping.py's own
+            # calculate_warp_markers writes the first marker as
+            # `WarpMarker(beat_time=0.0, sample_time=first_downbeat_sec)`,
+            # and first_downbeat_sec is measured, not assumed zero (0.024s
+            # on a real track in this corpus - small here, but the pipeline
+            # gives no guarantee it stays small on a track with a longer
+            # pickup). Defaults to 0.0 when absent (unwarped clip), which
+            # preserves the previous behaviour exactly for that case.
+            first_downbeat_sec = 0.0
+            wm = clip.find("./WarpMarkers/WarpMarker")
+            if wm is not None:
+                v = wm.get("SecTime")
+                if v is not None:
+                    try:
+                        first_downbeat_sec = float(v)
+                    except ValueError:
+                        pass
             clips.append({
                 "track": tname,
                 "arr_start": cs,
@@ -540,6 +560,7 @@ def parse_als(path: Path) -> tuple[TempoMap, list[dict]]:
                 "loop_end": loop_end,
                 "start_relative": start_relative,
                 "loop_on": loop_on,
+                "first_downbeat_sec": first_downbeat_sec,
             })
     return tempo_map, clips
 
@@ -1056,11 +1077,32 @@ def reclassify_source_faithful_silence(findings: list[Finding],
         beat_t1 = sec_to_beat_safe(f.t1, tempo_map)
         if beat_t0 is None or beat_t1 is None:
             continue  # unmappable window - stays FAIL
+        # The WHOLE finding window must sit inside this clip's own bounds
+        # (with a small tolerance), not just its midpoint (2026-09-02,
+        # Fable second-lens review of 32efa36, Finding 5): a silence that
+        # starts in a clip's natural tail and runs on into an arrangement
+        # GAP (no clip at all) would otherwise map entirely onto that
+        # clip's source - masking the part of the silence that isn't
+        # attributable to any track's material. The tolerance matters: an
+        # exact bound broke the real Demarkus finding (the mix's last
+        # clip - a 0.18-beat overshoot from the hard_silence detector's own
+        # 100ms frame granularity trailing a hair past the exact clip
+        # edge) - one beat comfortably absorbs a frame or two of that
+        # quantisation while staying far below Fable's actual concern, a
+        # genuine structural gap (his own example was four beats).
+        CLIP_WINDOW_TOL_BEATS = 1.0
+        if not (c["arr_start"] - CLIP_WINDOW_TOL_BEATS <= beat_t0
+               and beat_t1 <= c["arr_end"] + CLIP_WINDOW_TOL_BEATS):
+            continue  # window extends outside the clip - stays FAIL
         src_beat0 = c["loop_start"] + (beat_t0 - c["arr_start"])
         src_beat1 = c["loop_start"] + (beat_t1 - c["arr_start"])
+        # Beat 0 in the SOURCE is first_downbeat_sec, not sample 0 (see the
+        # first_downbeat_sec extraction note in parse_als above).
+        anchor = c.get("first_downbeat_sec", 0.0)
         wav = audio_dir / (name + ".wav")
-        loudest = _source_loudest_db(wav, src_beat0 * 60.0 / bpm,
-                                     src_beat1 * 60.0 / bpm)
+        loudest = _source_loudest_db(
+            wav, anchor + src_beat0 * 60.0 / bpm,
+            anchor + src_beat1 * 60.0 / bpm)
         if loudest is None or loudest >= SOURCE_QUIET_DB:
             continue
         f.level = "INFO"
@@ -1911,18 +1953,43 @@ def _loop_swap_beat(lp: dict, transitions: list[dict]) -> float | None:
 
 
 def _verbatim_gated_pairs(insert_beat: float, iter_len: float, count: int,
-                          swap_beat: float | None) -> list[int]:
+                          swap_beat: float | None,
+                          loop_type: str = "tail") -> list[int]:
     """Indices of adjacent-iteration pairs that may GATE (fail the check)
     using their FULL envelopes. Pair k compares iterations k and k+1,
-    spanning [insert + k*L, insert + (k+2)*L]. A pair whose later iteration
-    reaches past the swap beat plays under transition automation for at
-    least part of its span - excluded here (2026-09-02: all four
-    loop_verbatim FAILs on the House 10 render were exactly these pairs;
-    pre-swap pairs on the same loops read r 0.94-0.97). A pair excluded here
-    may still gate on its PRE-swap portion alone - see
-    `_straddle_fraction`."""
+    spanning [insert + k*L, insert + (k+2)*L].
+
+    TAIL loops (the default): a pair whose later iteration reaches past the
+    swap beat plays under transition automation for at least part of its
+    span - excluded here (2026-09-02: all four loop_verbatim FAILs on the
+    House 10 render were exactly these pairs; pre-swap pairs on the same
+    loops read r 0.94-0.97). This is the OUTGOING track: apply_automation's
+    volume/EQ envelopes keep changing for the rest of the overlap after the
+    swap, so post-swap material is never safe to compare pairwise.
+
+    INTRO loops (2026-09-02, Fable second-lens review of 32efa36, Finding
+    2): the same wholesale exclusion was wrongly applied to an INCOMING
+    track's intro loop too, where it is backwards - `lp["type"]` is written
+    by propose_arrangement.py (`"tail" if "tail" in ls.clip_name else
+    "intro"`) but was unused here. Verified against apply_automation.py
+    (every style's incoming-volume envelope, e.g. L1034-1039): the incoming
+    ramps from its sneak level up to VOL_UNITY EXACTLY at the swap beat,
+    then holds flat at unity for the rest of the overlap - so POST-swap
+    material is the steady, comparable state for an intro loop, and only
+    the ONE pair whose later iteration spans the ramp (straddles the swap)
+    needs special handling. Both fully-pre and fully-post pairs gate
+    normally; the straddling pair still recovers its pre-swap prefix via
+    `_straddle_fraction`, same mechanism as the tail case."""
     if swap_beat is None:
         return list(range(count - 1))
+    if loop_type == "intro":
+        gated = []
+        for k in range(count - 1):
+            fully_pre = insert_beat + (k + 2) * iter_len <= swap_beat + 1e-6
+            fully_post = insert_beat + (k + 1) * iter_len >= swap_beat - 1e-6
+            if fully_pre or fully_post:
+                gated.append(k)
+        return gated
     return [k for k in range(count - 1)
             if insert_beat + (k + 2) * iter_len <= swap_beat + 1e-6]
 
@@ -1965,7 +2032,8 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                 continue
             swap_beat = _loop_swap_beat(lp, transitions or [])
             gated = set(_verbatim_gated_pairs(
-                lp["insert_at_beat"], iter_len, count, swap_beat))
+                lp["insert_at_beat"], iter_len, count, swap_beat,
+                loop_type=lp.get("type", "tail")))
             envs = []
             for k in range(count):
                 start_beat = lp["insert_at_beat"] + k * iter_len

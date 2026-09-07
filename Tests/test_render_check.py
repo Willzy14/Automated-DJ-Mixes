@@ -2309,6 +2309,199 @@ def test_report_does_not_list_loop_verbatim_clean_when_only_automation_fired(tmp
         and "loop_verbatim " not in section
 
 
+# --------------------------------------------------------------------------- #
+# 2026-09-02 pins: Fable second-lens review of 32efa36 - findings MiniMax's  #
+# review did not catch (proving the two-lens principle).                    #
+# --------------------------------------------------------------------------- #
+
+# --- Finding 2: intro loops gate on BOTH sides of the swap, only the ------
+# --- straddling pair gets special handling ----------------------------------
+
+def test_verbatim_gated_pairs_intro_gates_both_sides_of_swap():
+    """Tail semantics (default): only fully-pre-swap pairs gate. Intro
+    semantics: fully-pre AND fully-post gate; only the ONE straddling pair
+    is excluded from full-envelope gating. With this geometry (insert=0,
+    iter_len=4, count=4, swap=14) there is no fully-post pair to
+    distinguish - pair 2 straddles under BOTH semantics, so tail and intro
+    agree here ([0, 1]); the genuinely distinguishing geometry (a real
+    fully-post pair) is covered separately below."""
+    tail = render_check._verbatim_gated_pairs(0.0, 4.0, 4, 14.0, loop_type="tail")
+    intro = render_check._verbatim_gated_pairs(0.0, 4.0, 4, 14.0, loop_type="intro")
+    assert tail == [0, 1]
+    assert intro == [0, 1]
+
+
+def test_verbatim_gated_pairs_intro_excludes_only_the_straddling_pair():
+    # A pair entirely AFTER the swap (both iterations post-swap) must gate
+    # under "intro" semantics (steady unity gain per apply_automation), but
+    # NOT under "tail" semantics (still under active automation there).
+    # insert=0, iter_len=4, count=6, swap=10: iterations are [0,4) [4,8)
+    # [8,12) [12,16) [16,20) [20,24). Pair 1 (iterations 1,2=[4,12)) is the
+    # genuine straddle (swap 10 falls strictly inside iteration 2's span);
+    # pairs 2,3,4 are fully post-swap; pair 0 is fully pre-swap.
+    tail = render_check._verbatim_gated_pairs(0.0, 4.0, 6, 10.0, loop_type="tail")
+    intro = render_check._verbatim_gated_pairs(0.0, 4.0, 6, 10.0, loop_type="intro")
+    assert tail == [0]                # only the fully-pre pair gates under tail
+    assert 2 not in tail and 3 not in tail and 4 not in tail
+    assert 2 in intro and 3 in intro and 4 in intro   # fully post-swap: gate under intro
+    assert 1 not in intro and 1 not in tail   # the straddle: excluded from
+                                               # FULL-envelope gating under
+                                               # both (still needs truncation)
+    assert 0 in intro                 # fully pre-swap: gated under both
+
+
+def test_intro_loop_defect_after_swap_is_caught(tmp_path):
+    """The scenario Fable named directly: a splice defect well after an
+    intro loop's swap, in material apply_automation holds at steady unity
+    gain, must FAIL loop_verbatim under "intro" semantics - under the old
+    type-blind exclusion it would have been silently dumped into rs_auto
+    and never gated at all."""
+    wav = tmp_path / "intro_post_swap_defect.wav"
+    # insert=0, iter_len=4, count=6 (24 beats @ 120bpm=12s); swap at 8 so
+    # pairs 2,3,4 are fully post-swap and should gate under "intro".
+    # Defect at beat 17 sits inside iteration 4's span [16,20) - well past
+    # the swap, entirely in "steady" territory.
+    _loop_render_with_defect(wav, seconds=14.0, defect_beat=17.0, defect_dur_beats=0.6)
+    tmap = render_check.TempoMap.flat(120.0)
+    loops = [{"track": "T", "type": "intro", "insert_at_beat": 0.0,
+             "total_beats": 24.0, "iter_len": 4.0}]
+    transitions = [{"swap_beats": 8.0, "overlap_beats": 20.0,
+                    "swap_progress": 0.4, "pair_index": 1}]
+    findings = render_check.check_loop_verbatim(wav, loops, tmap, transitions)
+    fails = [f for f in findings if f.check == "loop_verbatim"]
+    assert len(fails) == 1, findings
+
+
+# --- Finding 5: the WHOLE finding window must sit inside the clip's bounds -
+
+def test_source_faithful_silence_refuses_window_extending_past_clip_end(tmp_path):
+    """A silence whose window starts inside a clip but extends past its
+    arr_end (into a gap with no clip at all) must stay FAIL - the part
+    outside any clip cannot be attributed to that clip's source audio."""
+    sr = 44100
+    audio_dir = tmp_path / "Audio"
+    audio_dir.mkdir()
+    sf.write(str(audio_dir / "A.wav"), np.zeros(4 * sr), sr)  # fully silent
+
+    tempo_map = render_check.TempoMap.flat(120.0)
+    # Clip ends at beat 4.0 (arr seconds 0-2 at 120bpm). Finding window
+    # 1.0-1.4s maps to beats 2.0-2.8, comfortably inside [0,4) - baseline.
+    clip = {"track": "A", "arr_start": 0.0, "arr_end": 4.0,
+           "loop_start": 0.0, "loop_end": 4.0, "start_relative": 0.0,
+           "loop_on": False}
+    bpms = {"A": 120.0}
+
+    inside = render_check.Finding(check="hard_silence", level="FAIL",
+                                  t0=1.0, t1=1.4, beat0=0.0, beat1=0.0,
+                                  measured={}, msg="hard silence (0.4s)")
+    render_check.reclassify_source_faithful_silence(
+        [inside], [clip], tempo_map, audio_dir, bpms)
+    assert inside.level == "INFO"
+
+    # Window 1.5-3.5s -> beats 3.0-7.0: well past arr_end (4.0) - a
+    # structural gap, not the small render-tail overshoot the guard's
+    # tolerance (1 beat) is meant to absorb.
+    spans_out = render_check.Finding(check="hard_silence", level="FAIL",
+                                     t0=1.5, t1=3.5, beat0=0.0, beat1=0.0,
+                                     measured={}, msg="hard silence (2.0s)")
+    render_check.reclassify_source_faithful_silence(
+        [spans_out], [clip], tempo_map, audio_dir, bpms)
+    assert spans_out.level == "FAIL"
+
+    # Window 1.8-2.15s -> beats 3.6-4.3: MIDPOINT (beat 3.95) is safely
+    # inside the clip (the active-clip selection is unconditional on the
+    # midpoint - only the END exceeds arr_end, by 0.3 beats, inside the
+    # tolerance). This is the actual shape of the real bug: the mix's
+    # LAST clip's own tail silence had a midpoint well inside it but its
+    # end 0.18 beats past arr_end - must still downgrade, or that real
+    # case (02.09.26 House 10, Demarkus) wrongly stays FAIL again.
+    near_edge = render_check.Finding(check="hard_silence", level="FAIL",
+                                     t0=1.8, t1=2.15, beat0=0.0, beat1=0.0,
+                                     measured={}, msg="hard silence (0.35s)")
+    render_check.reclassify_source_faithful_silence(
+        [near_edge], [clip], tempo_map, audio_dir, bpms)
+    assert near_edge.level == "INFO"
+
+
+# --- Finding 6: the source-time mapping honours the clip's warp anchor ----
+# --- (first_downbeat_sec), not an assumed beat-0-equals-sample-0 -----------
+
+def test_parse_als_extracts_first_downbeat_sec_from_warp_markers(tmp_path):
+    """A clip whose first WarpMarker anchors beat 0 to a nonzero source
+    second must report that as first_downbeat_sec, not 0.0."""
+    root = Element("Ableton")
+    live = SubElement(root, "LiveSet")
+    tempo = SubElement(live, "Tempo")
+    SubElement(tempo, "Manual").set("Value", "120.0")
+    track = SubElement(live, "AudioTrack")
+    SubElement(track, "EffectiveName").set("Value", "A")
+    clip = SubElement(track, "AudioClip")
+    clip.set("Id", "1")
+    clip.set("Time", "0.0")
+    SubElement(clip, "CurrentStart").set("Value", "0.0")
+    SubElement(clip, "CurrentEnd").set("Value", "8.0")
+    wms = SubElement(clip, "WarpMarkers")
+    wm0 = SubElement(wms, "WarpMarker")
+    wm0.set("SecTime", "0.375")
+    wm0.set("BeatTime", "0.0")
+    wm1 = SubElement(wms, "WarpMarker")
+    wm1.set("SecTime", "0.875")
+    wm1.set("BeatTime", "1.0")
+
+    als = tmp_path / "anchor.als"
+    als.write_bytes(gzip.compress(tostring(root, encoding="utf-8")))
+    _tmap, clips = render_check.parse_als(als)
+    assert len(clips) == 1
+    assert clips[0]["first_downbeat_sec"] == pytest.approx(0.375)
+
+
+def test_parse_als_defaults_first_downbeat_sec_when_no_warp_markers():
+    """A clip with no WarpMarkers element (the fixture builder's normal
+    shape) must default to 0.0, preserving prior behaviour exactly."""
+    tmp = Path(__file__).parent / "_tmp_no_warp_check.als"
+    try:
+        _write_als(tmp, [{"track": "A", "arr_start": 0.0, "arr_end": 8.0}])
+        _tmap, clips = render_check.parse_als(tmp)
+        assert clips[0]["first_downbeat_sec"] == 0.0
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def test_source_faithful_silence_uses_the_warp_anchor(tmp_path):
+    """The mapped source window shifts by first_downbeat_sec - a source
+    that is loud at sample 0 but quiet starting exactly at the anchor must
+    downgrade (proves the anchor is actually applied, not just parsed)."""
+    sr = 44100
+    audio_dir = tmp_path / "Audio"
+    audio_dir.mkdir()
+    anchor = 0.5
+    y = np.concatenate([
+        0.3 * np.sin(2 * np.pi * 220 * np.arange(int(anchor * sr)) / sr),  # loud pickup
+        np.zeros(4 * sr),  # quiet from the anchor onward
+    ])
+    sf.write(str(audio_dir / "A.wav"), y, sr)
+
+    tempo_map = render_check.TempoMap.flat(120.0)
+    clip = {"track": "A", "arr_start": 0.0, "arr_end": 8.0,
+           "loop_start": 0.0, "loop_end": 8.0, "start_relative": 0.0,
+           "loop_on": False, "first_downbeat_sec": anchor}
+    bpms = {"A": 120.0}
+    # Beats 1.0-1.4 -> without the anchor this maps to source 0.5-0.7s
+    # (already past the loud pickup); WITH the anchor (added on top) it
+    # maps to 1.0-1.2s - still quiet either way, so use an EARLIER window
+    # that only reads quiet if the anchor is honoured: beats 0.0-0.3.
+    # Without anchor -> source 0.0-0.15s (LOUD pickup) -> stays FAIL.
+    # With anchor -> source 0.5-0.65s (quiet) -> downgrades to INFO.
+    f = render_check.Finding(check="hard_silence", level="FAIL",
+                             t0=0.0, t1=0.3, beat0=0.0, beat1=0.0,
+                             measured={}, msg="hard silence (0.3s)")
+    render_check.reclassify_source_faithful_silence(
+        [f], [clip], tempo_map, audio_dir, bpms)
+    assert f.level == "INFO", (
+        "anchor not applied - the mapped window read the loud pickup "
+        "instead of the quiet region past first_downbeat_sec")
+
+
 def test_gate_error_path_lists_no_check_as_clean(tmp_path, monkeypatch):
     """main()'s exception path is the SECOND bail that reads no audio.
 
