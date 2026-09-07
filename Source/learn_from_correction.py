@@ -203,6 +203,7 @@ class TrackInfo:
     sections: list[dict]
     arr_start: float
     arr_end: float
+    clips: list[dict] = field(default_factory=list)
 
 
 def _section_semantics(section: dict) -> dict:
@@ -258,6 +259,7 @@ def ordered_tracks_from_clip_records(
             sections=semantics,
             arr_start=min(float(clip["arr_time"]) for clip in positioned),
             arr_end=max(float(clip["arr_end"]) for clip in positioned),
+            clips=positioned,
         ))
     tracks.sort(key=lambda t: t.arr_start)
     return tracks
@@ -477,18 +479,45 @@ def _split_points_at(points: list[tuple[float, float]],
     return before, after
 
 
+def _source_beat(beat: float, clips: list[dict], fallback_origin: float) -> float:
+    """Map an arrangement beat to its clip's source-audio beat.
+
+    ``parse_sections_als`` records Ableton's ``LoopStart`` as
+    ``source_start_beats``.  That source coordinate survives an independent
+    trim or resize of the arranged clip, unlike its arrangement-local offset.
+    Synthetic callers without clip records retain the previous local-origin
+    behaviour.
+    """
+    source_clips = [
+        clip for clip in clips
+        if (clip.get("arr_time") is not None
+            and clip.get("arr_end") is not None
+            and clip.get("source_start_beats") is not None
+            and float(clip["arr_time"]) - 0.01 <= beat
+            <= float(clip["arr_end"]) + 0.01)
+    ]
+    if not source_clips:
+        return beat - fallback_origin
+
+    # A boundary can belong to adjacent phrase clips. Their source positions
+    # are normally identical there; choose the earlier arranged clip so the
+    # result is deterministic if an ALS is imperfectly segmented.
+    clip = min(source_clips, key=lambda item: float(item["arr_time"]))
+    return float(clip["source_start_beats"]) + (beat - float(clip["arr_time"]))
+
+
 def _scope_points(points: list[tuple[float, float]],
                   zone_start: float, zone_end: float,
-                  origin: float,
+                  clips: list[dict], fallback_origin: float,
                   margin: float = 40.0) -> list[tuple[float, float]]:
-    """Return transition points, anchored to this track's own start.
+    """Return transition points in their source-audio coordinate frame.
 
     Points are selected in the ALS's absolute arrangement coordinate system,
-    then translated into the track-local coordinate system used for every
-    cross-file comparison.  A whole downstream arrangement shift therefore
+    then translated through their containing clip's ``LoopStart``.  A whole
+    downstream arrangement shift or an independent clip trim therefore
     cannot masquerade as an automation edit.
     """
-    return [(t - origin, v) for t, v in points
+    return [(_source_beat(t, clips, fallback_origin), v) for t, v in points
             if zone_start - margin <= t <= zone_end + margin]
 
 
@@ -554,10 +583,31 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
             sam_overlap_start=s_ov_start,
             sam_overlap_end=s_ov_end,
             sam_overlap_bars=(s_ov_end - s_ov_start) / 4,
+            # Overlap LENGTH only (2026-09-07, follow-up to the source-beat
+            # anchoring fix above). This used to ALSO compare
+            # (in.arr_start - out.arr_start) on each side - an "internal
+            # offset" meant to catch the whole overlap window shifting
+            # position even when its length didn't change. But out.arr_start
+            # is set by the UPSTREAM transition (whatever precedes this
+            # track), not by THIS transition - an untouched T6 downstream of
+            # a genuinely-edited T5 has its own out.arr_start move for a
+            # reason that has nothing to do with T6, reproducing exactly the
+            # resize-blindness the source-beat fix above just closed for
+            # automation points (verified on the real corpus: How Good's
+            # start/end moved by different amounts from T5's edit alone,
+            # T6 itself untouched - this condition read arrangement_changed
+            # =True regardless). The signal it was reaching for - "did the
+            # swap POINT itself move" - is what bass_swap_delta (now
+            # source-anchored, correctly precise) and the automation-point
+            # comparison below already catch: a real handoff shift moves the
+            # bass-kill/volume points too, which still flips any_change via
+            # out_bass.changed/out_volume.changed. Overlap length alone,
+            # which IS set by this transition's own two boundaries
+            # (out.arr_end and in.arr_start), is the geometry-only signal
+            # this condition can measure without borrowing an upstream-
+            # contaminated reference.
             arrangement_changed=(
                 abs((c_ov_end - c_ov_start) - (s_ov_end - s_ov_start)) > 0.01
-                or abs((c_in_t.arr_start - c_out_t.arr_start)
-                       - (s_in_t.arr_start - s_out_t.arr_start)) > 0.01
             ),
         )
 
@@ -572,44 +622,44 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
             diffs.append(td)
             continue
 
-        # Scope each ALS with its own overlap, then anchor every automation
-        # stream to its own track start.  The resulting points are in a
-        # shared, track-local frame before _make_diff compares them.
+        # Scope each ALS with its own overlap, then map every automation
+        # stream to source-audio beats.  The resulting points share an
+        # invariant frame before _make_diff compares them.
         td.out_volume = _make_diff(
             "volume",
             _scope_points(c_out.volume_points, c_ov_start, c_ov_end,
-                          c_out_t.arr_start),
+                          c_out_t.clips, c_out_t.arr_start),
             _scope_points(s_out.volume_points, s_ov_start, s_ov_end,
-                          s_out_t.arr_start))
+                          s_out_t.clips, s_out_t.arr_start))
         td.out_bass = _make_diff(
             "bass",
             _scope_points(c_out.bass_points, c_ov_start, c_ov_end,
-                          c_out_t.arr_start),
+                          c_out_t.clips, c_out_t.arr_start),
             _scope_points(s_out.bass_points, s_ov_start, s_ov_end,
-                          s_out_t.arr_start))
+                          s_out_t.clips, s_out_t.arr_start))
         td.in_volume = _make_diff(
             "volume",
             _scope_points(c_in.volume_points, c_ov_start, c_ov_end,
-                          c_in_t.arr_start),
+                          c_in_t.clips, c_in_t.arr_start),
             _scope_points(s_in.volume_points, s_ov_start, s_ov_end,
-                          s_in_t.arr_start))
+                          s_in_t.clips, s_in_t.arr_start))
         td.in_bass = _make_diff(
             "bass",
             _scope_points(c_in.bass_points, c_ov_start, c_ov_end,
-                          c_in_t.arr_start),
+                          c_in_t.clips, c_in_t.arr_start),
             _scope_points(s_in.bass_points, s_ov_start, s_ov_end,
-                          s_in_t.arr_start))
+                          s_in_t.clips, s_in_t.arr_start))
 
-        # Find swaps in the same outgoing-track-local frame as the bass
-        # diffs.  Absolute positions cannot be compared across ALS files.
-        c_out_ov_start = c_ov_start - c_out_t.arr_start
-        c_out_ov_end = c_ov_end - c_out_t.arr_start
-        s_out_ov_start = s_ov_start - s_out_t.arr_start
-        s_out_ov_end = s_ov_end - s_out_t.arr_start
-        c_in_ov_start = c_ov_start - c_in_t.arr_start
-        c_in_ov_end = c_ov_end - c_in_t.arr_start
-        s_in_ov_start = s_ov_start - s_in_t.arr_start
-        s_in_ov_end = s_ov_end - s_in_t.arr_start
+        # Find swaps in the same source-audio frame as the bass diffs.
+        # Absolute arrangement positions cannot be compared across ALS files.
+        c_out_ov_start = _source_beat(c_ov_start, c_out_t.clips, c_out_t.arr_start)
+        c_out_ov_end = _source_beat(c_ov_end, c_out_t.clips, c_out_t.arr_start)
+        s_out_ov_start = _source_beat(s_ov_start, s_out_t.clips, s_out_t.arr_start)
+        s_out_ov_end = _source_beat(s_ov_end, s_out_t.clips, s_out_t.arr_start)
+        c_in_ov_start = _source_beat(c_ov_start, c_in_t.clips, c_in_t.arr_start)
+        c_in_ov_end = _source_beat(c_ov_end, c_in_t.clips, c_in_t.arr_start)
+        s_in_ov_start = _source_beat(s_ov_start, s_in_t.clips, s_in_t.arr_start)
+        s_in_ov_end = _source_beat(s_ov_end, s_in_t.clips, s_in_t.arr_start)
         td.out_overlap_end_claude = c_out_ov_end
         td.out_overlap_end_sam = s_out_ov_end
         td.bass_swap_claude = _find_bass_swap_beat(

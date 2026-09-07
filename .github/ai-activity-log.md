@@ -265,3 +265,4 @@
 [2026-09-02 16:01] Codex - STARTED: fix learn_from_correction stale Phase-1 geometry by deriving baseline and corrected geometry independently from their ALS clips, add a vacuous-result guard and focused regression pins, then run the full suite and real 9-transition acceptance fixture.
 [2026-09-07 09:35] Codex - STARTED: anchor learn_from_correction automation and bass swaps to each track's local arrangement origin before comparing corrected ALS geometry.
 [2026-09-07 09:46] Codex - DONE: corrected learner comparisons to track-local and transition-local geometry; pinned constant-shift invariance, recorded unmatched tracks, and surfaced Sam overlap lengths. Focused tests and real ALS dry-run pass; local commit blocked because this worktree's Dropbox Git metadata denies index.lock creation.
+[2026-09-07 10:00] Codex - STARTED: source-anchor learner automation-point normalization for resized clips; add regression pin and validate against the House 10 ALS pair.
