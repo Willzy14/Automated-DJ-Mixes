@@ -957,9 +957,31 @@ def check_hard_silence(rms100_db: np.ndarray, fps: int,
     return findings
 
 
-def _source_floor_db(wav_path: Path, t0: float, t1: float) -> float | None:
-    """50 ms frame-RMS floor of the source WAV between t0..t1 seconds, or
-    None when the window is unreadable."""
+# "Consistently quiet passage" bar for source-faithful silence, LOOSER than
+# HARD_SILENCE_DB deliberately. HARD_SILENCE_DB (-60) characterises the
+# RENDER'S near-digital-silence; the corresponding SOURCE passage in a real
+# written-in dip sits somewhat above that (measured 2026-09-02 on the two
+# real cases this reclassifier was built for: Deetron's fill maxed at -52.3
+# dBFS, Demarkus' end tail at -56.8 - both "quiet passage", neither anywhere
+# near -60 throughout). -45 is well below any normal program level while
+# staying loose enough not to reject a legitimate quiet dip.
+SOURCE_QUIET_DB = -45.0
+
+
+def _source_loudest_db(wav_path: Path, t0: float, t1: float) -> float | None:
+    """50 ms frame-RMS LOUDEST point of the source WAV between t0..t1
+    seconds, or None when the window is unreadable.
+
+    MAX, not min (2026-09-02, MiniMax review of 32efa36, Finding 7): using
+    the window's quietest frame as "the floor" meant a single momentary dip
+    inside otherwise-normal-level audio could justify downgrading a whole
+    hard_silence FAIL. Verified against the real corpus: re-measuring with
+    the shipped code's EXACT mapped windows (not an approximated one) showed
+    both real cases were genuinely quiet throughout (max -52.3 / -56.8 dBFS)
+    - min() happened not to bite there, but the statistic was still wrong in
+    principle. MAX requires EVERY frame in the window to be quiet before the
+    downgrade can fire, which is the correct reading of "source-faithful
+    THROUGHOUT"."""
     try:
         with sf.SoundFile(str(wav_path), "r") as fh:
             sr = fh.samplerate
@@ -974,7 +996,7 @@ def _source_floor_db(wav_path: Path, t0: float, t1: float) -> float | None:
         if m < 1:
             return None
         rms = np.sqrt((y[:m * n].reshape(m, n) ** 2).mean(axis=1))
-        return float(20.0 * np.log10(max(float(rms.min()), 1e-10)))
+        return float(20.0 * np.log10(max(float(rms.max()), 1e-10)))
     except Exception:
         return None
 
@@ -988,50 +1010,76 @@ def reclassify_source_faithful_silence(findings: list[Finding],
     near-silent at the mapped position - a track-intrinsic stop (a written-in
     breakdown halt, a natural end tail) is the track, not a render defect.
 
-    2026-09-02 evidence (02.09.26 House 10): both hard_silence FAILs mapped to
-    source floors of -62.7 and -74.2 dBFS in the tracks' own audio. Fails
-    closed: no active clip, unmappable source, or a source that is NOT silent
-    all keep the FAIL."""
+    2026-09-02 evidence (02.09.26 House 10): both hard_silence FAILs mapped
+    (via the exact per-clip formula below) to source windows genuinely quiet
+    throughout - Deetron's fill peaked at -52.3 dBFS, Demarkus' end tail at
+    -56.8. Fails closed: no active clip, more than one active clip (an
+    unresolved-mix ambiguity - see below), an unmappable source, a clip
+    shape this mapping doesn't model, or a source that ever rises above
+    SOURCE_QUIET_DB all keep the FAIL.
+
+    Single-active-clip only (2026-09-02, MiniMax Finding 5): during a
+    transition overlap TWO tracks can be simultaneously active. "Every
+    active clip's mapped source tests quiet" does not prove the RENDER's
+    silence is faithful to either one specifically - a genuine dropout on
+    the clip that SHOULD be audible could hide behind a legitimately-quiet
+    neighbour. Neither real case is an overlap-zone finding, so this guard
+    changes nothing observed on this mix; it closes an untested code path
+    that would otherwise fire on the next one. An overlap-zone silence is
+    exactly the case that most needs a human ear anyway.
+
+    loop_on / StartRelative clips are refused (2026-09-02, MiniMax Finding
+    6): the mapping below is a straight linear projection through
+    loop_start, correct only for a simple front-trimmed, non-looping clip
+    (both real clips are: loop_on=False, start_relative=0.0). A looped tail
+    clip needs modulo-wrapped source positions and StartRelative needs its
+    own offset; neither is implemented, so those clip shapes are refused
+    rather than mapped to a possibly-wrong source window."""
     for f in findings:
         if f.check != "hard_silence" or f.level != "FAIL":
             continue
         t_mid = (f.t0 + f.t1) / 2.0
         mid_beat = sec_to_beat_safe(t_mid, tempo_map)
-        floors: dict[str, float] = {}
-        verdict_faithful = None
-        for c in clips:
-            if not (c["arr_start"] <= mid_beat < c["arr_end"]):
-                continue
-            name = html.unescape(c["track"])
-            bpm = track_bpms.get(name) or track_bpms.get(c["track"])
-            if not bpm:
-                verdict_faithful = False
-                break
-            src_beat0 = c["loop_start"] + (
-                sec_to_beat_safe(f.t0, tempo_map) - c["arr_start"])
-            src_beat1 = c["loop_start"] + (
-                sec_to_beat_safe(f.t1, tempo_map) - c["arr_start"])
-            wav = audio_dir / (name + ".wav")
-            floor = _source_floor_db(wav, src_beat0 * 60.0 / bpm,
+        if mid_beat is None:
+            continue  # unmappable position - stays FAIL
+        active = [c for c in clips if c["arr_start"] <= mid_beat < c["arr_end"]]
+        if len(active) != 1:
+            continue  # none, or an unresolved overlap - stays FAIL
+        c = active[0]
+        if c["loop_on"] or c["start_relative"] != 0.0:
+            continue  # unmodelled clip shape - stays FAIL
+        name = html.unescape(c["track"])
+        bpm = track_bpms.get(name) or track_bpms.get(c["track"])
+        if not bpm:
+            continue
+        beat_t0 = sec_to_beat_safe(f.t0, tempo_map)
+        beat_t1 = sec_to_beat_safe(f.t1, tempo_map)
+        if beat_t0 is None or beat_t1 is None:
+            continue  # unmappable window - stays FAIL
+        src_beat0 = c["loop_start"] + (beat_t0 - c["arr_start"])
+        src_beat1 = c["loop_start"] + (beat_t1 - c["arr_start"])
+        wav = audio_dir / (name + ".wav")
+        loudest = _source_loudest_db(wav, src_beat0 * 60.0 / bpm,
                                      src_beat1 * 60.0 / bpm)
-            if floor is None or floor >= HARD_SILENCE_DB:
-                verdict_faithful = False
-                break
-            floors[name] = round(floor, 1)
-            verdict_faithful = True
-        if verdict_faithful:
-            f.level = "INFO"
-            f.measured["source_floors_db"] = floors
-            f.msg += (" - SOURCE-FAITHFUL: the active track's own audio is "
-                      "near-silent here (a written-in stop, not a render "
-                      "defect)")
+        if loudest is None or loudest >= SOURCE_QUIET_DB:
+            continue
+        f.level = "INFO"
+        f.measured["source_loudest_db"] = {name: round(loudest, 1)}
+        f.msg += (" - SOURCE-FAITHFUL: the active track's own audio never "
+                  "rises above quiet here (a written-in stop, not a render "
+                  "defect)")
 
 
-def sec_to_beat_safe(sec: float, tempo_map: TempoMap) -> float:
+def sec_to_beat_safe(sec: float, tempo_map: TempoMap) -> float | None:
+    """None on failure, never a sentinel float (2026-09-02, MiniMax Finding
+    8): a numeric sentinel like -1.0 only fails closed by ACCIDENT - it
+    depends on every caller's clip bounds happening to be non-negative. None
+    fails closed by construction: no clip's arr_start is ever None, so `c
+    <= None` raises rather than silently comparing wrong."""
     try:
         return float(sec_to_arr(sec, tempo_map))
     except Exception:
-        return -1.0
+        return None
 
 
 def _read_window(fh: sf.SoundFile, center_sample: int, half: int) -> np.ndarray | None:
@@ -1779,35 +1827,128 @@ def _loop_swap_beat(lp: dict, transitions: list[dict]) -> float | None:
     it is silenced outright), so rendered iterations legitimately stop
     repeating verbatim there. Overlap bounds are reconstructed from
     swap_beats + overlap_beats + swap_progress; when progress is absent,
-    fall back to "swap within 256 beats of the loop"."""
+    fall back to a window sized off the loop's own length.
+
+    Unambiguous-match only, validated inputs (2026-09-02, MiniMax review of
+    32efa36, Findings 2+3+4): the original returned the FIRST transition
+    satisfying either branch with no check that it was the ONLY one, used a
+    flat 256-beat fallback radius (two minutes at 128 BPM - wide enough to
+    reach a neighbouring transition in a tightly-packed mix), and trusted
+    swap_progress/overlap_beats without range-checking them. A malformed or
+    out-of-range value could reconstruct a bogus overlap that happens to
+    contain the loop, and an ambiguous match silently took report order.
+    Now: every candidate is collected per branch and the branch refuses
+    (returns no match - the safer default, meaning NO automation exclusion)
+    unless exactly one candidate exists; the fallback radius scales with the
+    loop's own length instead of a fixed constant; swap/progress/overlap are
+    range-checked before use. Verified this changes nothing on the real
+    corpus: all 9 of the House 10 mix's transitions carry a valid
+    swap_progress, so only the tight branch ever fires, and each of the 5
+    real loops matches exactly one transition, identically before and
+    after."""
     span_a = lp["insert_at_beat"]
     span_b = span_a + lp["total_beats"]
+
+    def _clean_swap(tr: dict) -> float | None:
+        swap = tr.get("swap_beats")
+        if swap is None:
+            return None
+        try:
+            swap = float(swap)
+        except (TypeError, ValueError):
+            return None
+        return swap if math.isfinite(swap) else None
+
+    tight: list[float] = []
+    # Every transition that CARRIED swap_progress+overlap data is excluded
+    # from the loose fallback below, whether or not that data passed
+    # validation or geometric containment. The fallback is for "no data was
+    # available", not "the data was malformed" - those must be rejected
+    # outright, never silently retried under the loose radius.
+    had_progress_data: set[int] = set()
+    for i, tr in enumerate(transitions or []):
+        swap = _clean_swap(tr)
+        if swap is None:
+            continue
+        prog, overlap = tr.get("swap_progress"), tr.get("overlap_beats")
+        if prog is None or not overlap:
+            continue
+        had_progress_data.add(i)
+        try:
+            prog, overlap = float(prog), float(overlap)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(prog) and math.isfinite(overlap)):
+            continue
+        if not (overlap > 0 and -0.05 <= prog <= 1.05):
+            continue
+        ov_a = swap - prog * overlap
+        ov_b = ov_a + overlap
+        if ov_a > ov_b:
+            continue
+        if ov_a - 1e-6 <= span_a and span_b <= ov_b + lp["iter_len"] + 1e-6:
+            tight.append(swap)
+    if len(tight) == 1:
+        return tight[0]
+    if len(tight) > 1:
+        return None  # ambiguous - refuse rather than guess
+    if had_progress_data:
+        return None  # progress data existed but didn't validate/contain -
+                     # refuse, never fall through to the loose radius
+
+    # Fallback only when NO transition carried any swap_progress+overlap
+    # data at all. Radius scales with the loop's own length rather than a
+    # flat constant.
+    radius = max(64.0, 4.0 * lp["iter_len"])
+    loose: list[float] = []
     for tr in transitions or []:
-        swap = tr["swap_beats"]
-        prog = tr.get("swap_progress")
-        if prog is not None and tr.get("overlap_beats"):
-            ov_a = swap - float(prog) * float(tr["overlap_beats"])
-            ov_b = ov_a + float(tr["overlap_beats"])
-            if ov_a - 1e-6 <= span_a and span_b <= ov_b + lp["iter_len"] + 1e-6:
-                return swap
-        elif abs(swap - span_a) <= 256.0 or abs(swap - span_b) <= 256.0:
-            return swap
-    return None
+        swap = _clean_swap(tr)
+        if swap is None:
+            continue
+        if abs(swap - span_a) <= radius or abs(swap - span_b) <= radius:
+            loose.append(swap)
+    return loose[0] if len(loose) == 1 else None
 
 
 def _verbatim_gated_pairs(insert_beat: float, iter_len: float, count: int,
                           swap_beat: float | None) -> list[int]:
-    """Indices of adjacent-iteration pairs that may GATE (fail the check).
-    Pair k compares iterations k and k+1, spanning
-    [insert + k*L, insert + (k+2)*L]. A pair whose later iteration reaches
-    past the swap beat plays under transition automation - excluded from
-    gating (2026-09-02: all four loop_verbatim FAILs on the House 10 render
-    were exactly these pairs; pre-swap pairs on the same loops read
-    r 0.94-0.97)."""
+    """Indices of adjacent-iteration pairs that may GATE (fail the check)
+    using their FULL envelopes. Pair k compares iterations k and k+1,
+    spanning [insert + k*L, insert + (k+2)*L]. A pair whose later iteration
+    reaches past the swap beat plays under transition automation for at
+    least part of its span - excluded here (2026-09-02: all four
+    loop_verbatim FAILs on the House 10 render were exactly these pairs;
+    pre-swap pairs on the same loops read r 0.94-0.97). A pair excluded here
+    may still gate on its PRE-swap portion alone - see
+    `_straddle_fraction`."""
     if swap_beat is None:
         return list(range(count - 1))
     return [k for k in range(count - 1)
             if insert_beat + (k + 2) * iter_len <= swap_beat + 1e-6]
+
+
+def _straddle_fraction(insert_beat: float, iter_len: float, k: int,
+                       swap_beat: float | None) -> float | None:
+    """For pair k (iterations k, k+1) not already gated in full: the
+    fraction of EACH iteration's length that lies before the swap beat, when
+    the swap falls strictly inside iteration k+1's span - None when the pair
+    is fully post-swap (no pre-swap material left to compare).
+
+    2026-09-02, MiniMax review of 32efa36, Finding 1: excluding a straddling
+    pair WHOLESALE throws away real coverage - a click or truncation in the
+    portion of iteration k+1 that plays BEFORE the swap is exactly as
+    detectable as one anywhere else, since the automation has not touched
+    that material yet (iteration k, being earlier, is entirely untouched).
+    Truncating both iterations to the same pre-swap prefix and correlating
+    that recovers the coverage the wholesale exclusion gave up."""
+    if swap_beat is None:
+        return None
+    next_start = insert_beat + (k + 1) * iter_len
+    next_end = next_start + iter_len
+    if not (next_start < swap_beat < next_end - 1e-9):
+        return None
+    frac = (swap_beat - next_start) / iter_len
+    return frac if 0.0 < frac < 1.0 else None
 
 
 def check_loop_verbatim(render_path: Path, loops: list[dict],
@@ -1852,10 +1993,28 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
             rs_auto: list[float] = []
             for k in range(len(envs) - 1):
                 a, b = envs[k], envs[k + 1]
+                target = rs_gate
+                if k not in gated:
+                    target = rs_auto
+                    frac = _straddle_fraction(
+                        lp["insert_at_beat"], iter_len, k, swap_beat)
+                    if frac is not None:
+                        # Compare only the pre-swap prefix of BOTH
+                        # iterations - iteration k is entirely untouched by
+                        # automation regardless, iteration k+1's prefix is
+                        # too; only its tail plays post-swap. A window too
+                        # short to correlate meaningfully (swap lands right
+                        # at the iteration's own start) falls through to
+                        # rs_auto (reported, never gates) rather than being
+                        # dropped or trusted on noise.
+                        cut = int(round(min_len * frac))
+                        if cut >= 8:
+                            a, b = a[:cut], b[:cut]
+                            target = rs_gate
                 if a.std() < 1e-12 or b.std() < 1e-12:
                     continue
                 r = float(np.corrcoef(a, b)[0, 1])
-                (rs_gate if k in gated else rs_auto).append(r)
+                target.append(r)
             if not rs_gate and not rs_auto:
                 continue
             if not rs_gate:
@@ -2353,6 +2512,13 @@ def write_report(result: CheckResult, render_path: Path,
                   "grid_fold", "kick_flam", "eof_truncated_reads",
                   "map_vs_render"}
     fired = {f.check for f in result.findings}
+    # loop_verbatim_under_automation is the SAME check reporting its
+    # not-applicable outcome under a distinct name (so the finding table
+    # reads clearly) - it must count as loop_verbatim having fired, or a
+    # loop that was skipped-as-inapplicable falsely reads as "ran clean"
+    # (2026-09-02, MiniMax review of 32efa36, Finding 11).
+    if "loop_verbatim_under_automation" in fired:
+        fired = fired | {"loop_verbatim"}
     # A check that was SKIPPED must never be listed as clean. The skip finding
     # carries its own name, so without this the report tells the operator that
     # the very check which did not run came back clean - which defeats the

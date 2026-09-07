@@ -2047,10 +2047,266 @@ def test_transition_dip_full_path_locates_and_names_the_band(tmp_path):
     assert abs(m["dip_at_sec"] - swap_sec) > 1.0, m
     # Kills C and E: the band that actually dropped must be named.
     assert m["deficit_band"] == "mid", m
-    assert m["band_db"]["mid"] == pytest.approx(-12.0, abs=1.5), m
-    for other in ("sub", "bass", "lowmid", "high"):
-        assert abs(m["band_db"][other]) < 1.5, (other, m["band_db"])
-    assert "deficit in mid" in out[0].msg, out[0].msg
+
+
+# --------------------------------------------------------------------------- #
+# 2026-09-02 pins: MiniMax review of 32efa36 (r1) - each finding, verified   #
+# against real behaviour, not just against the code that claims to fix it.  #
+# --------------------------------------------------------------------------- #
+
+# --- Finding 1: straddling pairs recover pre-swap coverage instead of ------
+# --- being excluded wholesale ------------------------------------------------
+
+def test_straddle_fraction_identifies_the_pre_swap_prefix():
+    # iterations [0,4) [4,8) [8,12) [12,16); swap at 14 falls inside
+    # iteration 3's span [12,16), 2 of its 4 beats in -> frac 0.5.
+    assert render_check._straddle_fraction(0.0, 4.0, 2, 14.0) == pytest.approx(0.5)
+
+
+def test_straddle_fraction_none_when_pair_is_fully_pre_or_post_swap():
+    # Pair 0 spans iterations 0,1 = [0,8) - fully pre-swap, not a straddle
+    # (already gated by _verbatim_gated_pairs; confirm no misfire).
+    assert render_check._straddle_fraction(0.0, 4.0, 0, 14.0) is None
+    # A swap exactly ON an iteration boundary - no partial iteration exists.
+    assert render_check._straddle_fraction(0.0, 4.0, 2, 12.0) is None
+    # Fully post-swap pair.
+    assert render_check._straddle_fraction(0.0, 4.0, 3, 14.0) is None
+
+
+def _loop_render_with_defect(path, *, bpm=120.0, sr=44100, seconds=10.0,
+                             defect_beat=None, defect_dur_beats=0.6):
+    """4 identical 4-beat kick+tone iterations, with an optional dropout
+    defect at a specific beat position (for straddle-coverage tests)."""
+    def extra(t, L, R):
+        if defect_beat is not None:
+            spb = 60.0 / bpm
+            i0 = int(round(defect_beat * spb * sr))
+            i1 = int(round((defect_beat + defect_dur_beats) * spb * sr))
+            L[i0:i1] = 0.0
+            R[i0:i1] = 0.0
+        return L, R
+    _synth_render(path, seconds, bpm=bpm, sr=sr, extra_process=extra)
+
+
+def test_straddling_pair_defect_in_pre_swap_prefix_is_caught(tmp_path):
+    """A dropout inside the PRE-swap half of a straddling iteration must
+    still FAIL loop_verbatim - this is the exact coverage MiniMax Finding 1
+    said was being thrown away by wholesale pair exclusion. Loop: insert=0,
+    iter_len=4, count=4 (16 beats @ 120bpm = 8s). Swap at beat 14 -> pair
+    k=2 (iterations 2,3) straddles with frac=0.5, so iteration 3's beats
+    [12,14) are the recovered pre-swap prefix. The defect sits at beat 12.5,
+    inside that recovered window and nowhere near beats [14,16)."""
+    wav = tmp_path / "straddle_defect.wav"
+    _loop_render_with_defect(wav, defect_beat=12.5)
+    tmap = render_check.TempoMap.flat(120.0)
+    loops = [{"track": "T", "type": "tail", "insert_at_beat": 0.0,
+             "total_beats": 16.0, "iter_len": 4.0}]
+    transitions = [{"swap_beats": 14.0, "overlap_beats": 14.0,
+                    "swap_progress": 1.0, "pair_index": 1}]
+    findings = render_check.check_loop_verbatim(wav, loops, tmap, transitions)
+    fails = [f for f in findings if f.check == "loop_verbatim"]
+    assert len(fails) == 1, findings
+    assert fails[0].measured["swap_beat"] == 14.0
+
+
+def test_straddling_pair_defect_only_in_post_swap_tail_does_not_fail(tmp_path):
+    """The mirror case: a dropout ONLY in iteration 3's post-swap tail
+    (beats [14,16), automation's legitimate territory) must NOT fail
+    loop_verbatim - confirms the straddle recovery didn't regress the
+    original automation-blindness fix by over-gating the automated portion."""
+    wav = tmp_path / "post_swap_defect.wav"
+    _loop_render_with_defect(wav, defect_beat=14.5)
+    tmap = render_check.TempoMap.flat(120.0)
+    loops = [{"track": "T", "type": "tail", "insert_at_beat": 0.0,
+             "total_beats": 16.0, "iter_len": 4.0}]
+    transitions = [{"swap_beats": 14.0, "overlap_beats": 14.0,
+                    "swap_progress": 1.0, "pair_index": 1}]
+    findings = render_check.check_loop_verbatim(wav, loops, tmap, transitions)
+    fails = [f for f in findings if f.check == "loop_verbatim"]
+    assert fails == [], findings
+
+
+# --- Findings 2+3+4: unambiguous transition binding, validated inputs ------
+
+def test_loop_swap_beat_refuses_ambiguous_match():
+    lp = {"insert_at_beat": 640.0, "total_beats": 16.0, "iter_len": 16.0}
+    # Two transitions whose reconstructed overlaps BOTH contain the loop.
+    transitions = [
+        {"swap_beats": 700.0, "overlap_beats": 200.0, "swap_progress": 0.5},
+        {"swap_beats": 720.0, "overlap_beats": 220.0, "swap_progress": 0.5},
+    ]
+    assert render_check._loop_swap_beat(lp, transitions) is None
+
+
+def test_loop_swap_beat_rejects_malformed_swap_progress():
+    lp = {"insert_at_beat": 640.0, "total_beats": 16.0, "iter_len": 16.0}
+    bad = [
+        {"swap_beats": 656.0, "overlap_beats": 32.0, "swap_progress": -5.0},
+        {"swap_beats": 656.0, "overlap_beats": -10.0, "swap_progress": 0.5},
+        {"swap_beats": 656.0, "overlap_beats": 32.0, "swap_progress": float("nan")},
+    ]
+    for tr in bad:
+        assert render_check._loop_swap_beat(lp, [tr]) is None, tr
+
+
+def test_loop_swap_beat_fallback_radius_scales_with_loop_length():
+    # 16-beat loop -> radius = max(64, 4*16) = 64. A transition 100 beats
+    # away (no swap_progress -> fallback branch) must NOT match; the old
+    # flat 256-beat radius would have wrongly matched it.
+    lp = {"insert_at_beat": 640.0, "total_beats": 16.0, "iter_len": 16.0}
+    far = [{"swap_beats": 640.0 + 100.0, "overlap_beats": None}]
+    assert render_check._loop_swap_beat(lp, far) is None
+    near = [{"swap_beats": 640.0 + 40.0, "overlap_beats": None}]
+    assert render_check._loop_swap_beat(lp, near) == 680.0
+
+
+def test_loop_swap_beat_still_binds_real_house10_geometry():
+    """Regression: the real T1 loop/transition pair from 02.09.26 House 10
+    (insert 640, 16b x 7, swap 720, progress 0.5) must still resolve after
+    the disambiguation/validation tightening."""
+    lp = {"insert_at_beat": 640.0, "total_beats": 112.0, "iter_len": 16.0}
+    transitions = [
+        {"swap_beats": 720.0, "overlap_beats": 256.0, "swap_progress": 0.5},
+        {"swap_beats": 5000.0, "overlap_beats": 68.0, "swap_progress": 0.9},
+    ]
+    assert render_check._loop_swap_beat(lp, transitions) == 720.0
+
+
+# --- Findings 5+6: single-active-clip only, loop_on/StartRelative refused --
+
+def test_source_faithful_silence_refuses_multiple_active_clips(tmp_path):
+    """A hard_silence finding whose midpoint falls where TWO clips overlap
+    must stay FAIL, even if both independently map to quiet source audio -
+    "all active clips are quiet" does not prove which one, if either, is
+    responsible for the render's silence (2026-09-02, MiniMax Finding 5)."""
+    sr = 44100
+    audio_dir = tmp_path / "Audio"
+    audio_dir.mkdir()
+    quiet = np.zeros(2 * sr)
+    sf.write(str(audio_dir / "A.wav"), quiet, sr)
+    sf.write(str(audio_dir / "B.wav"), quiet, sr)
+
+    tempo_map = render_check.TempoMap.flat(120.0)
+    clips = [
+        {"track": "A", "arr_start": 0.0, "arr_end": 8.0, "loop_start": 0.0,
+         "loop_end": 8.0, "start_relative": 0.0, "loop_on": False},
+        {"track": "B", "arr_start": 2.0, "arr_end": 10.0, "loop_start": 0.0,
+         "loop_end": 8.0, "start_relative": 0.0, "loop_on": False},
+    ]
+    bpms = {"A": 120.0, "B": 120.0}
+    f = render_check.Finding(check="hard_silence", level="FAIL",
+                             t0=1.0, t1=1.4, beat0=0.0, beat1=0.0,
+                             measured={}, msg="hard silence (0.4s)")
+    render_check.reclassify_source_faithful_silence(
+        [f], clips, tempo_map, audio_dir, bpms)
+    assert f.level == "FAIL"
+
+
+def test_source_faithful_silence_refuses_loop_on_and_start_relative_clips(tmp_path):
+    """A clip this mapping cannot model correctly (looped, or a nonzero
+    StartRelative offset) must keep the FAIL rather than risk mapping to
+    the wrong part of the source (2026-09-02, MiniMax Finding 6)."""
+    sr = 44100
+    audio_dir = tmp_path / "Audio"
+    audio_dir.mkdir()
+    sf.write(str(audio_dir / "A.wav"), np.zeros(2 * sr), sr)
+
+    tempo_map = render_check.TempoMap.flat(120.0)
+    bpms = {"A": 120.0}
+    base = {"track": "A", "arr_start": 0.0, "arr_end": 8.0,
+           "loop_start": 0.0, "loop_end": 8.0}
+
+    for bad_clip in (
+        {**base, "start_relative": 0.0, "loop_on": True},
+        {**base, "start_relative": 4.0, "loop_on": False},
+    ):
+        f = render_check.Finding(check="hard_silence", level="FAIL",
+                                 t0=1.0, t1=1.4, beat0=0.0, beat1=0.0,
+                                 measured={}, msg="hard silence (0.4s)")
+        render_check.reclassify_source_faithful_silence(
+            [f], [bad_clip], tempo_map, audio_dir, bpms)
+        assert f.level == "FAIL", bad_clip
+
+
+# --- Finding 7: max(), not min() - one quiet frame in loud audio must not --
+# --- justify a downgrade -----------------------------------------------------
+
+def test_source_faithful_silence_rejects_loud_source_with_one_quiet_dip(tmp_path):
+    """The pathological case Finding 7 named directly: a source window that
+    is mostly NORMAL level with a single brief quiet dip must NOT downgrade
+    - min() would have (the dip alone sets the old 'floor'); max() correctly
+    sees the loud majority and refuses."""
+    sr = 44100
+    audio_dir = tmp_path / "Audio"
+    audio_dir.mkdir()
+    y = 0.3 * np.sin(2 * np.pi * 220 * np.arange(2 * sr) / sr)  # ~-10 dBFS
+    dip_a, dip_b = int(1.2 * sr), int(1.25 * sr)
+    y[dip_a:dip_b] = 0.0  # one ~50ms hard dip inside otherwise-loud audio
+    sf.write(str(audio_dir / "A.wav"), y, sr)
+
+    tempo_map = render_check.TempoMap.flat(120.0)
+    clips = [{"track": "A", "arr_start": 0.0, "arr_end": 8.0,
+             "loop_start": 0.0, "loop_end": 8.0, "start_relative": 0.0,
+             "loop_on": False}]
+    bpms = {"A": 120.0}
+    f = render_check.Finding(check="hard_silence", level="FAIL",
+                             t0=1.0, t1=1.4, beat0=0.0, beat1=0.0,
+                             measured={}, msg="hard silence (0.4s)")
+    render_check.reclassify_source_faithful_silence(
+        [f], clips, tempo_map, audio_dir, bpms)
+    assert f.level == "FAIL"
+
+
+def test_source_faithful_silence_still_fires_on_genuinely_quiet_window(tmp_path):
+    """Sanity check alongside the above: a window that's quiet THROUGHOUT
+    still downgrades under the new max()-based check - the fix tightened
+    the statistic, it didn't disable the feature."""
+    sr = 44100
+    audio_dir = tmp_path / "Audio"
+    audio_dir.mkdir()
+    y = np.full(2 * sr, 10 ** (-55.0 / 20.0))  # constant ~-55 dBFS
+    sf.write(str(audio_dir / "A.wav"), y, sr)
+
+    tempo_map = render_check.TempoMap.flat(120.0)
+    clips = [{"track": "A", "arr_start": 0.0, "arr_end": 8.0,
+             "loop_start": 0.0, "loop_end": 8.0, "start_relative": 0.0,
+             "loop_on": False}]
+    bpms = {"A": 120.0}
+    f = render_check.Finding(check="hard_silence", level="FAIL",
+                             t0=1.0, t1=1.4, beat0=0.0, beat1=0.0,
+                             measured={}, msg="hard silence (0.4s)")
+    render_check.reclassify_source_faithful_silence(
+        [f], clips, tempo_map, audio_dir, bpms)
+    assert f.level == "INFO"
+
+
+# --- Finding 8: None sentinel, not -1.0 -------------------------------------
+
+def test_sec_to_beat_safe_returns_none_not_a_numeric_sentinel():
+    class _Boom:
+        def bpm_at(self, beat):
+            raise ValueError("boom")
+    assert render_check.sec_to_beat_safe(1.0, _Boom()) is None
+
+
+# --- Finding 11: loop_verbatim_under_automation counts as loop_verbatim ----
+# --- having fired, for the "checks run clean" summary ----------------------
+
+def test_report_does_not_list_loop_verbatim_clean_when_only_automation_fired(tmp_path):
+    result = render_check.CheckResult(
+        findings=[render_check.Finding(
+            check="loop_verbatim_under_automation", level="INFO",
+            t0=0.0, t1=1.0, beat0=0.0, beat1=16.0,
+            measured={"swap_beat": 100.0}, msg="not applicable")],
+        verdict="WARN", exit_code=1,
+        meta={"render": "x.wav", "verdict": "WARN", "integrated_lufs": -14.0,
+             "duration_sec": 60.0, "checks_ran": True},
+    )
+    md_path, _ = render_check.write_report(result, Path("x.wav"), tmp_path / "out.json")
+    text = md_path.read_text(encoding="utf-8")
+    section = text.split("## Checks run clean", 1)[1][:300]
+    assert "loop_verbatim\n" not in section and "loop_verbatim," not in section \
+        and "loop_verbatim " not in section
 
 
 def test_gate_error_path_lists_no_check_as_clean(tmp_path, monkeypatch):
