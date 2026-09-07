@@ -23,12 +23,15 @@ Example:
 from __future__ import annotations
 
 import gzip
+import html
 import json
 import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+
+from extract_sections_als import parse_sections_als
 
 
 # ── Reused from apply_automation.py ──────────────────────────────────────────
@@ -172,7 +175,10 @@ def extract_track_automation(lines: list[str],
 # ── Track matching helpers ───────────────────────────────────────────────────
 
 def _normalise(s: str) -> str:
-    return s.lower().replace("–", "-").replace("—", "-").strip()
+    # ALS attributes contain XML entities (for example ``&amp;``), while
+    # JSON hints and user-facing names generally do not. Normalise that
+    # boundary before every exact/substring comparison.
+    return html.unescape(s).lower().replace("–", "-").replace("—", "-").strip()
 
 
 def _match_name(a: str, b: str) -> bool:
@@ -199,19 +205,96 @@ class TrackInfo:
     arr_end: float
 
 
-def ordered_tracks_from_json(sections: dict) -> list[TrackInfo]:
+def _section_semantics(section: dict) -> dict:
+    """Keep label semantics from JSON without carrying its stale geometry."""
+    result = {
+        key: html.unescape(value) if isinstance(value, str) else value
+        for key, value in section.items()
+        if key in {"name", "label", "label_n"}
+    }
+    if "name" not in result:
+        result["name"] = result.get("label", "(unnamed)")
+    return result
+
+
+def _semantics_for_track(sections: dict | None,
+                         track_name: str) -> list[dict] | None:
+    if not sections:
+        return None
+    for candidate, records in sections.items():
+        if _match_name(candidate, track_name):
+            return [_section_semantics(record) for record in records]
+    return None
+
+
+def ordered_tracks_from_clip_records(
+        clip_records: dict[str, list[dict]],
+        section_semantics: dict | None = None,
+        ) -> list[TrackInfo]:
+    """Build ordered track spans from parsed ALS clip records.
+
+    ``clip_records`` has the output shape of :func:`parse_sections_als`, so
+    arranged clip behaviour is testable without constructing gzip fixtures.
+    Phase-1 JSON may supply section names for history records, but its
+    arrangement fields are never read here.
+    """
     tracks: list[TrackInfo] = []
-    for name, secs in sections.items():
-        if not secs:
+    for xml_name, clips in clip_records.items():
+        name = html.unescape(xml_name)
+        if not name or ("Audio" in name and "-" not in name):
             continue
+        positioned = [clip for clip in clips
+                      if clip.get("arr_time") is not None
+                      and clip.get("arr_end") is not None]
+        if not positioned:
+            continue
+
+        semantics = _semantics_for_track(section_semantics, name)
+        if semantics is None:
+            semantics = [_section_semantics(clip) for clip in positioned]
+
         tracks.append(TrackInfo(
             name=name,
-            sections=secs,
-            arr_start=secs[0]["arr_time"],
-            arr_end=secs[-1]["arr_end"],
+            sections=semantics,
+            arr_start=min(float(clip["arr_time"]) for clip in positioned),
+            arr_end=max(float(clip["arr_end"]) for clip in positioned),
         ))
     tracks.sort(key=lambda t: t.arr_start)
     return tracks
+
+
+def _find_track(tracks: list[TrackInfo], name: str) -> TrackInfo | None:
+    return next((track for track in tracks if _match_name(track.name, name)), None)
+
+
+def _has_overlapping_pair(tracks: list[TrackInfo]) -> bool:
+    for index, outgoing in enumerate(tracks[:-1]):
+        incoming = tracks[index + 1]
+        if max(outgoing.arr_start, incoming.arr_start) < min(
+                outgoing.arr_end, incoming.arr_end):
+            return True
+    return False
+
+
+class VacuousLearningError(RuntimeError):
+    """Raised when real ALS overlaps somehow yield an empty comparison."""
+
+
+def guard_against_vacuous_result(
+        claude_tracks: list[TrackInfo],
+        sam_tracks: list[TrackInfo],
+        diffs: list[TransitionDiff],
+        ) -> None:
+    """Refuse the silent-success shape that lost the 2026-09-02 correction."""
+    if (not diffs
+            and len(claude_tracks) >= 2
+            and len(sam_tracks) >= 2
+            and _has_overlapping_pair(claude_tracks)
+            and _has_overlapping_pair(sam_tracks)):
+        raise VacuousLearningError(
+            "both ALS files contain overlapping audio-track spans, but the "
+            "comparison produced 0 transitions; refusing to append an empty "
+            "learning result")
 
 
 # ── Diff analysis ────────────────────────────────────────────────────────────
@@ -240,6 +323,12 @@ class TransitionDiff:
     # derived
     bass_swap_claude: float | None = None
     bass_swap_sam: float | None = None
+    bass_swap_delta: float | None = None
+    out_overlap_end_claude: float | None = None
+    out_overlap_end_sam: float | None = None
+    sam_overlap_start: float | None = None
+    sam_overlap_end: float | None = None
+    sam_overlap_bars: float | None = None
     arrangement_changed: bool = False
     corrections: list[str] = field(default_factory=list)
     verdict: str = "correct"
@@ -250,8 +339,10 @@ class TransitionDiff:
 def _classify_style(td_out_vol: ParamDiff | None,
                     td_out_bass: ParamDiff | None,
                     td_in_vol: ParamDiff | None,
-                    overlap_start: float,
-                    overlap_end: float) -> str:
+                    out_overlap_start: float,
+                    out_overlap_end: float,
+                    in_overlap_start: float,
+                    in_overlap_end: float) -> str:
     """Classify which TransitionStyle Sam's corrections most closely match.
 
     Returns "standard", "long_blend", or "quick_swap".
@@ -259,19 +350,19 @@ def _classify_style(td_out_vol: ParamDiff | None,
     sam_in_vol = td_in_vol.sam_points if td_in_vol else []
     sam_out_bass = td_out_bass.sam_points if td_out_bass else []
 
-    sneak = _find_sneak_level(sam_in_vol, overlap_start)
+    sneak = _find_sneak_level(sam_in_vol, in_overlap_start)
     has_sneak = sneak is not None and sneak > 0.01
 
     bass_kill_val = None
     for t, v in sam_out_bass:
-        if overlap_start <= t <= overlap_end and v < 0.9:
+        if out_overlap_start <= t <= out_overlap_end and v < 0.9:
             bass_kill_val = v
             break
 
     partial_bass = bass_kill_val is not None and bass_kill_val > 0.25
 
     vol_points_in_zone = [(t, v) for t, v in sam_in_vol
-                          if overlap_start - 4 <= t <= overlap_end + 4]
+                          if in_overlap_start - 4 <= t <= in_overlap_end + 4]
     instant_swap = False
     if len(vol_points_in_zone) >= 2:
         for i in range(len(vol_points_in_zone) - 1):
@@ -388,93 +479,168 @@ def _split_points_at(points: list[tuple[float, float]],
 
 def _scope_points(points: list[tuple[float, float]],
                   zone_start: float, zone_end: float,
+                  origin: float,
                   margin: float = 40.0) -> list[tuple[float, float]]:
-    """Return only automation points within a transition zone (with margin).
+    """Return transition points, anchored to this track's own start.
 
-    Margin is generous (40 beats = 10 bars) to catch arrangement-shifted
-    points that moved slightly outside the expected zone.
+    Points are selected in the ALS's absolute arrangement coordinate system,
+    then translated into the track-local coordinate system used for every
+    cross-file comparison.  A whole downstream arrangement shift therefore
+    cannot masquerade as an automation edit.
     """
-    return [(t, v) for t, v in points
+    return [(t - origin, v) for t, v in points
             if zone_start - margin <= t <= zone_end + margin]
 
 
 def analyse_transitions(claude_auto: dict[str, TrackAutomation],
                         sam_auto: dict[str, TrackAutomation],
-                        tracks: list[TrackInfo],
+                        claude_tracks: list[TrackInfo],
+                        sam_tracks: list[TrackInfo],
                         ) -> list[TransitionDiff]:
     """Compare automation between Claude and Sam for each transition.
 
-    Only points within each transition's overlap zone (+ small margin) are
-    compared, so changes in an adjacent transition don't bleed through.
+    Each automation stream is scoped with the overlap geometry from its own
+    ALS. Sam's edit can move clips substantially; those different positions
+    are correction data, not parse noise.
     """
     diffs: list[TransitionDiff] = []
 
-    for i in range(len(tracks) - 1):
-        out_t, in_t = tracks[i], tracks[i + 1]
-        ov_start = in_t.arr_start
-        ov_end = out_t.arr_end
-        if ov_start >= ov_end:
+    for i in range(len(claude_tracks) - 1):
+        c_out_t, c_in_t = claude_tracks[i], claude_tracks[i + 1]
+        s_out_t = _find_track(sam_tracks, c_out_t.name)
+        s_in_t = _find_track(sam_tracks, c_in_t.name)
+        if s_out_t is None or s_in_t is None:
+            missing = []
+            if s_out_t is None:
+                missing.append("outgoing")
+            if s_in_t is None:
+                missing.append("incoming")
+            c_ov_start, c_ov_end = c_in_t.arr_start, c_out_t.arr_end
+            diffs.append(TransitionDiff(
+                pair_index=i + 1,
+                out_name=c_out_t.name,
+                in_name=c_in_t.name,
+                overlap_start=c_ov_start,
+                overlap_end=c_ov_end,
+                overlap_bars=max(0.0, (c_ov_end - c_ov_start) / 4),
+                verdict="unanalysed",
+                notes=("Unanalysed: no matching "
+                       f"{' and '.join(missing)} track in Sam ALS"),
+            ))
             continue
+
+        c_ov_start = c_in_t.arr_start
+        c_ov_end = c_out_t.arr_end
+        s_ov_start = s_in_t.arr_start
+        s_ov_end = s_out_t.arr_end
+        c_overlaps = c_ov_start < c_ov_end
+        s_overlaps = s_ov_start < s_ov_end
+        if not c_overlaps and not s_overlaps:
+            continue
+
+        # Pair-history overlap fields retain the proposal-side meaning. If
+        # Sam created an overlap where the proposal had none, use Sam's real
+        # window so that newly created transition is still learnable.
+        ov_start = c_ov_start if c_overlaps else s_ov_start
+        ov_end = c_ov_end if c_overlaps else s_ov_end
 
         td = TransitionDiff(
             pair_index=i + 1,
-            out_name=out_t.name,
-            in_name=in_t.name,
+            out_name=c_out_t.name,
+            in_name=c_in_t.name,
             overlap_start=ov_start,
             overlap_end=ov_end,
             overlap_bars=(ov_end - ov_start) / 4,
+            sam_overlap_start=s_ov_start,
+            sam_overlap_end=s_ov_end,
+            sam_overlap_bars=(s_ov_end - s_ov_start) / 4,
+            arrangement_changed=(
+                abs((c_ov_end - c_ov_start) - (s_ov_end - s_ov_start)) > 0.01
+                or abs((c_in_t.arr_start - c_out_t.arr_start)
+                       - (s_in_t.arr_start - s_out_t.arr_start)) > 0.01
+            ),
         )
 
         # match track names to automation data
-        c_out = _find_auto(claude_auto, out_t.name)
-        c_in = _find_auto(claude_auto, in_t.name)
-        s_out = _find_auto(sam_auto, out_t.name)
-        s_in = _find_auto(sam_auto, in_t.name)
+        c_out = _find_auto(claude_auto, c_out_t.name)
+        c_in = _find_auto(claude_auto, c_in_t.name)
+        s_out = _find_auto(sam_auto, s_out_t.name)
+        s_in = _find_auto(sam_auto, s_in_t.name)
 
         if not c_out or not s_out or not c_in or not s_in:
             td.notes = "Could not match all tracks to automation data"
             diffs.append(td)
             continue
 
-        # scope to overlap zone before comparing — prevents bleed from
-        # adjacent transitions that share a track
+        # Scope each ALS with its own overlap, then anchor every automation
+        # stream to its own track start.  The resulting points are in a
+        # shared, track-local frame before _make_diff compares them.
         td.out_volume = _make_diff(
             "volume",
-            _scope_points(c_out.volume_points, ov_start, ov_end),
-            _scope_points(s_out.volume_points, ov_start, ov_end))
+            _scope_points(c_out.volume_points, c_ov_start, c_ov_end,
+                          c_out_t.arr_start),
+            _scope_points(s_out.volume_points, s_ov_start, s_ov_end,
+                          s_out_t.arr_start))
         td.out_bass = _make_diff(
             "bass",
-            _scope_points(c_out.bass_points, ov_start, ov_end),
-            _scope_points(s_out.bass_points, ov_start, ov_end))
+            _scope_points(c_out.bass_points, c_ov_start, c_ov_end,
+                          c_out_t.arr_start),
+            _scope_points(s_out.bass_points, s_ov_start, s_ov_end,
+                          s_out_t.arr_start))
         td.in_volume = _make_diff(
             "volume",
-            _scope_points(c_in.volume_points, ov_start, ov_end),
-            _scope_points(s_in.volume_points, ov_start, ov_end))
+            _scope_points(c_in.volume_points, c_ov_start, c_ov_end,
+                          c_in_t.arr_start),
+            _scope_points(s_in.volume_points, s_ov_start, s_ov_end,
+                          s_in_t.arr_start))
         td.in_bass = _make_diff(
             "bass",
-            _scope_points(c_in.bass_points, ov_start, ov_end),
-            _scope_points(s_in.bass_points, ov_start, ov_end))
+            _scope_points(c_in.bass_points, c_ov_start, c_ov_end,
+                          c_in_t.arr_start),
+            _scope_points(s_in.bass_points, s_ov_start, s_ov_end,
+                          s_in_t.arr_start))
 
-        # find bass swap beats
+        # Find swaps in the same outgoing-track-local frame as the bass
+        # diffs.  Absolute positions cannot be compared across ALS files.
+        c_out_ov_start = c_ov_start - c_out_t.arr_start
+        c_out_ov_end = c_ov_end - c_out_t.arr_start
+        s_out_ov_start = s_ov_start - s_out_t.arr_start
+        s_out_ov_end = s_ov_end - s_out_t.arr_start
+        c_in_ov_start = c_ov_start - c_in_t.arr_start
+        c_in_ov_end = c_ov_end - c_in_t.arr_start
+        s_in_ov_start = s_ov_start - s_in_t.arr_start
+        s_in_ov_end = s_ov_end - s_in_t.arr_start
+        td.out_overlap_end_claude = c_out_ov_end
+        td.out_overlap_end_sam = s_out_ov_end
         td.bass_swap_claude = _find_bass_swap_beat(
-            c_out.bass_points, ov_start, ov_end, "outgoing")
+            td.out_bass.claude_points, c_out_ov_start, c_out_ov_end, "outgoing")
         td.bass_swap_sam = _find_bass_swap_beat(
-            s_out.bass_points, ov_start, ov_end, "outgoing")
+            td.out_bass.sam_points, s_out_ov_start, s_out_ov_end, "outgoing")
+        if td.bass_swap_claude is not None and td.bass_swap_sam is not None:
+            # The stored swaps are track-local, as are the point lists.  Their
+            # position *within this handoff* is local swap minus local incoming
+            # entry.  This removes unrelated edits earlier in the outgoing
+            # track (for example a shortened opening section) without hiding a
+            # real move of the handover itself.
+            td.bass_swap_delta = (
+                (td.bass_swap_sam - s_out_ov_start)
+                - (td.bass_swap_claude - c_out_ov_start)
+            )
 
         # classify corrections
-        any_change = False
+        any_change = td.arrangement_changed
 
         if td.out_bass and td.out_bass.changed:
             any_change = True
-            if td.bass_swap_claude and td.bass_swap_sam:
-                delta = td.bass_swap_sam - td.bass_swap_claude
+            if td.bass_swap_delta is not None:
+                delta = td.bass_swap_delta
                 if abs(delta) > 2:
                     td.corrections.append(
                         f"bass_swap_moved:{delta:+.0f}beats ({delta/4:+.0f}bars)")
 
             # check for two-stage bass
             two_stage = _detect_two_stage(
-                s_out.bass_points, ov_start, ov_end, "bass")
+                td.out_bass.sam_points, s_out_ov_start, s_out_ov_end, "bass")
             if two_stage:
                 td.corrections.append("two_stage_bass")
 
@@ -484,15 +650,15 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
         if td.out_volume and td.out_volume.changed:
             any_change = True
             two_stage = _detect_two_stage(
-                s_out.volume_points, ov_start, ov_end, "volume")
+                td.out_volume.sam_points, s_out_ov_start, s_out_ov_end, "volume")
             if two_stage:
                 td.corrections.append("two_stage_volume")
 
         if td.in_volume and td.in_volume.changed:
             any_change = True
             # check for sneak level change
-            c_sneak = _find_sneak_level(c_in.volume_points, ov_start)
-            s_sneak = _find_sneak_level(s_in.volume_points, ov_start)
+            c_sneak = _find_sneak_level(td.in_volume.claude_points, c_in_ov_start)
+            s_sneak = _find_sneak_level(td.in_volume.sam_points, s_in_ov_start)
             if c_sneak and s_sneak and abs(c_sneak - s_sneak) > 0.01:
                 td.corrections.append(
                     f"sneak_changed:{c_sneak}->{s_sneak}")
@@ -504,7 +670,7 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
 
         td.classified_style = _classify_style(
             td.out_volume, td.out_bass, td.in_volume,
-            td.overlap_start, td.overlap_end)
+            s_out_ov_start, s_out_ov_end, s_in_ov_start, s_in_ov_end)
 
         diffs.append(td)
 
@@ -557,10 +723,13 @@ def diff_to_jsonl_entry(td: TransitionDiff,
         "bpm_out": bpm,
         "bpm_in": bpm,
         "overlap_bars": td.overlap_bars,
+        "sam_overlap_bars": td.sam_overlap_bars,
+        "arrangement_changed": td.arrangement_changed,
         "out_structure": _section_names(out_t) if out_t else [],
         "in_structure": _section_names(in_t) if in_t else [],
         "claude_bass_swap_beat": td.bass_swap_claude,
         "sam_bass_swap_beat": td.bass_swap_sam,
+        "bass_swap_delta_beats": td.bass_swap_delta,
         "swap_at_boundary": False,
         "bass_changed": (td.out_bass.changed if td.out_bass else False)
                         or (td.in_bass.changed if td.in_bass else False),
@@ -574,14 +743,16 @@ def diff_to_jsonl_entry(td: TransitionDiff,
     }
 
     # detect boundary swap
-    if td.bass_swap_claude is not None:
-        if abs(td.bass_swap_claude - td.overlap_end) < 2:
+    if (td.bass_swap_claude is not None
+            and td.out_overlap_end_claude is not None):
+        if abs(td.bass_swap_claude - td.out_overlap_end_claude) < 2:
             entry["swap_at_boundary"] = True
 
     # add sneak info if changed
     if td.in_volume and td.in_volume.changed:
-        c_sneak = _find_sneak_level(td.in_volume.claude_points, td.overlap_start)
-        s_sneak = _find_sneak_level(td.in_volume.sam_points, td.overlap_start)
+        # Incoming points are stored relative to the incoming track start.
+        c_sneak = _find_sneak_level(td.in_volume.claude_points, 0.0)
+        s_sneak = _find_sneak_level(td.in_volume.sam_points, 0.0)
         if c_sneak is not None:
             entry["sneak_claude"] = c_sneak
         if s_sneak is not None:
@@ -601,25 +772,32 @@ def diff_to_jsonl_entry(td: TransitionDiff,
 def print_report(diffs: list[TransitionDiff]) -> None:
     correct = sum(1 for d in diffs if d.verdict == "correct")
     corrected = sum(1 for d in diffs if d.verdict == "corrected")
+    unanalysed = sum(1 for d in diffs if d.verdict == "unanalysed")
 
     print(f"\n{'='*70}")
     print(f"  LEARNING REPORT — {len(diffs)} transitions")
-    print(f"  Correct: {correct}/{len(diffs)}  |  Corrected: {corrected}/{len(diffs)}")
+    print(f"  Correct: {correct}/{len(diffs)}  |  Corrected: {corrected}/{len(diffs)}"
+          f"  |  Unanalysed: {unanalysed}/{len(diffs)}")
     print(f"{'='*70}")
 
     for td in diffs:
-        mark = "OK" if td.verdict == "correct" else "FIX"
+        mark = {"correct": "OK", "corrected": "FIX"}.get(td.verdict, "SKIP")
         swap_info = ""
-        if td.bass_swap_claude and td.bass_swap_sam:
-            if abs(td.bass_swap_claude - td.bass_swap_sam) > 2:
-                delta = td.bass_swap_sam - td.bass_swap_claude
+        if td.bass_swap_delta is not None:
+            if abs(td.bass_swap_delta) > 2:
+                delta = td.bass_swap_delta
                 swap_info = f"  swap moved {delta:+.0f} beats ({delta/4:+.0f} bars)"
             else:
-                swap_info = f"  swap@{td.bass_swap_claude:.0f}"
+                swap_info = "  swap aligned within transition"
+
+        overlap_info = f"{td.overlap_bars:.0f} bars overlap"
+        if td.sam_overlap_bars is not None:
+            overlap_info = (f"{td.overlap_bars:.0f}→{td.sam_overlap_bars:.0f} "
+                            "bars overlap")
 
         print(f"\n  T{td.pair_index} [{mark}]  "
               f"{_short(td.out_name)} -> {_short(td.in_name)}"
-              f"  ({td.overlap_bars:.0f} bars overlap)"
+              f"  ({overlap_info})"
               f"  style={td.classified_style}")
 
         if swap_info:
@@ -656,7 +834,14 @@ def print_report(diffs: list[TransitionDiff]) -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def _print_geometry(label: str, tracks: list[TrackInfo]) -> None:
+    print(f"\n{label} geometry — {len(tracks)} tracks in order:")
+    for track in tracks:
+        print(f"  {_short(track.name):20s}  "
+              f"arr {track.arr_start:6.0f}-{track.arr_end:6.0f}")
+
+
+def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -717,15 +902,24 @@ def main() -> None:
                   if ta.volume_points or ta.bass_points)
     print(f"  {s_count} tracks with automation")
 
-    # ── build track list from sections ───────────────────────────────
-    tracks = ordered_tracks_from_json(sections_data)
-    print(f"\n{len(tracks)} tracks in order:")
-    for t in tracks:
-        print(f"  {_short(t.name):20s}  "
-              f"arr {t.arr_start:6.0f}-{t.arr_end:6.0f}")
+    # Geometry is parsed from EACH ALS independently. The sections JSON was
+    # emitted from the sequential Phase-1 layout and is used only for stable
+    # section-label semantics in pair-history records.
+    claude_tracks = ordered_tracks_from_clip_records(
+        parse_sections_als(args.claude_als), sections_data)
+    sam_tracks = ordered_tracks_from_clip_records(
+        parse_sections_als(args.sam_als), sections_data)
+    _print_geometry("Baseline ALS", claude_tracks)
+    _print_geometry("Corrected ALS", sam_tracks)
 
     # ── analyse transitions ──────────────────────────────────────────
-    diffs = analyse_transitions(claude_auto, sam_auto, tracks)
+    diffs = analyse_transitions(
+        claude_auto, sam_auto, claude_tracks, sam_tracks)
+    try:
+        guard_against_vacuous_result(claude_tracks, sam_tracks, diffs)
+    except VacuousLearningError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     # ── print report ─────────────────────────────────────────────────
     print_report(diffs)
@@ -737,7 +931,8 @@ def main() -> None:
             library_path.parent.mkdir(parents=True)
             print(f"Created {library_path.parent}")
 
-        entries = [diff_to_jsonl_entry(td, tracks, args.project, args.bpm)
+        entries = [diff_to_jsonl_entry(
+            td, claude_tracks, args.project, args.bpm)
                    for td in diffs]
 
         with open(library_path, "a", encoding="utf-8") as f:
@@ -749,7 +944,8 @@ def main() -> None:
         print("[DRY RUN] Would append entries to pair_history.jsonl")
 
         # print what would be written
-        entries = [diff_to_jsonl_entry(td, tracks, args.project, args.bpm)
+        entries = [diff_to_jsonl_entry(
+            td, claude_tracks, args.project, args.bpm)
                    for td in diffs]
         print("\nEntries that would be written:")
         for e in entries:
@@ -757,6 +953,8 @@ def main() -> None:
                   f"{_short(e['out_track'])} -> {_short(e['in_track'])}"
                   f"  corrections={e.get('corrections', [])}")
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
