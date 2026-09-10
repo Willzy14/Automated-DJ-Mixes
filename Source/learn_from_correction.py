@@ -487,8 +487,36 @@ def _source_beat(beat: float, clips: list[dict], fallback_origin: float) -> floa
     trim or resize of the arranged clip, unlike its arrangement-local offset.
     Synthetic callers without clip records retain the previous local-origin
     behaviour.
-    """
-    source_clips = [
+
+    Boundary tie-break (2026-09-10, MiniMax review of 53d1b7d, Finding 1.1):
+    a beat sitting exactly on the splice between two adjacent clips used to
+    pick whichever clip was ARRANGED earliest, on the assumption "their
+    source positions are normally identical there" - true for adjacent
+    SECTION clips (a drop flowing into its own outro), but FALSE for an
+    INSERTED loop clip: apply_loops.clone_clip sets an inserted loop's
+    LoopStart to wherever the loop was deliberately sourced from
+    (propose_arrangement's tail/intro loop specs), which can differ from
+    the adjacent section's own source position by the loop's own length.
+    Real automation points DO land exactly on such splices (the swap point
+    is frequently the outgoing clip's own end). Fixed by preferring STRICT
+    half-open containment [arr_time, arr_end) - the ordinary playback
+    sense in which exactly one clip owns any given beat, no tie exists -
+    and falling back to the fuzzy 0.01-tolerance match (preferring the
+    LATER-arranged clip, matching Ableton's own end-exclusive/
+    start-inclusive convention) only for a genuine floating-point-exact
+    boundary beat, where strict containment matches none or both."""
+    strict = [
+        clip for clip in clips
+        if (clip.get("arr_time") is not None
+            and clip.get("arr_end") is not None
+            and clip.get("source_start_beats") is not None
+            and float(clip["arr_time"]) <= beat < float(clip["arr_end"]))
+    ]
+    if len(strict) == 1:
+        clip = strict[0]
+        return float(clip["source_start_beats"]) + (beat - float(clip["arr_time"]))
+
+    fuzzy = [
         clip for clip in clips
         if (clip.get("arr_time") is not None
             and clip.get("arr_end") is not None
@@ -496,13 +524,12 @@ def _source_beat(beat: float, clips: list[dict], fallback_origin: float) -> floa
             and float(clip["arr_time"]) - 0.01 <= beat
             <= float(clip["arr_end"]) + 0.01)
     ]
-    if not source_clips:
+    if not fuzzy:
         return beat - fallback_origin
 
-    # A boundary can belong to adjacent phrase clips. Their source positions
-    # are normally identical there; choose the earlier arranged clip so the
-    # result is deterministic if an ALS is imperfectly segmented.
-    clip = min(source_clips, key=lambda item: float(item["arr_time"]))
+    # Genuine boundary (strict containment found none or, for overlapping/
+    # malformed clip data, more than one) - prefer the LATER-arranged clip.
+    clip = max(fuzzy, key=lambda item: float(item["arr_time"]))
     return float(clip["source_start_beats"]) + (beat - float(clip["arr_time"]))
 
 
@@ -667,15 +694,33 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
         td.bass_swap_sam = _find_bass_swap_beat(
             td.out_bass.sam_points, s_out_ov_start, s_out_ov_end, "outgoing")
         if td.bass_swap_claude is not None and td.bass_swap_sam is not None:
-            # The stored swaps are track-local, as are the point lists.  Their
-            # position *within this handoff* is local swap minus local incoming
-            # entry.  This removes unrelated edits earlier in the outgoing
-            # track (for example a shortened opening section) without hiding a
-            # real move of the handover itself.
-            td.bass_swap_delta = (
-                (td.bass_swap_sam - s_out_ov_start)
-                - (td.bass_swap_claude - c_out_ov_start)
-            )
+            # Both swaps are already SOURCE-anchored (found on
+            # td.out_bass.claude_points/sam_points, which _scope_points
+            # mapped through _source_beat) - immune to arrangement shift
+            # AND clip resize by construction, on their own. The delta is
+            # simply the difference between them.
+            #
+            # 2026-09-10 (second-lens review of 53d1b7d, Finding 2):
+            # subtracting each side's own out_ov_start ("local swap minus
+            # local incoming entry", the previous rationale) does NOT
+            # remove noise here - it ADDS it, because it assumes the
+            # overlap's OWN geometry is stable across files, which it is
+            # not for 8 of the real corpus's 9 transitions (Sam routinely
+            # changes overlap length/position - that IS the correction).
+            # Verified against real ground truth (T9, Once Again -> A
+            # Deep-Felt Love): the true swap source position moves
+            # 640 -> 576 (-64, confirmed independently from each file's
+            # raw clip geometry - Claude's swap sits cleanly at the start
+            # of a tail-loop clip, Sam's sits cleanly inside drop_3, no
+            # boundary ambiguity on either side). The old formula reported
+            # +64 - sign-flipped - because s_out_ov_start and
+            # c_out_ov_start (each side's overlap start, independently
+            # source-mapped) differ by a large, transition-specific
+            # amount that has nothing to do with where the swap itself
+            # is. This is exactly the failure class this whole fix exists
+            # to close: an append-only pair_history.jsonl entry with a
+            # confidently wrong number.
+            td.bass_swap_delta = td.bass_swap_sam - td.bass_swap_claude
 
         # classify corrections
         any_change = td.arrangement_changed
@@ -842,7 +887,11 @@ def print_report(diffs: list[TransitionDiff]) -> None:
 
         overlap_info = f"{td.overlap_bars:.0f} bars overlap"
         if td.sam_overlap_bars is not None:
-            overlap_info = (f"{td.overlap_bars:.0f}→{td.sam_overlap_bars:.0f} "
+            # ASCII only - the u2192 arrow crashed this line's own print()
+            # on Sam's default Windows cp1252 console before the report
+            # even started (2026-09-10, second-lens review of 53d1b7d,
+            # Finding 4). Matches the project-wide encoding rule.
+            overlap_info = (f"{td.overlap_bars:.0f}->{td.sam_overlap_bars:.0f} "
                             "bars overlap")
 
         print(f"\n  T{td.pair_index} [{mark}]  "

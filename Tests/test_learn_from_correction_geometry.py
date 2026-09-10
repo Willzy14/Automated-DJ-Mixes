@@ -10,6 +10,7 @@ from learn_from_correction import (
     TrackAutomation,
     TrackInfo,
     VacuousLearningError,
+    _source_beat,
     analyse_transitions,
     guard_against_vacuous_result,
     ordered_tracks_from_clip_records,
@@ -212,6 +213,100 @@ def test_arrangement_changed_ignores_outgoing_start_drift_from_upstream_edit():
 
     assert diff.arrangement_changed is False
     assert diff.verdict == "correct"
+
+
+def test_source_beat_boundary_prefers_the_later_clip_on_a_repeated_tail_loop():
+    """2026-09-10, second-lens review of 53d1b7d Finding 1: a beat sitting
+    exactly on the splice between the LAST of several identical tail-loop
+    copies and the real outro clip after them must resolve to the outro's
+    OWN source position, not silently inherit the loop's - they are
+    provably different (real corpus: Apt 3b's tail loop LoopStart=640,
+    its own outro_1 LoopStart=608 - a 32-beat gap the old
+    earliest-arranged tie-break papered over). Mirrors the real shape:
+    apply_loops.clone_clip repeats N copies of a chosen loop window
+    (identical source_start_beats each), then the track's real content
+    resumes at its OWN, independently-set source position."""
+    tail_loop_copies = [
+        _clip(f"outro_1_tail_loop_{i}", 5536.0 + i * 32, 5568.0 + i * 32,
+             source_start=640.0)
+        for i in range(4)
+    ]
+    outro = _clip("outro_1", 5664.0, 5728.0, source_start=608.0)
+    clips = tail_loop_copies + [outro]
+
+    # The exact splice beat: end of the last tail-loop copy == start of
+    # outro_1. This is where the tie actually occurs.
+    boundary_beat = 5664.0
+    assert _source_beat(boundary_beat, clips, fallback_origin=0.0) == 608.0
+
+    # Sanity: a beat safely INSIDE a tail-loop copy (not a boundary) must
+    # still resolve to that copy's own source position, unaffected.
+    interior_beat = 5550.0
+    assert _source_beat(interior_beat, clips, fallback_origin=0.0) == \
+        640.0 + (interior_beat - 5536.0)
+
+
+def test_bass_swap_delta_is_the_raw_source_difference_not_overlap_relative():
+    """2026-09-10, second-lens review of 53d1b7d Finding 2 - the exact
+    real bug (verified independently against 02.09.26 House 10's T9,
+    Once Again -> A Deep-Felt Love: true swap source 640 -> 576, a real
+    -64 move; the buggy formula reported +64, sign-flipped). Mirrors
+    that transition's real shape: the outgoing's baseline side ends in a
+    repeated tail loop + a differently-sourced outro (swap sits at the
+    loop's own source, 200); the corrected side has the whole tail
+    deleted, ending mid-drop with the swap now inside that drop's OWN,
+    much-earlier source content (150) - AND the overlap window itself
+    also shifts and shrinks between the two files (Sam's genuine
+    overlap-length correction, unrelated to the swap fix), which is
+    exactly what made the old out_ov_start-relative formula sign-flip:
+    each side's independently-computed overlap-start distance differs by
+    more than the true swap move itself."""
+    baseline_out = ordered_tracks_from_clip_records({
+        "Out": [
+            _clip("drop_1", 1000.0, 1100.0, source_start=0.0),
+            *[_clip(f"tail_{i}", 1100.0 + i * 10, 1110.0 + i * 10,
+                    source_start=200.0) for i in range(4)],
+            _clip("outro_1", 1140.0, 1200.0, source_start=180.0),
+        ],
+        "In": [_clip("intro_1", 1140.0, 1300.0, source_start=0.0)],
+    })
+    corrected_out = ordered_tracks_from_clip_records({
+        "Out": [_clip("drop_1", 800.0, 1000.0, source_start=50.0)],
+        "In": [_clip("intro_1", 950.0, 1110.0, source_start=0.0)],
+    })
+    # Swap automation - points chosen to survive _scope_points' arrangement-
+    # time margin (overlap +/-40 beats) AND _find_bass_swap_beat's
+    # source-time search window (source-anchored overlap +/-10 beats,
+    # i.e. baseline [170,250], corrected [190,260] - computed from each
+    # side's own out_ov_start/end, not hand-derivable without running the
+    # code, which is the point of pinning it): baseline kills bass at arr
+    # 1105 (inside the first tail-loop copy -> source
+    # 200+(1105-1100)=205); corrected kills it at arr 950 (inside the
+    # truncated drop_1 -> source 50+(950-800)=200). True
+    # source-relative move: 200 - 205 = -5.
+    claude_auto = {
+        "Out": TrackAutomation("Out", bass_points=[(1105.0, 0.18)]),
+        "In": TrackAutomation("In"),
+    }
+    sam_auto = {
+        "Out": TrackAutomation("Out", bass_points=[(950.0, 0.18)]),
+        "In": TrackAutomation("In"),
+    }
+
+    [diff] = analyse_transitions(
+        claude_auto, sam_auto, baseline_out, corrected_out)
+
+    assert diff.bass_swap_claude == pytest.approx(205.0)
+    assert diff.bass_swap_sam == pytest.approx(200.0)
+    assert diff.bass_swap_delta == pytest.approx(-5.0), (
+        "expected the raw source-anchored difference (200-205=-5); "
+        "the old out_ov_start-relative formula would report -25 here "
+        "((200-200)-(205-180)=-25) - source-space overlap starts differ "
+        "by 20 beats between files, corrupting the delta by exactly that "
+        "amount. This is the same class of sign/magnitude corruption "
+        "Finding 2 found live on the real corpus (T9: true -64, old "
+        "formula reported +64 - a much larger corruption there because "
+        "that transition's real overlap-start drift is much larger)")
 
 
 def test_missing_sam_track_is_recorded_as_unanalysed():
