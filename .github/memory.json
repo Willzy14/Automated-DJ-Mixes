@@ -663,7 +663,19 @@
         "apply_loops stem-cache lookup fails closed when a track's cache exists in two projects - blocks corpus-copy test builds",
         "check ~/.claude/Memory symlink on the Home PC and Mac - same silent quota_check blindness likely"
       ]
+    },
+    {
+      "date": "2026-09-10",
+      "brain": "Claude + Codex + MiniMax + a Claude subagent",
+      "summary": "Sam's own hand-corrected ALS + bounce, worked as a two-item burn list, both merged to main after two adversarial review rounds each: burn/learner-geometry (learn_from_correction.py's _source_beat tie-break and bass_swap_delta sign, both sign-flip bugs ground-truth-verified against raw ALS XML) and burn/mechanical-cluster (extract_sections_als.py V1 dual-write + orchestrator BPM-provisional-display fixes, MiniMax-authored). Fixed a real test-isolation bug (RENDER_CHECK.md leaking into the repo root) and a genuinely stale git stash.lock along the way. Then re-ran the now-fixed learner against Sam's real House 10 correction pair for the first time ever - 9 real transitions into pair_history.jsonl (previously vacuous), revealing one dominant pattern (swap mid-drop + loop the incoming's intro, not the outgoing's tail) independently corroborated by an earlier correction pair (Fresh Mix V2). That pattern maps onto CUE_CONFIG.incoming_intro_loop, built 2026-08-17 but never enabled by any comparison harness - designed a SAM_V2 candidate (mutual exclusion fix between it and extend_incoming_entry, a real bug not just a gap; shadow-only density instrumentation), plan-reviewed by Codex+MiniMax before code, code-reviewed by Codex + an independent Claude subagent after (both rounds caught real bugs via constructed, executed counterexamples), merged to main. Curated 10 Tech House tracks via the real Neon DB (Sam-Wills-Mixing-Web-Site/v2/.env.local) for a fresh held-out comparison, created Test Project/10.09.26 Tech House Heldout/ - pipeline not yet run per Sam's instruction.",
+      "pending": [
+        "Run /mix Phase 0/1a on Test Project/10.09.26 Tech House Heldout/ (10 tracks copied in, unanalysed)",
+        "Build the 3-way SAM_V2 comparison via build_ab_comparison.py (A=interim_v1, B=sam_v1, C=sam_v1+introloop), seal via seal_listening_test.py, get Sam's blind listen",
+        "Pre-registered kill criteria (Heldout Replay Plan V2.md): B/C must win >=5 of 7 differing transitions, lose <=1, with no beat/grid error, audible clash, masked protected dropout, or unjustified extended-lane authorisation",
+        "interim_v1 remains the production default regardless of this round - no promotion without Sam's listening verdict",
+        "T1-T4/T7/T8 of the House 10 pair_history entries are not yet individually ground-truth-verified (only T1/T5/T6/T7/T9 were this session) - lower priority than the held-out listen"
+      ]
     }
   ],
-  "last_modified": "2026-09-01"
+  "last_modified": "2026-09-10"
 }

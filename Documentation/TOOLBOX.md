@@ -213,8 +213,8 @@ Safe standalone landmark refresh for certified stem JSONs. Hashes section geomet
 | `Source/automated_dj_mixes/tempo_curve.py` | Smoothed tempo arc: per-track held tempos, ramps across transitions, outliers absorbed not chased. Also `span_stretch_percent` (the honest full-span metric), `ramp_exposure`, and `suggest_resequence`. |
 | `Source/automated_dj_mixes/transition_policy.py` | Single source of truth for overlap/loop caps + frozen `TransitionPolicy` (interim_v1 / sam_v1). Replaces three independent declarations. |
 | `Source/alignment_feasibility.py` | Pairwise "can these two tracks align" matrix + longest BPM-ascending chain. Pick a workable running order BEFORE building. |
-| `Source/build_ab_comparison.py` | Builds two policy sides from one input, separate dirs and subprocesses so neither can contaminate the other. |
-| `Source/seal_listening_test.py` | Randomised blind clips + sealed mapping + an A-vs-A noise twin. |
+| `Source/build_ab_comparison.py` | Builds N policy sides (SIDES: label, transition-policy, cue-signals) from one input, separate dirs and subprocesses so none can contaminate another. As of 2026-09-10: A=interim_v1, B=sam_v1, C=sam_v1+`--cue-signals introloop` (the SAM_V2 candidate). |
+| `Source/seal_listening_test.py` | N-way blind clips (`--side LABEL=path`, repeatable) + sealed mapping + a `--twin-of LABEL` noise-twin duplicate. Decodes/re-writes via soundfile (not a byte copy) so source WAV metadata never survives into the sealed clips. |
 | `Source/setup_heldout_replay.py` | Stages verified held-out tracks (copies, never moves). |
 
 ## Added 2026-08-28
