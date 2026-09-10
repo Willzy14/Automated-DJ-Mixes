@@ -103,11 +103,26 @@ def main():
 
     out_dir = als.parent.parent / "Sections Review"
     out_dir.mkdir(parents=True, exist_ok=True)
-    # "V1_baseline" only if stem is exactly "Sections V1" — avoid matching V10/V11/V12.
-    label = "V1_baseline" if als.stem == "Sections V1" else als.stem.replace(" ", "_")
-    out_json = out_dir / f"{label}.json"
-    out_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"Saved: {out_json}")
+    # "Sections V1" writes BOTH V1_baseline.json AND Sections_V1.json with the
+    # same content (2026-09-02: extract_sections_als wrote only V1_baseline.json
+    # but validate_hints_vs_sections' hard gate looks for Sections_V<N>.json,
+    # so every fresh project needed a manual copy step). The "Sections V1"
+    # exact-stem check avoids matching V10/V11/V12 — those write only the
+    # canonical Sections_V<N>.json name.
+    if als.stem == "Sections V1":
+        payloads = [("V1_baseline.json", "Sections_V1.json")]
+    else:
+        label = als.stem.replace(" ", "_")
+        payloads = [(f"{label}.json",)]
+    for names in payloads:
+        out_json = out_dir / names[0]
+        out_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(f"Saved: {out_json}")
+        # Dual-write: V1 also lands as Sections_V1.json for the pipeline gate.
+        if len(names) > 1:
+            twin = out_dir / names[1]
+            twin.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            print(f"Saved: {twin}")
 
     # Pretty print summary
     print()

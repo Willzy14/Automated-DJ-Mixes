@@ -19,6 +19,37 @@ from automated_dj_mixes.mik_reader import enrich_from_mik
 from automated_dj_mixes.waveform_preview import PreviewContext, render_preview
 
 
+def _bpm_still_provisional(bpm: float, warnings: list[str]) -> bool:
+    """True only when the DISPLAYED bpm is still the librosa lattice
+    fallback a "BPM detected by librosa" warning named - not merely when
+    that warning is PRESENT in the list.
+
+    Nothing removes the warning once bpm is later overwritten by an
+    authoritative source (the stem-grid overwrite in run_pipeline - gated
+    by whether rb_matches has a qualifying track entry, which stem_grid
+    Phase 1a populates but so can the separate tick-grid/
+    apply_grid_override path when stem_grid is False, so this is broader
+    than a simple stem_grid=True check - or MIK enrichment). A
+    presence-only check
+    flags the AUTHORITATIVE grid bpm as provisional in exactly the runs
+    that matter most (found 2026-09-02, Fable second-lens review of the
+    2026-09-02 sweep fix - the bug never fired in the previews-only Phase
+    0b run the original sweep observed, because the grid overwrite is
+    skipped there). Parse the number the warning actually named and
+    compare it to the CURRENT bpm: still equal means nothing has
+    overwritten it yet - genuinely provisional; different means an
+    authoritative source already replaced it - stop flagging."""
+    for w in warnings:
+        if not w.startswith("BPM detected by librosa"):
+            continue
+        try:
+            warned_bpm = float(w.rsplit(":", 1)[-1].strip())
+        except ValueError:
+            return True  # unparseable - assume still provisional
+        return abs(warned_bpm - bpm) < 0.05
+    return False
+
+
 def _post_write_als_gate(path: Path) -> None:
     """Explicit post-write corruption gate for the orchestrator's write path.
 
@@ -491,7 +522,13 @@ def run_pipeline(
 
     for a in analyses:
         src = f"[{a.analysis_source}]" if a.analysis_source != "librosa" else ""
-        print(f"  {a.path.name}: {a.camelot or '?'} | {a.bpm:.1f} BPM | {a.lufs:.1f} LUFS {src}")
+        # Provisional only when the DISPLAYED bpm is still the flagged
+        # librosa fallback - see _bpm_still_provisional's docstring for why
+        # a presence-only check (2026-09-02 sweep) was wrong.
+        librosa_bpm = _bpm_still_provisional(a.bpm, a.warnings)
+        bpm_str = (f"~{a.bpm:.1f} BPM (librosa, provisional)"
+                   if librosa_bpm else f"{a.bpm:.1f} BPM")
+        print(f"  {a.path.name}: {a.camelot or '?'} | {bpm_str} | {a.lufs:.1f} LUFS {src}")
         for w in a.warnings:
             print(f"    WARNING: {w}")
 
