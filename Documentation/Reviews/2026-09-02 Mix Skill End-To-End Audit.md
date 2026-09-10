@@ -152,14 +152,15 @@ all sourced from `1. Stereo Masters/*/MASTER RENDERS/` (copied, never moved).
 
 | Burn item | Owner | Status |
 |---|---|---|
-| B1 learn_from_correction reads Phase-1 sequential geometry — vacuous 0-transition pass on Sam's first real tweak set | Codex (worktree `burn/learner-geometry`) | in flight |
-| B2 render_check loop_verbatim automation-blindness | Claude | **DONE + pinned (6 tests)** |
-| B3 render_check source-faithful silence | Claude | **DONE + pinned** |
-| B4 extract_sections_als V1_baseline naming | MiniMax (worktree `burn/mechanical-cluster`) | in flight |
-| B6 librosa-BPM console honesty | MiniMax | in flight |
-| B7 '&amp;' escape sweep across ALS-name consumers | MiniMax | in flight |
-| B10 Sam-tweaks lessons distilled | Claude | **DONE** — `Documentation/Mix Patterns Library/02.09.26 House 10 Sam Tweaks.md`; learner rerun pending B1; Crusy grid change uninspected |
-| Team tooling: three Home-PC hardcoded paths in run_seat/queue_runner killed the first launch silently | Claude | **FIXED** (USERPROFILE resolution) + ledger + Known Workarounds |
+| B1 learn_from_correction reads Phase-1 sequential geometry — vacuous 0-transition pass on Sam's first real tweak set | Codex (worktree `burn/learner-geometry`) | **work complete in-worktree** (WIP commit `80087b2`; acceptance-verified 9/9 transitions found, was 0) — Codex's covering note died to an upstream 503, transport failure not a work failure; not yet merged, pending review |
+| B2 render_check loop_verbatim automation-blindness | Claude | **DONE + pinned (6 tests)**, committed `32efa36` |
+| B3 render_check source-faithful silence | Claude | **DONE + pinned**, committed `32efa36` |
+| B4 extract_sections_als V1_baseline naming | MiniMax (worktree `burn/mechanical-cluster`) | **DONE**, commit `e219c4d` — my review passed |
+| B6 librosa-BPM console honesty | MiniMax | **DONE**, commit `3b1873b` |
+| B7 '&amp;' escape sweep across ALS-name consumers | MiniMax | **DONE**, commit `445a27b` — 33-row audit, no broken crossings found |
+| B10 Sam-tweaks lessons distilled | Claude | **DONE** — `Documentation/Mix Patterns Library/02.09.26 House 10 Sam Tweaks.md`; learner rerun pending merge of B1; Crusy grid change still uninspected |
+| Team tooling: three Home-PC hardcoded paths in run_seat/queue_runner killed the first launch silently | Claude | **FIXED** (USERPROFILE resolution) + ledger + Known Workarounds — **reverted by a concurrent Home-PC edit and re-fixed a second time** (see ledger, same day) |
+| Reviews of all three burn diffs (MiniMax r1 on the render-gate diff; Fable subagent r2 on all three) | MiniMax + Claude subagent | **paused mid-run at Sam's request** — not yet relaunched |
 
 ---
 
@@ -167,17 +168,23 @@ all sourced from `1. Stereo Masters/*/MASTER RENDERS/` (copied, never moved).
 
 | # | Item | Phase | Severity | Status |
 |---|---|---|---|---|
-| 1 | `local_audio_path`/availability column (or view) in Neon `credits` | Selection | Medium — unlocks one-query selection | open |
-| 2 | Genre enrichment backlog: 6,868 untagged rows | Selection | Medium | open |
-| 3 | Reusable "latest master" version resolver (Extended>Radio, AMENDED>plain, etc.) | Selection | Low | open |
-| 4 | Console prints librosa-lattice BPM as fact in Phase 0b | 0b | Low — cosmetic | open |
+| 1 | `local_audio_path`/availability column (or view) in Neon `credits` | Selection | Medium — unlocks one-query selection | open — **handed to Sam as a prompt for the samwillsmixing agent** (out of this repo's scope) |
+| 2 | Genre enrichment backlog: 6,868 untagged rows | Selection | Medium | open — not this project's work (existing enrichment backlog) |
+| 3 | Reusable "latest master" version resolver (Extended>Radio, AMENDED>plain, etc.) | Selection | Low | open — no owner yet |
+| 4 | Console prints librosa-lattice BPM as fact in Phase 0b | 0b | Low — cosmetic | **FIXED** (MiniMax, `3b1873b`) |
 | 5 | Hint gate dropped `&`-named tracks silently | 1f.5 | High | **FIXED + tested** |
 | 6 | Hint gate first_drop/first_break anchoring vs drums-only drops | 1f.5 | Medium | **FIXED + tested** |
 | 7 | Style-blind swap end margin blocks cold-ending outgoings | 3a | High | **FIXED + tested** |
 | 8 | `loop_review_viz` `V?` Windows crash | 4b | Medium | **FIXED** |
 | 9 | `transition_review_viz` end-to-end placement — Phase 4a gate unusable | 4a | High | **FIXED + verified on all 9 views** |
-| 10 | Skill doc vs orchestrator output layout (`Sections V<N> Project/` vs flat) | 1a | Medium — every command needs hand-editing | open |
-| 11 | `V1_baseline.json` naming quirk (since June) | 1b | Low | open |
-| 12 | Wire `hints_from_stem_result` into /mix so hints are derived then adjusted | 1d/1f | Medium — kills the misread class | open (matches 2026-08-27 audit O3) |
-| 13 | Detector labels no-bass full-drums openings as `drop` | 1a | Low — question for Sam | open |
-| 14 | Sweep other consumers of ALS-derived names for `&amp;` handling | all | Medium | open |
+| 10 | Skill doc vs orchestrator output layout (`Sections V<N> Project/` vs flat) | 1a | Medium — every command needs hand-editing | **FIXED** (Claude subagent, both brains, content-identical) |
+| 11 | `V1_baseline.json` naming quirk (since June) | 1b | Low | **FIXED** (MiniMax, `e219c4d`, dual-write) |
+| 12 | Wire `hints_from_stem_result` into /mix so hints are derived then adjusted | 1d/1f | Medium — kills the misread class | open — **highest-leverage remaining item, no owner yet** (matches 2026-08-27 audit O3) |
+| 13 | Detector labels no-bass full-drums openings as `drop` | 1a | Low — question for Sam | open — needs Sam's call, not a build item |
+| 14 | Sweep other consumers of ALS-derived names for `&amp;` handling | all | Medium | **FIXED** (MiniMax, `445a27b` — 33-row audit, all boundary crossings already handled; correctly refused to "fix" two escaped-consistent comparisons) |
+
+**Priority order for what's genuinely still open** (added 2026-09-02, second pass — the severity tags above didn't previously carry an explicit rank):
+1. **#12** (wire `hints_from_stem_result`) — highest real leverage of anything left; kills a whole misread class every future project pays for. No owner assigned yet.
+2. **#3** (version resolver) — low severity but cheap, mechanical, MiniMax-shaped; worth picking up opportunistically.
+3. **#13** — blocked on Sam, not a dispatch decision.
+4. **#1, #2** — both out of this repo's scope (external Neon-schema work / existing enrichment backlog); tracked here for visibility only, not burn-list work.
