@@ -22,7 +22,25 @@ import subprocess
 import sys
 from pathlib import Path
 
-SIDES = [("A", "interim_v1"), ("B", "sam_v1")]
+# (label, transition-policy, cue-signals). cue-signals is a --cue-signals
+# value forwarded verbatim to propose_arrangement.py's CLI (comma-separated
+# tokens, e.g. "introloop") or "" for none. Each subprocess ALWAYS installs a
+# fresh CueConfig for the tokens it's given (see propose_arrangement.py's
+# _apply_cue_signals), so side C's "introloop" cannot leak into A or B even
+# though they share this process's own module space via subprocess.run.
+#
+# "C" = sam_v1's policy geometry + the last-drop incoming_intro_loop cue
+# signal (the "SAM_V2" candidate, informal name - not a registered
+# TransitionPolicy; the two axes are orthogonal, see transition_policy.py's
+# own docstring on why cue signals and policy stay separate). Added 2026-
+# 09-10: the flag existed and was directly evidenced (Fresh Mix V2, 5/6 of
+# its reworked transitions land on this exact target) but this harness never
+# actually enabled it for any side, so no comparison had ever exercised it.
+SIDES = [
+    ("A", "interim_v1", ""),
+    ("B", "sam_v1", ""),
+    ("C", "sam_v1", "introloop"),
+]
 
 
 def run(cmd: list[str], log: Path) -> tuple[int, str]:
@@ -48,7 +66,7 @@ def main() -> int:
     source = Path(__file__).parent
     results: dict[str, dict] = {}
 
-    for side, policy in SIDES:
+    for side, policy, cue_signals in SIDES:
         side_dir = root / side
         side_dir.mkdir(parents=True, exist_ok=True)
         arranged = side_dir / f"Arranged {side}.als"
@@ -56,18 +74,23 @@ def main() -> int:
         mix_plan = side_dir / f"MixPlan {side}.json"
         final = side_dir / f"Mix {side}.als"
 
-        print(f"\n=== side {side}  policy={policy} ===")
-        code, out = run([
+        label = f"{policy}+{cue_signals}" if cue_signals else policy
+        print(f"\n=== side {side}  policy={label} ===")
+        arrange_cmd = [
             sys.executable, str(source / "propose_arrangement.py"),
             str(args.sections_als), str(args.sections_json), str(arranged),
             "--transition-policy", policy,
             "--report", str(report),
             "--mix-plan", str(mix_plan),
-        ], audit / f"{side}_arrange.log")
+        ]
+        if cue_signals:
+            arrange_cmd += ["--cue-signals", cue_signals]
+        code, out = run(arrange_cmd, audit / f"{side}_arrange.log")
         if code != 0:
             tail = "\n".join(out.strip().splitlines()[-6:])
             print(f"  ARRANGE FAILED ({code}):\n{tail}")
-            results[side] = {"policy": policy, "stage": "arrange", "ok": False}
+            results[side] = {"policy": policy, "cue_signals": cue_signals,
+                             "stage": "arrange", "ok": False}
             continue
         print(f"  arranged -> {arranged.name}")
 
@@ -79,12 +102,14 @@ def main() -> int:
         if code != 0:
             tail = "\n".join(out.strip().splitlines()[-6:])
             print(f"  AUTOMATION FAILED ({code}):\n{tail}")
-            results[side] = {"policy": policy, "stage": "automation", "ok": False}
+            results[side] = {"policy": policy, "cue_signals": cue_signals,
+                             "stage": "automation", "ok": False}
             continue
         print(f"  automated -> {final.name}")
         results[side] = {
-            "policy": policy, "stage": "complete", "ok": True,
-            "als": str(final), "report": str(report), "mix_plan": str(mix_plan),
+            "policy": policy, "cue_signals": cue_signals, "stage": "complete",
+            "ok": True, "als": str(final), "report": str(report),
+            "mix_plan": str(mix_plan),
         }
 
     (audit / "build_results.json").write_text(

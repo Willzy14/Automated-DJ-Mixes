@@ -653,6 +653,16 @@ class FillCutSpec:
     clip_name: str = ""                # break_skip: the incoming break clip to drop
     target_marker_name: str = ""       # named section/dropout reached by a loop
     note: str = ""
+    # entry_extension only, shadow instrumentation (2026-09-10): how "busy" the
+    # outgoing window the quiet incoming loop sits under measures against that
+    # track's own average, per Sam's held-out-replay finding that entry
+    # extension "works... because the break is quite a chilled out break" and
+    # would not on a busy one. NOT used to accept/reject a candidate this
+    # round (see _measure_outgoing_density's docstring) - logged only, so a
+    # future round has real data (positive example + this round's spread) to
+    # calibrate an actual threshold against, instead of guessing one now.
+    density_score: float | None = None
+    density_status: str = ""           # "measured" | "unmeasured: <reason>"
 
 
 @dataclass
@@ -1543,6 +1553,86 @@ def _resolve_stem_key(name: str, stems: dict) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+# Stems treated as "activity" for the entry-extension density measurement.
+# Bass is excluded deliberately: the outgoing's bass is not what would mask a
+# quiet, bass-killed incoming loop sitting under it (Sam's own automation
+# model kills the outgoing's bass across the swap anyway) - it's the drums/
+# other/vocal content still audible in that window that would compete with
+# it. "mix" is not used here (unlike evaluate_loop_quality) because a busy
+# vocal atop a quiet groove and a busy groove under a silent vocal can read
+# as similar overall RMS while being very different masking risks.
+DENSITY_ACTIVITY_STEMS = ("drums", "other", "vocals")
+
+
+def _measure_outgoing_density(track, start_bar: float, end_bar: float
+                              ) -> tuple[float | None, str]:
+    """Shadow-instrumentation only (2026-09-10, SAM_V2 candidate round 1):
+    measure how "busy" the outgoing's [start_bar, end_bar) window is,
+    normalised against that TRACK's own overall level per stem, as a
+    density signal for _plan_incoming_entry_extension's chosen candidate.
+
+    NOT a gate. Sam's held-out replay (Heldout Replay Result 01, 2026-08-12)
+    found entry extension worked on a "chilled out break" and predicted it
+    would not on a busy one - but that is ONE positive example and ZERO
+    negative contrasts, so any threshold picked now would be a guess dressed
+    as a measurement (the exact overfitting trap `prefer_intro_swap_with_
+    drop_payoff` already fell into on this project, on two examples, 2026-
+    08-12). This function only LOGS a score on the selected candidate, so a
+    future round has this round's real spread of values (plus whatever Sam's
+    listen adds) to calibrate an actual threshold against, instead of
+    picking one blind. See FillCutSpec.density_score/density_status.
+
+    Returns (score, status). status is "measured" or "unmeasured: <reason>".
+    A None score (unmeasured) must never be treated as "safe to extend" or
+    "unsafe to extend" - it means exactly what it says, not measured, same
+    convention as LoopQualityResult.unmeasured.
+
+    Score: mean, across whichever of DENSITY_ACTIVITY_STEMS are present in
+    the cache, of (window RMS dB - that stem's own track-wide median RMS
+    dB). Positive = busier than this track's own average there; negative =
+    quieter. A stem absent from the cache (e.g. an instrumental track with
+    no meaningful vocals array) is skipped, not fatal - the score is over
+    whatever stems ARE available, and is unmeasured only when NONE are.
+    """
+    import numpy as np
+
+    context = getattr(track, "loop_quality_context", None)
+    if context is None:
+        cache_path = getattr(track, "envelope_cache_path", None)
+        if cache_path is None:
+            return None, "unmeasured: track has no cached stem-envelope path"
+        try:
+            context = load_loop_quality_context(cache_path)
+        except FileNotFoundError as exc:
+            return None, f"unmeasured: {exc}"
+
+    source_start = float(start_bar) * 4.0
+    source_end = float(end_bar) * 4.0
+    if source_end <= source_start:
+        return None, "unmeasured: empty window"
+
+    deltas = []
+    for stem in DENSITY_ACTIVITY_STEMS:
+        envelope = context.envelopes.get(stem)
+        if envelope is None or len(envelope) == 0:
+            continue
+        window_mask_sized = _quality_frame_slice(
+            context, source_start, source_end, len(envelope))
+        window = np.asarray(envelope, dtype=float)[window_mask_sized]
+        if window.size == 0:
+            continue
+        try:
+            window_db = _rms_db(window)
+            track_median_db = _rms_db(envelope)
+        except ValueError:
+            continue
+        deltas.append(window_db - track_median_db)
+
+    if not deltas:
+        return None, "unmeasured: no activity stems in cache overlap the window"
+    return float(np.mean(deltas)), "measured"
+
+
 def _assess_loop_candidate(track, start_bar: float, end_bar: float,
                            insert_bar: float) -> LoopQualityResult:
     source_start = float(start_bar) * 4.0
@@ -1831,6 +1921,12 @@ def _plan_incoming_entry_extension(o, i, al, intro_end, loop_budget, policy):
             if round(chunk[1] - chunk[0]) != phrase:
                 continue
             labels = outgoing_cues[target]["labels"]
+            # Shadow instrumentation only - see _measure_outgoing_density's
+            # docstring. Measures the OUTGOING window the quiet incoming loop
+            # would actually sit under: [target, target+gap) in the
+            # outgoing's own bars.
+            density_score, density_status = _measure_outgoing_density(
+                o, target, target + gap)
             return FillCutSpec(
                 kind="incoming_intro",
                 reps=reps,
@@ -1841,6 +1937,8 @@ def _plan_incoming_entry_extension(o, i, al, intro_end, loop_budget, policy):
                 note=(f"entry extension {phrase}bx{reps} ({gap:.0f}b) back to "
                       f"outgoing {labels[0] if labels else 'cue'} - low level, "
                       f"bass killed until the swap"),
+                density_score=density_score,
+                density_status=density_status,
             ), float(gap)
     return None, 0.0
 
@@ -1875,18 +1973,19 @@ def plan_fill_or_cut(o, i, al, policy=None):
     policy = policy or _DEFAULT_POLICY
     intro_loop = False
 
-    # (1a) ENTRY EXTENSION (policy-gated) — the landmark path is the production
-    # path and block (1) below is switched off in it, so until now nothing could
-    # bring the incoming in early. This is the mechanism for Sam's T2/T3/T6.
-    if landmark_mode and policy.extend_incoming_entry:
-        entry_spec, entry_bars = _plan_incoming_entry_extension(
-            o, i, al, intro_end, loop_budget, policy)
-        if entry_spec is not None:
-            specs.append(entry_spec)
-            loop_budget -= entry_bars
-            intro_loop = True
-
     # (1) INCOMING-INTRO LOOP — enter at the outgoing's last drop; loop clean drums back.
+    # Tried FIRST (reordered 2026-09-10, see below) — this and (1a) both produce a
+    # kind="incoming_intro" FillCutSpec, and propose_arrangement stores only ONE
+    # such spec per transition (analysis.in_intro_loop); if both fired, the second
+    # would silently OVERWRITE the first (and worse, both would physically prepend
+    # loop clips, since the consumer dispatches on kind for EVERY spec in the
+    # list). Mutual exclusion via the `intro_loop` flag below is required, not
+    # cosmetic. Order matters: last-drop intro-loop has the stronger evidence
+    # (matches 5/6 of Fresh Mix V2's reworked transitions on this exact target,
+    # independently corroborated by House 10's T9) versus entry-extension's own
+    # held-out replay, which found the technique "valid, not superior" and
+    # identified a still-unbuilt density gate as the open question (Heldout
+    # Replay Result 01, 2026-08-12) — so it goes second, as the fallback.
     #
     # 2026-08-17: this block was gated `not landmark_mode`, and landmark mode IS the
     # production path — so despite being written, commented and correct, it had never
@@ -1946,6 +2045,22 @@ def plan_fill_or_cut(o, i, al, policy=None):
                              + f" ({used + partial:.0f}b) back to outgoing last drop"
                              + (" [safety-capped]" if (reps < requested_reps
                                 or partial < requested_partial) else "")))
+
+    # (1a) ENTRY EXTENSION (policy-gated), FALLBACK — only when (1) above did not
+    # fire. Mutually exclusive with (1) by construction (`not intro_loop`); see
+    # the ordering note above for why. This is the mechanism for Sam's T2/T3/T6.
+    if landmark_mode and policy.extend_incoming_entry:
+        if intro_loop:
+            al.notes.append(
+                "entry-extension suppressed: last-drop incoming_intro_loop "
+                "already filled this transition (mutually exclusive)")
+        else:
+            entry_spec, entry_bars = _plan_incoming_entry_extension(
+                o, i, al, intro_end, loop_budget, policy)
+            if entry_spec is not None:
+                specs.append(entry_spec)
+                loop_budget -= entry_bars
+                intro_loop = True
 
     # (2) INTRO CUT — only if no intro loop and the intro lands in a low-energy break.
     if not intro_loop and first_drop_in and first_drop_in > 0 and intro_end > 0:

@@ -901,6 +901,15 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                     chunk_beats, fc.reps,
                     "+{:.0f}b".format(partial_beats) if partial_beats else "",
                     fill)
+                # Shadow density instrumentation (SAM_V2 candidate, 2026-09-10) -
+                # only set for the entry-extension mechanism (see
+                # _measure_outgoing_density's docstring); the last-drop loop
+                # branch above never sets density_score/density_status, so this
+                # is silently a no-op there. Not a gate - see FillCutSpec.
+                if fc.density_status:
+                    analysis.notes += "; density {}".format(
+                        f"{fc.density_score:+.1f}dB" if fc.density_score is not None
+                        else fc.density_status)
         elif fc.kind == "break_skip" and fc.skip_bars > 0:
             # Mix CHOICE (Sam 2026-06-09): the incoming enters on a short, no-kick
             # pre-drop break stacked on the outgoing's outro (a dead spot). Drop that
@@ -945,6 +954,17 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                     out_track.arr_end -= skip_beats
                 analysis.notes += "; break->break: dropped {} ({:.0f}b), drop pulled onto swap".format(
                     brk.get("name", fc.clip_name), fc.skip_bars)
+
+    # Surface align_engine's own per-transition notes (e.g. the mutual-
+    # exclusion suppression message between the two incoming-intro
+    # mechanisms - see plan_fill_or_cut) into the machine-readable report,
+    # not just the console/PNG-viz title (al.notes already reaches those via
+    # align_engine.py:1532 and :2358). Without this, the report's own
+    # "selected mechanism" story was incomplete for exactly the case Codex's
+    # review asked it to cover: a suppressed candidate.
+    for note in getattr(al, "notes", None) or []:
+        if "suppressed" in note:
+            analysis.notes += f"; {note}"
 
 
 # -- Pair history matching ----------------------------------------------------
