@@ -1623,9 +1623,21 @@ def _measure_outgoing_density(track, start_bar: float, end_bar: float
             continue
         try:
             window_db = _rms_db(window)
-            track_median_db = _rms_db(envelope)
         except ValueError:
             continue
+        # MEDIAN of per-frame dB, not whole-envelope RMS - RMS is dragged up
+        # by a single loud outlier (one big transient skews the "track
+        # average" for every OTHER window), exactly the failure mode a
+        # constructed counterexample found in review (Codex, 2026-09-10): a
+        # 100-frame envelope with 99 frames at a constant level and one loud
+        # transient scored a window AT that constant level as ~-20dB below
+        # "baseline" under RMS, when it should read ~0 (it IS the track's
+        # typical level). Median is robust to that single outlier. Same
+        # idiom evaluate_loop_quality already uses for its silence floor
+        # (median of per-frame dB, not RMS-of-everything).
+        stem_arr = np.asarray(envelope, dtype=float)
+        all_db = 20.0 * np.log10(np.maximum(stem_arr, 1e-12))
+        track_median_db = float(np.median(all_db))
         deltas.append(window_db - track_median_db)
 
     if not deltas:

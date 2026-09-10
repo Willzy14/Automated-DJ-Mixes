@@ -164,6 +164,45 @@ def test_measure_outgoing_density_normalises_against_the_tracks_own_level():
     assert quiet_score < loud_score
 
 
+def test_density_baseline_is_the_median_not_whole_track_rms():
+    """Regression pin for a real bug caught in round-2 code review (Codex,
+    2026-09-10, executed and constructed this exact counterexample): the
+    docstring always said "median", but the first implementation computed
+    _rms_db(whole_envelope) - a plain RMS, not a median. RMS is dragged up
+    by a single loud outlier, so a window sitting at the track's actual
+    TYPICAL level scored as if it were ~20 dB quieter than "baseline",
+    because one transient elsewhere inflated the RMS baseline. A 100-frame
+    envelope, 99 frames at a constant -40 dB and one frame at 0 dB: a window
+    measured well away from the transient, AT the constant -40 dB level,
+    must read close to 0.0 (it IS the track's typical level) - not the
+    ~-20 dB the RMS-baseline bug produced.
+    """
+    import numpy as np
+    import align_engine as AE
+
+    n = 100
+    quiet = 10 ** (-40.0 / 20.0)
+    env = np.full(n, quiet, dtype=float)
+    env[0] = 1.0  # one 0 dB transient - must not dominate the baseline
+    envelopes = {name: env.copy() for name in ("drums", "bass", "other", "vocals", "mix")}
+    context = AE.LoopQualityContext(
+        Path("synthetic__stemenv.npz"), 126.0, 0.0, 0.1, envelopes)
+    # hop=0.1s, n=100 frames -> 10s total -> ~5.25 bars at 126 bpm. Measure a
+    # window inside that span, away from the transient at frame 0.
+    track = _track("probe", sections=[
+        {"name": "drop_1", "label": "drop", "start_bar": 0.0, "end_bar": 5.0},
+    ], n_bars=5, quality_context=False)
+    track.loop_quality_context = context
+
+    score, status = AE._measure_outgoing_density(track, 2.0, 3.0)
+
+    assert status == "measured"
+    assert score == pytest.approx(0.0, abs=0.5), (
+        f"a window at the track's own typical level should score ~0.0, got "
+        f"{score:.2f} dB - median baseline check regressed to an outlier-"
+        f"sensitive one")
+
+
 def _propose_track_info(name, arr_start, arr_end, sections, source_end=200.0):
     from propose_arrangement import TrackInfo
     return TrackInfo(name, sections, arr_start, arr_end, source_end=source_end)
