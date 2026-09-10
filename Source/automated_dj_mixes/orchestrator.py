@@ -25,9 +25,12 @@ def _bpm_still_provisional(bpm: float, warnings: list[str]) -> bool:
     that warning is PRESENT in the list.
 
     Nothing removes the warning once bpm is later overwritten by an
-    authoritative source (the stem-grid overwrite in run_pipeline, which
-    runs whenever stem_grid=True and not previews_only - i.e. every
-    production Phase 1a run - or MIK enrichment). A presence-only check
+    authoritative source (the stem-grid overwrite in run_pipeline - gated
+    by whether rb_matches has a qualifying track entry, which stem_grid
+    Phase 1a populates but so can the separate tick-grid/
+    apply_grid_override path when stem_grid is False, so this is broader
+    than a simple stem_grid=True check - or MIK enrichment). A
+    presence-only check
     flags the AUTHORITATIVE grid bpm as provisional in exactly the runs
     that matter most (found 2026-09-02, Fable second-lens review of the
     2026-09-02 sweep fix - the bug never fired in the previews-only Phase
