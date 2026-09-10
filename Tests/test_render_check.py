@@ -2302,7 +2302,7 @@ def test_report_does_not_list_loop_verbatim_clean_when_only_automation_fired(tmp
         meta={"render": "x.wav", "verdict": "WARN", "integrated_lufs": -14.0,
              "duration_sec": 60.0, "checks_ran": True},
     )
-    md_path, _ = render_check.write_report(result, Path("x.wav"), tmp_path / "out.json")
+    md_path, _ = render_check.write_report(result, tmp_path / "x.wav", tmp_path / "out.json")
     text = md_path.read_text(encoding="utf-8")
     section = text.split("## Checks run clean", 1)[1][:300]
     assert "loop_verbatim\n" not in section and "loop_verbatim," not in section \
