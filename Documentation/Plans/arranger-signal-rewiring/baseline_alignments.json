@@ -802,6 +802,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx7+0b to section:break_1 284",
       "partial_bars": 0.0,
@@ -1528,6 +1530,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -1541,6 +1545,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to landmark:kick_gap_248_256:end 201",
       "partial_bars": 0.0,
@@ -1596,6 +1602,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -1609,6 +1617,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to landmark:kick_gap_192_256:end 201",
       "partial_bars": 0.0,
@@ -1693,6 +1703,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -1706,6 +1718,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx6+0b to section:fill_1 197",
       "partial_bars": 0.0,
@@ -1744,6 +1758,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -1757,6 +1773,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx6+0b to section:build_1 197",
       "partial_bars": 0.0,
@@ -1847,6 +1865,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -1885,6 +1905,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to landmark:kick_gap_158_160:end 201",
       "partial_bars": 0.0,
@@ -1949,6 +1971,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -1962,6 +1986,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to landmark:kick_gap_224_256:end 201",
       "partial_bars": 0.0,
@@ -2000,6 +2026,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to landmark:kick_gap_152_160:end 201",
       "partial_bars": 0.0,
@@ -2745,6 +2773,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to landmark:kick_gap_220_224:end 216",
       "partial_bars": 0.0,
@@ -2812,6 +2842,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx2+0b to landmark:kick_gap_192_256:end 224",
       "partial_bars": 0.0,
@@ -2872,6 +2904,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx7+0b to section:break_1 236",
       "partial_bars": 0.0,
@@ -2938,6 +2972,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:fill_1 220",
       "partial_bars": 0.0,
@@ -3030,6 +3066,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:build_1 220",
       "partial_bars": 0.0,
@@ -3083,6 +3121,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to section:break_1 216",
       "partial_bars": 0.0,
@@ -3189,6 +3229,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to landmark:kick_gap_124_128:end 216",
       "partial_bars": 0.0,
@@ -3255,6 +3297,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to section:break_1 216",
       "partial_bars": 0.0,
@@ -3308,6 +3352,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to section:break_1 216",
       "partial_bars": 0.0,
@@ -3381,6 +3427,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx3+0b to section:break_1 232",
       "partial_bars": 0.0,
@@ -3448,6 +3496,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx3+0b to landmark:kick_gap_216_224:end 232",
       "partial_bars": 0.0,
@@ -3514,6 +3564,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx2+0b to section:drop_2 224",
       "partial_bars": 0.0,
@@ -3580,6 +3632,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx2+0b to landmark:kick_gap_190_192:end 224",
       "partial_bars": 0.0,
@@ -3653,6 +3707,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx3+0b to landmark:kick_gap_124_224:end 232",
       "partial_bars": 0.0,
@@ -4339,6 +4395,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx5+0b to section:break_2 230",
       "partial_bars": 0.0,
@@ -4405,6 +4463,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx5+0b to section:break_1 230",
       "partial_bars": 0.0,
@@ -4781,6 +4841,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to section:build_1 173",
       "partial_bars": 0.0,
@@ -4836,6 +4898,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_156_160:end 173",
       "partial_bars": 0.0,
@@ -5025,6 +5089,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to section:fill_1 173",
       "partial_bars": 0.0,
@@ -5120,6 +5186,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_158_160:end 173",
       "partial_bars": 0.0,
@@ -5216,6 +5284,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_190_192:end 173",
       "partial_bars": 0.0,
@@ -5472,6 +5542,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_190_192:end 173",
       "partial_bars": 0.0,
@@ -5526,6 +5598,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_94_96:end 173",
       "partial_bars": 0.0,
@@ -5964,6 +6038,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to landmark:kick_gap_184_192:end 249",
       "partial_bars": 0.0,
@@ -6017,6 +6093,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
@@ -6078,6 +6156,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to landmark:kick_gap_185_192:end 249",
       "partial_bars": 0.0,
@@ -6170,6 +6250,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx2+0b to section:build_1 261",
       "partial_bars": 0.0,
@@ -6238,6 +6320,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:break_1 257",
       "partial_bars": 0.0,
@@ -6291,6 +6375,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
@@ -6345,6 +6431,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to landmark:kick_gap_124_128:end 257",
       "partial_bars": 0.0,
@@ -6412,6 +6500,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to landmark:kick_gap_188_192:end 249",
       "partial_bars": 0.0,
@@ -6465,6 +6555,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:break_1 257",
       "partial_bars": 0.0,
@@ -6525,6 +6617,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to section:drop_2 249",
       "partial_bars": 0.0,
@@ -6578,6 +6672,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to landmark:kick_gap_124_128:end 249",
       "partial_bars": 0.0,
@@ -6631,6 +6727,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
@@ -6684,6 +6782,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
@@ -6744,6 +6844,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to section:break_1 249",
       "partial_bars": 0.0,
@@ -7370,6 +7472,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -7684,6 +7788,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -8242,6 +8348,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to section:build_1 204",
       "partial_bars": 0.0,
@@ -8296,6 +8404,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to landmark:kick_gap_156_160:end 204",
       "partial_bars": 0.0,
@@ -8349,6 +8459,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:break_1 212",
       "partial_bars": 0.0,
@@ -8409,6 +8521,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx5+0b to section:break_1 220",
       "partial_bars": 0.0,
@@ -8463,6 +8577,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to landmark:kick_gap_185_192:end 212",
       "partial_bars": 0.0,
@@ -8555,6 +8671,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to section:fill_1 204",
       "partial_bars": 0.0,
@@ -8608,6 +8726,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:break_1 212",
       "partial_bars": 0.0,
@@ -8676,6 +8796,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx2+0b to landmark:kick_gap_158_160:end 208",
       "partial_bars": 0.0,
@@ -8730,6 +8852,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx2+0b to landmark:kick_gap_174_176:end 208",
       "partial_bars": 0.0,
@@ -8796,6 +8920,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx2+0b to landmark:kick_gap_152_160:end 208",
       "partial_bars": 0.0,
@@ -8850,6 +8976,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx5+0b to section:break_2 220",
       "partial_bars": 0.0,
@@ -8903,6 +9031,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx4+0b to section:break_1 216",
       "partial_bars": 0.0,
@@ -8956,6 +9086,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to landmark:kick_gap_124_128:end 212",
       "partial_bars": 0.0,
@@ -9009,6 +9141,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:break_1 212",
       "partial_bars": 0.0,
@@ -9062,6 +9196,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:break_1 212",
       "partial_bars": 0.0,
@@ -9116,6 +9252,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to landmark:kick_gap_190_192:end 204",
       "partial_bars": 0.0,
@@ -9169,6 +9307,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx1+0b to landmark:kick_gap_94_96:end 204",
       "partial_bars": 0.0,
@@ -9222,6 +9362,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to section:build_1 261",
       "partial_bars": 0.0,
@@ -9276,6 +9418,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_156_160:end 261",
       "partial_bars": 0.0,
@@ -9552,6 +9696,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_158_160:end 261",
       "partial_bars": 0.0,
@@ -9646,6 +9792,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_190_192:end 261",
       "partial_bars": 0.0,
@@ -9920,6 +10068,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_190_192:end 261",
       "partial_bars": 0.0,
@@ -9973,6 +10123,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx5+0b to landmark:kick_gap_94_96:end 261",
       "partial_bars": 0.0,
@@ -10139,6 +10291,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to landmark:kick_gap_220_224:end 207",
       "partial_bars": 0.0,
@@ -10218,6 +10372,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx2+0b to landmark:kick_gap_192_256:end 215",
       "partial_bars": 0.0,
@@ -10355,6 +10511,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:fill_1 211",
       "partial_bars": 0.0,
@@ -10885,6 +11043,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx3+0b to section:break_1 223",
       "partial_bars": 0.0,
@@ -11180,6 +11340,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx8+0b to landmark:kick_gap_220_224:end 207",
       "partial_bars": 0.0,
@@ -11407,6 +11569,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to landmark:kick_gap_220_224:end 192",
       "partial_bars": 0.0,
@@ -11487,6 +11651,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx2+0b to landmark:kick_gap_192_256:end 200",
       "partial_bars": 0.0,
@@ -11547,6 +11713,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx7+0b to section:break_1 212",
       "partial_bars": 0.0,
@@ -11626,6 +11794,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:fill_1 196",
       "partial_bars": 0.0,
@@ -11742,6 +11912,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx3+0b to section:build_1 196",
       "partial_bars": 0.0,
@@ -11807,6 +11979,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to section:break_1 192",
       "partial_bars": 0.0,
@@ -11997,6 +12171,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to section:break_1 192",
       "partial_bars": 0.0,
@@ -12050,6 +12226,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx1+0b to section:break_1 192",
       "partial_bars": 0.0,
@@ -12124,6 +12302,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx3+0b to section:break_1 208",
       "partial_bars": 0.0,
@@ -12215,6 +12395,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx3+0b to landmark:kick_gap_216_224:end 208",
       "partial_bars": 0.0,
@@ -12478,6 +12660,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx3+0b to landmark:kick_gap_124_224:end 208",
       "partial_bars": 0.0,
@@ -13149,6 +13333,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx3+0b to landmark:kick_gap_156_160:end 271",
       "partial_bars": 0.0,
@@ -13202,6 +13388,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx7+0b to section:break_1 279",
       "partial_bars": 0.0,
@@ -13302,6 +13490,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx7+0b to landmark:kick_gap_185_192:end 279",
       "partial_bars": 0.0,
@@ -13446,6 +13636,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 4.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 4b (started in break)",
       "partial_bars": 0.0,
@@ -13499,6 +13691,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx7+0b to section:break_1 279",
       "partial_bars": 0.0,
@@ -13616,6 +13810,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 4.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 4b (started in break)",
       "partial_bars": 0.0,
@@ -13629,6 +13825,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx3+0b to landmark:kick_gap_188_192:end 268",
       "partial_bars": 0.0,
@@ -13689,6 +13887,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx3+0b to section:drop_2 268",
       "partial_bars": 0.0,
@@ -13742,6 +13942,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx7+0b to landmark:kick_gap_124_128:end 279",
       "partial_bars": 0.0,
@@ -13795,6 +13997,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx7+0b to section:break_1 279",
       "partial_bars": 0.0,
@@ -13848,6 +14052,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx7+0b to section:break_1 279",
       "partial_bars": 0.0,
@@ -13908,6 +14114,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx3+0b to landmark:kick_gap_94_96:end 271",
       "partial_bars": 0.0,
@@ -13960,6 +14168,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -14047,6 +14257,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -14148,6 +14360,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -14200,6 +14414,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -14252,6 +14468,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -14311,6 +14529,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 7.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 7b (started in break)",
       "partial_bars": 0.0,
@@ -14479,6 +14699,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -14492,6 +14714,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to landmark:kick_gap_220_224:end 184",
       "partial_bars": 0.0,
@@ -14572,6 +14796,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -14585,6 +14811,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to landmark:kick_gap_192_256:end 192",
       "partial_bars": 0.0,
@@ -14656,6 +14884,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx7+0b to section:break_1 204",
       "partial_bars": 0.0,
@@ -14747,6 +14977,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -14760,6 +14992,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx6+0b to section:fill_1 188",
       "partial_bars": 0.0,
@@ -14877,6 +15111,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -14890,6 +15126,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx6+0b to section:build_1 188",
       "partial_bars": 0.0,
@@ -14955,6 +15193,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -14968,6 +15208,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to section:break_1 184",
       "partial_bars": 0.0,
@@ -15058,6 +15300,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -15172,6 +15416,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to landmark:kick_gap_158_160:end 184",
       "partial_bars": 0.0,
@@ -15262,6 +15508,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 8.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "intro_cut",
       "note": "trim intro front 8b (started in break)",
       "partial_bars": 0.0,
@@ -15275,6 +15523,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to section:break_1 184",
       "partial_bars": 0.0,
@@ -15339,6 +15589,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to section:break_1 184",
       "partial_bars": 0.0,
@@ -15424,6 +15676,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 8bx3+0b to landmark:kick_gap_216_224:end 200",
       "partial_bars": 0.0,
@@ -15490,6 +15744,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to section:drop_2 184",
       "partial_bars": 0.0,
@@ -15556,6 +15812,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to landmark:kick_gap_190_192:end 184",
       "partial_bars": 0.0,
@@ -15651,6 +15909,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to landmark:kick_gap_124_224:end 192",
       "partial_bars": 0.0,
@@ -15912,6 +16172,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx7+0b to section:drop_2 192",
       "partial_bars": 0.0,
@@ -15978,6 +16240,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 1bx7+0b to landmark:kick_gap_190_192:end 192",
       "partial_bars": 0.0,
@@ -17517,6 +17781,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx2+0b to section:drop_2 156",
       "partial_bars": 0.0,
@@ -17585,6 +17851,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to landmark:kick_gap_184_192:end 160",
       "partial_bars": 0.0,
@@ -17639,6 +17907,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to section:break_1 160",
       "partial_bars": 0.0,
@@ -17741,6 +18011,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to landmark:kick_gap_185_192:end 160",
       "partial_bars": 0.0,
@@ -17847,6 +18119,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 4bx5+0b to section:build_1 172",
       "partial_bars": 0.0,
@@ -17916,6 +18190,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx2+0b to landmark:kick_gap_161_176:end 156",
       "partial_bars": 0.0,
@@ -17970,6 +18246,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to section:break_1 160",
       "partial_bars": 0.0,
@@ -18040,6 +18318,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to landmark:kick_gap_124_128:end 168",
       "partial_bars": 0.0,
@@ -18095,6 +18375,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx2+0b to landmark:kick_gap_174_176:end 156",
       "partial_bars": 0.0,
@@ -18149,6 +18431,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to section:break_1 168",
       "partial_bars": 0.0,
@@ -18216,6 +18500,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx8+0b to section:break_2 168",
       "partial_bars": 0.0,
@@ -18270,6 +18556,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to section:drop_2 160",
       "partial_bars": 0.0,
@@ -18336,6 +18624,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to landmark:kick_gap_216_224:end 160",
       "partial_bars": 0.0,
@@ -18563,6 +18853,8 @@
      {
       "clip_name": "",
       "cut_to_bar": 0.0,
+      "density_score": null,
+      "density_status": "",
       "kind": "outgoing_tail",
       "note": "loop outro 2bx4+0b to landmark:kick_gap_220_224:end 160",
       "partial_bars": 0.0,
