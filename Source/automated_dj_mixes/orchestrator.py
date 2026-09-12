@@ -352,7 +352,7 @@ def run_pipeline(
 
     # OUR-OWN-GRID source: build the beat grid from the stem-kick detector.
     # detector (Source/automated_dj_mixes/stem_grid.py). Injected into rb_matches
-    # here — BEFORE the BPM-authority loop, the beatgrid gate, the warp loop and
+    # here — BEFORE the BPM-authority step, the beatgrid gate, the warp loop and
     # the section-cut path — so every grid consumer reads ONE grid object per
     # track and the one-clock invariant holds by construction.
     #   - confident grid (flag "") -> stem-grid is the sole authority.
@@ -362,6 +362,31 @@ def run_pipeline(
     #   - weak/syncopated (LOWC/JIT) grids are judged by the hard grid gate;
     #     production never falls back to a two-marker grid.
     # Separates its own drum stem (GPU Demucs); the Phase-1a reuse is a TODO.
+    #
+    # PER TRACK, NOT PER STAGE (Sam, 2026-09-11 — py-spy-confirmed root cause
+    # of a lost session on the Home PC): grid detection, the BPM-authority
+    # overwrite, and stem-sections + kick-model detection now all run for ONE
+    # track, back to back, before the next track starts. The old code swept
+    # every track through grid detection FIRST, then hard-gated on
+    # `enforce_owned_grid_coverage`, then swept every track through
+    # stem-sections/kick-model SECOND. If a MemoryError (e.g. during
+    # full-resolution spectrogram analysis on a 16GB machine) hit even one
+    # track during the grid sweep, the coverage gate raised and aborted the
+    # WHOLE run before ANY track — including ones whose own grid detection
+    # had already succeeded — ever reached the stage that writes the
+    # `_Stem Analysis` cache, so their (~9 min/track) Demucs separation was
+    # simply thrown away. Finishing one track completely (and letting each
+    # stage persist to disk as it completes) before starting the next means a
+    # crash on a later track leaves every earlier track's work resumable.
+    # Sam: "i think you make the files at the start so at each phase all info
+    # is captured as it happens, and i think you should do it track by
+    # track. so at least then if for some reason i need to shoot off half
+    # way through the work to that point will be captured and can be picked
+    # back up later." The cache folder itself is created up front (not
+    # lazily on first write) so this holds even for the very first track.
+    if (stem_grid or stem_sections) and not previews_only:
+        (input_dir.parent / "_Stem Analysis").mkdir(parents=True, exist_ok=True)
+
     if stem_grid and not previews_only:
         from automated_dj_mixes.stem_grid import detect_beat_grid
         from automated_dj_mixes.grid_carrier import TrackGrid
@@ -378,7 +403,23 @@ def run_pipeline(
             res = res[res <= _np.median(_np.diff(b)) / 2]
             return float(_np.median(res)) if len(res) else float("nan")
         n_stem = n_snap = 0
-        for a in analyses:
+
+    if sections_layout and stem_sections and not previews_only:
+        from stem_detector import detect as stem_detect
+        from automated_dj_mixes.phrase_viz import segments_from_stem_sections, validate_bar_math
+
+    # The grid (stem-grid or tick-grid) is the BPM AUTHORITY for every track
+    # that has one. Without this, a.bpm stays librosa's quantized lattice
+    # whenever the MIK DB is absent (machine-local) — on 2026-06-12 those
+    # lattice values matched project_bpm within 0.05 and selected Repitch,
+    # which would have detuned 7 tracks of an in-key mix. MIK enrichment may
+    # still refine a.bpm later where its DB exists.
+    from automated_dj_mixes.warping import grid_bpm_and_downbeat
+
+    stem_results: dict[str, list] = {}   # track path -> section segments (stage 3 output)
+    for a in analyses:
+        # ---- Stage 1: owned stem-grid detection for THIS track ----
+        if stem_grid and not previews_only:
             try:
                 ticks = ableton_onsets_sec(a.path)       # Ableton's transients if analysed
                 bg = detect_beat_grid(a.path, asd_ticks=ticks)
@@ -388,72 +429,67 @@ def run_pipeline(
                 # state-dependent: two tracks failed inside a 14-track batch on
                 # 2026-08-12 and then gridded cleanly on their own, so the
                 # detail is only ever available at the moment it happens.
-                # The owned-grid coverage gate below still fails closed.
+                # The owned-grid coverage gate below still fails closed. A
+                # failure here (including a MemoryError) must not stop this
+                # track's BPM-authority/section-detection stages below, nor
+                # any later track — it only means THIS track keeps whatever
+                # grid it already had (usually none).
                 print(f"  [stem-grid] {a.path.name[:46]}: detection failed "
                       f"({type(e).__name__}: {e}) — keeping existing grid")
                 if os.environ.get("DJ_MIX_TRACEBACKS"):
                     traceback.print_exc()
-                continue
-            existing = rb_matches.get(str(a.path))
-            has_rb = existing is not None and len(getattr(existing, "beat_times_ms", [])) >= 8
-            if bg.flag in ("LOWC", "JIT") and not bg.snapped_to_asd and has_rb:
-                print(f"  [stem-grid] {a.path.name[:46]}: flagged {bg.flag}, no .asd to "
-                      f"rescue timing — keeping existing grid as fallback")
-                continue
-            note = ""
-            if has_rb:
-                dis = _disagree_ms(bg.beat_times_ms, existing.beat_times_ms)
-                note = (f" — OVERRIDES prior grid (disagree {dis:.0f}ms; we sit {bg.grid_vs_kick_ms}ms "
-                        f"on the kicks)" if not _np.isnan(dis) and dis > 25
-                        else f" — agrees w/ prior grid ({dis:.0f}ms)")
-                existing.beat_times_ms = bg.beat_times_ms
-                existing.first_downbeat_offset = bg.first_downbeat_offset
-                existing.bpm = bg.bpm
-                existing.end_beat = len(bg.beat_times_ms)
-            else:
-                rb_matches[str(a.path)] = TrackGrid(
-                    file_path=str(a.path), title=a.path.stem, bpm=bg.bpm,
-                    key_name=None, mood=1, end_beat=len(bg.beat_times_ms), phrases=[],
-                    beat_times_ms=bg.beat_times_ms,
-                    first_downbeat_offset=bg.first_downbeat_offset)
-                note = " — stem-grid sole source"
-            if bg.flag == "JIT":
-                note += (f" [OFF THE KICKS by {bg.grid_vs_kick_ms:.0f}ms — out of range, "
-                         f"the beatgrid gate will reject this]")
-            elif bg.snapped_to_asd:
-                note += " [.asd-snapped]"; n_snap += 1
-            elif bg.timing_src == "own-transients":
-                note += " [own-transient timing ~1ms]"
-            # Tell the beatgrid gate this grid is STEM-derived (built FROM the kicks):
-            # without provenance the gate judges it by the librosa whole-mix R test,
-            # which smears on percussion-heavy house and FALSE-FAILS perfect grids
-            # (10/35 corpus tracks hard-stop, universally where R < the rescue floor).
-            # stem_fitted=True makes the gate judge tempo confirmed + phase advisory.
-            # ALSO pass grid_vs_kick_ms so the gate can FAIL a stem grid that's off its
-            # own kicks (Afro/Latin / jackin' out-of-range -> 88ms): provenance must not
-            # be a blanket pass — the grid still has to sit on the transients.
-            ov_entry = grid_overrides.setdefault(a.path.name, {})
-            ov_entry["phase_source"] = "drum-stem-kicks"
-            ov_entry["grid_vs_kick_ms"] = bg.grid_vs_kick_ms
-            # Keep the downbeat clock single: a.first_downbeat_sec was set from the RB/
-            # librosa grid earlier; realign it to OUR grid so no later reader can split it.
-            a.first_downbeat_sec = bg.beat_times_ms[bg.first_downbeat_offset] / 1000.0
-            n_stem += 1
-            flag_s = f" [{bg.flag}]" if bg.flag else ""
-            print(f"  [stem-grid] {a.path.name[:46]}: {bg.bpm}bpm, "
-                  f"{bg.grid_vs_kick_ms}ms on kicks{flag_s}{note}")
-        if n_stem:
-            print(f"  Stem-grid: {n_stem}/{len(analyses)} tracks gridded from our own "
-                  f"kick detector ({n_snap} timing-snapped to Ableton .asd transients)")
+                bg = None
+            if bg is not None:
+                existing = rb_matches.get(str(a.path))
+                has_rb = existing is not None and len(getattr(existing, "beat_times_ms", [])) >= 8
+                if bg.flag in ("LOWC", "JIT") and not bg.snapped_to_asd and has_rb:
+                    print(f"  [stem-grid] {a.path.name[:46]}: flagged {bg.flag}, no .asd to "
+                          f"rescue timing — keeping existing grid as fallback")
+                else:
+                    note = ""
+                    if has_rb:
+                        dis = _disagree_ms(bg.beat_times_ms, existing.beat_times_ms)
+                        note = (f" — OVERRIDES prior grid (disagree {dis:.0f}ms; we sit {bg.grid_vs_kick_ms}ms "
+                                f"on the kicks)" if not _np.isnan(dis) and dis > 25
+                                else f" — agrees w/ prior grid ({dis:.0f}ms)")
+                        existing.beat_times_ms = bg.beat_times_ms
+                        existing.first_downbeat_offset = bg.first_downbeat_offset
+                        existing.bpm = bg.bpm
+                        existing.end_beat = len(bg.beat_times_ms)
+                    else:
+                        rb_matches[str(a.path)] = TrackGrid(
+                            file_path=str(a.path), title=a.path.stem, bpm=bg.bpm,
+                            key_name=None, mood=1, end_beat=len(bg.beat_times_ms), phrases=[],
+                            beat_times_ms=bg.beat_times_ms,
+                            first_downbeat_offset=bg.first_downbeat_offset)
+                        note = " — stem-grid sole source"
+                    if bg.flag == "JIT":
+                        note += (f" [OFF THE KICKS by {bg.grid_vs_kick_ms:.0f}ms — out of range, "
+                                 f"the beatgrid gate will reject this]")
+                    elif bg.snapped_to_asd:
+                        note += " [.asd-snapped]"; n_snap += 1
+                    elif bg.timing_src == "own-transients":
+                        note += " [own-transient timing ~1ms]"
+                    # Tell the beatgrid gate this grid is STEM-derived (built FROM the kicks):
+                    # without provenance the gate judges it by the librosa whole-mix R test,
+                    # which smears on percussion-heavy house and FALSE-FAILS perfect grids
+                    # (10/35 corpus tracks hard-stop, universally where R < the rescue floor).
+                    # stem_fitted=True makes the gate judge tempo confirmed + phase advisory.
+                    # ALSO pass grid_vs_kick_ms so the gate can FAIL a stem grid that's off its
+                    # own kicks (Afro/Latin / jackin' out-of-range -> 88ms): provenance must not
+                    # be a blanket pass — the grid still has to sit on the transients.
+                    ov_entry = grid_overrides.setdefault(a.path.name, {})
+                    ov_entry["phase_source"] = "drum-stem-kicks"
+                    ov_entry["grid_vs_kick_ms"] = bg.grid_vs_kick_ms
+                    # Keep the downbeat clock single: a.first_downbeat_sec was set from the RB/
+                    # librosa grid earlier; realign it to OUR grid so no later reader can split it.
+                    a.first_downbeat_sec = bg.beat_times_ms[bg.first_downbeat_offset] / 1000.0
+                    n_stem += 1
+                    flag_s = f" [{bg.flag}]" if bg.flag else ""
+                    print(f"  [stem-grid] {a.path.name[:46]}: {bg.bpm}bpm, "
+                          f"{bg.grid_vs_kick_ms}ms on kicks{flag_s}{note}")
 
-    # The grid is the BPM AUTHORITY for every track that has one. Without
-    # this, a.bpm stays librosa's quantized lattice whenever the MIK DB is
-    # absent (machine-local) — on 2026-06-12 those lattice values matched
-    # project_bpm within 0.05 and selected Repitch, which would have
-    # detuned 7 tracks of an in-key mix. MIK enrichment may still refine
-    # a.bpm later where its DB exists.
-    from automated_dj_mixes.warping import grid_bpm_and_downbeat
-    for a in analyses:
+        # ---- Stage 2: BPM authority for THIS track ----
         rb = rb_matches.get(str(a.path))
         if rb and len(getattr(rb, "beat_times_ms", [])) >= 8:
             g_bpm, _ = grid_bpm_and_downbeat(
@@ -461,6 +497,57 @@ def run_pipeline(
                 getattr(rb, "bpm", None))
             if g_bpm and g_bpm > 40.0:
                 a.bpm = g_bpm
+
+        # ---- Stage 3: stem-sections + kick-model, using THIS track's own
+        # grid — independent of project BPM / mix order, so every input it
+        # needs is already settled above rather than waiting for the whole
+        # corpus to clear the grid sweep + coverage gate. Writes the
+        # SECTIONS_STEM_<track>.json + DETECT_<track>.png + envelope/drums
+        # cache to `_Stem Analysis` immediately, same as it always has —
+        # the fix is that it now runs before this track's own analysis
+        # phase is considered "done", not after every track's grid stage.
+        if sections_layout and stem_sections and not previews_only:
+            try:
+                det_bpm, det_downbeat = a.bpm, a.first_downbeat_sec
+                grid_times, grid_offset = None, 0
+                if rb and len(getattr(rb, "beat_times_ms", [])) >= 8:
+                    g_bpm, g_db = grid_bpm_and_downbeat(
+                        rb.beat_times_ms, getattr(rb, "first_downbeat_offset", 0),
+                        getattr(rb, "bpm", None))
+                    if g_bpm:
+                        det_bpm, det_downbeat = g_bpm, g_db
+                        grid_times = rb.beat_times_ms
+                        grid_offset = getattr(rb, "first_downbeat_offset", 0)
+                        grid_name = "owned stem grid" if stem_grid else "tick grid"
+                        print(f"  [one-clock] {a.path.name[:46]}: "
+                              f"detector on {grid_name} ({g_bpm:.2f} BPM, downbeat {g_db:.3f}s)")
+                stem_res = stem_detect(
+                    a.path, input_dir.parent,
+                    bpm=det_bpm, downbeat=det_downbeat,
+                    kick_model=kick_model,
+                    kick_model_path=kick_model_path,
+                    kick_model_device=kick_model_device,
+                    make_viz=True,   # DETECT_<track>.png = the per-track sanity check
+                                     # (full track + 4 stem panels + section/beat annotations).
+                                     # Replaces the old 80-PNG blind pass (Sam 2026-06-10).
+                )
+                if stem_res:
+                    segments = segments_from_stem_sections(
+                        stem_res,
+                        beat_times_ms=grid_times,
+                        first_downbeat_offset=grid_offset,
+                    )
+                    for w in validate_bar_math(segments, a.path.stem[:40]):
+                        print(f"  BAR-MATH: {w}")
+                    stem_results[str(a.path)] = segments
+            except Exception as e:
+                print(f"  WARNING: stem section detection failed for {a.path.name}: {e}")
+        elif sections_layout and not previews_only:
+            print(f"  WARNING: no stem-sections for {a.path.name} - single uncoloured clip")
+
+    if stem_grid and not previews_only and n_stem:
+        print(f"  Stem-grid: {n_stem}/{len(analyses)} tracks gridded from our own "
+              f"kick detector ({n_snap} timing-snapped to Ableton .asd transients)")
 
     # HARD GATE: require complete per-beat grid coverage regardless of source
     # (owned stem grids or .asd tick fits - there is no Rekordbox fallback).
@@ -675,60 +762,13 @@ def run_pipeline(
             zip(ordered_analyses, warp_markers_all, warp_modes)
         ):
             total_beats = markers[-1].beat_time if markers else 0.0
-            rb_match = rb_matches.get(str(analysis.path))
-            segments = None
-            if stem_sections:
-                # Stem-based detector as the section source — needs no RB phrases
-                # (only the audio + bpm + downbeat). The .npz envelope cache makes
-                # re-runs on known tracks instant.
-                try:
-                    from stem_detector import detect as stem_detect
-                    from automated_dj_mixes.phrase_viz import (
-                        segments_from_stem_sections, validate_bar_math,
-                    )
-                    from automated_dj_mixes.warping import grid_bpm_and_downbeat
-
-                    # ONE CLOCK: the detector's constant bpm/downbeat MUST come
-                    # from the same grid the warp markers use — analysis.bpm is
-                    # librosa's quantized lattice when tags are absent (cannot
-                    # say 128.00; caused the 09.06.26 cuts-off regression).
-                    det_bpm, det_downbeat = analysis.bpm, analysis.first_downbeat_sec
-                    grid_times, grid_offset = None, 0
-                    if rb_match and len(getattr(rb_match, "beat_times_ms", [])) >= 8:
-                        g_bpm, g_db = grid_bpm_and_downbeat(
-                            rb_match.beat_times_ms,
-                            getattr(rb_match, "first_downbeat_offset", 0),
-                            getattr(rb_match, "bpm", None),
-                        )
-                        if g_bpm:
-                            det_bpm, det_downbeat = g_bpm, g_db
-                            grid_times = rb_match.beat_times_ms
-                            grid_offset = getattr(rb_match, "first_downbeat_offset", 0)
-                            grid_name = "owned stem grid" if stem_grid else "tick grid"
-                            print(f"  [one-clock] {analysis.path.name[:46]}: "
-                                  f"detector on {grid_name} ({g_bpm:.2f} BPM, downbeat {g_db:.3f}s)")
-                    stem_res = stem_detect(
-                        analysis.path, input_dir.parent,
-                        bpm=det_bpm, downbeat=det_downbeat,
-                        kick_model=kick_model,
-                        kick_model_path=kick_model_path,
-                        kick_model_device=kick_model_device,
-                        make_viz=True,   # DETECT_<track>.png = the per-track sanity check
-                                         # (full track + 4 stem panels + section/beat annotations).
-                                         # Replaces the old 80-PNG blind pass (Sam 2026-06-10).
-                    )
-                    if stem_res:
-                        segments = segments_from_stem_sections(
-                            stem_res,
-                            beat_times_ms=grid_times,
-                            first_downbeat_offset=grid_offset,
-                        )
-                        for w in validate_bar_math(segments, analysis.path.stem[:40]):
-                            print(f"  BAR-MATH: {w}")
-                except Exception as e:
-                    print(f"  WARNING: stem section detection failed for {analysis.path.name}: {e}")
-            else:
-                print(f"  WARNING: no stem-sections for {analysis.path.name} - single uncoloured clip")
+            # Section/kick-model detection already ran for every track, back
+            # to back with its own grid detection, in the per-track analysis
+            # phase above (before sequencing) — that is what makes each
+            # track's cache resumable independently of what a later track
+            # does. Here we only look up what that phase already computed
+            # and cached; nothing is re-detected.
+            segments = stem_results.get(str(analysis.path))
             track_data.append((analysis, markers, mode, segments, total_beats))
 
         # Sections-layout is a per-track section-chop artifact for REVIEW only.

@@ -47,7 +47,17 @@ def _lazy_stem_audio(wav, *args, **kwargs):
     silent corruption rather than a crash.
 
     Falls through to real separation on any miss, so behaviour is unchanged
-    whenever the cache is absent, stale or unreadable.
+    whenever the cache is absent, stale or unreadable. A fresh separation is
+    now ALSO saved back to the same sidecar (Sam, 2026-09-11 - py-spy-
+    confirmed root cause of a lost session): previously only the kick-model/
+    stem-sections stage ever wrote this cache, so a track whose grid
+    detection succeeded but whose run then hard-stopped before reaching that
+    later stage (e.g. `enforce_owned_grid_coverage` failing on a DIFFERENT
+    track) lost its own ~9-minute Demucs separation for nothing - it was
+    never persisted anywhere. Saving here means grid detection alone is
+    enough to make a track resumable, and the later stem-sections/kick-model
+    stage for the SAME track gets a warm hit instead of separating twice.
+    Saving is opportunistic and never allowed to break grid detection itself.
     """
     wav_path = Path(wav)
     cache_dir = _sidecar_dir(wav_path)
@@ -63,7 +73,16 @@ def _lazy_stem_audio(wav, *args, **kwargs):
             drums, sr = hit
             return drums, None, sr
     from probe_stem_kick_grid import stem_audio
-    return stem_audio(wav, *args, **kwargs)
+    drums, bass, sr = stem_audio(wav, *args, **kwargs)
+    if cache_dir is not None:
+        try:
+            from kick_model_adapter import _save_drums_cache, _save_bass_cache
+            _save_drums_cache(wav_path, cache_dir, drums, sr)
+            if bass is not None:
+                _save_bass_cache(wav_path, cache_dir, bass, sr)
+        except Exception:
+            pass  # caching is opportunistic - never let a save failure break grid detection
+    return drums, bass, sr
 
 
 _aa_stem_grid.set_stem_separator(_lazy_stem_audio)
