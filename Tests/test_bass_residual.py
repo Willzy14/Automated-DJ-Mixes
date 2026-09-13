@@ -277,3 +277,114 @@ def test_quick_swap_refuses_a_residual():
     pts = dict(auto["out"]["eq_bass"])
     assert pts[480.0] == AA.EQ_BASS_KILL
     assert dict(auto["out"]["volume"])[480.0] == AA.VOL_ZERO
+
+
+# --------------------------------------------------------------------------- #
+# the bass shelf must snap, not ramp (Sam's correction, 2026-09-12)
+# --------------------------------------------------------------------------- #
+
+def _values_at(points, beat):
+    """All values recorded at exactly *beat*, in emission order (raw list,
+    not a dict — a dict would silently hide a same-beat step)."""
+    return [v for t, v in points if t == beat]
+
+
+def test_bass_swap_is_instant_for_standard():
+    """The shelf must land two points on the swap beat itself (pre-swap
+    value, then post-swap value) rather than starting its ramp a beat
+    early — confirmed against Sam's own hand-tweaked ALS (Sections V3 SW
+    Tweaks.als), which lands both breakpoints on the exact same beat."""
+    plan, tracks = _plan(style=AA.TransitionStyle.STANDARD)
+    pts = AA.build_track_automation([plan], tracks)["out"]["eq_bass"]
+    assert _values_at(pts, plan.bass_swap) == [AA.EQ_BASS_UNITY, AA.EQ_BASS_KILL]
+    assert plan.bass_swap - 1 not in {t for t, _ in pts}, (
+        "no breakpoint should remain a beat before the swap — that beat is "
+        "what turned this into a ramp"
+    )
+
+
+def test_bass_swap_is_instant_for_long_blend():
+    plan, tracks = _plan(style=AA.TransitionStyle.LONG_BLEND)
+    pts = AA.build_track_automation([plan], tracks)["out"]["eq_bass"]
+    assert _values_at(pts, plan.bass_swap) == [AA.EQ_BASS_UNITY, AA.EQ_BASS_KILL]
+
+
+def test_bass_swap_is_instant_for_quick_swap():
+    plan, tracks = _plan(style=AA.TransitionStyle.QUICK_SWAP)
+    pts = AA.build_track_automation([plan], tracks)["out"]["eq_bass"]
+    assert _values_at(pts, plan.bass_swap) == [AA.EQ_BASS_UNITY, AA.EQ_BASS_KILL]
+
+
+def test_incoming_bass_swap_is_also_instant():
+    plan, tracks = _plan(style=AA.TransitionStyle.STANDARD)
+    pts = AA.build_track_automation([plan], tracks)["in"]["eq_bass"]
+    assert _values_at(pts, plan.bass_swap) == [AA.EQ_BASS_KILL, AA.EQ_BASS_UNITY]
+
+
+def test_genuine_duplicate_boundary_points_still_collapse():
+    """The dedup fix must keep merging TRUE redundant duplicates (same time
+    AND same value, e.g. two back-to-back transitions on one track whose
+    boundary points coincide) - it must only stop merging an intentional
+    same-beat step where the value actually changes."""
+    out = AA.TrackInfo(name="out", sections=[], arr_start=0.0, arr_end=400.0)
+    mid = AA.TrackInfo(name="mid", sections=[], arr_start=200.0, arr_end=1200.0)
+    inc = AA.TrackInfo(name="in", sections=[], arr_start=1000.0, arr_end=1800.0)
+    # plan1's incoming (mid) fade finishes at ov_e=560 holding VOL_UNITY out
+    # to ov_e+1=561; plan2's outgoing (mid) starts its hold at ov_s-1=561 —
+    # same beat, same value, from two independent transitions.
+    plan1 = AA.TransitionPlan(outgoing=out, incoming=mid, overlap_start=400.0,
+                              overlap_end=560.0, bass_swap=480.0,
+                              style=AA.TransitionStyle.STANDARD)
+    plan2 = AA.TransitionPlan(outgoing=mid, incoming=inc, overlap_start=562.0,
+                              overlap_end=720.0, bass_swap=640.0,
+                              style=AA.TransitionStyle.STANDARD)
+    pts = AA.build_track_automation([plan1, plan2], [out, mid, inc])["mid"]["volume"]
+    times = [t for t, _ in pts]
+    # no beat appears twice with the SAME value (those must have merged)
+    from collections import Counter
+    for beat, count in Counter(times).items():
+        if count > 1:
+            vals = {v for t, v in pts if t == beat}
+            assert len(vals) == count, (
+                f"beat {beat} has {count} points but only {len(vals)} distinct "
+                "values — a genuine duplicate failed to collapse"
+            )
+
+
+# --------------------------------------------------------------------------- #
+# _find_audio_dir — regression for the AB-comparison levelling miss
+# --------------------------------------------------------------------------- #
+#
+# Sam (2026-09-12): every track in the Tech House Heldout Side A mix shipped
+# with its mixer fader at unity — levelling never ran. Root cause: the old
+# audio_dir lookup only checked 3 fixed parent levels above the .als, which
+# matched the normal <project>/Output/Mix.als layout but missed
+# build_ab_comparison.py's deeper <project>/Output/AB/<side>/Mix <side>.als
+# layout, where Audio/ sits a level further up. It failed silently (a print,
+# not an error), so nobody noticed until Sam heard it.
+
+def test_find_audio_dir_single_level_layout(tmp_path):
+    """<project>/Output/Mix.als - Audio/ two levels up (the pre-existing,
+    already-working layout)."""
+    project = tmp_path / "My Project"
+    (project / "Audio").mkdir(parents=True)
+    als = project / "Output" / "Mix.als"
+    als.parent.mkdir(parents=True)
+    assert AA._find_audio_dir(als) == project / "Audio"
+
+
+def test_find_audio_dir_ab_comparison_layout(tmp_path):
+    """<project>/Output/AB/A/Mix A.als - Audio/ four levels up. This exact
+    layout is what build_ab_comparison.py produces and is what silently
+    skipped levelling on the real Tech House Heldout build."""
+    project = tmp_path / "My Project"
+    (project / "Audio").mkdir(parents=True)
+    als = project / "Output" / "AB" / "A" / "Mix A.als"
+    als.parent.mkdir(parents=True)
+    assert AA._find_audio_dir(als) == project / "Audio"
+
+
+def test_find_audio_dir_missing_returns_none(tmp_path):
+    als = tmp_path / "Nowhere" / "Output" / "Mix.als"
+    als.parent.mkdir(parents=True)
+    assert AA._find_audio_dir(als) is None

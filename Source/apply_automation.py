@@ -902,7 +902,14 @@ def build_track_automation(plans: list[TransitionPlan],
         ov_s = plan.overlap_start
         ov_e = plan.overlap_end
         swap = plan.bass_swap
-        pre  = swap - 1  # 1-beat ramp for EQ
+        # Hard swap, not a ramp: Sam's own hand-tweaked ALSs always land the
+        # EQ bass shelf's before/after breakpoints on the SAME beat (e.g.
+        # Sections V3 SW Tweaks.als: two FloatEvents at Time=1056.0, one at
+        # unity and one at the kill value) — the shelf snaps instantly at the
+        # swap. A beat-long ramp here was a leftover safety margin from before
+        # automation placement was reliable; volume still fades over the
+        # transition as normal, this only affects the bass shelf gain.
+        pre  = swap
 
         # Sam's option 2. `out_post_swap_bass` is what the OUTGOING's low shelf
         # holds from the swap onward: normally the full kill, but when a residual
@@ -1015,9 +1022,9 @@ def build_track_automation(plans: list[TransitionPlan],
                 auto[plan.outgoing.name]["eq_bass"].extend([
                     (ov_s - 1, EQ_BASS_UNITY),
                     (ov_s,     EQ_BASS_UNITY),
-                    (partial_beat - 1, EQ_BASS_UNITY),
+                    (partial_beat,     EQ_BASS_UNITY),
                     (partial_beat,     EQ_BASS_PARTIAL),
-                    (kill_beat - 1,    EQ_BASS_PARTIAL),
+                    (kill_beat,        EQ_BASS_PARTIAL),
                     (kill_beat,        out_post_swap_bass),
                     (ov_e,             EQ_BASS_KILL),
                 ])
@@ -1049,12 +1056,21 @@ def build_track_automation(plans: list[TransitionPlan],
             ])
 
     # sort + dedupe per track
+    #
+    # A hard swap is now two points at the SAME beat with DIFFERENT values
+    # (the pre-swap value, then the post-swap value) — that pair must survive
+    # this pass, or the hard swap silently turns back into a ramp from
+    # whatever point came before it. Only collapse points that are near-equal
+    # in BOTH time and value — genuine redundant duplicates (e.g. two
+    # transitions' boundary points landing on the same beat with the same
+    # level), never an intentional same-beat step.
     for name in auto:
         for param in ("volume", "eq_bass"):
             pts = sorted(auto[name][param], key=lambda p: p[0])
             deduped: list[tuple[float, float]] = []
             for p in pts:
-                if deduped and abs(deduped[-1][0] - p[0]) < 0.01:
+                if (deduped and abs(deduped[-1][0] - p[0]) < 0.01
+                        and abs(deduped[-1][1] - p[1]) < 1e-4):
                     deduped[-1] = p
                 else:
                     deduped.append(p)
@@ -1117,6 +1133,31 @@ def _wav_for_track(track_name: str, wavs: list[Path]) -> Path | None:
     if m is None:
         return None
     return wavs[m[0]]
+
+
+def _find_audio_dir(als_path: Path, max_levels: int = 8) -> Path | None:
+    """Find the project's Audio/ folder above *als_path*.
+
+    Used to be a fixed 3-level parent check (parent.parent, parent.parent.
+    parent, parent), which matched the single-mix layout
+    (<project>/Output/Mix.als -> parent.parent has Audio/) but silently
+    missed build_ab_comparison.py's deeper A/B/C layout
+    (<project>/Output/AB/<side>/Mix <side>.als -> Audio/ is 4 levels up).
+    That miss shipped every Tech House Heldout Side A track with its mixer
+    fader stuck at unity (Sam, 2026-09-12) — levelling never ran, it just
+    silently printed "Audio folder not found" and moved on. Walk upward
+    instead of guessing a fixed depth, bounded so a genuinely misplaced .als
+    fails fast rather than climbing to the drive root.
+    """
+    current = als_path.parent
+    for _ in range(max_levels):
+        candidate = current / "Audio"
+        if candidate.is_dir():
+            return candidate
+        if current.parent == current:
+            break
+        current = current.parent
+    return None
 
 
 def measure_track_levelling(tracks, audio_dir: Path) -> dict[str, float]:
@@ -1335,10 +1376,7 @@ def main() -> None:
     # refusal costs nothing. It needs the levelling offsets the mix will ship
     # with, which is why they are measured here rather than read off the
     # arranged set, where every fader is still 0 dB.
-    audio_dir = next((c / "Audio" for c in
-                      (als_path.parent.parent, als_path.parent.parent.parent,
-                       als_path.parent)
-                      if (c / "Audio").is_dir()), None)
+    audio_dir = _find_audio_dir(als_path)
     if BASS_RESIDUAL_ENABLED and audio_dir is not None:
         _size_bass_residuals(plans, tracks, als_path, audio_dir)
     elif BASS_RESIDUAL_ENABLED:
