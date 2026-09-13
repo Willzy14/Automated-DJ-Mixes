@@ -587,6 +587,19 @@ def _quality_cache_for_track(track_text: str, track_name: str) -> Path:
             if candidate.is_file():
                 worktree_matches.append(candidate)
     unique_worktree = list(dict.fromkeys(path.resolve() for path in worktree_matches))
+    if len(unique_worktree) > 1:
+        # A same-named track cached by a DIFFERENT, unrelated project
+        # elsewhere in the repo (e.g. an earlier test mix reused this WAV)
+        # can win here by coincidence, since the glob above searches the
+        # whole working tree. Narrow to caches that actually live under one
+        # of this track's own project roots (the WAV's own grandparent
+        # directory) before giving up - that is never a guess, since the
+        # audio path IS the ground truth for which project this track
+        # belongs to in THIS build.
+        project_roots = {p.parent.parent.resolve() for p in audio_paths}
+        scoped = [m for m in unique_worktree if m.parent.parent.resolve() in project_roots]
+        if len(scoped) == 1:
+            unique_worktree = scoped
     if len(unique_worktree) == 1:
         return unique_worktree[0]
     if len(unique_worktree) > 1:
