@@ -1,7 +1,24 @@
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
 librosa>=0.10.0
+soundfile>=0.12.0
 pyloudnorm>=0.1.0
 mutagen>=1.47.0
 ffmpeg-python>=0.2.0
+
+# Stem separation (Kick Detector V3 + Demucs sections)
+# GPU note (per Kick Detector's own requirements.txt):
+#   Home PC (GTX 750)   = CPU-only PyTorch is fine for dev/small runs.
+#   Studio PC (RTX 3050) = install a CUDA build for batch Demucs, e.g.
+#     pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+torch>=2.11.0
+torchaudio>=2.11.0
+demucs>=4.0.1
+
+# Sibling package (Audio Analysis Toolkit) - install separately, editable:
+#   pip install -e "<Dropbox>/Sam Wills/0.1---GIT HUB---/Audio Analysis Toolkit[librosa]"
+
 # Desktop automation (driving the MIK UI from desktop_analyzer.py)
 pywinauto>=0.6.9
 pyautogui>=0.9.54
