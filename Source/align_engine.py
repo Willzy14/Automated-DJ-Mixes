@@ -751,7 +751,8 @@ def report_landmark_candidates(
 MIN_REMAINING_CONTENT_BARS = 1.0
 
 
-def _outgoing_has_post_swap_content(o: Track, swap_bar: float) -> bool:
+def _outgoing_has_post_swap_content(o: Track, swap_bar: float,
+                                    effective_end: float | None = None) -> bool:
     """True iff the outgoing still has real content to fade across after
     *swap_bar* (the outgoing's OWN native bar the handoff lands on) - false
     means this is a genuine cold ending, not a defect to correct.
@@ -763,18 +764,26 @@ def _outgoing_has_post_swap_content(o: Track, swap_bar: float) -> bool:
     automatically wrong; it depends on whether the outgoing actually has
     anything left to give at that point.
 
-    Two independent, already-computed signals; either is enough to call it
-    cold-ending:
-      1. `bass_out_is_end` - the bass never comes back before the file
-         ends, so once it's gone (at/before the swap) there's nothing left
-         to carry a fade.
-      2. Distance to the track's own real end (`n_bars`) - regardless of
-         what's still playing, there's no time left to fade through.
+    Distance to *effective_end* (defaults to the track's own real end,
+    `n_bars`) alone: regardless of what's still playing, there's no time
+    left to fade through once the swap is within MIN_REMAINING_CONTENT_BARS
+    of it. Pass an explicit `effective_end` when an outgoing-tail loop has
+    extended playback past the native end (see the compute_aligned_positions
+    call site, which does this AFTER plan_fill_or_cut runs) - a loop only
+    ever adds content, so the caller should never pass something SMALLER
+    than `o.n_bars` here.
+
+    `bass_out_is_end` was tried and DROPPED as a second signal (Codex
+    review, 2026-09-13): it only means the bass specifically never returns
+    before the file ends, not that every stem has - Christoph, The Rise
+    (n_bars=256, bass-out~253, drums-only outro through 256) has 3 real
+    bars of percussion after its bass-out point, which the bass signal
+    alone would have misread as a cold ending. Bass ownership is not
+    sufficient evidence of "nothing left" - only actual distance to the
+    track's end is checked now.
     """
-    if (o.bass_out_bar is not None and o.bass_out_is_end
-            and o.bass_out_bar <= swap_bar):
-        return False
-    return (o.n_bars - swap_bar) > MIN_REMAINING_CONTENT_BARS
+    end = o.n_bars if effective_end is None else effective_end
+    return (end - swap_bar) > MIN_REMAINING_CONTENT_BARS
 
 
 def _handoff_candidates(o: Track) -> list[tuple[float, str, str]]:
@@ -2341,9 +2350,6 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
     for k in range(1, len(tracks)):
         o, i = stems[resolved[k - 1]], stems[resolved[k]]
         al = align_pair(o, i, policy)
-        al.outgoing_has_post_swap_content = _outgoing_has_post_swap_content(
-            o, al.handoff_bar_out
-        )
         prev = arr_pos[k - 1]
         # A break-skip at an earlier pair tightened the timeline (its incoming lost a
         # break), so THIS track + the swap into it move left by `contraction`. The
@@ -2356,6 +2362,25 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
         al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
         al.landmark_candidates = report_landmark_candidates(o, i, al, prev, new)
         al.fills_cuts = plan_fill_or_cut(o, i, al, policy)   # loops/cuts around the swap
+        # Computed AFTER plan_fill_or_cut, not right after align_pair (Codex
+        # review, 2026-09-13): an outgoing-tail loop genuinely extends the
+        # outgoing past its native n_bars (Christoph -> A Studio: flag would
+        # read False at the native end, bar 253, but the planned tail loop
+        # extends the outgoing to bar 261 - 8 real bars of content past the
+        # swap the pre-loop read would have missed). A loop only ever ADDS
+        # content, so this can only make a False read become True, never
+        # the reverse - the dangerous direction (a stale False making the
+        # margin check wrongly lenient) is exactly what this closes.
+        outgoing_tail = next(
+            (f for f in al.fills_cuts if f.kind == "outgoing_tail"), None
+        )
+        effective_end = (
+            max(o.n_bars, float(outgoing_tail.target_marker_bar))
+            if outgoing_tail else None
+        )
+        al.outgoing_has_post_swap_content = _outgoing_has_post_swap_content(
+            o, al.handoff_bar_out, effective_end=effective_end
+        )
         bskip = next((f for f in al.fills_cuts if f.kind == "break_skip"), None)
         contraction = bskip.skip_bars * 4.0 if bskip else 0.0
         alignments.append(al)
