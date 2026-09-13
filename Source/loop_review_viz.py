@@ -227,16 +227,24 @@ def main() -> int:
             print(f"  L{i:02d}: cannot parse source_beats={ls['source_beats']}, skip")
             continue
         count = int(ls.get("count", 1))
-        bpm = bpm_lookup.get(track)
-        if not bpm:
-            print(f"  L{i:02d}: no BPM for {track}, skip")
-            continue
-
         display_track = html.unescape(track)
         wav = audio_dir / f"{display_track}.wav"
         if not wav.exists():
             print(f"  L{i:02d}: no audio at {wav}, skip")
             continue
+        bpm = bpm_lookup.get(track)
+        if not bpm:
+            # The report's per-track bpm is populated from MIK metadata and
+            # is None when MIK didn't run (e.g. no MIK install on this
+            # machine) - that's a reporting gap, not a real analysis miss,
+            # since the actual arrangement/warp already used the owned
+            # stem-grid BPM throughout. Fall back to a direct librosa
+            # estimate for this picture's beat gridlines, same approach
+            # transition_review_viz.py already uses successfully.
+            y_probe, sr_probe = librosa.load(str(wav), sr=22050, mono=True)
+            tempo, _ = librosa.beat.beat_track(y=y_probe, sr=sr_probe)
+            bpm = float(np.asarray(tempo).reshape(-1)[0])
+            print(f"  L{i:02d}: no report BPM for {track}, estimated {bpm:.1f} from audio")
         print(f"  L{i:02d} {track[:40]} {ltype} beats {beat_a:.0f}-{beat_b:.0f} ×{count}")
         y, sr = librosa.load(str(wav), sr=22050, mono=True)
         safe_track = display_track.replace("/", "_").replace("\\", "_")[:50]
