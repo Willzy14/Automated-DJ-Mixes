@@ -640,6 +640,12 @@ def _load_arrangement_report(als_path: Path,
                 "swap_beats": tr["swap_beats"],
                 "handoff_kind": tr.get("handoff_kind", "align"),
                 "alignment_policy": tr.get("alignment_policy", "legacy_v1"),
+                # Default True (old, stricter behaviour) for a report written
+                # before this field existed - never silently loosen a margin
+                # the report never actually claimed.
+                "outgoing_has_post_swap_content": tr.get(
+                    "outgoing_has_post_swap_content", True
+                ),
             }
     if out:
         print(f"  Loaded {len(out)} align_engine swap point(s) from {cand.name}")
@@ -675,32 +681,45 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             # ((swap, VOL_ZERO)), so it needs one bar for the instant cut,
             # not eight beats of fade room. A cold-ending outgoing (Crusy
             # 1-bar outro, 2026-09-02) legitimately hands off on its final
-            # bar under a quick swap.
-            margin = 4.0 if (ov_end - ov_start) / 4 < 24 else 8.0
+            # bar under a quick swap — and Sam's correction (2026-09-12)
+            # generalises this: ANY overlap length can legitimately have a
+            # swap this close to the end, if the outgoing genuinely has
+            # nothing left past it. `outgoing_has_post_swap_content` (align_
+            # engine, carried through the report) is that check — a long
+            # overlap whose outgoing is cold-ending gets the same lenient
+            # margin a short overlap always got, instead of a fixed 8 beats
+            # regardless of what's actually left to fade.
+            outgoing_has_content = rep.get("outgoing_has_post_swap_content", True)
+            margin = (4.0 if (not outgoing_has_content or (ov_end - ov_start) / 4 < 24)
+                      else 8.0)
             aligner_chosen = rep.get("alignment_policy") in LANDMARK_POLICIES
             clamped = min(max(swap, ov_start), ov_end - margin)
             if aligner_chosen:
                 # The clamp is a safety bound: it guarantees the swap sits
                 # inside the ARRANGED overlap with fade room after it. An
-                # aligner-chosen swap already satisfies that BY CONSTRUCTION
-                # (align_engine derives swap_beats from the same geometry it
-                # froze, with >= last_min_bars of outgoing tail after the
-                # handoff). So a clamp trigger here can only mean the report
-                # and the arranged ALS disagree — a stale report, a
-                # re-arranged ALS, or an upstream shift. Moving the beat
+                # aligner-chosen swap is EXPECTED to satisfy that by
+                # construction, but this is a real safety net, not a
+                # tautology — align_engine can still hand back a swap that
+                # doesn't clear it (a genuine construction shortfall, not
+                # necessarily evidence of a stale report). Moving the beat
                 # would silently break the landmark contract while KEEPING
-                # its provenance (handoff_kind/paired cues), so it is a hard
-                # error, never a repair (Codex round-2 BLOCKER 1).
+                # its provenance (handoff_kind/paired cues), so a violation
+                # is a hard error, never a silent repair (Codex round-2
+                # BLOCKER 1).
                 if abs(clamped - swap) > 1e-6:
                     raise ValueError(
                         f"Aligner-approved swap for '{out_t.name}' -> "
                         f"'{in_t.name}' is outside the safe overlap: swap "
                         f"{swap} not in [{ov_start}, {ov_end - margin}] "
                         f"(policy {rep.get('alignment_policy')}, handoff "
-                        f"{rep.get('handoff_kind', '?')}). The arrangement "
-                        f"report and the arranged ALS disagree — rebuild the "
-                        f"arrangement or fix the report; refusing to move an "
-                        f"approved swap silently."
+                        f"{rep.get('handoff_kind', '?')}, margin {margin:.0f} "
+                        f"beats, outgoing_has_post_swap_content="
+                        f"{outgoing_has_content}). This swap does not leave "
+                        f"the outgoing's fade the room this margin requires — "
+                        f"could be a stale report / re-arranged ALS, or "
+                        f"align_engine picking a pair too close to the "
+                        f"overlap edge; rebuild the arrangement or fix the "
+                        f"report; refusing to move an approved swap silently."
                     )
             elif clamped != swap:
                 if abs(clamped - swap) > 0.5:

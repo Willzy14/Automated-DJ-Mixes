@@ -683,6 +683,15 @@ class Alignment:
     alignment_policy: str = "legacy_v1"
     paired_cues: list = field(default_factory=list)
     swap_progress: float | None = None
+    # Does the outgoing still have real content to fade across after the
+    # swap, or does it genuinely end here (a "cold ending")? Computed once
+    # by compute_aligned_positions via _outgoing_has_post_swap_content and
+    # carried through the arrangement report so apply_automation's margin
+    # check can tell the two cases apart instead of using overlap length
+    # alone. Defaults True (the old, stricter behaviour) so an Alignment
+    # built without going through compute_aligned_positions - direct
+    # align_pair() calls in tests, mainly - is unaffected.
+    outgoing_has_post_swap_content: bool = True
 
 
 def report_landmark_candidates(
@@ -733,6 +742,39 @@ def report_landmark_candidates(
             item["suggested_transition_finish_beat"], item["track_role"]
         ),
     )
+
+
+#: Hard floor for _outgoing_has_post_swap_content's "genuinely nothing left"
+#: read - matches the existing QUICK_SWAP margin, so a swap that clears this
+#: floor can already produce a valid (if abrupt) handoff (Rule 1's own
+#: boundary-margin test already pins that anything tighter is a hard error).
+MIN_REMAINING_CONTENT_BARS = 1.0
+
+
+def _outgoing_has_post_swap_content(o: Track, swap_bar: float) -> bool:
+    """True iff the outgoing still has real content to fade across after
+    *swap_bar* (the outgoing's OWN native bar the handoff lands on) - false
+    means this is a genuine cold ending, not a defect to correct.
+
+    Sam, 2026-09-12 (correcting apply_automation's fixed margin rule):
+    "sometimes the outgoing track can run all the way up to the drop of the
+    next track... so it could plausibly happen within [a few bars] of the
+    end of the track" - a swap sitting close to the overlap's end is not
+    automatically wrong; it depends on whether the outgoing actually has
+    anything left to give at that point.
+
+    Two independent, already-computed signals; either is enough to call it
+    cold-ending:
+      1. `bass_out_is_end` - the bass never comes back before the file
+         ends, so once it's gone (at/before the swap) there's nothing left
+         to carry a fade.
+      2. Distance to the track's own real end (`n_bars`) - regardless of
+         what's still playing, there's no time left to fade through.
+    """
+    if (o.bass_out_bar is not None and o.bass_out_is_end
+            and o.bass_out_bar <= swap_bar):
+        return False
+    return (o.n_bars - swap_bar) > MIN_REMAINING_CONTENT_BARS
 
 
 def _handoff_candidates(o: Track) -> list[tuple[float, str, str]]:
@@ -2299,6 +2341,9 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
     for k in range(1, len(tracks)):
         o, i = stems[resolved[k - 1]], stems[resolved[k]]
         al = align_pair(o, i, policy)
+        al.outgoing_has_post_swap_content = _outgoing_has_post_swap_content(
+            o, al.handoff_bar_out
+        )
         prev = arr_pos[k - 1]
         # A break-skip at an earlier pair tightened the timeline (its incoming lost a
         # break), so THIS track + the swap into it move left by `contraction`. The

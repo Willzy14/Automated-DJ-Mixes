@@ -1788,6 +1788,7 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
             t["alignment_policy"] = al.alignment_policy
             t["paired_cues"] = al.paired_cues
             t["swap_progress"] = al.swap_progress
+            t["outgoing_has_post_swap_content"] = al.outgoing_has_post_swap_content
             t["landmark_policy"] = _landmark_policy_label(al.alignment_policy)
             t["musical_landmark_candidates"] = [
                 candidate for candidate in _final_landmark_candidates(plan, al)
