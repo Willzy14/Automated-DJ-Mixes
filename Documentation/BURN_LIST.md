@@ -370,7 +370,7 @@ was written).
   `Staging/` receipt, `validate_burn_list.py --strict` checks 6/11 will show the same two expected
   FAILs on this line.
 
-- [ ] **The listening-test contract contradicts itself and needs resolving before the listen,
+- [x] **The listening-test contract contradicts itself and needs resolving before the listen,
   not glossed over** (A4) - Astra found this independently of Fable: `Heldout Replay Plan V2.md`
   requires MixPlan reconciliation before listening, but `/mix`'s own replay instructions
   explicitly exempt experimental sides from that gate, and Astra confirmed directly that none of
@@ -446,13 +446,214 @@ was written).
   preserves override provenance separately from effective tempo, and the broad `except Exception`
   around `reconcile()` is the right boundary for a per-side gate (worst case it misclassifies an
   internal reconciler bug as a gate failure - it never lets one pass silently).
-  The reconciliation half of this item is DONE. The excerpt-extraction half (Astra's other
-  finding, `seal_listening_test.py`) is not - this item stays open on that half alone.
-  Owner: Claude. Author: Claude. Peer review: SOUND - Codex, reconciliation half only (1 round,
-  `-Effort high`, real staged files, "NO MATERIAL OBJECTIONS"); the excerpt-extraction half is
-  unreviewed because it is not yet built. Same lightweight-convention caveat as A1/A3 applies (see
-  the validator note under THE COUNT) - no formal `Staging/` receipt, `validate_burn_list.py
-  --strict` checks 6/11 will show the same two expected FAILs on this line.
+  The reconciliation half of this item is DONE.
+
+  **EXCERPT-EXTRACTION HALF: BUILT, TESTED, VERIFIED ON THE REAL PROJECT - 2026-09-14.**
+  New script `Source/extract_transition_excerpts.py`. For each side, reads that side's OWN
+  `Arranged {side}_ARRANGEMENT_REPORT.json` (transition geometry) and OWN `Mix {side}.als`
+  (ground-truth tempo, read straight off the ALS - same principle as the reconciliation fix
+  above) - each side's overlap zone for the same transition can genuinely differ, which is the
+  entire point of the comparison. Excerpt window = the transition's overlap zone (incoming
+  track's arrangement start -> outgoing track's arrangement end) plus 8 bars of context each
+  side - the SAME convention already established and reviewed in
+  `transition_review_viz.render_transition` (`ctx_bars = 8`), reused rather than invented fresh.
+  Beat-to-seconds conversion reuses `render_check.TempoMap`/`parse_als` directly rather than
+  reinventing it - a nice side effect: it transparently handles a genuine tempo-arc'd mix too
+  (`build_ab_comparison.py` never produces one today, but the excerpt script does not assume
+  flat tempo and isn't limited to that harness). Raw, side-labelled clips are written only to a
+  throwaway `tempfile.TemporaryDirectory()` and handed to the EXISTING `seal_listening_test.py`
+  as a subprocess to randomise/blind/twin - no sealing logic duplicated, "blind means blind"
+  holds for the per-transition sets exactly as it already does for the whole-mix one. Optional
+  `--build-results` gate refuses to extract from any side that didn't pass
+  `build_ab_comparison.py`'s own arrange/automation/reconcile gates - Plan V2's "all automated
+  checks... pass before anything is heard" requirement, enforced a second time at the point
+  audio is actually cut.
+  **VERIFIED THREE WAYS:** (1) 15 new unit tests (`Tests/test_extract_transition_excerpts.py`) -
+  window-geometry math, tempo-map reuse (including a genuine tempo-ramp fixture converting
+  correctly, and a genuinely ambiguous double-envelope fixture correctly aborting), WAV-duration
+  clamping, the `--build-results` gate both ways, and a full synthetic end-to-end `main()` run
+  proving no side-labelled filename ever lands under `--out-dir`. (2) Proved-the-test on the
+  window-geometry formula: temporarily dropped the beats-per-bar multiplier, confirmed the tests
+  failed with the exact predicted wrong values (540 instead of 516; 2.0 instead of the expected
+  0.0 clamp), then restored. (3) Ran for real against the actual Tech House Heldout A/B/C
+  renders (not just fixtures): all 8 real transitions sealed cleanly; T01's excerpt duration
+  matched the hand-computed expectation to sample-rounding precision
+  (103.38s observed vs 103.3846s expected); side C's excerpt for T01 came out audibly longer
+  than A/B's (147.69s vs 103.38s) - expected and correct, since C's introloop cue signal gives
+  it a different overlap geometry for that transition, which is the whole point of the
+  comparison; spot-checked audio content (RMS) on T01 and T08 (the mix's tail, where WAV-duration
+  clamping actually engages) - no silence, no corruption; live-checked `--build-results` against
+  the project's real (pre-A4-fix) `build_results.json`, confirmed it passes through correctly.
+  Full suite 666/6/0 -> 681/6/0 (15 new, 0 broken).
+  **Docs, both brains (frozen sync list):** `Claude Code Brain/commands/mix.md` and
+  `Codex Brain/commands/mix.md` (content-verified identical, `diff -w -B` clean) - new
+  step 3.5f-2 documenting the script and its CLI, plus the Policy Replay toolchain table row.
+
+  **CODEX ROUND 1 (`-Effort high`, real staged files) FOUND A REAL, SEVERE BUG - FIXED,
+  RE-VERIFIED, 2026-09-14.** 1 FATAL, 3 MAJOR, 2 MINOR - all six adopted, none rebutted:
+  - **FATAL - the excerpts were not actually blind.** Per-side windows can have different
+    durations (this was already visible in the round-1 verification note above - C's 147.69s vs
+    A/B's 103.38s - and nobody, including Claude, connected it to a blind-breaking tell before
+    Codex flagged it). A clip's LENGTH is trivially audible/visible regardless of a randomised
+    filename or stripped metadata - Sam could identify side C before a single note played, on
+    every transition where the policies genuinely differ. Fixed with a new
+    `_equalize_windows_sec`: the overlap zone itself is never cropped (that IS the content being
+    judged), but every side shorter than the transition's longest is extended symmetrically with
+    MORE REAL audio (never silence - a silence onset is exactly as disclosing as an unequal
+    duration) from before/after its own window, clamped to that side's own file bounds; a side
+    that cannot reach the target without exceeding its own bounds fails that transition rather
+    than serving mismatched clips.
+  - **MAJOR - matching pair_index SETS across sides doesn't prove pair_index N names the SAME
+    two tracks on every side.** New `_verify_cross_side_transition_identity`, cross-checking
+    every side's out_track/in_track names against the reference side before extracting anything.
+  - **MAJOR - a manually supplied `--side` WAV has no binding to its side's own ALS/report** (a
+    swapped file would silently use the wrong geometry/tempo). No binding exists anywhere in
+    this toolchain today (`seal_listening_test.py`'s own `--side` is equally unverified) and a
+    real cryptographic binding would mean instrumenting the MANUAL Ableton bounce step itself -
+    out of scope for this round. Mitigated cheaply instead: new `_sanity_check_wav_duration`
+    compares each side's actual render duration against what that side's own report predicts,
+    refusing a >10%-off mismatch (catches the likely real mistake - a swapped file - without the
+    larger manifest feature).
+  - **MAJOR - raw side-labelled clips could survive an abnormal stop or a hung sealer**
+    (`TemporaryDirectory` only cleans up on orderly exit; `subprocess.run` had no timeout). Fixed:
+    raw clips now use opaque UUID filenames (never `{transition}_{side}.wav`) so even a leaked
+    file discloses nothing; `run()` now takes a `--seal-timeout-sec` (default 600s); a best-effort
+    cleanup of this script's own stale temp roots runs at the start of every invocation.
+  - **MINOR - `--context-bars` accepted negative/non-finite values silently**, which would have
+    shrunk the window rather than failed. Now validated (finite, >= 0).
+  - **MINOR - a duplicate `pair_index` in `transitions[]` silently overwrote the first
+    occurrence.** Now refused explicitly.
+  Fixed all six, added 13 more tests (15 -> 28), proved-the-test on the FATAL fix specifically
+  (temporarily skipped equalization, confirmed the new integration test failed with the exact
+  real-world numbers - 32s vs 64s, mirroring the actual 103s-vs-147s finding - then restored),
+  and RE-RAN AGAINST THE REAL PROJECT: all 8 real transitions still seal cleanly under the
+  stricter checks, and every transition's 4 sealed clips now measure IDENTICAL duration to the
+  millisecond (0.000s spread, confirmed for all 8). Full suite 681/6/0 -> 694/6/0.
+  **CODEX ROUND 2 (`-Effort high`, real staged files - this time also `seal_listening_test.py`
+  and `render_check.py`, which round 1 didn't have and asked for) FOUND FOUR MORE REAL ISSUES,
+  ALL FIXED - 2026-09-14.** 1 FATAL + 3 MAJOR + 1 MINOR:
+  - **FATAL - `seal_listening_test.py`'s own `HOW TO LISTEN.txt` named the twin's side outright**
+    (`"the 'A' side, duplicated"`) - PRE-EXISTING code, not introduced this session, but it
+    directly undermines the exact guarantee both the whole-mix seal AND every one of the 8 new
+    per-transition seals depend on: once a listener spots the two identical clips (which needs
+    no advance knowledge, just noticing they sound the same), the text hands them that side's
+    identity for free without ever opening `_sealed/MAPPING.json`. Fixed in `seal_listening_test.
+    py` itself (touches BOTH the whole-mix seal and the new per-transition ones, one fix) -
+    the instructions now say only "a duplicate pair," never which side.
+  - **MAJOR - the round-1 stale-temp-dir cleanup was itself a live regression**: it swept EVERY
+    matching temp directory unconditionally, no age check, so a second concurrent invocation's
+    startup cleanup could delete the FIRST invocation's still-in-use raw clips out from under its
+    own sealer subprocess mid-run. Fixed: only removes a directory older than 1 hour - a single
+    transition's extract+seal completes in seconds in practice, so an hour cannot reach anything
+    plausibly active.
+  - **MAJOR - the duration-sanity mitigation (round 1's MAJOR-3 fix) doesn't protect against the
+    REALISTIC failure**: a same-length A/B swap (likely exactly because A/B/C comparison variants
+    share the same tracks) passes it cleanly and silently applies the wrong side's geometry.
+    Built the real fix Codex asked for: new `Source/record_bounce_manifest.py`, run once per side
+    right after bouncing (the one moment a human still knows FOR CERTAIN which file they just
+    exported) - hashes the ALS, report, and WAV together into a manifest.
+    `extract_transition_excerpts.py` now verifies it byte-for-byte if present (`_verify_bounce_
+    manifest`), refusing on any mismatch; a side with no manifest still falls back to the weak
+    duration check, but now prints a visible WARNING so a weakly-bound side is never silently
+    treated as equally trustworthy. Both `mix.md` docs updated (new recommended step between
+    3.5e bounce and 3.5f-2 extraction).
+  - **MAJOR - reusing an out-dir across runs with a different number of sides left a stale,
+    unmapped `Clip N.wav` from the earlier run.** Fixed in `seal_listening_test.py`: `Listen/`
+    and `_sealed/` are now removed before each write, so a reseal always starts clean.
+  - **MINOR - a manually bounced side with a different sample rate/channel count/subtype would
+    survive re-encoding as a technical tell.** Fixed in `seal_listening_test.py`: refuses to seal
+    if `--side` renders don't share the same format.
+  Fixed all five (the FATAL plus four Codex-numbered findings), added 24 more tests across three
+  files (`test_extract_transition_excerpts.py` 28->34, new `test_record_bounce_manifest.py` with
+  5, `test_seal_listening_test.py` 4->7), proved-the-test on both the manifest-swap detection and
+  the concurrency-regression fix specifically (temporarily disabled each, confirmed the exact
+  predicted failures, restored), then RE-RAN AGAINST THE REAL PROJECT A THIRD TIME - this time
+  also running `record_bounce_manifest.py` for real against side A and confirming
+  `extract_transition_excerpts.py` picked it up silently (no warning) while B/C correctly printed
+  the fallback warning; all 8 transitions still sealed cleanly, durations still exactly equal,
+  and `HOW TO LISTEN.txt` confirmed to no longer name the twin's side. Full suite 694/6/0 ->
+  708/6/0.
+  Files changed: `Source/extract_transition_excerpts.py`, `Source/seal_listening_test.py`,
+  `Source/record_bounce_manifest.py` (new), `Tests/test_extract_transition_excerpts.py`,
+  `Tests/test_seal_listening_test.py`, `Tests/test_record_bounce_manifest.py` (new),
+  `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`.
+  **CODEX ROUND 3 (`-Effort high`, real staged files) FOUND ZERO FATAL - FIRST CLEAN-OF-FATAL
+  ROUND - PLUS 2 MAJOR + 1 MINOR, ALL ADDRESSED - 2026-09-14.**
+  - **MAJOR - the manifest binding is optional, so a side without one silently fell back to the
+    known-insufficient duration check with only a printed warning** - meaning a completed run's
+    own exit code and results file carried no trace of which sides were actually strongly bound.
+    Fixed two ways: `_verify_side_binding` now RETURNS a `{label: "strong"|"weak"}` dict, written
+    into `extract_results.json` alongside the per-transition results (no longer a flat dict - now
+    `{"binding": {...}, "transitions": {...}}`), and the final console summary prints
+    "NOT FULLY AUDITABLE: side(s) ... had no bounce manifest" whenever any side fell back -
+    visible at the point the run reports success, not just buried mid-run. New opt-in
+    `--require-bounce-manifests` CLI flag makes a missing manifest a hard refusal instead of a
+    fallback, for a caller that wants the strict guarantee. Deliberately NOT made the default -
+    a manifest's value depends entirely on being recorded AT BOUNCE TIME, which code cannot
+    enforce regardless of whether the flag is mandatory, so forcing it changes nothing about the
+    real protection while breaking existing callers who haven't adopted the new step yet.
+  - **MAJOR - the round-1/round-2 stale-temp-dir cleanup was STILL not concurrency-safe**: an
+    mtime-based age check doesn't prove inactivity, so a genuinely slow run past the 1-hour
+    threshold could still have its live temp directory deleted by another invocation's startup
+    cleanup. Adopted Codex's own "safest" fix: REMOVED automatic cross-run cleanup entirely
+    rather than build a real ownership/lock mechanism for what was only ever a hygiene feature -
+    the opaque per-clip filenames (kept) are what actually prevent a leaked file from disclosing
+    a side, regardless of how long it sits on disk; a leftover directory is left to the OS's own
+    temp housekeeping. Net simpler than round 1's version, not more complex.
+  - **MINOR - a TOCTOU gap**: the WAV is hashed once near the top of the run but re-read fresh
+    for each transition's actual slice later - a file replaced on disk in between would be
+    verified against different bytes than were sliced. Deliberately NOT fixed: closing it for
+    real means either re-hashing a whole WAV before every transition (real, avoidable cost for a
+    long mix) or snapshotting it (real disk/time cost) against a threat model - another process
+    replacing a file mid-run on Sam's own machine with no adversary - this project doesn't treat
+    as live anywhere else; a corrupted run from this is also not silent (an audibly/visibly
+    broken clip, not a quiet wrong verdict). Documented explicitly in `_verify_bounce_manifest`'s
+    docstring as an accepted, reasoned gap rather than silently dropped - same convention as the
+    round-1 duration-check disposition.
+  Fixed both MAJORs, documented the MINOR, added 5 more tests (36 total in the extract-excerpts
+  file), proved-the-test on the `--require-bounce-manifests` refusal path, and re-verified
+  against the real project a FOURTH time: a no-manifest run correctly prints the new
+  "NOT FULLY AUDITABLE" line naming all three sides; recording real manifests for all three
+  (via `record_bounce_manifest.py`, for real, against the real ALS/report/WAV files) then running
+  with `--require-bounce-manifests` set completes silently with `binding: {"A": "strong", "B":
+  "strong", "C": "strong"}` in the real results file; removing one real manifest and re-running
+  strict correctly refuses naming that side. Full suite 708/6/0 -> 710/6/0.
+  Files changed: `Source/extract_transition_excerpts.py`, `Tests/test_extract_transition_excerpts.py`.
+
+  **CODEX ROUND 4 (`-Effort high`, real staged files): CONVERGED - 0 FATAL, 0 MAJOR - 2026-09-14.**
+  First round with no severe finding at all. "The binding-tier result record, final weak-binding
+  summary, and opt-in strict mode close round 3's auditability MAJOR. Keeping strict mode opt-in
+  is reasonable... Removing automatic temp cleanup is also the right safety trade-off... Round-4
+  verdict: converged for the A4 excerpt-extraction review." One MINOR, explicitly flagged as
+  "non-blocking hardening," not required for convergence: the round-3 TOCTOU disposition claimed
+  a mid-run WAV swap would be "audibly/visibly broken" and therefore self-evident - correctly
+  called out as overstated (a plausible-but-provenance-invalid substitute would not necessarily
+  sound broken). Fixed anyway, as a bonus hardening pass rather than a 5th review round for
+  something Codex itself said didn't gate closing the item: new `_wav_identity`
+  (mtime, size - cheap, non-cryptographic) captured at manifest-verification time for every
+  strongly-bound side, rechecked immediately before each transition's actual slice
+  (`_check_wav_identity_unchanged`), aborting that transition if the file changed in between.
+  Narrows the window from "whole run" to "between verification and this one slice," at
+  negligible cost, without repeated full-file hashing. 3 new tests, proved-the-test (disabled the
+  comparison, confirmed the replaced-file test failed to raise, restored), full real-project
+  re-verification with `--require-bounce-manifests` set against all three real sides (binding
+  `{"A": "strong", "B": "strong", "C": "strong"}`, 8/8 transitions sealed). Full suite
+  710/6/0 -> 713/6/0.
+  **A4 IS NOW FULLY DONE: both halves fixed, tested, verified against the real project, and
+  independently reviewed to convergence.** Reconciliation half: 1 Codex round, "NO MATERIAL
+  OBJECTIONS." Excerpt-extraction half: 4 Codex rounds (1 FATAL+3 MAJOR+2 MINOR round 1 -> 1
+  FATAL+3 MAJOR+1 MINOR round 2 -> 0 FATAL+2 MAJOR+1 MINOR round 3 -> 0 FATAL+0 MAJOR+1 MINOR
+  round 4, converged) - five real, substantive findings that survived to reach Claude's own
+  verification bar were caught ONLY because independent review kept running past the point each
+  round's fix "looked done"; worth keeping as the concrete case for why this project's
+  Codex-review-every-substantial-fix rule exists.
+  Owner: Claude. Author: Claude. Peer review: SOUND - Codex, reconciliation half (1 round,
+  `-Effort high`, real staged files, "NO MATERIAL OBJECTIONS"); excerpt-extraction half SOUND -
+  Codex, 4 rounds, `-Effort high`, real staged files throughout, round 4 "converged," 0 FATAL/
+  MAJOR outstanding. Same lightweight-convention caveat as A1/A3
+  applies (see the validator note under THE COUNT) - no
+  formal `Staging/` receipt, `validate_burn_list.py --strict` checks 6/11 will show the same two
+  expected FAILs on this line.
 
 - [ ] **Run the actual sealed blind listen and get Sam's verdict** (A5) - blocked on A1-A4
   above. Pre-registered kill criteria already exist (Plan V2): B/C must win >=5 of 7 differing
@@ -870,4 +1071,83 @@ and reviewed; excerpt-extraction half (Astra's other A4 finding) still open, so 
 top-level checkbox stays unchecked. rev (uncommitted, follows the prior folds above) -> (this
 write).
 
-## THE COUNT: 23 open, 3 done (last update 2026-09-14 13:16 [Claude]: A1+A2+A3 DONE; A4's reconciliation half fixed+verified+reviewed (SOUND, Codex), excerpt-extraction half still open - 23 open, 3 done)
+Last item update: 2026-09-14 13:45 [Claude] - progress: A4's excerpt-extraction half built. New
+`Source/extract_transition_excerpts.py` cuts per-transition windows (overlap zone + 8 bars
+context, reusing transition_review_viz's own convention) from each side's own
+ARRANGEMENT_REPORT + ALS tempo, then hands them to the existing seal_listening_test.py as a
+subprocess to randomise/blind/twin - the missing half of Plan V2's "whole-mix pair plus
+randomized per-transition excerpts" requirement. 15 new tests, prove-the-test done on the
+window-geometry formula, and run for real against all 8 transitions of the actual Tech House
+Heldout A/B/C renders (T01's duration matched hand-computed expectation to sample-rounding
+precision; side C's differing overlap geometry showed up correctly as a longer excerpt; no
+silence/corruption on spot-checked audio). Both mix.md docs updated (frozen sync list,
+content-verified identical). Suite 666/6/0 -> 681/6/0. Item not yet peer-reviewed on this half -
+stays unchecked; rev (uncommitted, follows the prior folds above) -> (this write).
+
+Last item update: 2026-09-14 14:05 [Claude] - reviewed + fixed: A4's excerpt-extraction half,
+round 1. Codex, 1 round, `-Effort high`, real staged files - found 1 FATAL (sealed clips were
+NOT actually blind: per-side duration differences, already visible in the prior verification
+note as C's 147.69s vs A/B's 103.38s, are themselves an audible/visible tell regardless of
+randomised filenames - nobody had connected that number to a blind-breaking leak until Codex
+did) + 3 MAJOR (no cross-side transition-identity check beyond matching pair_index sets; no
+binding between a manually-supplied --side WAV and its side's own ALS/report; raw side-labelled
+clips could survive an abnormal stop) + 2 MINOR (unvalidated --context-bars; silent duplicate
+pair_index overwrite). All six adopted and fixed - new duration-equalization (extends shorter
+sides with more real audio, never silence, never crops the content being judged), a cross-side
+identity check, a duration-sanity mitigation, opaque temp filenames + a subprocess timeout +
+stale-tempdir cleanup, and the two validation gaps closed. 13 new tests (15 -> 28), proved-the-
+test on the FATAL fix (skipped equalization, confirmed the exact real-world failure numbers,
+restored), and re-ran against the real project: all 8 transitions still seal cleanly, and every
+transition's 4 clips now measure IDENTICAL duration (0.000s spread, all 8 confirmed). Suite
+681/6/0 -> 694/6/0. Round 2 (with seal_listening_test.py and render_check.py also staged, as
+Codex asked for) not yet run - item stays unchecked; rev (uncommitted, follows the prior folds
+above) -> (this write).
+
+Last item update: 2026-09-14 14:45 [Claude] - reviewed + fixed: A4's excerpt-extraction half,
+round 2 (this time with seal_listening_test.py and render_check.py also staged, as round 1
+asked for). Codex found a second FATAL - this one in seal_listening_test.py itself
+(pre-existing, not introduced this session): HOW TO LISTEN.txt named the twin's side outright,
+letting a listener infer it the moment they spotted the matching pair. Plus 3 MAJOR (round 1's
+own stale-temp cleanup was a live regression - no age check, could delete a concurrent
+invocation's active clips; the duration-sanity mitigation doesn't catch a realistic same-length
+A/B swap; reusing an out-dir across differently-sized runs left a stale unmapped clip) + 1 MINOR
+(differing WAV format across sides survives as a technical tell). All five fixed: the leak text
+rewritten, the cleanup now age-gated (1hr), a new record_bounce_manifest.py gives a real
+cryptographic bounce-to-side binding (verified automatically, weak fallback now visibly warns),
+stale Listen/_sealed cleared before every reseal, format-consistency enforced. 24 new tests
+across 3 files, proved-the-test on both the manifest-swap detection and the concurrency
+regression, re-ran against the real project a third time (including a real
+record_bounce_manifest.py run against side A, confirmed picked up silently while B/C warned).
+Suite 694/6/0 -> 708/6/0. Two straight rounds have each found a FATAL neither Claude nor the
+prior round caught - round 3 is needed before this can be treated as done; item stays unchecked;
+rev (uncommitted, follows the prior folds above) -> (this write).
+
+Last item update: 2026-09-14 15:05 [Claude] - reviewed + fixed: A4's excerpt-extraction half,
+round 3. FIRST ROUND WITH ZERO FATAL. 2 MAJOR (manifest binding stayed optional with only a
+printed warning, so a completed run's own output carried no trace of which sides fell back to
+the weaker check - fixed with a returned/recorded binding-strength dict, a "NOT FULLY AUDITABLE"
+summary line, and an opt-in --require-bounce-manifests strict flag; the round-1/2 stale-temp
+cleanup was STILL not concurrency-safe under an mtime-only age check - fixed by adopting Codex's
+own "safest" option and removing automatic cross-run cleanup entirely, net simpler than what it
+replaced) + 1 MINOR (a TOCTOU gap between verifying and later re-reading a WAV - deliberately
+documented as an accepted, reasoned gap rather than fixed, given the threat model doesn't apply
+on Sam's own machine with no adversary and a corrupted run from it is not silent). 5 more tests,
+proved-the-test on the strict-flag refusal, re-verified against the real project a fourth time
+including real record_bounce_manifest.py runs for all three sides with --require-bounce-manifests
+set (silent success, binding all "strong") and a real refusal when one manifest was removed.
+Suite 708/6/0 -> 710/6/0. Round 4 launched. rev (uncommitted, follows the prior folds above)
+-> (this write).
+
+Last item update: 2026-09-14 15:20 [Claude] - DONE: A4. Codex round 4 converged - 0 FATAL, 0
+MAJOR, one MINOR explicitly flagged non-blocking ("hardening", not required to close the item),
+fixed anyway as a bonus pass (WAV-identity recheck immediately before each slice, narrowing the
+TOCTOU window at negligible cost - 3 new tests, proved-the-test, re-verified against the real
+project with --require-bounce-manifests set on all three real sides). Both halves of A4 - the
+MixPlan reconciliation data-gap fix and the per-transition excerpt-extraction script - are now
+fixed, tested, verified against the real Tech House Heldout project, and independently reviewed
+to convergence (reconciliation: 1 Codex round; excerpt-extraction: 4 Codex rounds, the first two
+of which each found a genuine FATAL). Suite 710/6/0 -> 713/6/0. A5 (the actual sealed blind
+listen) is now unblocked on the tooling side - what remains is Sam's own listening session.
+rev (uncommitted, follows the prior folds above) -> (this write).
+
+## THE COUNT: 22 open, 4 done (last update 2026-09-14 15:20 [Claude]: A1+A2+A3+A4 DONE - A4 closed after Codex round 4 converged (0 FATAL/MAJOR) on the excerpt-extraction half; both A4 halves now fixed+verified+reviewed - 22 open, 4 done)
