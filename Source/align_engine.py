@@ -1099,7 +1099,7 @@ def _align_pair_landmark_aware(o: Track, i: Track, policy=None) -> Alignment:
     if chosen is None:
         raise ValueError(
             f"No paired section/dropout alignment for '{o.name}' -> '{i.name}' "
-            f"inside the {PHRASE_GRID}-{MAX_OVERLAP_BARS} bar window"
+            f"inside the {PHRASE_GRID}-{beats_to_bars(policy.max_overlap_beats)} bar window"
         )
 
     # Two return shapes arrive here:
@@ -1198,6 +1198,15 @@ def _search_matched_tail_head(o, i, outgoing, incoming, window_start,
     Returns a candidate tuple in `_search_anchors`' shape, or None to fall through to
     the existing search.
     """
+    # Burn list c1 (2026-09-14): overlap admissibility used to gate on a
+    # MODULE-LEVEL constant frozen from INTERIM_V1 at import time,
+    # regardless of which policy was actually threaded through this call -
+    # a policy with a genuinely different max_overlap_beats would have this
+    # check silently ignore it. Read from the live `policy` parameter
+    # instead. Numerically unchanged for every policy that exists today
+    # (INTERIM_V1 and SAM_V1 currently share the same max_overlap_beats).
+    max_overlap_bars = beats_to_bars(policy.max_overlap_beats)
+
     out_pt = int(round(o.n_bars - PHRASE_BACKSTEP_BARS))
     in_pt = int(PHRASE_BACKSTEP_BARS)
     if out_pt < window_start or out_pt <= 0 or in_pt <= 0:
@@ -1205,7 +1214,7 @@ def _search_matched_tail_head(o, i, outgoing, incoming, window_start,
 
     arr_offset = out_pt - in_pt
     overlap = o.n_bars - arr_offset
-    if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+    if not PHRASE_GRID <= overlap <= max_overlap_bars:
         return None
     progress = in_pt / overlap if overlap else 1.0
     if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
@@ -1219,7 +1228,7 @@ def _search_matched_tail_head(o, i, outgoing, incoming, window_start,
         return None
     arr_offset = out_anchor - in_pt
     overlap = o.n_bars - arr_offset
-    if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+    if not PHRASE_GRID <= overlap <= max_overlap_bars:
         return None
     progress = in_pt / overlap if overlap else 1.0
     if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
@@ -1295,6 +1304,8 @@ def _search_tail_anchor_rescue(o, i, outgoing, incoming, window_start,
     trailing booleans (out_is_real_cue, in_is_real_cue) so the caller can label
     the Alignment honestly without re-deriving the provenance.
     """
+    max_overlap_bars = beats_to_bars(policy.max_overlap_beats)  # burn list C5
+
     out_pt_raw = int(round(o.n_bars - PHRASE_BACKSTEP_BARS))
     if out_pt_raw < window_start or out_pt_raw <= 0:
         return None
@@ -1317,7 +1328,7 @@ def _search_tail_anchor_rescue(o, i, outgoing, incoming, window_start,
 
     arr_offset = out_anchor - in_anchor
     overlap = o.n_bars - arr_offset
-    if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+    if not PHRASE_GRID <= overlap <= max_overlap_bars:
         return None
     progress = in_anchor / overlap if overlap else 1.0
     if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
@@ -1378,6 +1389,7 @@ def _search_anchors(anchor_bars, o, i, outgoing, incoming, window_start,
     anchor's candidates and takes the best rank, which is only appropriate for
     the rescue pass where anchor order carries no musical meaning.
     """
+    max_overlap_bars = beats_to_bars(policy.max_overlap_beats)  # burn list C5
     pooled: list = []
     for incoming_anchor in anchor_bars:
         candidates = []
@@ -1386,7 +1398,7 @@ def _search_anchors(anchor_bars, o, i, outgoing, incoming, window_start,
                 continue
             arr_offset = outgoing_anchor - incoming_anchor
             overlap = o.n_bars - arr_offset
-            if not PHRASE_GRID <= overlap <= MAX_OVERLAP_BARS:
+            if not PHRASE_GRID <= overlap <= max_overlap_bars:
                 continue
             progress = incoming_anchor / overlap if overlap else 1.0
             if not MIN_SWAP_PROGRESS <= progress <= MAX_SWAP_PROGRESS:
@@ -1821,12 +1833,19 @@ def pick_cue_bounded_drum_loop(
     gap_bars: int,
     required_boundary_bars: int | None = None,
     insert_bar: float | None = None,
+    policy=None,
 ):
     """Pick a clean loop whose complete repeats land exactly on a named cue.
 
     Source chunks terminate at a clean-window boundary, so the loop itself is
     musically cut; its length must divide the target gap within the repeat cap.
-    """
+
+    `policy` defaults to INTERIM_V1 (burn list C5, 2026-09-14) - previously
+    this read a module-level MAX_LOOP_REPEATS constant frozen at import
+    time regardless of caller; a caller not passing `policy` (this
+    function's own direct tests, for instance) gets the exact same number
+    as before."""
+    policy = policy or _DEFAULT_POLICY
     if gap_bars < 2:
         return None
 
@@ -1838,7 +1857,7 @@ def pick_cue_bounded_drum_loop(
     for length in (8, 4, 7, 6, 5, 3, 2, 1):
         repeats = gap_bars // length
         remainder = gap_bars % length
-        if repeats < 1 or repeats > MAX_LOOP_REPEATS:
+        if repeats < 1 or repeats > policy.max_loop_repeats:
             continue
         if required_boundary_bars:
             if required_boundary_bars % length != 0 or remainder > 1:
@@ -2019,21 +2038,30 @@ def plan_fill_or_cut(o, i, al, policy=None):
          section marker after the outgoing ends.
       4. BREAK-SKIP — mix choice: drop the incoming's pre-drop break if it would mix
          break-into-break (soft; see _resolve_break_to_break)."""
+    # Burn list c1 (2026-09-14): overlap_ceiling/loop_budget used to be
+    # computed from MODULE-LEVEL constants frozen from INTERIM_V1 at import
+    # time, regardless of which `policy` was actually passed in here - a
+    # policy with different overlap/loop-extension caps would silently have
+    # this function ignore them. `policy` is defaulted FIRST now (moved up
+    # from below) so both values genuinely read the live policy. Numerically
+    # unchanged for every policy that exists today (INTERIM_V1 and SAM_V1
+    # currently share max_overlap_beats/max_landmark_overlap_beats/
+    # max_loop_extension_beats/max_loop_repeats).
+    policy = policy or _DEFAULT_POLICY
     arr = al.arr_offset_bars
     specs = []
     landmark_mode = al.alignment_policy in LANDMARK_POLICIES
-    overlap_ceiling = (
-        MAX_LANDMARK_OVERLAP_BARS if landmark_mode else MAX_OVERLAP_BARS
+    overlap_ceiling = beats_to_bars(
+        policy.max_landmark_overlap_beats if landmark_mode
+        else policy.max_overlap_beats
     )
     loop_budget = min(
-        MAX_LOOP_EXTENSION_BARS,
+        beats_to_bars(policy.max_loop_extension_beats),
         max(0.0, overlap_ceiling - max(0.0, al.overlap_bars)),
     )
     first_drop_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
     intro_end = (i.sections[0]["end_bar"]
                  if i.sections and i.sections[0]["label"] == "intro" else 0.0)
-
-    policy = policy or _DEFAULT_POLICY
     intro_loop = False
 
     # (1) INCOMING-INTRO LOOP — enter at the outgoing's last drop; loop clean drums back.
@@ -2091,7 +2119,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
                                      if CUE_CONFIG.incoming_intro_loop else 0.0)
                 reps = min(
                     requested_reps,
-                    MAX_LOOP_REPEATS,
+                    policy.max_loop_repeats,
                     int(loop_budget // clen),
                 )
                 used = reps * clen
@@ -2178,6 +2206,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
                 int(candidate_gap),
                 required_boundary_bars=required_boundary_bars or None,
                 insert_bar=float(outro["start_bar"]),
+                policy=policy,
             )
             if candidate_chunk is not None:
                 chunk_length = candidate_chunk[1] - candidate_chunk[0]
@@ -2205,7 +2234,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
                 f"cue '{candidate_name}' would end {shortfall:g} bars before locked "
                 f"swap ({repeats} repeats at {chunk_length:g} bars; "
                 f"{required_repeats} required), and no later named cue fits the "
-                f"{MAX_LOOP_REPEATS}-repeat/{loop_budget:g}-bar safety limits"
+                f"{policy.max_loop_repeats}-repeat/{loop_budget:g}-bar safety limits"
             )
     if nxt is not None and outro is not None:
         gap = nxt - o.n_bars                                   # exact bars to the marker
@@ -2252,7 +2281,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
                     partial = 0.0
                 requested_reps = reps
                 requested_partial = partial
-                reps = min(reps, MAX_LOOP_REPEATS, int(loop_budget // clen))
+                reps = min(reps, policy.max_loop_repeats, int(loop_budget // clen))
                 used = reps * clen
                 remaining = max(0.0, loop_budget - used)
                 partial = min(requested_partial, remaining)
