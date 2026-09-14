@@ -42,6 +42,7 @@ sys.path.insert(0, str(ROOT / "Source"))
 import align_engine as AE  # noqa: E402
 from apply_automation import (  # noqa: E402
     TrackInfo,
+    TransitionStyle,
     _normalise,
     plan_transitions,
 )
@@ -268,6 +269,88 @@ def test_two_stage_bass_refuses_a_kill_before_the_partial_cut():
         "before the partial cut - it would sort the automation out of "
         "chronological order"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Style selection (burn list C2, 2026-09-14): style used to come from        #
+# overlap length ALONE - now consults the same outgoing_has_post_swap_content #
+# signal the margin rule above already uses, with the same landmark-policy-  #
+# only scoping (legacy path stays byte-identical).                          #
+# --------------------------------------------------------------------------- #
+
+def _short_overlap_pair(overlap_bars=17.0):
+    """Overlap under the 24-bar quick-swap line - the actual Freejak->HARTY
+    shape (17 bars) that exposed C2: the outgoing has real content left to
+    fade across, but overlap length alone used to force QUICK_SWAP."""
+    overlap_beats = overlap_bars * 4
+    out_t = TrackInfo("OutT", [_sec("drop_2", "drop", 300.0, 400.0),
+                               _sec("outro_1", "outro", 400.0, 400.0 + overlap_beats)],
+                      0.0, 400.0 + overlap_beats)
+    in_t = TrackInfo("InT", [], 400.0, 1200.0)
+    return out_t, in_t
+
+
+def test_short_overlap_with_real_content_now_gets_a_standard_fade():
+    """The actual fix: a short overlap with real content left to fade
+    across no longer gets crushed to an instant cut."""
+    out_t, in_t = _short_overlap_pair(17.0)
+    swaps = _swaps_for(out_t, in_t, 450.0, content=True)
+    plans = plan_transitions([out_t, in_t], swaps)
+    assert plans[0].style == TransitionStyle.STANDARD
+
+
+def test_short_overlap_with_no_content_still_gets_quick_swap():
+    """No real content left past the swap - an instant cut is still the
+    correct choice, not a compromise."""
+    out_t, in_t = _short_overlap_pair(17.0)
+    swaps = _swaps_for(out_t, in_t, 450.0, content=False)
+    plans = plan_transitions([out_t, in_t], swaps)
+    assert plans[0].style == TransitionStyle.QUICK_SWAP
+
+
+def test_short_overlap_legacy_policy_ignores_content_entirely():
+    """Same scoping discipline as the margin rule: the legacy/non-landmark
+    path has no outgoing_has_post_swap_content signal to consult and keeps
+    the exact original overlap-length-only rule, unaffected by any content
+    claim in the report."""
+    out_t, in_t = _short_overlap_pair(17.0)
+    swaps = {(_normalise(out_t.name), _normalise(in_t.name)): {
+        "swap_beats": 450.0,
+        "handoff_kind": "drop->outro",
+        "alignment_policy": "legacy_v1",
+        "outgoing_has_post_swap_content": True,  # must be ignored
+    }}
+    plans = plan_transitions([out_t, in_t], swaps)
+    assert plans[0].style == TransitionStyle.QUICK_SWAP
+
+
+def test_short_overlap_missing_content_field_defaults_to_standard():
+    """A report written before this field existed defaults content to True
+    (the same default the margin rule already uses for the identical
+    missing-field case) - so a short-overlap landmark-policy transition
+    with no field at all gets the gentler STANDARD fade, not QUICK_SWAP."""
+    out_t, in_t = _short_overlap_pair(17.0)
+    swaps = {(_normalise(out_t.name), _normalise(in_t.name)): {
+        "swap_beats": 450.0,
+        "handoff_kind": "paired/landmark:kick_dropout:start->drop",
+        "alignment_policy": "paired_landmarks_v2",
+        # outgoing_has_post_swap_content deliberately omitted
+    }}
+    plans = plan_transitions([out_t, in_t], swaps)
+    assert plans[0].style == TransitionStyle.STANDARD
+
+
+def test_long_overlap_still_gets_long_blend_regardless_of_content():
+    """Sanity check on the reordered if/elif: overlap > 36 bars must still
+    always win LONG_BLEND, whatever the content signal says. Swap held well
+    clear of the overlap's own end margin (unlike the 599.0 fixture used
+    elsewhere in this file) so this isolates style selection only, without
+    also exercising the margin-violation error path."""
+    out_t, in_t = _long_overlap_pair()
+    for content in (True, False):
+        swaps = _swaps_for(out_t, in_t, 550.0, content=content)
+        plans = plan_transitions([out_t, in_t], swaps)
+        assert plans[0].style == TransitionStyle.LONG_BLEND
 
 
 def test_two_stage_bass_still_activates_when_kill_is_after_swap():

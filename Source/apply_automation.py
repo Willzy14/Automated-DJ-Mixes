@@ -807,11 +807,28 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
             plan.low_sneak = True
 
         # ── Style selection ──────────────────────────────────────────
+        # Burn list C2 (2026-09-14): style used to come from overlap length
+        # ALONE - a short overlap always meant QUICK_SWAP (instant hard-cut
+        # on both bass and volume), regardless of whether the outgoing
+        # actually has real content to fade across. Same root cause, same
+        # signal, as the margin fix above - and the same real correction
+        # exposed it: Sam's Freejak->HARTY edit (2026-09-12) widened a
+        # 17-bar overlap and replaced its instant volume cut with a proper
+        # 16-bar fade, specifically because Freejak had plenty of real
+        # audio left to fade through. `outgoing_has_post_swap_content` is
+        # exactly that check, already computed above for the margin - now
+        # consulted here too, with the SAME landmark-policy-only scoping
+        # (Codex review, 2026-09-13) as the margin fix: the legacy/
+        # non-aligner path has no such signal to consult and keeps the
+        # exact original overlap-length-only rule, byte-identical to
+        # before. `outgoing_has_content` is only read when `aligner_chosen`
+        # is True, guarded by short-circuit evaluation below - it is never
+        # referenced (and never needs to be defined) on the legacy path.
         overlap_bars = overlap_len / 4
-        if overlap_bars < 24:
-            plan.style = TransitionStyle.QUICK_SWAP
-        elif overlap_bars > 36:
+        if overlap_bars > 36:
             plan.style = TransitionStyle.LONG_BLEND
+        elif overlap_bars < 24 and (not aligner_chosen or not outgoing_has_content):
+            plan.style = TransitionStyle.QUICK_SWAP
         else:
             plan.style = TransitionStyle.STANDARD
 
