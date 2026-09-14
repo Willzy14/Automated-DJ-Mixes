@@ -763,7 +763,7 @@ was written).
   Evidence: `Source/automated_dj_mixes/orchestrator.py:100-113` (Fable).
   Owner: Sam. Peer review: NONE - not yet reviewed.
 
-- [ ] **Whether to scope the deeper swap-first redesign (item "c") NOW, in parallel with the
+- [x] **Whether to scope the deeper swap-first redesign (item "c") NOW, in parallel with the
   blind listen, rather than waiting for it to fail first** (B3) - the redesign's own landing
   plan queued item (c) "only if a real case surfaces that (a) alone can't handle." Fable's
   reading, which this list agrees with: that case already surfaced BEFORE (a) was even built -
@@ -771,11 +771,50 @@ was written).
   reproduced by any of today's three comparison policies, because none of them touch swap
   placement at all (see C1/C2). Waiting for the listen to "fail" first may never happen, because
   the listen structurally cannot test this. Sam's call on sequencing, not a build decision.
-  Owner: Sam. Peer review: NONE - not yet reviewed.
+
+  **DECIDED, 2026-09-14: yes, scope now.** Investigated the real call path (Explore agent, cited
+  file:line throughout) before proposing a landing order - the swap point IS already chosen
+  before loop/cut geometry (temporally), but overlap/progress admissibility caps gate candidate
+  ADMISSION inside the SAME search loop as musical-merit scoring, before scoring ever runs -a
+  candidate that would need loop extension to become geometrically valid is discarded before
+  it's ever compared, never revisited. The primary search pass also isn't a full ranked search:
+  it takes the FIRST anchor (earliest drop) yielding any valid candidate; only the rescue pass
+  (fired when the primary finds nothing) ranks globally. **Real finding, unprompted:** burn list
+  C1 (below) and item (c) are the SAME decision point, not two jobs - `find_similar_pairs`
+  doesn't even READ the swap-delta fields when matching similarity, so building C1 standalone
+  would risk the wrong consumption interface. C1 folded into C7 below; its own line item is
+  superseded.
+
+  Landing order, smallest/safest first:
+  - **C5 - fix a real latent bug**: the overlap/loop-size limits gating candidate admissibility
+    were MODULE-LEVEL constants frozen from `INTERIM_V1` at import time, never actually reading
+    the `policy` parameter threaded through the call chain - invisible today only because
+    `SAM_V1` happens to share the same limits; any future policy with different caps would have
+    this silently ignore them. **BUILT + TESTED + VERIFIED, 2026-09-14** (see below).
+  - **C2 (folded in here as the first real signal-aware change)**: automation style stops
+    ignoring whether the outgoing has real content to fade across. **BUILT + TESTED + VERIFIED,
+    2026-09-14** (see below).
+  - **C6 - not yet built**: retire "first admissible anchor wins" for the primary search pass;
+    always rank globally, the way the rescue pass already does. Medium risk - could change real
+    outcomes, needs the 380-pair sweep re-run and a Codex review before landing.
+  - **C7 (was C1) - not yet built**: feed `pair_history.jsonl`'s actual swap-delta data into
+    candidate scoring, not just a notes string. Needs a defensible weighting scheme designed
+    first (e.g. how many similar corrections, in which direction, before nudging a score).
+  - **C8 - not yet scoped**: let a musically-better candidate win even if it needs a loop
+    extension to become geometrically valid, instead of discarding it before it's ever compared.
+    The deepest, highest-risk piece - deliberately left unscoped until C5/C6/C7 are proven.
+  Evidence: `Source/align_engine.py:1050,1174,1262,1372,2021,1831` (C5's six touched functions);
+  `Source/apply_automation.py:809-816` (C2); `Source/propose_arrangement.py:1008-1052` (C7/old
+  C1); `Documentation/Plans/swap-first-redesign/codex-review-brief.md:38-41` (item (c)'s
+  original one-sentence scope, the landing order above expands on it).
+  Owner: Sam (the sequencing decision itself); Claude (the resulting build work - C5/C2 built,
+  C6/C7/C8 to follow, Codex review planned before C6/C7 land). Peer review: n/a for the decision
+  itself, same as A5 - this is Sam's call, not a build (C5/C2's OWN peer review is tracked below,
+  separately from B3).
 
 ## C - The structural fix that actually reduces Sam's manual work (item "c" + the learning loop)
 
-- [ ] **`pair_history.jsonl` holds 16+ real Sam corrections and nothing reads it to make a
+- [-] **`pair_history.jsonl` holds 16+ real Sam corrections and nothing reads it to make a
   decision** (C1) - House 10 (9 entries) + this project's Heldout run (8 entries) + Fresh Mix V2
   are all logged with real deltas (7 of 9 on House 10 were `bass_swap_moved`, +/-28 to 64 beats).
   The only consumer, `find_similar_pairs`, feeds a notes string and a report field - annotation,
@@ -786,7 +825,14 @@ was written).
   Evidence: `Source/propose_arrangement.py:1008-1052,1239-1248` (Fable);
   `Source/propose_arrangement.py:1239`, `Source/align_engine.py:1945` (Astra, same finding
   independently).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+  **Status: SUPERSEDED, 2026-09-14** - not dropped, folded. Scoping B3's investigation found this
+  is the SAME decision point as item (c)'s candidate selection, not a separate standalone
+  consumer to build first: `find_similar_pairs` doesn't even read the swap-delta fields
+  (`claude_bass_swap_beat`/`sam_bass_swap_beat`/`bass_swap_delta_beats`) when matching
+  similarity, so a standalone consumption interface built now would very likely need rebuilding
+  once item (c)'s actual selection mechanism is designed. Tracked as landing-order item **C7**
+  under B3 above; this line stays for the trail, do not action separately from B3's breakdown.
+  Owner: Claude. Peer review: n/a - superseded, not built.
 
 - [ ] **Automation style (QUICK_SWAP/STANDARD/LONG_BLEND) is still chosen purely by overlap
   length, unchanged by today's margin fix** (C2) - confirmed directly
@@ -799,7 +845,58 @@ was written).
   `outgoing_has_post_swap_content` signal the margin check now uses.
   Evidence: `Source/apply_automation.py:809`, `:984` (Astra, verified by Claude);
   `.github/ai-activity-log.md` final entry (Astra).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **BUILT + TESTED + VERIFIED, 2026-09-14.** `apply_automation.py`'s style selection now
+  consults `outgoing_has_post_swap_content` with the SAME landmark-policy-only scoping the
+  margin fix already established - legacy/non-aligner path byte-identical, unchanged. 5 new
+  tests, proved-the-test on the core branch. **Honest real-data finding, not glossed over**: ran
+  the actual real corpus (all 8 transitions x 3 sides) through the new logic - exactly ONE
+  transition in the whole project has overlap under the 24-bar line (side A's T2, the Freejak->
+  HARTY case this fix was named for), and its `outgoing_has_post_swap_content` reads **False** -
+  Freejak's swap point sits exactly 1 bar from its own arranged end under `interim_v1`'s CURRENT
+  geometry, correctly read as genuinely cold-ending. **This fix produces ZERO behaviour change
+  on this project's real data today** - real confirmation, not a setback, that C2 alone cannot
+  fix the transition that motivated it; only moving the swap POINT (item c) can. C2 remains real
+  and correctly built for other/future transitions where a short overlap genuinely has more than
+  1 bar of remaining content.
+  Full suite 713/6/0 -> 718/6/0.
+  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed.
+
+- [ ] **`align_engine.py`'s overlap/loop-size admissibility caps were frozen module constants,
+  never actually reading the policy threaded through the call chain** (C5) - landing-order item
+  under B3 above. `MAX_OVERLAP_BARS`/`MAX_LANDMARK_OVERLAP_BARS`/`MAX_LOOP_REPEATS`/
+  `MAX_LOOP_EXTENSION_BARS` were computed once from `INTERIM_V1` at import time and never
+  reassigned; every candidate-admissibility gate that used them (`_align_pair_landmark_aware`,
+  `_search_matched_tail_head`, `_search_tail_anchor_rescue`, `_search_anchors`,
+  `plan_fill_or_cut`, `pick_cue_bounded_drum_loop`) ignored whichever `policy` object was
+  actually passed in. Invisible today only because `SAM_V1` happens to share every one of these
+  fields with `INTERIM_V1`; any future policy with genuinely different caps would have this
+  silently keep using `INTERIM_V1`'s numbers.
+
+  **BUILT + TESTED + VERIFIED, 2026-09-14.** All six functions now read the live `policy`
+  parameter (added where missing - `pick_cue_bounded_drum_loop` gained a `policy=None` parameter,
+  defaulting to `INTERIM_V1`, identical to every other function's own default handling in this
+  file). Deliberately scoped to the LANDMARK path only - `align_pair`'s own legacy/non-landmark
+  branch (used only when `USE_ALIGN_ENGINE`'s fallback fires) was left completely untouched,
+  matching this project's own hard-won "legacy path stays byte-identical, only the landmark path
+  gets new signal-awareness" convention (the exact same scoping the item-(a) margin fix and C2
+  above both use, for the same reason: the 380-pair verification corpus only covers the landmark
+  path). 6 new tests (`Tests/test_policy_threading.py`) prove the fix does something a frozen
+  constant never could - a custom policy with a tighter `max_overlap_beats` now genuinely REJECTS
+  a candidate the default policy accepts; a custom policy with `max_loop_repeats=1` now genuinely
+  REJECTS a loop needing 2 repeats. Proved-the-test on both (reverted each fix, confirmed the
+  exact predicted failure, restored). **Zero behaviour change for INTERIM_V1**, proven the
+  strongest way this project has for `align_engine.py`: the full 380-pair historical baseline
+  sweep (`Tests/test_alignment_baseline.py`) passes with ZERO changed decisions - not a synthetic
+  claim, a real corpus of real past transitions. (One purely cosmetic near-miss caught by the
+  baseline itself and fixed: an added `:g` format spec would have trimmed "48.0" to "48" in one
+  error message text; removed to keep the message byte-identical too, not just the underlying
+  number.)
+  Full suite 718/6/0 -> 724/6/0.
+  Files changed: `Source/align_engine.py`, `Tests/test_policy_threading.py` (new).
+  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed (this touches
+  `align_engine.py`, the core alignment engine every mix's transition-point selection runs
+  through - same review bar as A1-A4's changes to equally central modules).
 
 - [ ] **Production tempo-arc builds are blocked without MIK even though the certified BPM
   already exists** (C3) - `t.bpm`/`camelot`/`energy` are populated ONLY from the MIK database;
@@ -1026,7 +1123,11 @@ counterpart by definition, and dressing it up as "reviewed" by another brain wou
 what actually happened (Sam listened, Sam decided - that's the whole point of a blind test).
 `n/a` here is honest, not a gap to close. Same principle as the check 6/11 note above: don't
 fabricate a receipt to satisfy the checker; read past this one for any future item whose DONE
-state is a human judgment call rather than a build.
+state is a human judgment call rather than a build. **B3 (2026-09-14) is the same category**:
+its own DONE state is Sam's sequencing decision ("yes, scope now"), not a build - checked off
+the moment he said so, same as A5. The BUILD WORK B3's decision unlocked (C5, C2, and the rest
+of item (c)'s landing order) are tracked as their OWN separate items with their own real peer
+review requirements - B3 being `n/a` never exempts them.
 
 Last item update: 2026-09-14 10:55 [Claude] - progress: A3's hash/staleness half CLOSED - Codex
 round 3 (own AST read-access audit, not just re-reading the diff) returned "NO MATERIAL
@@ -1190,4 +1291,16 @@ never consulted pair_history.jsonl or used content-aware automation style, so "r
 at C1/C2 specifically, not at abandoning swap placement). Lane A is now fully closed.
 rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 21 open, 5 done (last update 2026-09-14 15:45 [Claude]: A1+A2+A3+A4+A5 DONE - Lane A (switch-on path) fully closed; A5's verdict is written up in Heldout Replay Result 02.md - 21 open, 5 done)
+Last item update: 2026-09-14 16:15 [Claude] - progress: B3 decided (Sam: "yes, scope B3 now") and
+scoped - investigated the real align_engine.py call path first (not guessed), found C1 and item
+(c) are the same decision point (folded C1 into landing-order item C7, superseded its own line),
+proposed a 5-step landing order (C5/C2 built now, C6/C7/C8 to follow with Codex review before
+the riskier ones land). Built + tested + proved-the-test on both C5 (align_engine.py's frozen
+policy-constant bug - 6 new tests, zero change on the real 380-pair historical baseline) and C2
+(automation style now content-aware - 5 new tests, but honestly found it produces ZERO change on
+this project's actual T2 case since interim_v1's current swap point leaves only 1 bar of real
+content there; the swap POINT itself, item c's job, is what T2 actually needs). Full suite
+718/6/0 -> 724/6/0 across both. Neither yet peer-reviewed; item (c)'s full 5-step scope written
+up under B3 above. rev (uncommitted, follows the prior folds above) -> (this write).
+
+## THE COUNT: 20 open, 6 done, 1 dropped (last update 2026-09-14 16:15 [Claude]: B3 decided+scoped (DONE - Sam's call); C5 and C2 built+tested+verified against real data, not yet reviewed; C1's own item superseded, folded into landing-order C7 - 20 open, 6 done, 1 dropped)
