@@ -92,17 +92,31 @@ every clip, every side:
 - **T7**: "the mix works, although the mix lasts over the break and it doesn't need
   to." An overlap-length tuning opportunity independent of which policy builds it.
 
+## Not a verdict on swap PLACEMENT itself
+
+The `sam_v1` this round tested is missing two fixes burn list section C already has
+queued: it never consults `pair_history.jsonl` (16+ real Sam corrections sitting
+unread - C1), and its automation style is still chosen purely by overlap length, not
+by what's actually playing underneath (C2 - the exact Freejak->HARTY-shaped bug Sam
+corrected by hand recently). T1's "messy" B clip and T6's outright loss are both
+plausibly explained by one or both of those gaps, not by the swap-placement idea
+itself being wrong. "Park or revise" for `sam_v1` should read as "revise, specifically
+by wiring in C1/C2 first," not as the underlying approach being disproven.
+
 ## Next
 
 1. **Don't re-run this held-out set on `sam_v1` alone hoping for a different read** -
    the kill fired on losses, not a marginal win count; the failure mode needs
    understanding before another blind round is worth the seed. T6 specifically: what
    does `sam_v1` do differently there that `interim_v1`'s simpler choice avoided?
-2. `sam_v1`+introloop's 4 real wins are worth keeping as a live thread, but the bar
+2. Wire in C1 (`pair_history.jsonl` actually informing a choice) and C2 (content-aware
+   automation style) before re-testing `sam_v1` - the most likely fix for what this
+   round actually found, not a fresh redesign.
+3. `sam_v1`+introloop's 4 real wins are worth keeping as a live thread, but the bar
    wasn't cleared - if revisited, it still needs the REGIME's second held-out mix
    before any promotion conversation, per the pre-registered protocol.
-3. T3's shared pre-drop glitch: pull isolated stems for HARTY / Jay de Lys and look
+4. T3's shared pre-drop glitch: pull isolated stems for HARTY / Jay de Lys and look
    at what's actually happening there - independent of this comparison entirely.
-4. T7's overlap: worth a look at whether the overlap-length policy can be tightened to
+5. T7's overlap: worth a look at whether the overlap-length policy can be tightened to
    not run past the break, on `interim_v1` as it stands today (this is a live-default
    observation, not a `sam_v1` one).

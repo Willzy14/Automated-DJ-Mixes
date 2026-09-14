@@ -655,14 +655,33 @@ was written).
   formal `Staging/` receipt, `validate_burn_list.py --strict` checks 6/11 will show the same two
   expected FAILs on this line.
 
-- [ ] **Run the actual sealed blind listen and get Sam's verdict** (A5) - blocked on A1-A4
+- [x] **Run the actual sealed blind listen and get Sam's verdict** (A5) - blocked on A1-A4
   above. Pre-registered kill criteria already exist (Plan V2): B/C must win >=5 of 7 differing
   transitions, lose <=1, no beat/grid errors, no audible clash, no masked protected dropout, no
   unjustified extended-lane authorisation. `interim_v1` stays production default regardless of
   this round's result - promotion needs Sam's listening verdict, same as every prior round.
   Read C1/C2 below before treating any result here as a verdict on swap PLACEMENT - it isn't one
   this round.
-  Owner: Sam (the listen itself). Peer review: n/a - this is Sam's verdict, not a build.
+
+  **DONE, 2026-09-14.** Sealed via `seal_listening_test.py` (whole-mix, seed 20260914) and
+  `extract_transition_excerpts.py` (all 8 per-transition excerpts, `--require-bounce-manifests`
+  set - every side strongly bound). Sam listened blind, twin control confirmed on all 8
+  transitions (the sharpest case: T6, where Sam correctly identified the twin while listening
+  and it still won). Verdict, tracked separately per policy since B and C are different things:
+  `sam_v1` (B) hits an explicit kill condition (2 losses of 8, exceeding the "loses <=1" limit).
+  `sam_v1`+introloop (C) does not trigger the hard kill (1 loss, at the boundary) but falls short
+  of the win bar (4/8, not ~6/8) - validated, not promoted, same outcome class as Result 01.
+  `interim_v1` stays production default. Per-transition table, the twin-control evidence, and the
+  C1/C2 caveat (this round's `sam_v1` never consulted `pair_history.jsonl` or content-aware
+  automation style - "park or revise" means revise via C1/C2, not that swap placement itself is
+  disproven) all written up in
+  `Documentation/Mix Patterns Library/Heldout Replay Result 02.md`.
+  Evidence: `Documentation/Mix Patterns Library/Heldout Replay Result 02.md`;
+  `Test Project/10.09.26 Tech House Heldout/Output/AB/Blind Test/_sealed/MAPPING.json`;
+  `Test Project/10.09.26 Tech House Heldout/Output/AB/Blind Test/Transitions/T01`-`T08`
+  (each `_sealed/MAPPING.json`).
+  Owner: Sam (the listen itself). Peer review: n/a - this is Sam's verdict, not a build (see the
+  validator note under THE COUNT).
 
 - [ ] **Every AB-comparison ALS bakes in a machine-specific absolute path AND a relative path one
   folder-level too shallow, so opening one on a different machine reliably shows offline samples**
@@ -999,6 +1018,16 @@ one it is not), which is exactly what checks 6/11 exist to catch elsewhere. Futu
 this list will show the same two expected FAILs unless the project later adopts the full
 apparatus - read past them, don't chase them to zero.
 
+**Validator note, addendum (2026-09-14, A5's DONE):** strict check 2d will also FAIL on A5's
+`Peer review: n/a`. A5 is Sam's own listening verdict, not a code/build artifact - the skill's
+"independent SOUND verdict from a different brain" model assumes every DONE item is Claude/Codex/
+MiniMax/Kimi output another brain can review; a human's subjective preference call has no such
+counterpart by definition, and dressing it up as "reviewed" by another brain would misrepresent
+what actually happened (Sam listened, Sam decided - that's the whole point of a blind test).
+`n/a` here is honest, not a gap to close. Same principle as the check 6/11 note above: don't
+fabricate a receipt to satisfy the checker; read past this one for any future item whose DONE
+state is a human judgment call rather than a build.
+
 Last item update: 2026-09-14 10:55 [Claude] - progress: A3's hash/staleness half CLOSED - Codex
 round 3 (own AST read-access audit, not just re-reading the diff) returned "NO MATERIAL
 OBJECTIONS... A3 is closed"; one MINOR adopted (json.loads(bytes) accepted some UTF-16/32 input
@@ -1150,4 +1179,15 @@ of which each found a genuine FATAL). Suite 710/6/0 -> 713/6/0. A5 (the actual s
 listen) is now unblocked on the tooling side - what remains is Sam's own listening session.
 rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 22 open, 4 done (last update 2026-09-14 15:20 [Claude]: A1+A2+A3+A4 DONE - A4 closed after Codex round 4 converged (0 FATAL/MAJOR) on the excerpt-extraction half; both A4 halves now fixed+verified+reviewed - 22 open, 4 done)
+Last item update: 2026-09-14 15:45 [Claude] - DONE: A5. Sam listened blind against the real
+sealed test (whole-mix + all 8 per-transition excerpts, full manifest binding). Twin control
+confirmed on every transition - T6 the sharpest case, twin correctly identified live and it
+still won. Verdict, per policy: `sam_v1` hits an explicit kill condition (2 losses of 8, over
+the 1-loss limit) - park or revise. `sam_v1`+introloop doesn't trigger the hard kill but falls
+short of the win bar (4/8 not ~6/8) - validated, not promoted. `interim_v1` stays default.
+Written up in `Heldout Replay Result 02.md`, including the C1/C2 caveat (this `sam_v1` build
+never consulted pair_history.jsonl or used content-aware automation style, so "revise" points
+at C1/C2 specifically, not at abandoning swap placement). Lane A is now fully closed.
+rev (uncommitted, follows the prior folds above) -> (this write).
+
+## THE COUNT: 21 open, 5 done (last update 2026-09-14 15:45 [Claude]: A1+A2+A3+A4+A5 DONE - Lane A (switch-on path) fully closed; A5's verdict is written up in Heldout Replay Result 02.md - 21 open, 5 done)
