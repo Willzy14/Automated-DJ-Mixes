@@ -816,6 +816,65 @@ was written).
   - **C8 - not yet scoped**: let a musically-better candidate win even if it needs a loop
     extension to become geometrically valid, instead of discarding it before it's ever compared.
     The deepest, highest-risk piece - deliberately left unscoped until C5/C6/C7 are proven.
+
+  **CODEX PLAN REVIEW, ROUND 1, 2026-09-14: "REVISE THE PLAN BEFORE BUILDING C6."** Run in a real
+  isolated git worktree (`.claude/worktrees/codex-c6c7c8-review`, `-AllowRepoRoot` - confirmed
+  clean of tracked secrets first), full read access, `-Effort high`. NOT a rubber stamp - 3 FATAL
+  + 4 MAJOR + 1 MINOR, all real, all code-grounded:
+  - **FATAL - C6's own proposed verification order was backwards.** Plan said refresh the 380-pair
+    baseline THEN attribute changes; the test's own convention is inspect-first, refresh only
+    after - refreshing first destroys the evidence needed to review.
+  - **FATAL - "rank everything globally" was left unspecified as an actual rule.** The current
+    rank tuple's own tiebreak already ends on `overlap` (favours the later/wider candidate on
+    ties) - simply pooling and taking max-rank risks reproducing the exact gaming the original
+    earliest-wins design defended against, not fixing it. Needs an explicit rule (e.g. a later
+    anchor only wins if it clears a real quality margin over the earlier one), with fixtures
+    pinning both directions.
+  - **FATAL - the pair_history corpus is not 34 clean, independent observations.** Real count:
+    25 unique (project, pair_index) observations (Black Book pairs 1-9 logged twice under
+    different sources); some directly CONFLICT (Black Book T3 is `corrected` in one record,
+    `correct` in another); schema is inconsistent (a move delta is sometimes a field, sometimes
+    only inside a `corrections` string, often absent). Real non-zero-move count: 10, not "7-9" -
+    7 earlier, 3 later. C7 needs a canonicalised, deduplicated, revision-aware record format
+    before it can influence a real decision.
+  - **MAJOR - C7 has no integration contract today.** `find_similar_pairs` runs AFTER
+    `compute_aligned_positions` has already called `align_pair` and locked geometry - it returns
+    records, not scoring features, and nothing threads it into the search. "Put it inside
+    `_search_anchors`" needs a new interface built first, not a small additive term. Recommended:
+    start C7 in SHADOW MODE - report a proposed preference + confidence, never alter selection,
+    evaluated leave-one-PROJECT-out (transitions within one mix are correlated, not independent
+    samples).
+  - **MAJOR - C7 must not be allowed to override admissibility while C8 is deferred.** T2's real
+    correction changed BOTH swap point and overlap - a C7 override would secretly implement part
+    of C8 without any of C8's feasibility/quality checks. C7 stays nudge-among-feasible-
+    candidates only, and shadow-only first per the finding above.
+  - **MAJOR - C8's own scope was materially wrong.** Existing loop mechanisms only EXTEND
+    material - they cannot rescue a candidate already OVER the max overlap, only one below the
+    minimum. "Feasibility" also can't be read off the numeric loop budget alone -
+    `plan_fill_or_cut` can reject for clean-loop availability, repeat limits, named-cue
+    reachability, or locked-swap constraints the budget number never sees. C8 needs an atomic
+    candidate object (alignment + a real dry-run fill/cut plan + effective geometry + extension
+    cost) - selecting alignment first and hoping planning succeeds is today's ordering problem,
+    one layer down.
+  - **MAJOR - the proposed C6 verification doesn't cover the actual trigger case.** The 380-pair
+    baseline is a different corpus (14.08.26) than T2 (Tech House Heldout) - real regression
+    coverage, not proof the redesign fixes the transition that motivated it. Also found live: the
+    review worktree is MISSING the baseline's external stem-analysis fixtures entirely, so that
+    test SKIPS cleanly rather than running - it cannot be the sole gate in every environment.
+    Needs its own small, COMMITTED (not gitignored-external-data-dependent) T2-derived fixture
+    pinning the real alternatives, selected anchor, final overlap, and automation style.
+  - **MINOR - one current-code claim in the plan was wrong.** `_search_matched_tail_head` is not
+    unconditionally tried first - it's gated behind `CUE_CONFIG.matched_tail_head_swap`, which
+    defaults `False`, so the default landmark path never reaches it at all.
+  Codex's own recommended order: (1) specify + test C6's anti-gaming rule, then build C6; (2)
+  canonicalise pair_history, C7 shadow-reporting only; (3) scope C8 as a joint feasible-candidate/
+  loop-planning redesign; (4) promote C7 from shadow to a real nudge only after held-out evidence
+  - geometry override stays C8's job, never C7's.
+  **Not yet actioned** - Sam redirected to B1 (turning on the four disabled flags) before the plan
+  revision was written up. C6/C7/C8 stay exactly as Codex left them: real, substantial findings,
+  plan not yet revised, nothing built. Full review:
+  `.claude/worktrees/codex-c6c7c8-review/Documentation/Plans/swap-first-redesign/c6-c7-c8-plan.md`
+  (the reviewed plan) - revise this file against the 8 findings above before the next round.
   Evidence: `Source/align_engine.py:1050,1174,1262,1372,2021,1831` (C5's six touched functions);
   `Source/apply_automation.py:809-816` (C2); `Source/propose_arrangement.py:1008-1052` (C7/old
   C1); `Documentation/Plans/swap-first-redesign/codex-review-brief.md:38-41` (item (c)'s
