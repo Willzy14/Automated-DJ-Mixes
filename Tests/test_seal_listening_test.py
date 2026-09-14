@@ -157,6 +157,106 @@ def test_metadata_does_not_survive_the_reseal(tmp_path):
             "the reseal is not actually blind")
 
 
+def test_how_to_listen_does_not_name_the_twins_side(tmp_path):
+    """Codex review, 2026-09-14, FATAL-1: the instructions used to say e.g.
+    "the 'A' side, duplicated" - naming which side was the twin let a
+    listener infer that side's identity the moment they spotted the matching
+    pair, without ever opening the sealed mapping. Pins that the twin's own
+    label string no longer appears in the instructions."""
+    a = tmp_path / "A.wav"
+    b = tmp_path / "B.wav"
+    _sine_wav(a, 220.0)
+    _sine_wav(b, 330.0)
+
+    out_dir = tmp_path / "sealed"
+    argv = [
+        "seal_listening_test.py",
+        "--side", f"A={a}", "--side", f"B={b}",
+        "--twin-of", "A", "--out-dir", str(out_dir), "--seed", "11",
+    ]
+    old_argv = sys.argv
+    sys.argv = argv
+    try:
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = SLT.main()
+    finally:
+        sys.argv = old_argv
+    assert rc == 0
+
+    text = (out_dir / "Listen" / "HOW TO LISTEN.txt").read_text(encoding="utf-8")
+    assert "'A'" not in text and '"A"' not in text and "A side" not in text
+    assert "duplicate" in text.lower()  # still explains a twin exists
+
+
+def test_rejects_side_renders_with_different_sample_rates(tmp_path):
+    """Codex review, 2026-09-14, MINOR-1: a differing technical format
+    (sample rate/channels/subtype) survives re-encoding and could itself be
+    a side tell even with content and metadata otherwise blind."""
+    import numpy as np
+    import soundfile as sf
+
+    a = tmp_path / "A.wav"
+    b = tmp_path / "B.wav"
+    _sine_wav(a, 220.0, sr=44100)
+    t = np.arange(int(48000 * 0.2)) / 48000
+    y = 0.2 * np.sin(2 * np.pi * 330.0 * t)
+    sf.write(str(b), np.stack([y, y], axis=1), 48000, subtype="PCM_16")  # different SR
+
+    argv = [
+        "seal_listening_test.py",
+        "--side", f"A={a}", "--side", f"B={b}",
+        "--twin-of", "A", "--out-dir", str(tmp_path / "sealed"), "--seed", "1",
+    ]
+    old_argv = sys.argv
+    sys.argv = argv
+    try:
+        with pytest.raises(SystemExit, match="do not share the same"):
+            SLT.main()
+    finally:
+        sys.argv = old_argv
+
+
+def test_rerunning_with_fewer_sides_does_not_leave_a_stale_clip(tmp_path):
+    """Codex review, 2026-09-14, MAJOR-3: reusing --out-dir across runs used
+    to leave an earlier run's extra Clip N.wav sitting in Listen/, unmapped
+    by the new run's MAPPING.json."""
+    a = tmp_path / "A.wav"
+    b = tmp_path / "B.wav"
+    c = tmp_path / "C.wav"
+    for p, freq in ((a, 220.0), (b, 330.0), (c, 440.0)):
+        _sine_wav(p, freq)
+
+    out_dir = tmp_path / "sealed"
+    import contextlib
+    import io
+
+    def _run(sides):
+        argv = ["seal_listening_test.py"]
+        for label, path in sides:
+            argv += ["--side", f"{label}={path}"]
+        argv += ["--twin-of", sides[0][0], "--out-dir", str(out_dir), "--seed", "5"]
+        old_argv = sys.argv
+        sys.argv = argv
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                return SLT.main()
+        finally:
+            sys.argv = old_argv
+
+    assert _run([("A", a), ("B", b), ("C", c)]) == 0  # 4 clips (3 + twin)
+    assert _run([("A", a), ("B", b)]) == 0  # 3 clips (2 + twin) - fewer sides
+
+    clips = sorted((out_dir / "Listen").glob("Clip *.wav"))
+    assert len(clips) == 3
+
+    import json
+    mapping = json.loads((out_dir / "_sealed" / "MAPPING.json").read_text())["mapping"]
+    mapped_names = {m["clip"] for m in mapping}
+    assert mapped_names == {p.name for p in clips}  # every clip on disk is mapped, nothing stale
+
+
 def test_rejects_a_twin_of_label_that_was_not_supplied(tmp_path):
     a = tmp_path / "A.wav"
     b = tmp_path / "B.wav"

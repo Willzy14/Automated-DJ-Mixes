@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import shutil
 from pathlib import Path
 
 
@@ -43,6 +44,16 @@ def _parse_side(spec: str) -> tuple[str, Path]:
     if not label:
         raise argparse.ArgumentTypeError(f"--side has an empty label: {spec!r}")
     return label, Path(path)
+
+
+def _format_signature(path: Path) -> tuple[int, int, str]:
+    """(samplerate, channels, subtype) - the technical shape a differing
+    --side render could disclose as a tell even after re-encoding (Codex
+    review, 2026-09-14, MINOR-1)."""
+    import soundfile as sf
+
+    info = sf.info(str(path))
+    return (info.samplerate, info.channels, info.subtype)
 
 
 def _write_clean_copy(source: Path, target: Path) -> None:
@@ -84,8 +95,31 @@ def main() -> int:
         if not path.is_file():
             raise SystemExit(f"missing render for side {label!r}: {path}")
 
+    # A manually bounced input carrying a different sample rate/channel
+    # count/subtype than the others would survive as a technical tell even
+    # after _write_clean_copy re-encodes each clip - the format itself
+    # (inspectable via file properties, not just audible content) is
+    # preserved per side, not normalised to one shared format (Codex review,
+    # 2026-09-14, MINOR-1). Refuse rather than silently seal a set where one
+    # clip's format alone could identify it.
+    formats = {label: _format_signature(path) for label, path in args.sides}
+    distinct = set(formats.values())
+    if len(distinct) > 1:
+        detail = ", ".join(f"{label}={sig}" for label, sig in formats.items())
+        raise SystemExit(
+            f"--side renders do not share the same sample rate/channels/"
+            f"subtype - a differing format would itself be a side tell: {detail}")
+
     listen = args.out_dir / "Listen"
     sealed_dir = args.out_dir / "_sealed"
+    # Remove any prior run's output first (Codex review, 2026-09-14,
+    # MAJOR-3): reusing --out-dir across runs with a different number of
+    # sides otherwise leaves a stale, unmapped Clip N.wav from the earlier
+    # run sitting in Listen/ alongside the new, correctly-mapped clips.
+    if listen.exists():
+        shutil.rmtree(listen)
+    if sealed_dir.exists():
+        shutil.rmtree(sealed_dir)
     listen.mkdir(parents=True, exist_ok=True)
     sealed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -106,8 +140,12 @@ def main() -> int:
         encoding="utf-8")
 
     (listen / "HOW TO LISTEN.txt").write_text(
-        f"{len(entries)} clips. Two of them are the SAME render (the "
-        f"{args.twin_of!r} side, duplicated) - that pair is the control. If "
+        f"{len(entries)} clips. Two of them are the SAME render (a duplicate "
+        "pair) - that pair is the control. Which side was duplicated is "
+        "deliberately NOT stated here: naming it would let you infer that "
+        "side's identity the moment you spot the matching pair, without "
+        "needing to open the sealed mapping (Codex review, 2026-09-14 -"
+        " found live on the excerpt-extraction half of burn list A4). If "
         "you confidently hear a difference between the two identical clips, "
         "the test is not discriminating and the result is void, which is "
         "exactly what the control is for.\n\n"
