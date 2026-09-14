@@ -737,17 +737,30 @@ was written).
 
 - [ ] **Four pre-built features are sitting behind disabled flags with real evidence already
   gathered, and nobody has ruled on any of them** (B1): `LOOP_SELF_SIMILARITY_TIERA`'s
-  AND-vs-replacement semantics; `width_cues`; soft rules R2/R4 (R4's own Key Decision record
-  shows 7/9 false positives under its ORIGINAL trigger, and it fired again on this project's own
-  T2 - a transition Sam then hand-fixed, so it's confounded evidence, not proof either way);
-  `BASS_RESIDUAL_ENABLED` (two full mixes of zero-firings evidence now exist - House 10 A/B - and
-  the flag still defaults off). Astra separately flagged the same class of thing from a
+  AND-vs-replacement semantics; `width_cues`; `soft_intro_outro`'s R2/R4 section-detection soft
+  rules; `BASS_RESIDUAL_ENABLED` (two full mixes of zero-firings evidence now exist - House 10
+  A/B - and the flag still defaults off). Astra separately flagged the same class of thing from a
   different angle: Tier-A loop similarity and width-based section cues exist behind switches
   with documented examples, and simply enabling everything would also remove some existing
   correct rejections - this needs a real replay before promotion, not a flip.
-  Evidence: `Source/align_engine.py:66,499` (Astra); `Source/apply_automation.py:804-807`
-  (R4 trigger, Claude); `Source/apply_automation.py:65` (BASS_RESIDUAL, Astra);
-  `Documentation/AI_CONTEXT.md:294,299` (Astra).
+
+  **CORRECTED, 2026-09-14 (found while answering Sam's own "what is B1?" directly):** the
+  original evidence line for the R2/R4 item pointed at the WRONG code and carried the WRONG
+  number. `Source/apply_automation.py:804-807`'s "Rule 4: lower sneak" is NOT behind a flag at
+  all - it always runs (`overlap_len <= 80 beats -> plan.low_sneak = True`); its "7/9 false
+  positives" figure is a 2026-05-21 historical record against an OLD trigger
+  (`clips>=3 OR len<=32`) already superseded by today's code, not live evidence against a
+  disabled feature. The REAL flag-gated R2/R4 is `Source/stem_detector.py`'s `soft_intro_outro`
+  parameter (default `False`) - Sam's SECTION-DETECTION soft rules: R2 (kick-less head = intro),
+  R4 (kick-in head + first pre-drop break = intro extends to that break). Its real evidence is
+  materially DIFFERENT and more positive than the wrong citation implied: a 20-track corpus sweep
+  with the flag ON showed 2/20 tracks improve (Pushin' From The Walls, Reachin), 0 spurious - "R4
+  proven, R2 unproven" per `Documentation/TOOLBOX.md`'s own note.
+  Evidence: `Source/align_engine.py:66,499` (Astra, LOOP_SELF_SIMILARITY_TIERA);
+  `Source/stem_detector.py:565,570,633` (soft_intro_outro, corrected 2026-09-14);
+  `Documentation/TOOLBOX.md:161` (the 2/20-improve/0-spurious sweep result);
+  `Source/apply_automation.py:65` (BASS_RESIDUAL, Astra); `Documentation/AI_CONTEXT.md:294,299`
+  (Astra).
   Owner: Sam. Peer review: NONE - not yet reviewed.
 
 - [ ] **An untracked Ableton 12.4.3 template is being picked nondeterministically by mtime,
