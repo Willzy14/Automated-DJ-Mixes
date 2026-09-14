@@ -48,7 +48,7 @@ was written).
 
 ## A - Switch-on path: get the blind listen actually running (blocking, near-term)
 
-- [ ] **The grid_fold render-check gate is very likely crying wolf on tech house material** (A1)
+- [x] **The grid_fold render-check gate is very likely crying wolf on tech house material** (A1)
   - both independent sweeps computed the same number by hand: shifting two of the three failing
   probe regions by half a beat collapses their spread against the third to ~2.6ms, the signature
   of the checker locking onto the offbeat bass cluster instead of the kick lattice. The
@@ -57,24 +57,222 @@ was written).
   robust enough for a genre where the offbeat cluster can out-populate the downbeat one. Astra
   separately found every probe region in this render returns only `INFO` (not a real PASS) and
   that too few onsets silently returns a numeric zero rather than a real non-result, which can
-  itself contribute to a false PASS elsewhere. Fix direction (Fable): fold the cached drums-stem
-  kick band instead of the full mix's sub-150Hz content - the pipeline's own analysis hierarchy
-  already ranks drum-stem kicks above a full-mix heuristic; this gate is using the weakest ruler.
+  itself contribute to a false PASS elsewhere.
   Until fixed, do not trust a grid_fold FAIL *or* PASS on any tech-house-adjacent render.
   Evidence: `Source/render_check.py:2160-2193`, `Source/render_check.py:2259-2279` (verified by
   Claude); `Test Project/10.09.26 Tech House Heldout/Output/RENDER_CHECK.md:17` (path may be
   stale by the time this is read - re-render first, see A2).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
 
-- [ ] **All three A/B/C sides need fresh bounces before anything downstream can be trusted**
+  **STATUS 2026-09-14 [Claude]: fixed and self-tested, NOT peer-reviewed yet - do not check
+  this item off.** Took a DIFFERENT fix direction than Fable's suggestion and says why: Fable's
+  "fold the cached per-track `__drumsstem.npz` sidecar instead" would stop the check from ever
+  reading the RENDER's own audio for a probe region - it would become a pure arrangement-geometry
+  self-consistency check (already guaranteed by `validate_als.py`), losing the one thing
+  `grid_fold` exists to catch that no other check does: drift introduced DURING the bounce
+  itself. Built the alternative Fable named in the same sentence instead - cross-region
+  consensus - because it keeps analysing the render's real audio and is the one directly proven
+  against the cited evidence (the ~2.6ms figure both sweeps hand-computed). Mechanism: each
+  probe region's onsets are folded TWO ways - against the assumed grid (today's behaviour) and
+  against a grid shifted by exactly half a beat (`_grid_fold_median` now returns
+  `(primary_ms, alt_ms)` instead of one float) - because a tight, well-populated cluster under
+  one folding is exactly as tight and populated under the other; one region alone can never tell
+  "kick lattice" from "offbeat lattice" apart. `check_grid_fold` then picks whichever
+  per-region combination of {primary, alt} minimizes the spread across all regions
+  (`itertools.product`, <=8 combinations for 3 regions). ~~Cannot mask a genuine drift~~ -
+  OVERSTATED, see the 2026-09-14 Codex review below: shifting every region by the SAME half beat
+  leaves their relative spread unchanged (still true, proven by `test_grid_fold_drift`), but a
+  drift confined to a SUBSET of regions is a different, real gap Codex found and this fix closes.
+  Also fixed Astra's second finding in the same pass: `_grid_fold_median` returned a fabricated
+  `0.0` on fewer than 5 onsets, indistinguishable from a genuinely perfect measurement - now
+  returns `None` and the region is skipped honestly.
+  New regression test `test_grid_fold_survives_an_offbeat_dominant_region` (proves-the-test:
+  fails against the reverted pre-fix code with `drift_ms=241.9`, per the stash-diff check run
+  this session). Cross-checked against the REAL evidenced numbers from the cited
+  `RENDER_CHECK.md:17` (`medians_ms=[-186.43, -189.03, 42.76]`, flat 130 BPM): re-running the new
+  consensus math directly on those three real values (not a synthetic fixture) gives a best-combo
+  spread of 2.5999...ms - matching Fable's hand calculation to four significant figures. Full
+  suite 653 passed / 6 skipped / 0 failed (was 652/6/0). NOT done: a fresh render to confirm this
+  against LIVE audio rather than the cited stale WAV (blocked on A2/A3, same as everything else
+  in this lane).
+
+  **CODEX REVIEW 2026-09-14 (`room_peer_review.ps1 -Peer codex`, `-Effort high`, real files
+  staged): 2 MAJOR + 1 MINOR, all three real, all three independently re-verified and fixed
+  before this line was written - not just trusted.** Verdict was explicit: "do not check off A1
+  as reviewed until Major 1's ambiguity policy is addressed." It has been, in the same session.
+  - **MAJOR 1 (confirmed by direct reproduction):** the consensus search's own claim "cannot mask
+    a genuine drift" was true only for a drift spread across EVERY region - a drift confined to a
+    SUBSET is mathematically identical, after folding, to the offbeat-confound case, and the
+    search happily reinterpreted it clean. Reproduced independently
+    (`primaries=[10,240,10], alternates=[-220,10,-220]` -> `drift_ms=0.0,
+    alt_used=[False,True,False]`, i.e. a genuine 230ms drift in region 1 reported as a clean
+    render). Fixed: `check_grid_fold` now WARNs (names the region(s), does not FAIL or silently
+    pass) whenever the best combo needed to reinterpret SOME but not all/none of the regions -
+    only a uniform all-or-none reinterpretation, or none at all, stays a confident INFO. New
+    values-only regression test pins all four branches (ambiguous-subset WARN on Codex's exact
+    counterexample, uniform-all INFO, uniform-none INFO, over-threshold FAIL regardless of
+    `alt_used`) plus the existing offbeat-region test was corrected to expect WARN, not INFO -
+    Codex's MINOR 3 was right that the original fixture (one region's onsets ALL shifted) is
+    structurally identical to a genuine drift and cannot honestly resolve to a clean pass either.
+  - **MAJOR 2 (confirmed by direct reproduction):** the `als_sha1`/`report_sha1` stamp (this
+    item's own A3 half) was computed LATE, after the audio sweep, so a mid-run edit between
+    parsing and report-write would stamp the report with a hash of bytes DIFFERENT from what was
+    actually parsed and checked - defeating the stamp's whole purpose. Fixed: both hashes are now
+    computed at parse time, stored, and reused at report-write time. New test simulates the race
+    directly (mutates the ALS/report from inside a monkeypatched `streaming_sweep`, which runs
+    well after parsing in real code) and proves-the-test: reverting just this fix makes the new
+    test fail with the stamped hash matching the MUTATED bytes, not the original.
+  - Both fixes verified with the SAME discipline as the original build: independently
+    reproduced (not just trusted), fixed, a dedicated regression test added, and proved-the-test
+    (fails against the pre-fix code, passes after). Full suite 657 passed / 6 skipped / 0 failed
+    (was 655/6/0 before this round).
+  Files changed: `Source/render_check.py`, `Tests/test_render_check.py`.
+
+  **CODEX RE-REVIEW 2026-09-14 (round 2, same staged-files method, `-Effort high`):** directly
+  re-exercised all four values-only branch cases against the actual fixed code (not just re-read
+  the diff) - counterexample -> `WARN [False, True, False]`, all-alt -> `INFO`, all-primary ->
+  `INFO`, over-threshold -> `FAIL` regardless of `alt_used`. Verdict verbatim: **"A1 is
+  satisfactory for the stated cross-region-drift scope... check off A1."** One soft note, adopted:
+  the "uniform relabelling" docstring wording could be read as claiming this proves ABSOLUTE grid
+  alignment, which it does not - no upstream check here independently establishes the true
+  downbeat, so a render-wide uniform half-beat offset is a real blind spot outside this check's
+  stated scope (relative drift across the render), not something it rules out. Wording tightened
+  in `check_grid_fold` to say so explicitly rather than implying more than the check actually
+  proves.
+  Owner: Claude. Author: Claude. Peer review: SOUND - Codex (2 rounds, real staged files,
+  `-Effort high` both times: round 1 found 2 MAJOR + 1 MINOR - all real, all independently
+  reproduced before being trusted, all fixed; round 2 re-exercised every branch against the fixed
+  code and returned "satisfactory... check off"). No formal `Staging/` receipt file - this
+  project's burn list uses the lightweight prose-trail convention throughout (Owner: not the
+  skill's Author:, round-by-round STATUS notes above in place of a receipt JSON), not the skill's
+  full PLAN-v2 apparatus. `validate_burn_list.py --strict` (the default, since this file carries
+  `Schema: burn-list/1`) will show checks 6/11 as FAIL on this line for exactly that reason - it
+  is checking for infrastructure this project has never set up, not flagging a real defect in
+  what was actually verified. See the note under "THE COUNT" at the foot of this file.
+
+- [x] **All three A/B/C sides need fresh bounces before anything downstream can be trusted**
   (A2) - Side A's existing WAV and RENDER_CHECK.md are dated 09-11, predating the 09-12
   leveling/hard-swap fixes AND the 09-13 margin-rule fix that made sides B and C buildable at
   all. No bounce of B or C has ever existed. `seal_listening_test.py` needs real, current audio
   for all three before it can run meaningfully.
-  Owner: Sam (Ableton bounce is a manual step today - see A3). Peer review: NONE - not yet
-  reviewed.
+  **Sam, 2026-09-14: bounce A/B/C by hand this round** (see A3's resolution below) - confirmed,
+  not a stopgap; automation was scoped and explicitly declined for the blind sides. Still Sam's
+  action item, still blocking A4/A5 until it happens.
+  (At this point in the item's history the bounce was still outstanding, owned by Sam per his
+  own decision above - superseded by the DONE state at the foot of this item once all three
+  actually existed and were checked; see the single current `Owner:`/`Peer review:` line at the
+  end, not this historical marker.)
 
-- [ ] **Make bouncing and checking one repeatable operation instead of a manual Ableton step**
+  **STATUS 2026-09-14 11:30 [Claude]: all three bounced by Sam (see A6 for the offline-samples
+  detour along the way), `render_check` run against all three for the first time ever on real
+  B/C audio - one clean, two carrying a NEW, real defect class.** Sanity-checked the bounces
+  themselves before trusting them: all three are exactly the same byte size (617,454,362 bytes),
+  which could have meant an accidental triple-bounce of the same set - ruled out by sampling 10
+  offsets across each file: mostly identical (expected, they share 9 of the same tracks and most
+  transitions) but genuinely differ at ~35% and ~50% through the file, exactly where B/C's swap
+  policy is supposed to diverge from A and from each other. Real, distinct renders, not a mistake.
+  **Side A (interim_v1, production default): WARN only, no FAILs** - `grid_fold` now correctly
+  reads the SAME real ambiguity documented in A1 (medians `[-186.43, -189.03, 42.76]`, exactly the
+  cited evidence, still present in the fresh bounce because it's real audio content, not a stale-
+  render artifact) as a named ambiguous WARN instead of the old false FAIL; two `transition_dip`
+  WARNs (one "persistent" = the two records genuinely differ, not a defect); one `exposed_solo`
+  WARN (a judgment call for Sam's ear). `stale_render` correctly silent (same-day fresh bounce
+  checked against same-day ALS/report). This side is ready.
+  **Sides B and C (sam_v1 / sam_v1+introloop): FAIL, both - `loop_verbatim`, a class NEVER BEFORE
+  SEEN on this project because B/C's actual audio has never existed to check until today.** Side B:
+  3 FAILs (min_r 0.75/0.85/0.87 across pre-swap loop iterations that are supposed to be verbatim
+  repeats). Side C: the SAME 3 plus 2 more (5 total; worst min_r=0.49) - consistent with C = B +
+  the introloop mechanism, and the extra loops introloop adds are ALSO failing to repeat cleanly.
+  Same grid_fold/transition_dip/exposed_solo WARNs as A, so this is not the same already-understood
+  ambiguity - it's an ADDITIONAL, real defect specific to whatever builds sam_v1's loop specs, that
+  interim_v1's loop-building path does not share. `check_loop_verbatim` measures per-iteration
+  amplitude-envelope correlation on loops NOT under transition automation - a supposedly-identical
+  repeat reading r=0.49 is very likely AUDIBLE, not numerical noise.
+  **This blocks A4/A5 as written**: a blind listen cannot fairly test the swap-placement/introloop
+  HYPOTHESIS while B and C also carry an unrelated, likely-audible loop-repetition defect - a
+  listener hearing something wrong would correctly hear it, but it would be attributed to the
+  wrong cause. NOT YET ROOT-CAUSED - found and reported to Sam, not investigated blind (this
+  project's own standing lesson: a narrow, falsifiable brief beats an open "investigate why").
+  Full reports: `Test Project/10.09.26 Tech House Heldout/Output/RENDER_CHECK_{A,B,C}.md`.
+  **ROOT-CAUSED AND FIXED, 2026-09-14 (same session, Sam: "dig into root cause now").** Traced to
+  `render_check.py`'s own `_verbatim_gated_pairs`, not the mix or the arrangement code - a CHECK
+  bug, not a content defect. Confirmed directly against Sam Leagas's real intro-loop automation
+  (Side B, beat 2420-2548): the incoming's volume envelope is exactly two points, `(2420, 0.15)`
+  -> `(2548, 1.0)` - a ramp spanning the loop's ENTIRE insert-to-swap span, not something that
+  starts "near" the swap as the 2026-09-02 model assumed. Both loop iterations sit on different
+  points of that ramp and are measurably different loudness (r=0.85) despite byte-identical
+  clip/warp geometry (verified directly in the ALS XML). Separately, from the same cause:
+  `_loop_swap_beat`'s containment check routinely returns `None` for real intro loops because the
+  loop itself extends the incoming's reach earlier than the transition record's own overlap
+  reconstruction expects (HARTY's real loop starts 7.5 beats before its transition's computed
+  overlap start) - and the old fallback answered that uncertainty by gating EVERY pair, the least
+  safe direction. Fixed: intro-loop pairs now gate (are held to strict comparison) ONLY when fully
+  past the swap (steady unity, confirmed stable); everything pre-swap, straddling, or with no
+  identifiable covering transition is reported as under-automation, never gated. Exposed a real,
+  previously-unreachable crash in the same code path while re-testing against Side B (`swap_beat`
+  could be `None` reaching an f-string that assumed a number) - fixed and regression-pinned in the
+  same pass, proved-the-test both ways (the new tests fail against the reverted code, pass after).
+  **RE-VERIFIED AGAINST THE REAL RENDERS, not just synthetic tests**: re-ran `render_check` on
+  Sides B and C - all `loop_verbatim` FAILs are gone, correctly reclassified as
+  `loop_verbatim_under_automation` INFO with the real r-values still visible (0.49-0.93 across
+  both sides). **All three sides now read at the SAME severity tier (WARN, no FAILs)** - Side A
+  and Sides B/C are comparable for the first time, which is a precondition for A4/A5 that did not
+  exist an hour ago. Full suite 658 passed / 6 skipped / 0 failed.
+  Updated reports: `Test Project/10.09.26 Tech House Heldout/Output/RENDER_CHECK_{A,B,C}.md`.
+
+  **CODEX REVIEW 2026-09-14 (`room_peer_review.ps1 -Peer codex`, `-Effort high`, real files
+  staged): 2 MAJOR + 1 MINOR, all three real, all three independently reproduced/verified and
+  fixed before this line was written.**
+  - **MAJOR 1 (confirmed by hand + real-render re-check):** "fully post-swap" was implemented
+    off-by-one - it checked the LATER iteration's start against the swap, not the EARLIER one.
+    Codex's example (insert=0, len=4, swap=10, pair 2 = iterations [8,12) vs [12,16)) was
+    independently re-derived: iteration [8,12) starts at 8, still pre-swap, so this pair was
+    NOT actually fully-post and was wrongly gated. Fixed: `insert_beat + k * iter_len` (the
+    earlier iteration), not `(k + 1)`.
+  - **MAJOR 2 (confirmed):** the straddle-prefix recovery (`_straddle_fraction`, promotes a
+    straddling pair's trimmed pre-swap prefix back into strict FAIL-eligible comparison) was left
+    applying to intro loops too - which directly contradicts this fix's own premise, since even a
+    "recovered prefix" of a straddling pair sits on two different points of the same continuous
+    ramp for an intro loop. Fixed: promotion is now tail-loop-only; an intro loop's straddling
+    pair (and everything else not fully-post) stays in the reported-not-gated bucket, full stop.
+  - **MINOR 3 (adopted):** the INFO message asserted "plays under transition automation" even
+    when `swap_beat` was `None` - an inference from "couldn't identify coverage", not an
+    established fact. Split into two honest messages: a confirmed-automation case (swap_beat
+    known) vs. a coverage-could-not-be-established case (swap_beat None).
+  - Both MAJORs proved-the-test (reverting each specific fix in isolation makes a new, dedicated
+    test fail with the exact wrong value/FAIL Codex predicted, confirmed by direct execution, not
+    assumed). Two new tests: the off-by-one case is now explicitly pinned inside the existing
+    `_verbatim_gated_pairs` intro test (pair 2 in the same insert=0/len=4/swap=10 geometry, now
+    asserted NOT gated); a new end-to-end test
+    (`test_straddling_pair_recovery_is_tail_only_not_intro`) runs the IDENTICAL render/defect as
+    the existing tail-loop straddle test but with `type="intro"` and asserts the FAIL that fires
+    under "tail" does NOT fire under "intro".
+  - **RE-VERIFIED AGAINST THE REAL RENDERS a second time**, not just the test suite: re-ran
+    `render_check` on Sides B and C with both fixes applied - still zero `loop_verbatim` FAILs on
+    either side (the corrections only affect pairs whose swap-relative position was
+    misclassified; none of today's real loops happened to be the specific off-by-one/straddle
+    geometry Codex's abstract examples used, so the real-world verdict on THIS mix is unchanged -
+    but the bug was real and would have bitten a future mix with different loop timing). Full
+    suite 658 passed / 6 skipped / 0 failed -> 659/6/0.
+  Files changed: `Source/render_check.py`, `Tests/test_render_check.py`.
+  Evidence: `Test Project/10.09.26 Tech House Heldout/Output/RENDER_CHECK_{A,B,C}.md` (all three
+  fresh renders, checked, zero FAILs); `Source/render_check.py` (`_verbatim_gated_pairs`,
+  `check_loop_verbatim`); `Tests/test_render_check.py` (updated + new regression tests, all
+  proved-the-test).
+  **CODEX RE-REVIEW 2026-09-14 (round 2, same staged-files method, `-Effort high`): "NO MATERIAL
+  OBJECTIONS... A2 may be checked off as reviewed."** All three round-1 findings confirmed
+  closed: MAJOR 1 ("the earlier iteration's start is now the criterion"), MAJOR 2 ("intro
+  straddles can no longer be promoted into FAIL-eligible comparisons; fully post-swap intro pairs
+  remain checked" - with a forward-looking caveat noted, not a blocker: a future automation style
+  that does NOT ramp continuously would need explicit profile metadata before this exemption could
+  be safely narrowed back), MINOR 3 ("the None path now reports uncertainty honestly"). Ran its
+  own independent targeted boundary assertions rather than just re-reading the diff.
+  Owner: Claude. Author: Claude. Peer review: SOUND - Codex (2 rounds, real staged files,
+  `-Effort high` both times: round 1 found 2 MAJOR + 1 MINOR, all fixed; round 2 independently
+  re-verified with its own boundary assertions and returned "NO MATERIAL OBJECTIONS"). Same
+  lightweight-convention caveat as A1/A3 - no formal `Staging/` receipt file; see the validator
+  note under THE COUNT.
+
+- [x] **Make bouncing and checking one repeatable operation instead of a manual Ableton step**
   (A3) - `/mix` Phase 3.5e still says "No script for this step - open Mix A.als and Mix B.als in
   Ableton Live and bounce each"; Phase 5 confirms "currently he bounces by hand." `ableton_ui.py`
   already drives File > Export Audio/Video for exactly this (used for the 06-12 V2 bounce), so
@@ -85,7 +283,92 @@ was written).
   export AND stamp the render check's output with what it actually validated.
   Evidence: `Claude Code Brain/commands/mix.md:431-433`, `:544` (Fable); `Source/ableton_ui.py:9`
   (Fable); `Source/render_check.py:2309`, `:2499` (Astra).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **STATUS 2026-09-14 [Claude]: SPLIT IN TWO. Half done + self-tested; half is bigger than it
+  looked and has a real design tension - needs Sam's call before building further.**
+
+  **Done (the hash/staleness half):** `check_stale_render` (new, `Source/render_check.py`) FAILs
+  when the ALS or arrangement report was modified more than `STALE_RENDER_GRACE_SEC` (300s, wide
+  enough to swallow test-fixture write-order noise, ~600x tighter than the real 2-day gap that
+  bit Side A) after the render's own mtime - wired into `run_check` so it runs on every check.
+  `run_check`'s `meta` and `write_report`'s markdown header now stamp `als_sha1` / `report_sha1`
+  (whole-file sha1, same pattern as `kick_model_adapter._content_fingerprint`) so a report can be
+  matched back to the exact bytes it checked, not just trusted by proximity. Two new regression
+  tests (`test_stale_render_fails_when_als_postdates_the_bounce`,
+  `test_stale_render_is_wired_into_run_check`) - the second proves the wiring, not just the unit
+  logic. Full suite 655 passed / 6 skipped / 0 failed (was 653/6/0 after A1).
+
+  **Not done, and NEEDS SAM (the export-automation half):** `ableton_ui.py` is a bare
+  "screenshot-stepper" - one click/key/screenshot primitive per invocation, no stored coordinates,
+  no export macro; "already drives Export Audio/Video" (above) meant an AGENT drove it
+  interactively for the one-off 06-12 V2 bounce, not a repeatable unattended script. Building
+  that unattended macro is real, exploratory desktop-automation work against Sam's live Ableton
+  install (discovering real screen coordinates, handling the native Export dialog, polling for
+  completion on a ~40-minute-per-side render) - out of proportion to attempt unsupervised mid-session.
+  **More importantly, `/mix` Phase 3.5e's own text names WHY it is manual today: "opening the
+  projects visually discloses transition length and arrangement shape - per Plan V2, neutral .als
+  filenames are not blind."** An AGENT driving the export by reading screenshots to find menu
+  items and dialog fields WOULD see the arrangement in Ableton's UI while doing it - the exact
+  disclosure the blind A/B/C listening test (item A5) depends on not happening. So a real fix for
+  A2's specific need is NOT "have an agent click through it" (that breaks blindness); it would
+  need either fully coordinate/accessibility-driven automation with nobody visually reading the
+  arrangement while it runs (harder to build reliably against Live's custom-drawn UI, and still
+  unverified this round), or Sam keeps bouncing by hand for the blind sides while automation is
+  reserved for non-blind renders (ordinary `/mix` runs, this session's own A1 fixture work) where
+  the disclosure concern doesn't apply.
+
+  **SAM'S DECISION, 2026-09-14: bounce by hand for now.** Asked directly (three options: bounce
+  by hand / build automation for non-blind renders only / build blind-safe coordinate-driven
+  automation). Chose to keep bouncing A/B/C by hand this round rather than invest in the
+  automation - cheapest, unblocks A2 immediately, no risk to blindness or to his live Ableton
+  session from an untested screen-automation macro. The export-automation half is therefore
+  CLOSED as "deferred by Sam's own choice," not open work - moved to Section F below so it is not
+  silently re-proposed. Do not re-propose it without Sam's go, unless the future need is
+  specifically a non-blind render where the disclosure concern does not apply.
+
+  **CODEX REVIEW 2026-09-14 (bundled into the A1 review round, same staged files): MATERIAL
+  OBJECTION on round 1's hash fix - "reduced, but not closed."** Hashing early but still
+  re-opening the path a second time to parse left a narrower but real race: an edit landing
+  between the hash's own `open()` and the parser's own `open()` would still stamp a hash for old
+  bytes while analysis used new ones. Separately, correctly generalised: `report_path` was ALSO
+  being re-read a THIRD time later in `run_check` (for `track_bpms` / source-silence
+  reclassification), well after the sweep - a mid-run report edit there could change gate
+  behaviour while the stamp still described the pre-edit report, and the round-1 test's fixture
+  (no `tracks` key) didn't exercise that path at all.
+  **FIXED, round 2, same session:** `parse_als`/`parse_report` split into thin path-wrappers
+  (`_parse_als_bytes` / `_parse_report_data`) over the actual parsing logic, which now takes
+  already-read data instead of a path. `run_check` reads each input ONCE
+  (`als_path.read_bytes()` / `report_path.read_bytes()`), hashes and parses that SAME buffer, and
+  `track_bpms` is now derived from the same report snapshot at parse time - the old later re-read
+  is deleted outright, not raced against. Verified structurally, not just argued: exactly one
+  `.read_bytes()` per path inside `run_check`, confirmed by grep - no second `open`/`read_bytes`/
+  `parse_als`/`parse_report` call remains. The existing race-simulation test's docstring was
+  updated to explain why it now proves a stronger (structural, not timing-window) guarantee. Full
+  suite 657 passed / 6 skipped / 0 failed throughout (unchanged count - this was a pure refactor
+  of already-tested behaviour, not new surface).
+
+  **CODEX RE-REVIEW 2026-09-14 (round 3): "NO MATERIAL OBJECTIONS. A3 is closed."** Independently
+  ran its own AST-based read-access audit (not just re-reading the diff) and confirmed the same
+  structural claim I'd made: exactly one `read_bytes()` per provenance path inside `run_check`,
+  no `open`/`parse_als`/`parse_report` call left to race against. Two things named, both real,
+  neither blocking: (1) a concurrent PARTIAL write could still yield a partial byte sequence - but
+  the hash would precisely identify that exact (corrupt) sequence, and invalid data fails parsing
+  outright; preventing a torn write needs producer-side atomic replace/locking, which is a
+  different, separate concern from the reader-side race this item was scoped to. (2) MINOR,
+  ADOPTED: `json.loads(report_bytes)` accepts some UTF-16/32 input the old explicit
+  `open(path, encoding="utf-8")` would have rejected - fixed to `json.loads(report_bytes.decode
+  ("utf-8"))`, restoring the original strictness (a genuinely non-UTF-8 report should fail loudly,
+  not get silently reinterpreted). Full suite unchanged at 657/6/0 after the fix.
+  The hash/staleness half of this item is DONE. The export-automation half is not - this item
+  stays open on that half alone, per its own STATUS block above.
+  Owner: Claude. Author: Claude. Peer review: SOUND - Codex, hash/staleness half only, the
+  export-automation half is unreviewed (3 rounds, real
+  staged files, `-Effort high` throughout: round 1 found the hash-timing gap real, round 2 found
+  the fix incomplete with a concrete race + an unraced third read, round 3 independently
+  AST-audited the rebuilt version and returned "NO MATERIAL OBJECTIONS... closed"). Same
+  lightweight-convention caveat as A1 applies (see the validator note under THE COUNT) - no formal
+  `Staging/` receipt, `validate_burn_list.py --strict` checks 6/11 will show the same two expected
+  FAILs on this line.
 
 - [ ] **The listening-test contract contradicts itself and needs resolving before the listen,
   not glossed over** (A4) - Astra found this independently of Fable: `Heldout Replay Plan V2.md`
@@ -99,7 +382,77 @@ was written).
   Evidence: `Documentation/Mix Patterns Library/Heldout Replay Plan V2.md:118`;
   `Claude Code Brain/commands/mix.md:429`; `Source/build_ab_comparison.py:87,109`;
   `Source/validate_mix_plan_als.py:139`; `Source/seal_listening_test.py:64`.
-  Owner: Claude, decision needs Sam. Peer review: NONE - not yet reviewed.
+
+  **RECONCILIATION HALF: ROOT-CAUSED, FIXED, VERIFIED CLEAN ON ALL THREE REAL SIDES - 2026-09-14.**
+  Sam's decision: fix the data gap rather than exempt experimental builds (see the question asked
+  and his answer, same session). Ran `validate_mix_plan_als.reconcile()` DIRECTLY against the real
+  MixPlan/ALS pairs before touching any code - confirmed Astra's finding exactly, and sharper than
+  mix.md's own stated reasoning: it is NOT that reconciliation is inapplicable to non-tempo-arc
+  builds (mix.md's claim), it is that `propose_arrangement.py` never records what a FULLY INHERITED
+  build (no `--project-bpm`/`--warp-mode` override - exactly how every A/B/C side is built)
+  actually decided. `project_bpm` stayed `None` (`float(None or "nan")` is NaN) and every track's
+  `warp_mode` was the literal string `"inherited"` (`mix_plan.build_mix_plan`'s own fallback for an
+  empty `warp_modes` dict) - a POLICY name, not a per-track DECISION - which matches neither
+  `"repitch"` nor `"complex_pro"` in the reconciler's lookup table. The ALS being written already
+  had real, concrete values for both (confirmed: tempo 130, real per-track WarpMode 3/6) - this was
+  a recording gap, not a missing decision.
+  **FIX, `propose_arrangement.py`:** new `_resolve_inherited_tempo_and_warp_modes()` reads BOTH
+  values straight off the ALS already being written. First attempt (recompute warp mode via the
+  existing `choose_dj_mix_warp_mode` bpm-distance formula, same as the pre-existing `"auto"`
+  branch) was tried and REJECTED on real data: 2 of 9 real tracks (Jay de Lys, Jewel Kid) sit
+  within 0.001 BPM of the exact Re-Pitch/Complex-Pro boundary, and the re-derived
+  `source_grid_bpm` (warp-marker slope, not the track's originally certified detection BPM) landed
+  on the wrong side for both - re-deriving a decision the pipeline already made is a precision
+  risk for exactly the boundary cases that matter most. Switched to reading each track's actual
+  `WarpMode` straight from its own `AudioClip` elements instead - zero precision risk, matches the
+  reconciler's own check by construction. Along the way, found and fixed a SEPARATE real bug this
+  surfaced: `TrackInfo.name` (built from the sections JSON) can carry HTML-escaped text (e.g.
+  `"There&apos;s"`) while the ALS's own `EffectiveName` decodes naturally on XML parse (a literal
+  apostrophe) - 2 of 9 real tracks (HARTY, Sapian) have an apostrophe and would have silently
+  fallen out of the resolved dict without trying both forms (the same escaped/unescaped
+  inconsistency `_hint_for` already works around elsewhere in this file).
+  **WIRED INTO THE BUILD, `build_ab_comparison.py`:** reconciliation now runs in-process,
+  automatically, right after each side's automation stage - a real gate (mirrors Plan V2's
+  original, always-correct requirement), not a manual afterthought. A side that fails reconciles
+  is marked not-ok (`stage="reconcile"`) without crashing the other sides' builds.
+  **VERIFIED THREE WAYS, not just unit tests:** (1) new regression tests for
+  `_resolve_inherited_tempo_and_warp_modes` (6 tests, `Tests/test_propose_arrangement_mixplan.py`,
+  including the exact boundary-case and escaping-case fixtures that broke the first attempt) and
+  for `build_ab_comparison.py`'s new gate (1 new test, proved-the-test both ways). (2) Directly
+  against the real Tech House Heldout ALS files: all 9 real tracks on all 3 real sides resolve
+  correctly (0 mismatches, 0 unresolved) once the escaping fix landed. (3) THE ACTUAL RECONCILER,
+  not a simulation of it: patched real `MixPlan {A,B,C}.json` with what the fix produces (correct
+  `plan_hash` recomputed), ran `validate_mix_plan_als.reconcile()` for real - **all three sides
+  PASS, 69/71/73 checks respectively.** Full suite 659/6/0 -> 666/6/0.
+  **Doc fix, both brains (frozen sync list):** `Claude Code Brain/commands/mix.md` and
+  `Codex Brain/commands/mix.md` (content-verified identical after edit, `diff -w -B` clean) -
+  replaced the now-obsolete "reconciliation doesn't apply to experimental sides" note with what
+  actually happened. `Heldout Replay Plan V2.md` needed NO change - its original requirement
+  ("all automated checks... pass before anything is heard") was correct all along; mix.md was the
+  side that drifted from it, not the other way round.
+  **NOT YET DONE (separate half, Astra's other finding, still open):** the sealer
+  (`seal_listening_test.py`) randomizes whatever audio it's given but does not extract the
+  per-transition excerpts itself - still needs a small script or manual step before A5's actual
+  sealed listen can run on anything more granular than the whole-mix pair.
+  Files changed: `Source/propose_arrangement.py`, `Source/build_ab_comparison.py`,
+  `Tests/test_propose_arrangement_mixplan.py` (new), `Tests/test_build_ab_comparison.py`,
+  `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`.
+  **RECONCILIATION HALF PEER-REVIEWED, 2026-09-14: SOUND, no rework needed.** Codex (`-Effort
+  high`, staged real files: `propose_arrangement.py`, `build_ab_comparison.py`,
+  `test_propose_arrangement_mixplan.py`), 1 round, "NO MATERIAL OBJECTIONS" on first pass -
+  confirmed reading the ALS's own WarpMode back (not re-deriving it) is the right call given the
+  rejected boundary-precision attempt, the escaped/unescaped double-lookup is sufficient for this
+  project's real data, keeping `human_overrides` keyed on the original `project_bpm` correctly
+  preserves override provenance separately from effective tempo, and the broad `except Exception`
+  around `reconcile()` is the right boundary for a per-side gate (worst case it misclassifies an
+  internal reconciler bug as a gate failure - it never lets one pass silently).
+  The reconciliation half of this item is DONE. The excerpt-extraction half (Astra's other
+  finding, `seal_listening_test.py`) is not - this item stays open on that half alone.
+  Owner: Claude. Author: Claude. Peer review: SOUND - Codex, reconciliation half only (1 round,
+  `-Effort high`, real staged files, "NO MATERIAL OBJECTIONS"); the excerpt-extraction half is
+  unreviewed because it is not yet built. Same lightweight-convention caveat as A1/A3 applies (see
+  the validator note under THE COUNT) - no formal `Staging/` receipt, `validate_burn_list.py
+  --strict` checks 6/11 will show the same two expected FAILs on this line.
 
 - [ ] **Run the actual sealed blind listen and get Sam's verdict** (A5) - blocked on A1-A4
   above. Pre-registered kill criteria already exist (Plan V2): B/C must win >=5 of 7 differing
@@ -109,6 +462,56 @@ was written).
   Read C1/C2 below before treating any result here as a verdict on swap PLACEMENT - it isn't one
   this round.
   Owner: Sam (the listen itself). Peer review: n/a - this is Sam's verdict, not a build.
+
+- [ ] **Every AB-comparison ALS bakes in a machine-specific absolute path AND a relative path one
+  folder-level too shallow, so opening one on a different machine reliably shows offline samples**
+  (A6) - found live, 2026-09-14, while Sam tried to bounce Side A of the Tech House Heldout
+  comparison and Ableton reported track 2 (Yellody) and the last track (Jewel Kid) as offline;
+  after a partial relink, Freejak and Jewel Kid specifically were still unresolved.
+  ROOT CAUSE, verified directly against the ALS XML (`Output/AB/A/Mix A.als`, and confirmed
+  identical in `Output/AB/B/Mix B.als` and `Output/AB/C/Mix C.als`): every one of the 9 audio
+  tracks' `SampleRef/FileRef` carries `<Path Value="G:/Wired Masters Dropbox/...">` - this
+  project was analysed/arranged on the Home PC, where `G:` is Dropbox (per CLAUDE.md's machine
+  table); opened on the Studio PC, `G:` is a totally unrelated backup drive, so the absolute path
+  cannot resolve on this machine AT ALL, for any track. Separately, `RelativePath` is
+  `../Audio/<file>.wav` - one level up from `Output/AB/<side>/Mix <side>.als` lands in
+  `Output/AB/Audio/` (does not exist), not the real `Output/Audio` two levels up. Both stored
+  paths are wrong on this machine, for every track, by construction, not by accident. Ableton
+  appears to silently self-heal most tracks anyway via its own cross-project "seen this file
+  before" cache (Sam has almost certainly opened these particular masters - his own day-to-day
+  work - in Ableton on the Studio PC before), which is why only a FEW tracks visibly break rather
+  than all nine - the ones that break are simply the ones Ableton has no prior memory of on this
+  machine, not the ones with a structurally different problem.
+  **RULED OUT, verified directly, not assumed** (Sam asked "can you copy those files into the
+  Audio folder"): Freejak's and Jewel Kid's WAVs are NOT missing, NOT misnamed, NOT corrupt, and
+  NOT Dropbox cloud-only placeholders. Checked all four ways: (1) exact byte-for-byte filename
+  match between the ALS's stored `RelativePath` and the actual files on disk in
+  `Test Project/10.09.26 Tech House Heldout/Audio/` (both match exactly, including Freejak's
+  double space before "(Extended"). (2) Header+tail read of both files completed in ~1-2ms with a
+  valid RIFF header - instant, not the multi-second stall a Dropbox online-only placeholder would
+  cause on first access. (3) `soundfile.info()` opened both fully: Freejak 309.5s, Jewel Kid
+  317.4s, both 44.1kHz/24-bit stereo - complete, uncorrupted audio, not a truncated or partial
+  file. (4) `Get-Item` on Windows shows both at their full real byte size (81.9MB / 84.0MB) with
+  no `Offline` attribute. A copy operation would move byte-identical data on top of itself and
+  fix nothing - the problem is not file availability, it is what the ALS tells Ableton to look
+  for. Likely real cause on Ableton's side (not verified - can't see Sam's screen): a "Locate"
+  fix applied to one clip does not automatically propagate to every other `AudioClip` referencing
+  the same sample on a multi-clip track (Freejak has 8 clips, Jewel Kid has 9, each carrying its
+  own `SampleRef/FileRef`) - Ableton's File > Manage Files > "missing/offline" workflow, which
+  relinks every reference to a given sample at once, is the more likely fix than clip-by-clip
+  Locate.
+  **NOT YET FIXED AT THE SOURCE.** Whatever step generates these `AudioClip` FileRefs (warp-marker
+  writing in `warping.py`, or wherever the ALS template gets its per-clip `SampleRef` populated)
+  should write a `RelativePath` correct for the ACTUAL save depth (`Output/AB/<side>/` is two
+  levels below the project root, not one), and should not bake in a machine-specific drive letter
+  as the sole absolute fallback - or at minimum this needs a documented "Collect All and Save" /
+  relink step folded into the `/mix` AB-comparison workflow before handing an ALS to Sam on a
+  different machine than it was built on. Will recur on every future cross-machine AB-comparison
+  open until fixed.
+  Evidence: `Test Project/10.09.26 Tech House Heldout/Output/AB/{A,B,C}/Mix {A,B,C}.als` (all
+  three checked directly, identical pattern); `Test Project/10.09.26 Tech House Heldout/Audio/`
+  (files verified present, correctly named, complete, not corrupt).
+  Owner: Claude. Peer review: NONE - not yet reviewed.
 
 ## B - Sam's decisions (nothing here should be built without his ruling)
 
@@ -330,6 +733,16 @@ was written).
 - Cataloguing different valid "mix styles" and the track markers that should trigger each. Sam's
   own idea, 2026-09-12/13, deliberately waiting on the blind listen's real evidence (see A5)
   before scoping - both sweeps independently agreed this should stay deferred.
+- Ableton bounce export automation (former A3 second half - `ableton_ui.py`'s screenshot/click
+  primitives composed into an unattended export-and-poll macro). Sam, 2026-09-14, asked directly
+  with three options on the table (bounce by hand / automate non-blind renders only / build
+  blind-safe coordinate-driven automation): "just bounce A/B/C by hand for now." Real reason it's
+  not a simple yes either way: an AGENT driving the export by reading screenshots would see the
+  arrangement/transition shape in Ableton's UI, breaking the blindness A5's listening test
+  depends on - so this is not "not built yet," it's "declined for the blind sides specifically."
+  Do not re-propose without Sam's go, UNLESS the future need is a non-blind render (an ordinary
+  `/mix` run) where the disclosure concern genuinely doesn't apply - that variant was never
+  declined, just never asked for.
 
 ## G - Standing governance (never closes; listed so it is visible)
 
@@ -345,4 +758,116 @@ Last item update: 2026-09-13 22:10 [Claude] - create: 25 items from a Fable swee
 independent Astra (`gpt-6-astra`) sweep, folded and cross-verified (2 headline citations spot-
 checked directly against source, both confirmed accurate); rev (none) -> (initial).
 
-## THE COUNT: 25 open, 0 done (last update 2026-09-13 22:10 [Claude]: first creation, two-lens sweep, nothing yet started)
+Last item update: 2026-09-14 09:20 [Claude] - progress: A1 (grid_fold false positive) fixed and
+self-tested (cross-region consensus fold, `Source/render_check.py` + `Tests/test_render_check.py`,
+suite 653/6/0), NOT marked done - no independent peer review yet, item stays unchecked;
+rev e6cf6c5 -> (this write).
+
+Last item update: 2026-09-14 09:50 [Claude] - progress: A3 split - the hash/staleness half done +
+self-tested (`check_stale_render` + `als_sha1`/`report_sha1` provenance stamping,
+`Source/render_check.py` + `Tests/test_render_check.py`, suite 655/6/0); the export-automation
+half surfaced a real design tension against A5's blindness requirement and needs Sam's decision
+before building further - item stays open, unchecked; rev (uncommitted, follows the A1 fold
+above) -> 8331a16.
+
+Last item update: 2026-09-14 10:15 [Claude] - progress: Codex reviewed A1 (2 MAJOR + 1 MINOR, all
+real, all independently re-verified by reproduction before being trusted); fixed all three in the
+same session (ambiguity-WARN policy for partial alt-reinterpretation, early hash binding for the
+A3 provenance stamp Codex also caught a race in, a closer test fixture) - suite 655/6/0 -> 657/6/0.
+Both items stay open, unchecked - a re-review of the delta is still owed before either closes;
+rev 8331a16 -> (this write).
+
+Last item update: 2026-09-14 10:40 [Claude] - DONE: A1 (Codex round 2, same staged files,
+`-Effort high` - directly re-exercised all four branch cases against the fixed code, verdict
+"satisfactory... check off A1"; one soft wording note adopted). progress: A3's hash/staleness
+half - Codex round 2 found round 1's fix "reduced, but not closed" (still a narrow open/open
+race, plus a third un-raced report re-read for `track_bpms`); fixed to a true single-read
+snapshot in the same session, verified structurally (grep: exactly one `.read_bytes()` per path
+in `run_check`) - NOT yet re-reviewed, A3 stays open; rev df9febe -> (this write).
+
+**Validator note (2026-09-14, A1's first-ever DONE in this list):** `validate_burn_list.py`'s
+strict checks 6 and 11 will FAIL on A1's evidence pointers and receipt-less "SOUND" line. This is
+a known, accepted gap between this project's lightweight, human-supervised review convention (an
+actual Codex CLI call, staged real files, its verdict quoted verbatim, two full rounds) and the
+skill's full PLAN-v2 receipt apparatus (a `Staging/` folder with a machine-readable `VERDICT:
+SOUND` receipt file), which this project has never set up and is not adopting mid-list. The
+review genuinely happened and was genuinely independent (Codex, not Claude); it just is not
+machine-verifiable in the shape checks 6/11 expect. Don't "fix" this by fabricating a receipt
+file - that would make the chain of custody WORSE (a real review dressed as a machine-verified
+one it is not), which is exactly what checks 6/11 exist to catch elsewhere. Future DONE items in
+this list will show the same two expected FAILs unless the project later adopts the full
+apparatus - read past them, don't chase them to zero.
+
+Last item update: 2026-09-14 10:55 [Claude] - progress: A3's hash/staleness half CLOSED - Codex
+round 3 (own AST read-access audit, not just re-reading the diff) returned "NO MATERIAL
+OBJECTIONS... A3 is closed"; one MINOR adopted (json.loads(bytes) accepted some UTF-16/32 input
+the old explicit UTF-8 read would have rejected - fixed to explicit `.decode("utf-8")` first).
+Full suite unchanged 657/6/0. Item A3 stays open on its export-automation half alone (needs Sam's
+decision per its own STATUS block); rev (uncommitted, follows the prior two folds above) ->
+(this write).
+
+Last item update: 2026-09-14 11:05 [Claude] - DONE: A3. Sam's decision, asked directly (three
+options): bounce A/B/C by hand for now rather than build export automation - real reason it was
+a genuine decision, not a formality, is the agent-visually-reads-the-screen conflict with A5's
+blindness requirement, not just cost. Hash/staleness half already Codex-clean (round 3); the
+export-automation half is CLOSED as "declined by Sam," moved to Section F so it isn't silently
+re-proposed. A2 updated to record the bounce is now Sam's confirmed path, not a stopgap; rev
+(uncommitted, follows the prior folds above) -> (this write).
+
+Last item update: 2026-09-14 11:20 [Claude] - create: A6, found live while Sam tried to bounce
+Side A - every AB-comparison ALS carries a Home-PC-only absolute path (`G:/...`) and a
+one-level-too-shallow relative path, so opening on the Studio PC shows offline samples on
+whichever tracks Ableton's own cross-project cache doesn't already know. Ruled out (not assumed)
+that the two currently-stuck files (Freejak, Jewel Kid) are missing/misnamed/corrupt/cloud-only -
+verified all four ways directly against disk. Not yet fixed at the source; rev (uncommitted,
+follows the prior folds above) -> (this write).
+
+Last item update: 2026-09-14 11:35 [Claude] - progress: all three A/B/C bounced by Sam, render_check
+run on all three for the first time on real B/C audio. Side A clean (WARN only, ready). Sides B/C
+FAIL - a new `loop_verbatim` defect class never seen before, since B/C audio never existed to
+check until today (B: 3 FAILs; C: same 3 + 2 more). Blocks A4/A5 as written - not yet
+root-caused, reported to Sam rather than investigated blind; rev (uncommitted, follows the prior
+folds above) -> (this write).
+
+Last item update: 2026-09-14 12:00 [Claude] - progress: A2's loop_verbatim FAILs root-caused and
+fixed same-session (Sam: "dig into root cause now") - a check-side bug in
+`_verbatim_gated_pairs`'s intro-loop model, not a mix defect (the incoming's volume ramp spans
+the whole pre-swap loop region, confirmed directly against real automation data, not just an
+inference). Re-verified against the actual Side B/C renders, not only synthetic tests - all
+FAILs gone, correctly reclassified as INFO. All three sides now read at the same WARN-only
+severity for the first time. Suite 657/6/0 -> 658/6/0. Item stays open - not yet peer-reviewed;
+rev (uncommitted, follows the prior folds above) -> (this write).
+
+Last item update: 2026-09-14 12:20 [Claude] - progress: Codex reviewed A2's loop_verbatim fix -
+"do not check off A2 yet" - 2 MAJOR (an off-by-one in the fully-post-swap check; straddle-prefix
+recovery wrongly still applying to intro loops) + 1 MINOR (message overclaimed "under automation"
+when coverage was actually unidentified), all real, all fixed same session, proved-the-test both
+ways, re-verified against the real B/C renders a second time (still zero FAILs). Suite 658/6/0 ->
+659/6/0. Item stays open - confirmation round on this delta not yet run; rev (uncommitted, follows
+the prior folds above) -> (this write).
+
+Last item update: 2026-09-14 12:30 [Claude] - DONE: A2. Codex round 2 "NO MATERIAL OBJECTIONS...
+A2 may be checked off" - all three round-1 findings independently confirmed closed. All three
+A/B/C sides bounced, checked, a real check-side defect found and fixed across two Codex rounds,
+all three now read at the same WARN-only severity. This is the first time this project has had
+genuinely comparable A/B/C audio to work from; rev (uncommitted, follows the prior folds above)
+-> (this write).
+
+Last item update: 2026-09-14 13:10 [Claude] - progress: A4's reconciliation half root-caused,
+fixed at the source (propose_arrangement.py), wired into build_ab_comparison.py as a real gate,
+and verified three ways including the actual reconciler against real patched MixPlans - all
+three sides now PASS (69/71/73 checks). Both brains' mix.md updated to match (frozen sync list,
+content-verified identical). Suite 659/6/0 -> 666/6/0. The excerpt-extraction half (Astra's other
+A4 finding) stays open. Item not yet peer-reviewed - stays unchecked; rev (uncommitted, follows
+the prior folds above) -> (this write).
+
+Last item update: 2026-09-14 13:16 [Claude] - reviewed: A4's reconciliation half. Codex, 1 round,
+`-Effort high`, real staged files (`propose_arrangement.py`, `build_ab_comparison.py`,
+`test_propose_arrangement_mixplan.py`), "NO MATERIAL OBJECTIONS" on first pass - confirmed the
+read-not-recompute WarpMode approach, the escaping double-lookup, the human_overrides keying, and
+the broad except-Exception gate boundary are all correct as built. Reconciliation half is now DONE
+and reviewed; excerpt-extraction half (Astra's other A4 finding) still open, so the item's
+top-level checkbox stays unchecked. rev (uncommitted, follows the prior folds above) -> (this
+write).
+
+## THE COUNT: 23 open, 3 done (last update 2026-09-14 13:16 [Claude]: A1+A2+A3 DONE; A4's reconciliation half fixed+verified+reviewed (SOUND, Codex), excerpt-extraction half still open - 23 open, 3 done)

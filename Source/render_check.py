@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import html
+import itertools
 import json
 import math
 import re
@@ -30,6 +32,12 @@ from scipy.signal import lfilter, lfilter_zi, sosfiltfilt, butter
 HOP_SEC = 0.1
 FLOOR_DB = -120.0
 SWEEP_BLOCK_SEC = 10.0
+# Generous on purpose (burn list A3): the real staleness this exists to
+# catch is measured in HOURS to DAYS (Side A's ALS was edited across two
+# days while its 09-11 render kept getting read as current), so this only
+# needs to be well clear of incidental mtime noise between a script writing
+# the ALS/report and the render finishing - not a tight tolerance.
+STALE_RENDER_GRACE_SEC = 300.0
 CLICK_HALF_WINDOW_SEC = 0.002  # +/-2 ms around a boundary, in samples via sr
 NULL_BEATS_EACH_SIDE = 16
 NULL_EXCLUSION_BEATS = 0.5
@@ -498,9 +506,21 @@ class TempoMap:
 
 
 def parse_als(path: Path) -> tuple[TempoMap, list[dict]]:
-    """Return (tempo_map, clips), with clip geometry in arrangement beats."""
-    with gzip.open(path, "rb") as fh:
-        root = ET.fromstring(fh.read())
+    """Return (tempo_map, clips), with clip geometry in arrangement beats.
+
+    Thin path-based wrapper over `_parse_als_bytes` - reads the file exactly
+    once. `run_check` calls `_parse_als_bytes` directly on a snapshot it
+    already read for hashing, rather than going through this wrapper and
+    opening the file a second time (Codex, 2026-09-14, A3 follow-up: two
+    separate opens - one to hash, one to parse - still leaves a race even
+    back-to-back; only a single read used for both closes it by
+    construction)."""
+    return _parse_als_bytes(Path(path).read_bytes())
+
+
+def _parse_als_bytes(data: bytes) -> tuple[TempoMap, list[dict]]:
+    """Return (tempo_map, clips) from already-read ALS bytes (gzipped XML)."""
+    root = ET.fromstring(gzip.decompress(data))
 
     tempo_map = TempoMap.from_als_root(root)
 
@@ -574,9 +594,20 @@ def parse_report(path: Path) -> tuple[list[dict], list[dict], list[str]]:
     """Return (loops, transitions, missing) where missing is the list of
     dependent keys absent from the JSON object. An empty list PRESENT in the
     JSON is an explicit statement ("we checked, nothing found") and is NOT
-    missing - only a missing KEY is missing."""
+    missing - only a missing KEY is missing.
+
+    Thin path-based wrapper over `_parse_report_data` - reads the file
+    exactly once. `run_check` decodes its own already-read snapshot bytes
+    and calls `_parse_report_data` directly, rather than opening the file
+    again here (same reasoning as `parse_als`/`_parse_als_bytes`)."""
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
+    return _parse_report_data(data)
+
+
+def _parse_report_data(data: dict) -> tuple[list[dict], list[dict], list[str]]:
+    """Return (loops, transitions, missing) from an already-parsed report
+    JSON object. See `parse_report`'s docstring for `missing`'s semantics."""
     missing: list[str] = []
     if "loops" not in data:
         missing.append("loops")
@@ -615,6 +646,69 @@ def derive_v_suffix(render_path: Path, report_path: Path | None) -> str:
         if matches:
             return f"V{matches[-1]}"
     return ""
+
+
+def _file_sha1(path: Path) -> str | None:
+    """Whole-file sha1, or None on any read failure - never fails the gate
+    over a provenance-binding detail (burn list A3, 2026-09-14: same
+    fail-open-on-read-error posture as kick_model_adapter._content_fingerprint)."""
+    try:
+        h = hashlib.sha1()
+        with open(path, "rb") as fh:
+            while chunk := fh.read(1 << 20):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def check_stale_render(render_path: Path, als_path: Path,
+                       report_path: Path) -> list[Finding]:
+    """FAIL when the ALS or arrangement report was modified AFTER this WAV
+    was bounced - the render can no longer be trusted to reflect what it is
+    nominally being checked against.
+
+    Burn list A3 (2026-09-14, Astra): the render report never bound its
+    findings to what it actually validated, so nothing stopped reviewing
+    yesterday's audio against today's arrangement - exactly what happened
+    with Side A (`RENDER_CHECK.md` dated 09-11 kept getting read as current
+    through the 09-12 leveling fix and the 09-13 margin-rule fix, both of
+    which changed the ALS the WAV was supposedly proving). mtime, not
+    content hash: a same-byte re-save (e.g. Ableton re-writing the ALS with
+    no real change) should still warn - it means SOMETHING touched the file
+    after the bounce, and the honest response is "re-render before trusting
+    this", not silently deciding the touch was harmless.
+
+    STALE_RENDER_GRACE_SEC tolerates incidental mtime noise (a test fixture
+    or a script that writes the ALS/report and then the render within the
+    same run, no meaningful elapsed time) without needing a "which was
+    written by a person first" signal this check does not have - see the
+    constant's own comment for why the margin stays safe against the real
+    defect class."""
+    findings: list[Finding] = []
+    try:
+        render_mtime = render_path.stat().st_mtime
+    except OSError:
+        return findings  # render_truncated / the caller's own I/O already covers a missing render
+    for label, path in (("ALS", als_path), ("arrangement report", report_path)):
+        try:
+            src_mtime = path.stat().st_mtime
+        except OSError:
+            continue  # a missing report/ALS is reported elsewhere (parse_report/parse_als)
+        if src_mtime > render_mtime + STALE_RENDER_GRACE_SEC:
+            age_s = src_mtime - render_mtime
+            findings.append(Finding(
+                check="stale_render", level="FAIL",
+                t0=0.0, t1=0.0, beat0=0.0, beat1=0.0,
+                measured={"source": label, "source_path": str(path),
+                          "render_mtime": render_mtime,
+                          "source_mtime": src_mtime,
+                          "source_newer_by_sec": age_s},
+                msg=(f"the {label} was modified {age_s / 60.0:.1f} min AFTER "
+                     "this render was bounced - re-render before trusting "
+                     "this report"),
+            ))
+    return findings
 
 
 # --------------------------------------------------------------------------- #
@@ -1968,28 +2062,65 @@ def _verbatim_gated_pairs(insert_beat: float, iter_len: float, count: int,
     swap, so post-swap material is never safe to compare pairwise.
 
     INTRO loops (2026-09-02, Fable second-lens review of 32efa36, Finding
-    2): the same wholesale exclusion was wrongly applied to an INCOMING
-    track's intro loop too, where it is backwards - `lp["type"]` is written
-    by propose_arrangement.py (`"tail" if "tail" in ls.clip_name else
-    "intro"`) but was unused here. Verified against apply_automation.py
-    (every style's incoming-volume envelope, e.g. L1034-1039): the incoming
-    ramps from its sneak level up to VOL_UNITY EXACTLY at the swap beat,
-    then holds flat at unity for the rest of the overlap - so POST-swap
-    material is the steady, comparable state for an intro loop, and only
-    the ONE pair whose later iteration spans the ramp (straddles the swap)
-    needs special handling. Both fully-pre and fully-post pairs gate
-    normally; the straddling pair still recovers its pre-swap prefix via
-    `_straddle_fraction`, same mechanism as the tail case."""
+    2; CORRECTED 2026-09-14 on real Tech House Heldout B/C audio, burn
+    list A2 investigation): the same wholesale exclusion was wrongly
+    applied to an INCOMING track's intro loop too, where it is backwards -
+    `lp["type"]` is written by propose_arrangement.py (`"tail" if "tail" in
+    ls.clip_name else "intro"`) but was unused here.
+
+    The 2026-09-02 model was WRONG about "fully-pre pairs gate normally,"
+    and it was wrong in a way that never showed up until an actual
+    `incoming_intro_loop` produced real audio to check (never true before
+    2026-09-14 - see burn list A2/A3). Verified directly against a real
+    render's automation envelope (Tech House Heldout Side B, Sam Leagas's
+    intro loop at beat 2420, swap at 2548): the incoming's volume
+    automation carries exactly two points, `(2420, 0.15)` and `(2548,
+    1.0)` - a ramp spanning the loop's ENTIRE insert-to-swap span, not
+    something that starts "near" the swap. Both loop iterations (2420-2452,
+    2452-2484) sit on DIFFERENT points of that ramp and are measurably
+    louder than each other (r=0.85) despite byte-identical clip/warp
+    geometry confirmed directly in the ALS - the render is doing exactly
+    what it was told to (a legitimate sneak-in), and the OLD model's
+    "fully-pre = stable" assumption was simply never true for this
+    mechanism. Separately, but from the SAME cause: `_loop_swap_beat`'s
+    geometric containment check (built assuming a loop sits WITHIN its
+    transition's reconstructed overlap) routinely returns None for real
+    intro loops, because the loop itself is what extends the incoming's
+    reach earlier than that reconstruction expects (confirmed: HARTY's
+    real loop starts 7.5 beats before its transition's own computed
+    overlap start) - and the old `swap_beat is None` fallback answered
+    that uncertainty by gating EVERY pair, the least safe direction.
+
+    New model: only FULLY-POST pairs (after the ramp has reached unity)
+    are gated - normal, unchanged. A pair that is fully pre-swap, straddles
+    the swap, OR whose covering transition could not be identified at all
+    is treated as under-automation and reported, never gated - erring
+    toward not flagging a real defect over flagging a legitimate ramp,
+    which is the direction this project already takes everywhere else a
+    check cannot tell the two apart (grid_fold's arc WARN, boundary_click's
+    arc skip). A straddling pair's own pre-swap-prefix recovery
+    (`_straddle_fraction`, called by the caller, not here) is intro-safe
+    on its own terms, but the caller ONLY promotes that recovery for tail
+    loops now - see check_loop_verbatim - because even a recovered PREFIX
+    is two different points on the same continuous ramp for an intro loop,
+    which is exactly the fault this whole correction removes.
+
+    OFF-BY-ONE, caught by Codex review (2026-09-14): "fully post-swap"
+    requires BOTH iterations of the pair to start at/after the swap - the
+    EARLIER iteration k, not the later iteration k+1. insert=0, iter_len=4,
+    swap=10, pair k=2 compares iterations [8,12) and [12,16): the later
+    iteration (3) starts at 12 (post-swap), but the earlier iteration (2)
+    starts at 8 (PRE-swap) and still contains ramp material in [8,10) -
+    checking only the later iteration's start wrongly called this pair
+    fully-post and gated it, reintroducing a false-FAIL path for exactly
+    the geometry this fix exists to close."""
+    if loop_type == "intro":
+        if swap_beat is None:
+            return []
+        return [k for k in range(count - 1)
+                if insert_beat + k * iter_len >= swap_beat - 1e-6]
     if swap_beat is None:
         return list(range(count - 1))
-    if loop_type == "intro":
-        gated = []
-        for k in range(count - 1):
-            fully_pre = insert_beat + (k + 2) * iter_len <= swap_beat + 1e-6
-            fully_post = insert_beat + (k + 1) * iter_len >= swap_beat - 1e-6
-            if fully_pre or fully_post:
-                gated.append(k)
-        return gated
     return [k for k in range(count - 1)
             if insert_beat + (k + 2) * iter_len <= swap_beat + 1e-6]
 
@@ -2031,9 +2162,10 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
             if count < 2:
                 continue
             swap_beat = _loop_swap_beat(lp, transitions or [])
+            loop_type = lp.get("type", "tail")
             gated = set(_verbatim_gated_pairs(
                 lp["insert_at_beat"], iter_len, count, swap_beat,
-                loop_type=lp.get("type", "tail")))
+                loop_type=loop_type))
             envs = []
             for k in range(count):
                 start_beat = lp["insert_at_beat"] + k * iter_len
@@ -2064,21 +2196,37 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                 target = rs_gate
                 if k not in gated:
                     target = rs_auto
-                    frac = _straddle_fraction(
-                        lp["insert_at_beat"], iter_len, k, swap_beat)
-                    if frac is not None:
-                        # Compare only the pre-swap prefix of BOTH
-                        # iterations - iteration k is entirely untouched by
-                        # automation regardless, iteration k+1's prefix is
-                        # too; only its tail plays post-swap. A window too
-                        # short to correlate meaningfully (swap lands right
-                        # at the iteration's own start) falls through to
-                        # rs_auto (reported, never gates) rather than being
-                        # dropped or trusted on noise.
-                        cut = int(round(min_len * frac))
-                        if cut >= 8:
-                            a, b = a[:cut], b[:cut]
-                            target = rs_gate
+                    # Straddle-prefix promotion is TAIL-ONLY (Codex,
+                    # 2026-09-14, second round: the retained promotion
+                    # contradicted this fix's own premise). The comment
+                    # this replaces claimed "iteration k is entirely
+                    # untouched by automation regardless" - true for a
+                    # tail loop, where the outgoing's automation only
+                    # starts AT the swap, so anything before it really is
+                    # flat. FALSE for an intro loop under the model this
+                    # fix established: the incoming's ramp spans the
+                    # loop's entire insert-to-swap span, so a "recovered
+                    # pre-swap prefix" is still two different points on
+                    # that same continuous ramp, not a flat, comparable
+                    # region - promoting it back into rs_gate would
+                    # reintroduce exactly the false-FAIL this fix removes.
+                    if loop_type != "intro":
+                        frac = _straddle_fraction(
+                            lp["insert_at_beat"], iter_len, k, swap_beat)
+                        if frac is not None:
+                            # Compare only the pre-swap prefix of BOTH
+                            # iterations - iteration k is entirely untouched
+                            # by automation regardless, iteration k+1's
+                            # prefix is too; only its tail plays post-swap.
+                            # A window too short to correlate meaningfully
+                            # (swap lands right at the iteration's own
+                            # start) falls through to rs_auto (reported,
+                            # never gates) rather than being dropped or
+                            # trusted on noise.
+                            cut = int(round(min_len * frac))
+                            if cut >= 8:
+                                a, b = a[:cut], b[:cut]
+                                target = rs_gate
                 if a.std() < 1e-12 or b.std() < 1e-12:
                     continue
                 r = float(np.corrcoef(a, b)[0, 1])
@@ -2086,9 +2234,33 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
             if not rs_gate and not rs_auto:
                 continue
             if not rs_gate:
-                # Every pair plays under the transition's automation - a
+                # Every pair falls outside the confirmed-stable region - a
                 # verbatim gate has nothing valid to measure. Report, never
-                # gate: the automation SHOULD change these iterations.
+                # gate.
+                #
+                # swap_beat can be None here (2026-09-14: an intro loop
+                # whose covering transition _loop_swap_beat could not
+                # identify now also lands in this branch, correctly, rather
+                # than being force-gated - see _verbatim_gated_pairs) -
+                # previously unreachable with swap_beat=None, since the old
+                # model always gated at least one pair in that case, so the
+                # f"{swap_beat:.0f}" below never ran against None until this
+                # fix exposed it.
+                #
+                # The message is HONEST about which of two different things
+                # is true (Codex, 2026-09-14, second round: the original
+                # wording asserted "plays under transition automation" even
+                # when swap_beat is None, which is an INFERENCE from "we
+                # could not identify coverage", not an established fact -
+                # the loop may or may not actually be under automation;
+                # what is true is that this check cannot tell). When
+                # swap_beat IS known, "under transition automation" is a
+                # confirmed fact, not an inference - keep that wording.
+                if swap_beat is not None:
+                    reason = f"plays under transition automation (swap at beat {swap_beat:.0f})"
+                else:
+                    reason = ("automation coverage could not be established "
+                             "(no single covering transition identified)")
                 findings.append(Finding(
                     check="loop_verbatim_under_automation", level="INFO",
                     t0=arr_to_sec(lp["insert_at_beat"], tempo_map),
@@ -2098,9 +2270,7 @@ def check_loop_verbatim(render_path: Path, loops: list[dict],
                     beat1=lp["insert_at_beat"] + lp["total_beats"],
                     measured={"swap_beat": swap_beat, "iters": int(count),
                               "rs": [round(r, 3) for r in rs_auto]},
-                    msg=("loop plays entirely under transition automation "
-                         f"(swap at beat {swap_beat:.0f}) - verbatim check "
-                         "not applicable"),
+                    msg=f"loop {reason} - verbatim check not applicable",
                 ))
                 continue
             min_r = min(rs_gate)
@@ -2157,32 +2327,16 @@ def _pick_solo_regions(clips: list[dict], tempo_map: TempoMap,
     return out
 
 
-def _grid_fold_median(path: Path, t0_sec: float, dur_sec: float,
-                      tempo_map: TempoMap) -> float:
-    """Lazy librosa: load mono at 22050, lowpass 150 Hz, fold onsets, return
-    median phase in ms."""
-    import librosa
-    dur = min(dur_sec, GRID_FOLD_PROBE_S)
-    y, sr = librosa.load(str(path), sr=22050, mono=True,
-                         offset=t0_sec, duration=dur)
-    sos = butter(4, 150.0, btype="low", fs=sr, output="sos")
-    y_low = sosfiltfilt(sos, y)
-    env = librosa.onset.onset_strength(y=np.ascontiguousarray(y_low), sr=sr)
-    on = librosa.onset.onset_detect(onset_envelope=env, sr=sr, units="time",
-                                    backtrack=False)
-    if len(on) < 5:
-        return 0.0
-    times = on + t0_sec
-    onset_beats = sec_to_arr(times, tempo_map)
-    beat_dur = 60.0 / tempo_map.bpm_at(float(onset_beats.mean()))
-    phase_ms = ((onset_beats + 0.5) % 1.0 - 0.5) * beat_dur * 1000.0
-    # Dominant-cluster median, not the raw median: solo house program has
-    # offbeat percussion whose onsets fold to +/-half-beat and drag the raw
-    # median tens of ms off (V10 region at 7:13 reads -31.9 raw vs +49.6
-    # clustered while its neighbours cluster at +47.9/+50.9 -- the cluster
-    # is the kick lattice, the raw median is the hat pattern). Same
-    # histogram logic as probe_render_flam.py.
-    half_beat_ms = beat_dur * 500.0
+def _dominant_cluster_median(phase_ms: np.ndarray, half_beat_ms: float) -> float:
+    """Histogram-mode median of a folded onset-phase array.
+
+    Dominant-cluster median, not the raw median: solo house program has
+    offbeat percussion whose onsets fold to +/-half-beat and drag the raw
+    median tens of ms off (V10 region at 7:13 reads -31.9 raw vs +49.6
+    clustered while its neighbours cluster at +47.9/+50.9 -- the cluster
+    is the kick lattice, the raw median is the hat pattern). Same
+    histogram logic as probe_render_flam.py. Shared by both foldings in
+    `_grid_fold_median` - see its docstring for why there are two."""
     hist, edges = np.histogram(phase_ms, bins=47,
                                range=(-half_beat_ms, half_beat_ms))
     centers = (edges[:-1] + edges[1:]) / 2.0
@@ -2193,11 +2347,84 @@ def _grid_fold_median(path: Path, t0_sec: float, dur_sec: float,
     return float(np.median(near))
 
 
+def _grid_fold_median(path: Path, t0_sec: float, dur_sec: float,
+                      tempo_map: TempoMap) -> tuple[float, float] | None:
+    """Lazy librosa: load mono at 22050, lowpass 150 Hz, fold onsets.
+
+    Returns (primary_ms, alt_ms): `primary` is today's dominant-cluster
+    median against the assumed grid; `alt` is the SAME onsets folded
+    against a grid shifted by exactly half a beat.
+
+    Both foldings are EQUALLY well-supported from one region alone - a
+    tight, well-populated cluster under one folding is exactly as tight and
+    populated under the other, just relabelled - so a single region can
+    never tell "kick lattice" from "offbeat lattice" apart by itself
+    (burn list A1, 2026-09-14). On tech house an offbeat bassline can
+    out-populate the true kick cluster within one region, so the old
+    single-folding dominant-cluster argmax locked onto the wrong lattice:
+    a real Tech House Heldout render measured -186.4 / -189.0 / +42.8 ms
+    across three regions (a 231.8 ms spread, well past the 30 ms FAIL
+    threshold), and shifting the first two by a half beat collapses the
+    spread to ~2.6 ms - clearly the same grid, misread twice. Returning
+    both readings lets `check_grid_fold` resolve the ambiguity with
+    cross-region consensus instead of trusting one region's own argmax.
+
+    THE RESIDUAL AMBIGUITY (Codex, 2026-09-14, confirmed by reproduction):
+    the same two-readings-per-region shape that rescues the offbeat-confound
+    case is ALSO exactly what a genuine half-beat-multiple drift in a SINGLE
+    region looks like - primaries [10, 240, 10] / alternates [-220, 10,
+    -220] is mathematically the offbeat-confound signature AND a real 230ms
+    drift in region 1, and no per-region measurement can tell them apart.
+    `check_grid_fold` does not resolve this by guessing; it downgrades to a
+    named WARN whenever reaching the best spread required reinterpreting
+    only SOME regions, rather than reporting a confident clean pass.
+
+    None (never a fabricated 0.0 - Astra, 2026-09-13: a numeric zero from
+    too few onsets is indistinguishable from a genuinely perfect
+    measurement) when there are fewer than 5 onsets to measure at all."""
+    import librosa
+    dur = min(dur_sec, GRID_FOLD_PROBE_S)
+    y, sr = librosa.load(str(path), sr=22050, mono=True,
+                         offset=t0_sec, duration=dur)
+    sos = butter(4, 150.0, btype="low", fs=sr, output="sos")
+    y_low = sosfiltfilt(sos, y)
+    env = librosa.onset.onset_strength(y=np.ascontiguousarray(y_low), sr=sr)
+    on = librosa.onset.onset_detect(onset_envelope=env, sr=sr, units="time",
+                                    backtrack=False)
+    if len(on) < 5:
+        return None
+    times = on + t0_sec
+    onset_beats = sec_to_arr(times, tempo_map)
+    beat_dur = 60.0 / tempo_map.bpm_at(float(onset_beats.mean()))
+    half_beat_ms = beat_dur * 500.0
+    phase_ms = ((onset_beats + 0.5) % 1.0 - 0.5) * beat_dur * 1000.0
+    alt_phase_ms = (onset_beats % 1.0 - 0.5) * beat_dur * 1000.0
+    primary = _dominant_cluster_median(phase_ms, half_beat_ms)
+    alt = _dominant_cluster_median(alt_phase_ms, half_beat_ms)
+    return primary, alt
+
+
 def check_grid_fold(render_path: Path, clips: list[dict],
                     tempo_map: TempoMap) -> list[Finding]:
     """Up to 3 solo regions at 15/50/85% of the arrangement, >= 45 s each.
     Drift = max - min of median onset phase across regions; > 30 ms -> FAIL.
-    The constant librosa bias is fine; only drift fails."""
+    The constant librosa bias is fine; only drift fails.
+
+    Each region yields TWO equally-plausible readings (see `_grid_fold_median`
+    - a genuine offbeat-heavy region can lock onto the wrong one alone), so
+    drift is the BEST achievable spread across all combinations of readings,
+    one per region - cross-region consensus instead of trusting each
+    region's own argmax. Shifting EVERY region by the same half beat leaves
+    their relative spread unchanged, so an unrelated real desync spread
+    across the whole render still fails (pinned by test_grid_fold_drift).
+
+    It does NOT rule out a genuine drift confined to a SUBSET of regions
+    (Codex, 2026-09-14): that is mathematically identical, after folding, to
+    the offbeat-confound case this exists to catch - one region's data can
+    never say which it is. So a combination that only needed to reinterpret
+    SOME regions (not all, not none) is reported as an ambiguous WARN, never
+    a confident clean pass - see `alt_used` in `measured` for which region(s)
+    to give a closer look or an actual listen."""
     findings: list[Finding] = []
     regions = _pick_solo_regions(clips, tempo_map, [0.15, 0.5, 0.85])
     if len(regions) < 2:
@@ -2209,26 +2436,36 @@ def check_grid_fold(render_path: Path, clips: list[dict],
             msg="grid_fold skipped (fewer than 2 solo regions >= 45 s)",
         ))
         return findings
-    medians: list[float] = []
+    probes: list[tuple[float, float]] = []
     used: list[tuple[float, float]] = []
     for t0, t1 in regions:
         try:
-            m = _grid_fold_median(render_path, t0, t1 - t0, tempo_map)
+            result = _grid_fold_median(render_path, t0, t1 - t0, tempo_map)
         except Exception:
             continue
-        medians.append(m)
+        if result is None:
+            continue
+        probes.append(result)
         used.append((t0, t1))
-    if len(medians) < 2:
+    if len(probes) < 2:
         findings.append(Finding(
             check="grid_fold", level="INFO",
             t0=0.0, t1=0.0,
             beat0=0.0, beat1=0.0,
-            measured={"regions": len(medians)},
+            measured={"regions": len(probes)},
             msg="grid_fold skipped (probe failure)",
         ))
         return findings
-    drift = max(medians) - min(medians)
+    best_combo = min(
+        itertools.product(*probes),
+        key=lambda combo: max(combo) - min(combo),
+    )
+    drift = max(best_combo) - min(best_combo)
+    medians = list(best_combo)
+    alt_used = [c != p[0] for c, p in zip(best_combo, probes)]
     measured = {"medians_ms": medians,
+                "primary_medians_ms": [p[0] for p in probes],
+                "alt_used": alt_used,
                 "regions": [(round(t0, 1), round(t1, 1)) for t0, t1 in used],
                 "drift_ms": drift,
                 "tempo_map_flat": tempo_map.is_flat}
@@ -2277,6 +2514,48 @@ def check_grid_fold(render_path: Path, clips: list[dict],
             measured=measured,
             msg=f"beat grid drifts across the render ({drift:.1f} ms)",
         ))
+    elif 0 < sum(alt_used) < len(alt_used):
+        # Codex, 2026-09-14: reaching a spread under threshold required
+        # reinterpreting SOME (not all, not none) regions via their
+        # half-beat-shifted alternate - reproduced as a real ambiguity, not
+        # a false alarm (primaries [10, 240, 10] / alternates
+        # [-220, 10, -220] -> drift 0.0, indistinguishable from a genuine
+        # 230ms drift confined to region 1). Report it as such rather than
+        # a confident clean pass.
+        #
+        # ALL regions picking alt is NOT this case for DRIFT-ACROSS-REGIONS
+        # purposes - it is the same uniform relabelling `_grid_fold_median`'s
+        # own module-level reasoning already covers (shifting every region
+        # together preserves their relative agreement), just expressed in
+        # the other frame, so it stays a confident pass on THIS check's own
+        # claim. Codex, 2026-09-14 follow-up: that is not the same as
+        # proving absolute grid alignment - nothing upstream of this check
+        # independently establishes which frame is the TRUE downbeat, so a
+        # render-wide, uniform half-beat offset is a real blind spot outside
+        # this check's stated scope (relative drift across the render), not
+        # a case it can or claims to rule out. Confirmed live: the plain
+        # on-grid control fixture in test_grid_fold_drift reads
+        # alt_used=[True, True] purely from a librosa onset-detection
+        # edge-of-range artifact on a single-tone synthetic kick, with
+        # drift_ms effectively 0 - a uniform pick, not an ambiguous one, and
+        # `sum(alt_used) < len(alt_used)` is what keeps it out of this
+        # branch.
+        flagged = [f"{used[i][0]:.1f}-{used[i][1]:.1f}s"
+                  for i, u in enumerate(alt_used) if u]
+        findings.append(Finding(
+            check="grid_fold", level="WARN",
+            t0=used[0][0], t1=used[-1][1],
+            beat0=sec_to_arr(used[0][0], tempo_map),
+            beat1=sec_to_arr(used[-1][1], tempo_map),
+            measured=measured,
+            msg=(f"beat grid reads consistent ({drift:.1f} ms) only after "
+                 f"reinterpreting region(s) {', '.join(flagged)} against a "
+                 "half-beat-shifted grid - ambiguous, not confirmed clean: "
+                 "could be the offbeat-bass confound this fold exists to "
+                 "see past, or a genuine half-beat-multiple drift confined "
+                 "to exactly those regions. Check measured.alt_used; "
+                 "listen to the region(s) named above."),
+        ))
     else:
         findings.append(Finding(
             check="grid_fold", level="INFO",
@@ -2312,11 +2591,23 @@ def run_check(render_path: Path, report_path: Path,
     report_path = Path(report_path)
     als_path = Path(als_path)
 
+    # SNAPSHOT, not just early: read each provenance input ONCE into bytes,
+    # hash and parse THAT SAME buffer, never re-open the path a second time
+    # (Codex, 2026-09-14, A3 follow-up round: hashing early but still
+    # re-opening the file to parse still left a race - narrower than
+    # hashing late, but not closed - a mid-run edit landing in the gap
+    # between the hash's own open() and the parser's own open() would still
+    # stamp a hash for bytes different from what was actually parsed and
+    # checked. A single read used for both closes it by construction, not
+    # by narrowing the window).
+    als_bytes = als_path.read_bytes()
+    als_sha1 = hashlib.sha1(als_bytes).hexdigest()
+
     # Fail closed when the tempo envelope cannot produce a trustworthy map.
     # Running any audio check with a partial or invalid map would silently
     # mis-check the render.
     try:
-        tempo_map, clips = parse_als(als_path)
+        tempo_map, clips = _parse_als_bytes(als_bytes)
     except TempoAutomationUnsupported as e:
         distinct = (list(e.distinct_values)
                     if e.distinct_values is not None else [])
@@ -2341,11 +2632,36 @@ def run_check(render_path: Path, report_path: Path,
                 # prevent, on the one path that never reads a sample.
                 "checks_ran": False,
                 "v_suffix": derive_v_suffix(render_path, report_path),
+                "als_path": str(als_path),
+                "als_sha1": als_sha1,
             },
         )
-    loops, transitions, missing = parse_report(report_path)
+    report_bytes = report_path.read_bytes()
+    report_sha1 = hashlib.sha1(report_bytes).hexdigest()
+    # Decode as UTF-8 explicitly, not json.loads(bytes) (Codex, 2026-09-14,
+    # round 3: json's own bytes auto-detection accepts some UTF-16/32 input
+    # the old explicit `open(path, encoding="utf-8")` would have rejected -
+    # a genuinely non-UTF-8 report should fail loudly, not get silently
+    # reinterpreted under a different encoding).
+    report_data = json.loads(report_bytes.decode("utf-8"))
+    loops, transitions, missing = _parse_report_data(report_data)
+    # Same snapshot, not a later re-read (Codex, 2026-09-14: the OLD
+    # separate re-open further down - for source-faithful-silence
+    # reclassification - was a THIRD read of report_path, well after the
+    # sweep; a mid-run edit there could change track_bpms behaviour while
+    # the provenance stamp still described the pre-edit report). Derived
+    # once, here, from the same bytes that were hashed and parsed above.
+    try:
+        track_bpms = {
+            html.unescape(t["name"]): float(t.get("source_grid_bpm")
+                                            or t.get("bpm") or 0.0)
+            for t in report_data.get("tracks", [])
+        }
+    except Exception:
+        track_bpms = {}
 
     findings: list[Finding] = []
+    findings += check_stale_render(render_path, als_path, report_path)
 
     # Surface missing report keys. A missing key means a whole class of
     # checks (loops or transitions) was disabled; an empty list is an
@@ -2403,16 +2719,8 @@ def run_check(render_path: Path, report_path: Path,
     # Consult the SOURCE audio before letting a silence finding gate: a
     # track-intrinsic stop (written-in breakdown halt, natural end tail) is
     # the track, not a render defect. Fails closed - see the reclassifier.
-    try:
-        with open(report_path, "r", encoding="utf-8") as _fh:
-            _rep_raw = json.load(_fh)
-        track_bpms = {
-            html.unescape(t["name"]): float(t.get("source_grid_bpm")
-                                            or t.get("bpm") or 0.0)
-            for t in _rep_raw.get("tracks", [])
-        }
-    except Exception:
-        track_bpms = {}
+    # track_bpms was derived above from the same report_bytes snapshot that
+    # was hashed and parsed - not re-read here.
     audio_dir = render_path.parent.parent / "Audio"
     if track_bpms and audio_dir.is_dir():
         reclassify_source_faithful_silence(findings, clips, tempo_map,
@@ -2507,6 +2815,18 @@ def run_check(render_path: Path, report_path: Path,
         "arr_start_sec": arr_start_s,
         "arr_end_sec": arr_end_s,
         "n_boundaries": len(boundaries_sec),
+        # Provenance binding (burn list A3, 2026-09-14): what this report
+        # actually validated, so a stale render read against a since-changed
+        # ALS/arrangement report is detectable after the fact, not just at
+        # check_stale_render's own gate time - re-hash the cited paths and
+        # compare against these to know whether a report is still current.
+        # Hashed EARLY (als_sha1/report_sha1 above, at parse time) - not
+        # here - so the stamp binds to what was actually parsed, not to
+        # whatever the file happens to be after the audio sweep runs.
+        "als_path": str(als_path),
+        "als_sha1": als_sha1,
+        "report_path": str(report_path),
+        "report_sha1": report_sha1,
     })
     return CheckResult(findings=findings, verdict=verdict, exit_code=exit_code,
                        meta=meta)
@@ -2553,7 +2873,14 @@ def write_report(result: CheckResult, render_path: Path,
     md.append(f"- BPM: {result.meta.get('bpm', 0):.3f}")
     md.append(f"- clip count: {result.meta.get('clip_count', 0)}")
     md.append(f"- integrated LUFS: {result.meta.get('integrated_lufs', -120):.2f}")
-    md.append(f"- verdict: **{result.verdict}** (exit {result.exit_code})\n")
+    md.append(f"- verdict: **{result.verdict}** (exit {result.exit_code})")
+    md.append(f"- checked against: ALS `{result.meta.get('als_path', '')}` "
+              f"sha1 `{result.meta.get('als_sha1') or '-'}`, report "
+              f"`{result.meta.get('report_path', '')}` sha1 "
+              f"`{result.meta.get('report_sha1') or '-'}` - re-hash these "
+              "paths before trusting this file; a mismatch means it is "
+              "stale (see `stale_render` in Findings if the render itself "
+              "predates either).\n")
 
     md.append("## Findings\n")
     md.append("| # | time | arr beat | check | level | measured | note |")
