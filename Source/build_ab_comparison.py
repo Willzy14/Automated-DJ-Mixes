@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from validate_mix_plan_als import reconcile
+
 # (label, transition-policy, cue-signals). cue-signals is a --cue-signals
 # value forwarded verbatim to propose_arrangement.py's CLI (comma-separated
 # tokens, e.g. "introloop") or "" for none. Each subprocess ALWAYS installs a
@@ -106,11 +108,41 @@ def main() -> int:
                              "stage": "automation", "ok": False}
             continue
         print(f"  automated -> {final.name}")
-        results[side] = {
-            "policy": policy, "cue_signals": cue_signals, "stage": "complete",
-            "ok": True, "als": str(final), "report": str(report),
-            "mix_plan": str(mix_plan),
-        }
+
+        # MixPlan reconciliation is now a real gate for every side (burn
+        # list A4, 2026-09-14) - not skipped for non-tempo-arc/experimental
+        # builds. It used to hard-fail on every track here (project_bpm None
+        # -> NaN, every warp_mode the literal string "inherited") because
+        # propose_arrangement.py never recorded what tempo/warp mode a
+        # FULLY INHERITED build (no --project-bpm/--warp-mode override -
+        # exactly how every side here is built) actually used - a real data
+        # gap in the MixPlan, fixed at the source rather than exempted here.
+        # In-process, not a subprocess: reconciliation is read-only, so the
+        # per-side module-state isolation this file's docstring cares about
+        # (the automation ID counter, cached policy) does not apply to it.
+        try:
+            # Broad except, not just ValueError (render_check.py's own
+            # "gate could not run" convention): a missing/malformed
+            # MixPlan or ALS is exactly as disqualifying as a genuine
+            # mismatch - never let an unrelated IO/parse error crash the
+            # whole comparison build uncaught when it should just fail
+            # this one side's gate.
+            recon = reconcile(mix_plan, report, final)
+            print(f"  reconciled -> {len(recon['checks'])} checks PASS")
+            results[side] = {
+                "policy": policy, "cue_signals": cue_signals,
+                "stage": "complete", "ok": True, "als": str(final),
+                "report": str(report), "mix_plan": str(mix_plan),
+                "reconciliation": recon,
+            }
+        except Exception as e:
+            print(f"  RECONCILE FAILED: {type(e).__name__}: {e}")
+            results[side] = {
+                "policy": policy, "cue_signals": cue_signals,
+                "stage": "reconcile", "ok": False, "als": str(final),
+                "report": str(report), "mix_plan": str(mix_plan),
+                "reconciliation_error": f"{type(e).__name__}: {e}",
+            }
 
     (audit / "build_results.json").write_text(
         json.dumps(results, indent=2), encoding="utf-8")

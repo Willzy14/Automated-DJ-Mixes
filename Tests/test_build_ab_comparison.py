@@ -13,6 +13,7 @@ this pins the COMMAND CONSTRUCTION, not a full pipeline run (which belongs
 in a real project fixture, out of scope here).
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -40,6 +41,14 @@ def test_cue_signals_only_passed_to_the_subprocess_when_set(tmp_path, monkeypatc
         return 0, ""
 
     monkeypatch.setattr(BAC, "run", fake_run)
+    # This test is about subprocess COMMAND CONSTRUCTION (per the module
+    # docstring), not MixPlan reconciliation (burn list A4, 2026-09-14) -
+    # the fake run() never creates real MixPlan/report/ALS files, so a real
+    # reconcile() call would correctly fail closed on missing files. Stub
+    # it out, matching the same "mock the sibling step, pin only what this
+    # test is actually about" approach already used for run().
+    monkeypatch.setattr(BAC, "reconcile",
+                        lambda plan, report, als: {"checks": ["stubbed"]})
 
     project = tmp_path / "Proj"
     sections_als = tmp_path / "Sections.als"
@@ -64,3 +73,41 @@ def test_cue_signals_only_passed_to_the_subprocess_when_set(tmp_path, monkeypatc
     assert cue_signal_calls[0][idx + 1] == "introloop"
     policy_idx = cue_signal_calls[0].index("--transition-policy")
     assert cue_signal_calls[0][policy_idx + 1] == "sam_v1"
+
+
+def test_reconciliation_failure_fails_that_side_not_the_whole_build(tmp_path, monkeypatch):
+    """Burn list A4 (2026-09-14): MixPlan reconciliation is now a real gate,
+    called in-process after each side's automation stage succeeds. A side
+    whose MixPlan does not reconcile against its ALS must be marked not-ok
+    (stage="reconcile") and the overall exit code must reflect it - "the
+    subprocesses succeeded" is no longer sufficient for main() to return 0."""
+    def fake_run(cmd, log):
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("", encoding="utf-8")
+        return 0, ""
+
+    monkeypatch.setattr(BAC, "run", fake_run)
+
+    def fake_reconcile(plan, report, als):
+        raise ValueError("Project tempo does not match MixPlan nan")
+
+    monkeypatch.setattr(BAC, "reconcile", fake_reconcile)
+
+    project = tmp_path / "Proj"
+    sections_als = tmp_path / "Sections.als"
+    sections_json = tmp_path / "Sections.json"
+    sections_als.write_bytes(b"")
+    sections_json.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", [
+        "build_ab_comparison.py", str(project), str(sections_als), str(sections_json),
+    ])
+    rc = BAC.main()
+    assert rc == 1, "a reconciliation failure on every side must not report success"
+
+    results = json.loads((project / "Output" / "AB" / "_audit" / "build_results.json")
+                         .read_text(encoding="utf-8"))
+    for side in ("A", "B", "C"):
+        assert results[side]["ok"] is False
+        assert results[side]["stage"] == "reconcile"
+        assert "Project tempo" in results[side]["reconciliation_error"]

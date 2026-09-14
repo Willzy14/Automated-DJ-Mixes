@@ -1065,6 +1065,95 @@ def _hint_for(hints: dict, raw_name: str) -> dict:
             or hints.get(raw_name) or hints.get(raw_name + ".wav") or {})
 
 
+def _resolve_inherited_tempo_and_warp_modes(
+    input_root, tracks: list,
+) -> tuple[float | None, dict[str, int]]:
+    """Burn list A4 (2026-09-14): when propose_arrangement is called with
+    neither an explicit `--project-bpm`/`--warp-mode` override nor
+    `warp_mode="auto"` - the FULLY INHERITED case build_ab_comparison.py
+    uses for every side - nothing tells the MixPlan writer what tempo or
+    per-track warp mode the build actually used, even though the ALS being
+    written already has real, concrete values for both. Left unresolved,
+    `mix_plan.build_mix_plan` falls back to `project_bpm=None` and every
+    track's `warp_mode="inherited"` (a POLICY name, not a per-track
+    DECISION) - and `validate_mix_plan_als.py` can never reconcile either:
+    "inherited" matches neither "repitch" nor "complex_pro" in its lookup
+    table, and `float(None or "nan")` is NaN. Confirmed live: this is
+    exactly why MixPlan reconciliation hard-failed on all three sides of
+    the first-ever real Tech House Heldout A/B/C bounce, on every track,
+    identically.
+
+    Reads BOTH the manual tempo AND each track's per-clip WarpMode straight
+    from the ALS that is already being written - NOT re-derived via
+    `choose_dj_mix_warp_mode`'s bpm-distance rule, which was tried first and
+    rejected on real data: `source_grid_bpm` (the warp markers' own
+    beat/second slope, not the track's originally certified detection BPM)
+    disagreed with the ALS's actual WarpMode on 2 of 9 real tracks (Jay de
+    Lys, Jewel Kid) - both within 0.001 BPM of the exact +/-1.05 threshold,
+    landing on the wrong side of a boundary the ORIGINAL decision (made
+    upstream, from a different, more precise BPM measurement) did not.
+    Recomputing a decision the pipeline already made is a precision risk
+    for exactly the boundary cases that matter most; reading the value
+    already written into the artifact being described has none - same
+    lesson as this morning's A3 fix (bind to what is actually there, do not
+    re-derive it) - and it is exactly what `validate_mix_plan_als.py`
+    itself checks against, so it cannot disagree with the reconciler by
+    construction.
+
+    Returns (None, {}) if the ALS genuinely has no readable manual tempo.
+    Per-track: a track whose clips carry a WarpMode this project's DJ-mix
+    policy never uses (not Re-Pitch, not Complex Pro - e.g. plain Complex),
+    or whose clips disagree with each other, is left OUT of the returned
+    dict rather than guessed - `build_mix_plan`'s own per-track fallback to
+    "inherited" then correctly flags exactly that track, honestly, instead
+    of this function inventing a decision it cannot verify."""
+    import html
+
+    from automated_dj_mixes.warping import (
+        WARP_MODE_COMPLEX_PRO, WARP_MODE_REPITCH)
+
+    manual_el = input_root.find(".//Tempo/Manual")
+    manual_value = manual_el.get("Value") if manual_el is not None else None
+    if manual_value is None:
+        return None, {}
+    bpm = float(manual_value)
+
+    warp_modes_by_name: dict[str, set[float]] = {}
+    for track_el in input_root.iter("AudioTrack"):
+        name_el = next(track_el.iter("EffectiveName"), None)
+        clips = list(track_el.iter("AudioClip"))
+        if name_el is None or not clips:
+            continue
+        name = html.unescape(name_el.get("Value", ""))
+        warp_modes_by_name[name] = {
+            float(mode_el.get("Value"))
+            for clip in clips
+            for mode_el in [clip.find("WarpMode")]
+            if mode_el is not None
+        }
+
+    modes: dict[str, int] = {}
+    for track in tracks:
+        # ALS EffectiveName decodes XML entities naturally on parse (a
+        # literal apostrophe), but TrackInfo.name here can ALSO be the
+        # escaped sections-JSON form (e.g. "There&apos;s") - the same
+        # escaped/unescaped inconsistency _hint_for already works around
+        # elsewhere in this file. Confirmed live: without trying both,
+        # HARTY and Sapian (both have an apostrophe in their real name)
+        # would silently fall out of this dict on the real Tech House
+        # Heldout build, even though their WarpMode is perfectly readable.
+        found = (warp_modes_by_name.get(track.name)
+                or warp_modes_by_name.get(html.unescape(track.name)))
+        if not found or len(found) != 1:
+            continue
+        value = next(iter(found))
+        if value == float(WARP_MODE_REPITCH):
+            modes[track.name] = WARP_MODE_REPITCH
+        elif value == float(WARP_MODE_COMPLEX_PRO):
+            modes[track.name] = WARP_MODE_COMPLEX_PRO
+    return bpm, modes
+
+
 def propose_arrangement(als_path: Path, sections_path: Path,
                         output_path: Path,
                         history_path: Path | None = None,
@@ -1356,6 +1445,12 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         )
 
     effective_warp_modes: dict[str, int] = {}
+    # The MixPlan's OWN project_bpm field (what validate_mix_plan_als.py
+    # reconciles against the ALS) must always describe what was actually
+    # built - separate from `project_bpm` itself, which stays None unless a
+    # human explicitly overrode it (human_overrides below depends on that
+    # distinction and must not change).
+    effective_project_bpm = project_bpm
     if tempo_contract is not None:
         # Under a moving tempo, a track's mode cannot be judged from one project
         # BPM. It plays through the ramp into it and the ramp out of it, so pick
@@ -1386,6 +1481,24 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         }
     elif isinstance(warp_mode, int):
         effective_warp_modes = {track.name: warp_mode for track in tracks}
+    elif mix_plan_path is not None:
+        # FULLY INHERITED (burn list A4, 2026-09-14): no explicit warp_mode
+        # override and no "auto" was requested - the build simply uses
+        # whatever the ALS's own manual tempo already is. This is how
+        # build_ab_comparison.py invokes every side, and it is a valid,
+        # deliberate combination (the guard above at "project_bpm and
+        # warp_mode must be supplied together" explicitly allows both None
+        # together) - but the MixPlan this function writes must still
+        # describe what actually happened, not leave a hole. See
+        # _resolve_inherited_tempo_and_warp_modes's docstring for the full
+        # story (confirmed live: this is exactly why MixPlan reconciliation
+        # hard-failed on all three sides of the first-ever real Tech House
+        # Heldout A/B/C bounce).
+        resolved_bpm, resolved_modes = _resolve_inherited_tempo_and_warp_modes(
+            input_root, tracks)
+        if resolved_bpm is not None:
+            effective_project_bpm = resolved_bpm
+            effective_warp_modes = resolved_modes
 
     if mix_plan_path is not None:
         from automated_dj_mixes.mix_plan import (
@@ -1417,7 +1530,13 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             source_hashes=source_hashes,
             section_map_hashes=original_section_hashes,
             warp_grid_contracts=warp_grid_contracts,
-            project_bpm=project_bpm,
+            # effective_project_bpm, not project_bpm (burn list A4): the
+            # MixPlan's own project_bpm field must describe what was
+            # actually built (read back from the ALS when fully inherited),
+            # while human_overrides below stays keyed on the original
+            # project_bpm - "was this explicitly overridden" is a real,
+            # separate distinction worth keeping.
+            project_bpm=effective_project_bpm,
             warp_modes={
                 name: "repitch" if mode == WARP_MODE_REPITCH else "complex_pro"
                 for name, mode in effective_warp_modes.items()
