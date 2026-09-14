@@ -320,19 +320,32 @@ def test_merge_same_label_protection_keeps_width_cut_split():
     assert merged_protected[1]["start_bar"] == 148
 
 
-def test_detect_signature_and_merge_default_arg_byte_identical():
-    """detect() must accept width_cues=False as default (no caller breakage),
-    and _merge_same_label's protected_bars default must be an empty frozenset
-    so the default branch is byte-identical to pre-flag code. The actual
-    corpus-level JSON byte-identity proof is the courier's job; this test
-    pins the surface area."""
-    from stem_detector import _merge_same_label, detect
+def test_detect_signature_default_is_on():
+    """Burn list B1 (2026-09-14): width_cues flipped default-ON after real
+    verification - a 20-track corpus sweep (14 cues, 11 new boundaries, every
+    one independently backed by a stem/band exit at flat RMS, 0 spurious, 0
+    existing boundaries moved), independently corroborated by a second,
+    unrelated detector (allin1) finding the same Revoloution bar-147 boundary
+    every energy detector missed, and confirmed lightweight on a real track
+    (2.56s to compute Tier-A envelopes fresh, 0.02s on a cache hit). This
+    replaces the old pinned-OFF test - width_cues=True is now the surface
+    area to defend, not width_cues=False."""
+    from stem_detector import detect
 
     sig = inspect.signature(detect)
-    assert sig.parameters["width_cues"].default is False
+    assert sig.parameters["width_cues"].default is True
 
-    sig2 = inspect.signature(_merge_same_label)
-    assert sig2.parameters["protected_bars"].default == frozenset()
+
+def test_merge_same_label_protected_bars_default_is_still_empty():
+    """_merge_same_label's own protected_bars default is unrelated to
+    width_cues's flag flip - a caller that doesn't pass protected_bars
+    explicitly (any caller other than detect() itself, which now always
+    passes the width-derived bars when width_cues=True) must still get the
+    empty-set, byte-identical-to-pre-flag behaviour."""
+    from stem_detector import _merge_same_label
+
+    sig = inspect.signature(_merge_same_label)
+    assert sig.parameters["protected_bars"].default == frozenset()
 
 
 def test_detect_wires_width_protected_from_snapped_bar():

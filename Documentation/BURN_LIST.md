@@ -756,12 +756,75 @@ was written).
   materially DIFFERENT and more positive than the wrong citation implied: a 20-track corpus sweep
   with the flag ON showed 2/20 tracks improve (Pushin' From The Walls, Reachin), 0 spurious - "R4
   proven, R2 unproven" per `Documentation/TOOLBOX.md`'s own note.
-  Evidence: `Source/align_engine.py:66,499` (Astra, LOOP_SELF_SIMILARITY_TIERA);
-  `Source/stem_detector.py:565,570,633` (soft_intro_outro, corrected 2026-09-14);
-  `Documentation/TOOLBOX.md:161` (the 2/20-improve/0-spurious sweep result);
-  `Source/apply_automation.py:65` (BASS_RESIDUAL, Astra); `Documentation/AI_CONTEXT.md:294,299`
-  (Astra).
-  Owner: Sam. Peer review: NONE - not yet reviewed.
+  **RESOLVED 2/4, 2026-09-14 (Sam: "let's get them turned on") - investigated all four properly
+  before touching anything, and two more citation errors turned up in this same item on top of
+  the R2/R4 one already fixed above.** The "2/20-improve/0-spurious" figure's real source is
+  `Documentation/AI_CONTEXT.md:416`, not `TOOLBOX.md:161` (which carries a related but different,
+  figure-free sentence). The "two full mixes of zero-firings evidence... House 10 A/B" claim for
+  `BASS_RESIDUAL_ENABLED` does not hold up either - only ONE documented zero-firing run exists
+  (`.github/ai-activity-log.md:263`, House 10, 2026-09-02: 0 firings, 1 guard-refusal); the only
+  OTHER documented `BASS_RESIDUAL=1` run (`.github/ai-activity-log.md:256`, 2026-09-01) actually
+  DID fire. The citation this claim traces to (`AI_CONTEXT.md:294,299`) is about an unrelated
+  tempo-map render-gate merge, not bass residual at all.
+
+  **`width_cues`: ENABLED.** `Source/stem_detector.py:769`'s default flipped `False -> True`. Real
+  evidence held up: 20-track sweep, 14 cues, 11 new boundaries, every one independently backed by
+  a stem/band exit at flat RMS, 0 spurious, 0 existing boundaries moved (the 719be92 commit
+  message itself, the real primary source, has the full numbers - AI_CONTEXT.md/TOOLBOX.md only
+  paraphrase it). Independently corroborated by a SEPARATE detector entirely - `allin1`
+  (spectrogram transformer) found the same Revoloution bar-147 boundary every energy detector
+  missed, confirmed in `Documentation/Reviews/2026-08-20 allin1 Second-Opinion Evaluation.md`
+  BEFORE `width_cues` was even built. Verified before flipping, not just trusted: `width_cues=True`
+  requires real cached Tier-A stereo-width envelope arrays (`ensure_tier_a_arrays`) - ran it
+  directly against a real Tech House Heldout track (not a synthetic fixture): 2.56s to compute
+  fresh, 0.02s on a cache hit - genuinely lightweight, no real production cost. This dependency
+  broke every test using a fake/synthetic wav fixture (they don't have real audio to compute
+  envelopes from) - fixed by explicitly pinning `width_cues=False` in the 3 test files that were
+  testing something else entirely (kick-model integration, R2/R3/R4) and were never meant to
+  exercise this path; the one test that pinned the OLD default is rewritten to pin the new one.
+  Full suite 724/6/0 -> 725/6/0 (net: one old pinning test replaced by two).
+
+  **`soft_intro_outro`: ENABLED.** Same file/line, same flip. R2 and R4 share one flag - no way to
+  split them without new code, so "enable R4 (proven), leave R2 (unproven) off" isn't available
+  without building that split first. Enabled the COMBINED behaviour exactly as it was actually
+  tested: the real 20-track sweep tested R2+R3+R4 together and found 0 spurious - real evidence of
+  SAFETY for the combination, even though R2's own individual contribution specifically was never
+  isolated. Verified clean against the real test suite (11/11 in `test_section_soft_rules.py`).
+
+  **`LOOP_SELF_SIMILARITY_TIERA`: NOT ENABLED - a real, documented reason, not neglect.** The
+  module comment's own "test sweep" is a synthetic unit-test file, not corpus evidence - the REAL
+  corpus evidence (the actual 719be92 commit message, not the AI_CONTEXT.md paraphrase) is a
+  15,268-window replay: ON flips 1,262 verdicts - 791 evidenced NEW rejections, but also **404
+  evidence-carrying UN-catches** (real bad loops the current 5-key check correctly fails, that the
+  blended 10-key score would let PASS). This is the exact "AND-vs-replacement semantics" question
+  B1 already named: today's code computes one blended score across all 10 features
+  ("replacement" - a strong tiera signal can outvote a real base-score failure); the candidate fix
+  already on record is AND semantics (compute both scores, fail if EITHER fails, so ON can only
+  ever ADD catches, never remove one) - not built. Flipping the flag AS CODED TODAY would be a
+  real regression, not a safe default change. Needs the AND-semantics version built and re-replayed
+  against the same 15,268-window corpus before this can be turned on - real, scoped follow-up
+  work, not a flip.
+
+  **`BASS_RESIDUAL_ENABLED`: NOT ENABLED - a real, still-open Codex finding, not neglect.**
+  `Source/bass_residual.py`'s own module docstring documents an explicit, unresolved FATAL-severity
+  finding from a 2026-09-01 Codex review: the gate this relies on (`BAND_P95_DB`) was measured on
+  SUMMED-BOUNCE predictions but is being used to gate a DIFFERENCE of two per-track shares - a
+  materially different estimator the gate was never certified for. The code's own comment states
+  plainly this stays default OFF until held-out solo-render calibration exists for that specific
+  quantity. That calibration has not been built. Flipping this without addressing the actual named
+  blocker would mean silently overriding a real, reasoned safety decision, not correcting an
+  oversight.
+
+  **Sam's call needed on these last two** - real technical work is required before either can be
+  safely turned on (an AND-semantics rebuild + re-replay for tiera; solo-render calibration for
+  bass residual), not just a flip. Happy to scope either as its own burn list item if you want it
+  picked up.
+  Evidence: `Source/align_engine.py:58-69,364-388,499-503` (LOOP_SELF_SIMILARITY_TIERA, corrected
+  2026-09-14 - real semantics + replay numbers, not the module-comment paraphrase);
+  `Source/stem_detector.py:769` (both flips); `Documentation/AI_CONTEXT.md:416` (soft_intro_outro's
+  real 2/20-improve/0-spurious source, corrected); `Source/bass_residual.py:1-70`,
+  `.github/ai-activity-log.md:256,263` (BASS_RESIDUAL, corrected).
+  Owner: Sam. Author: Claude (width_cues, soft_intro_outro). Peer review: NONE - not yet reviewed.
 
 - [ ] **An untracked Ableton 12.4.3 template is being picked nondeterministically by mtime,
   and it's already the one every recent mix actually used** (B2) - `_find_template` rglobs

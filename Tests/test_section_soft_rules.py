@@ -107,6 +107,12 @@ def _run_detect(*, kick_on_per_bar, bass_on_per_bar, soft_intro_outro=False,
         wav, tmp_path, bpm=bpm, downbeat=0.0,
         make_viz=False, write_json=False,
         soft_intro_outro=soft_intro_outro,
+        # This file tests R2/R3/R4 in isolation - width_cues (now default True
+        # in production, burn list B1, 2026-09-14) needs real cached Tier-A
+        # envelope arrays that this synthetic fixture's fake.wav can't
+        # produce; explicitly off here so this stays a clean test of
+        # soft_intro_outro alone, not an accidental exercise of width_cues.
+        width_cues=False,
     )
 
 

@@ -766,7 +766,7 @@ def _merge_same_label(sections, protected_bars=frozenset()):
 
 def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True,
            kick_model=False, kick_model_path=None, kick_model_device="auto",
-           kick_provider=None, soft_intro_outro=False, tier_a=False, width_cues=False):
+           kick_provider=None, soft_intro_outro=True, tier_a=False, width_cues=True):
     """Detect sections + mix signals for one track.
 
     bpm/downbeat may be passed in (pipeline use — they come from Rekordbox/analysis);

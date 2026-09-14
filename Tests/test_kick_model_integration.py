@@ -33,11 +33,16 @@ def test_flag_off_fixed_input_parity_and_lazy_import(monkeypatch, tmp_path):
     wav = tmp_path / "Track.wav"
     wav.write_bytes(b"placeholder")
 
+    # width_cues (default True, burn list B1, 2026-09-14) needs real cached
+    # Tier-A envelope arrays this synthetic fixture can't produce - off here
+    # so this stays a clean test of kick-model integration alone.
     first = stem_detector.detect(
-        wav, tmp_path, bpm=120.0, downbeat=0.0, make_viz=False, write_json=False
+        wav, tmp_path, bpm=120.0, downbeat=0.0, make_viz=False, write_json=False,
+        width_cues=False,
     )
     second = stem_detector.detect(
-        wav, tmp_path, bpm=120.0, downbeat=0.0, make_viz=False, write_json=False
+        wav, tmp_path, bpm=120.0, downbeat=0.0, make_viz=False, write_json=False,
+        width_cues=False,
     )
 
     assert first == second
@@ -89,6 +94,7 @@ def test_flag_on_fake_provider_overrides_only_kick_presence(monkeypatch, tmp_pat
         make_viz=False,
         write_json=False,
         kick_provider=FakeKickProvider(),
+        width_cues=False,  # see the earlier test's comment
     )
 
     cues = [(c["type"], c["beat"]) for c in res["signals"]["kick_cues"]]
@@ -116,6 +122,7 @@ def test_kick_classification_uses_raw_not_section_signal(monkeypatch, tmp_path):
         make_viz=False,
         write_json=False,
         kick_provider=FakeRawVsSectionKickProvider(),
+        width_cues=False,  # see the earlier test's comment
     )
 
     cues = [(c["type"], c["beat"]) for c in res["signals"]["kick_cues"]]
