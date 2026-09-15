@@ -1257,7 +1257,26 @@ was written).
   Evidence: `Documentation/Production Polish Backlog.md:10-25` (Fable);
   `Source/bass_residual.py:36`, `Source/apply_automation.py:1013`, `Source/render_check.py:1755`
   (Astra, related loudness-compensation gap).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **INVESTIGATED, 2026-09-15 - the item's own caveat confirmed, thin evidence.** Checked the one
+  Sam hand-tweak ALS available on this machine (`Test Project/10.09.26 Tech House Heldout/
+  Output/AB/A/Mix A Sams Tweaks Project/Mix A Sams Tweaks.als`) against the production `Mix
+  A.als` it was tweaked from. `<Utility ` device count identical (22 in both - Sam added no new
+  gain-dip devices). `<FloatEvent` (real automation breakpoints) count: 164 -> 165, i.e. exactly
+  ONE new breakpoint across the whole file. (`<AutomationEnvelope` count jumped 35 -> 123, but
+  that's a known Ableton UI artifact - opening/interacting with a project in Live materialises
+  near-empty envelope containers for parameters with a visible automation lane, independent of
+  whether the user actually drew anything - not a signal of real edits on its own.) **No
+  systematic loudness-dip pattern exists in this sample** - confirms the item's own stated
+  caveat rather than overriding it. This is n=1 and thin: it means no example currently exists
+  to reverse-engineer exact numbers from, not that Sam's described technique is wrong (the
+  Production Polish Backlog's own numbers - 0.25-0.5dB dip + gentle low-shelf, restoring after
+  the overlap - are stated directly, not inferred, so building TO that written spec rather than
+  FROM learned data remains a real option). Did not build: this touches `apply_automation.py`'s
+  automation-build logic (same review bar as C2 above), and no peer was free this session (both
+  MiniMax and Kimi were mid-review on C5/C2 when this was checked) - queued rather than built
+  blind or without a plan review.
+  Owner: Claude. Peer review: NONE - not yet reviewed (investigation only, no code written).
 
 - [ ] **Mix endings need a real trim/fade decision, not silent-tail warnings every time** (D2) -
   the held-out render's last 7.4s sit at -62dBFS (Jewel Kid's own documented fade-out), and
@@ -1409,7 +1428,29 @@ was written).
   catch an audible defect.
   Evidence: `Source/render_check.py:2235,2440` (Astra); Master Board line 27 (Fable, prior
   carding).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **INVESTIGATED, 2026-09-15 - real, but narrower than "untested."** Two things confirmed
+  separately:
+  1. **The detection logic itself IS validated** - `Tests/test_render_check.py:286`
+     (`test_boundary_click_single_sample_step`) injects a real synthetic single-sample click at
+     a boundary and asserts a FAIL, plus a negative control (a 5ms ramped hit at the same
+     boundary must NOT trigger). So "does the check work" is answered: yes, on synthetic data.
+  2. **What's actually true, confirmed against every RENDER_CHECK*.json on this machine (6
+     artifacts: House 10 V3, Tech House Heldout A/B/C, 14.08.26 V10/V16)**: `check_boundary_click`
+     only ever appends a Finding on FAIL (`Source/render_check.py:1429-1433`) - a clean pass and
+     "never ran" are indistinguishable in the output. Zero `boundary_click` FAIL findings exist
+     in any of the 6. On the one tempo-arc render in the set (House 10 V3), it's SKIPPED for
+     101 of 101 boundaries (100%) - confirmed by reading the actual JSON, matching the code's own
+     documented, deliberate, Codex-reviewed design (honest named SKIP rather than a false-clean
+     PASS - the arc map's fit scatter, 5.3ms RMS, already exceeds the +/-2ms click window, so no
+     boundary on an arc can currently be called trusted, not even early ones).
+  **So the real gap is: zero observed real-world evidence (positive or negative) that this check
+  has ever operated on actual production audio, and 100% zero coverage on every tempo-arc mix
+  today** - not a code bug, and not "the check might not work." Closing the arc-coverage half for
+  real would mean characterising the tempo map's actual per-boundary timing uncertainty beyond
+  today's single mean-bias-plus-scatter fit (a real, scoped statistics task, not a quick patch) -
+  left open rather than attempted in the time available this session.
+  Owner: Claude. Peer review: NONE - not yet reviewed (investigation only, no code written).
 
 - [ ] **`AI_CONTEXT.md` and `/mix` have drifted from what the code actually does** (E2): "What's
   Next" still opens with 2026-09-10 and 2026-09-01 TOPs and carries May-era items;
