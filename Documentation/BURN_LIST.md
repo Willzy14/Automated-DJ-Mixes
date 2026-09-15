@@ -1767,8 +1767,16 @@ was written).
   same event on a section clip; (2) `_repeat_groups` checked "already played" against a min-max
   span, so a one-off clip from inside a skipped gap read as a loop - now the union of played
   intervals, and a single copy counts only when it repeats the previous clip's own tail. Real-pair
-  labels unchanged by either correction. Confirmation on the corrected hash: pending from the
-  same reviewer. Found while running the full suite: C7's canonicaliser
+  labels unchanged by either correction. Confirmation on the corrected hash (sha256 33c07cf54058,
+  commit 66467db): the Claude stand-in re-ran its own two counter-example scripts against the
+  corrected code and returned SOUND (`Documentation/Plans/burn-list-2026-09-15/
+  claude-review-D12-confirmation.md`; suite 830 passed, real-pair labels byte-identical before
+  and after). Deliverable receipt on that hash: `Receipts/2026-09-15/receipt-D12-a2.json`,
+  ACCEPTED, 45 learner tests passed. Still not DONE: the only SOUND from a different brain
+  (MiniMax) is bound to the FIRST build's hash, so a MiniMax re-confirmation on 33c07cf54058 was
+  dispatched at 18:35 (`review-brief-D12-confirm.md`, expected at `Receipts/2026-09-15/
+  minimax-review-D12-confirm.md`); SOUND there closes this item. Found while running the full
+  suite: C7's canonicaliser
   (`Source/canonicalize_pair_history.py`) reports the new T4 record as malformed because Sam's
   version has no bass swap (`sam_bass_swap_beat` null, `swap_removed` in its corrections) and it
   requires both swap beats to derive a delta. It has no observation class for a removed swap.
@@ -1778,7 +1786,45 @@ was written).
   Evidence: `Source/learn_from_correction.py:551` `Tests/test_learn_geometry_corrections.py`
   `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.md`
   `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.diff.json`
-  Owner: Claude. Status: OPEN - built and tested, awaiting review; feeds C7. Touched: 2026-09-15.
+  Owner: Claude. Status: OPEN - built, tested, Claude-confirmed on the corrected hash; waiting
+  on MiniMax's re-confirmation of that hash; feeds C7. Touched: 2026-09-15.
+  Peer review: NONE - not yet reviewed (MiniMax SOUND exists only for the superseded first-build
+  hash 168b6051b358; re-confirmation in flight).
+
+- [ ] **Claude-arranged mode: the pipeline executes a written per-transition decision instead
+  of the anchor search** (D13) - Sam, 2026-09-15, after asking why the pipeline is rule-based
+  when Claude's judgement could arrange directly: "yeah do that, re-run this one in
+  Claude-arranged mode". Built the same evening: `propose_arrangement.py --decisions FILE`
+  (`align_engine.alignment_from_decision` / `fills_from_decision`, policy `claude_decisions_v1`,
+  a member of `LANDMARK_POLICIES` so clip splitting, the paired_boundary gate and the
+  automation margin rule all apply). A decision names the outgoing bar the incoming enters on,
+  its intro trim, the incoming bar that takes the bass, and optionally a tail loop of the
+  outgoing's own bars (allowed on a track with no outro), a front cut of a named outgoing clip
+  (`apply_loops.cut_named_clip_front_and_pull`, new) or a middle skip of its outro that keeps
+  the ending. The decisions for the 15.09.26 August Releases Mix are in that project's
+  `Hints/arrangement_decisions.json` (11 transitions, each with its reason and the rule it
+  follows); they were written after Sam's tweaks were analysed, so the run tests whether the
+  pipeline can EXECUTE a decided arrangement and how the decision vocabulary falls short of
+  what Sam does by hand (levels, the no-EQ-swap crossfade at T4), not whether Claude guesses
+  Sam blind. Phase 2 ran clean: all 11 overlaps ok, 4 loops through the quality gate, front
+  cut and outro skip applied, `Output/In-Key Mix V3 Claude Arranged.als` passes validate_als;
+  every overlap within 1-2 bars of Sam's (48/24/48/23/20/32/16/32/34/29/31 vs Sam's
+  50/24/48/23/20/31/15/34/34/29/32). `Tests/test_arrangement_decisions.py` (11 tests). Full
+  suite: 841 passed, 6 skipped, 2 failed - both `test_alignment_baseline.py` rows whose only
+  difference was the new `keep_end_bars: 0.0` key in every serialised FillCutSpec (proved: the
+  refreshed baseline's git diff is 142 added `keep_end_bars` lines and nothing else); baseline
+  refreshed per its own procedure, then 3 of 3 baseline tests pass.
+  LEFT TO DO: Phase 3 (`apply_automation.py` with the Claude-arranged report + MixPlan paths),
+  strict gate + reconciliation, then `learn_from_correction.py --dry-run` Claude-arranged vs
+  `In-Key Mix V2 SW Tweaks.als` to score it with the geometry-aware learner, then a note to
+  Sam on what the mode can and cannot express. The /mix skill (frozen sync list, both brains)
+  does not yet document `--decisions`.
+  Evidence: `Source/align_engine.py:2453` `Source/propose_arrangement.py:896`
+  `Source/apply_loops.py:1048` `Tests/test_arrangement_decisions.py`
+  `Test Project/15.09.26 August Releases Mix/Hints/arrangement_decisions.json` (gitignored
+  project folder; a copy belongs in `Documentation/Mix Patterns Library/` once scored)
+  Owner: Claude. Status: OPEN - built and Phase-2-proven; Phase 3 + scoring next session.
+  Touched: 2026-09-15.
   Peer review: NONE - not yet reviewed.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
@@ -2292,7 +2338,16 @@ to all 11 transitions of the 15.09.26 August Releases Mix: the correction learne
 swap where the `phrase` anchor put it). D10 and D11 committed since the last fold (1609f3a,
 f6f1fdb, 6b31da7). rev cb42f7e -> (this write).
 
-## THE COUNT: 9 open, 23 done, 1 dropped (last update 2026-09-15 17:02 [Claude]: D12 opened -
+Last item update: 2026-09-15 18:50 [Claude] - create + progress: D13 created (Claude-arranged
+mode, Sam's "yeah do that, re-run this one in Claude-arranged mode"), built the same evening
+and Phase-2-proven on the 15.09.26 August Releases Mix; Phase 3 + scoring next session. D12
+progressed: Claude stand-in SOUND on the corrected hash 33c07cf54058, receipt D12-a2 ACCEPTED,
+MiniMax re-confirmation on that hash dispatched - stays OPEN until it lands. rev fe813f1 ->
+(this write).
+
+## THE COUNT: 10 open, 23 done, 1 dropped (last update 2026-09-15 18:50 [Claude]: D13 opened -
+Claude-arranged mode, built and Phase-2-proven, Phase 3 + scoring pending: 9 -> 10 open. Prior
+update (2026-09-15 17:02 [Claude]): D12 opened -
 the correction learner misses geometry edits, evidence from Sam's 11 tweaks: 8 -> 9 open. Prior
 update (2026-09-15 16:06 [Claude]): D10 and D11
 checked off SOUND with a MiniMax receipt and four accepted deliverable receipts, code still

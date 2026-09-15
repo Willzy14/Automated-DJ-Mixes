@@ -1,0 +1,19 @@
+{
+  "attempt": "D12-a1",
+  "checked_at": "2026-09-15T17:46:13",
+  "kind": "burn-list-receipt",
+  "mtime": "2026-09-15T17:38:21",
+  "path": "C:\\Users\\Carillon\\Wired Masters Dropbox\\Sam Wills\\0.1---GIT HUB---\\Automated DJ Mixes\\Source\\learn_from_correction.py",
+  "prior_hash": null,
+  "reasons": [],
+  "result": "ACCEPTED",
+  "sha256": "168b6051b358f9877ee4faaafcbfa7403fa85b8c18dcf1d4a4ec95af99f9996e",
+  "size": 62111,
+  "started": "2026-09-15T17:00:00",
+  "validation": {
+    "command": "python -m pytest Tests/test_learn_geometry_corrections.py Tests/test_learn_from_correction_geometry.py Tests/test_canonicalize_pair_history.py -q -p no:cacheprovider",
+    "exempt": null,
+    "exit": 0,
+    "tail": "41 passed in 0.12s"
+  }
+}

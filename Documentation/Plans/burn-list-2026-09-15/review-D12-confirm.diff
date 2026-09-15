@@ -1,0 +1,214 @@
+diff --git a/Source/learn_from_correction.py b/Source/learn_from_correction.py
+index 4087bb3..d24b9f5 100644
+--- a/Source/learn_from_correction.py
++++ b/Source/learn_from_correction.py
+@@ -571,7 +571,8 @@ def _scope_points(points: list[tuple[float, float]],
+ GEOMETRY_MIN_MOVE_BARS = 1.0
+ GEOMETRY_MIN_OVERLAP_DELTA_BARS = 4.0
+ GEOMETRY_MIN_CUT_BARS = 2.0
+-GEOMETRY_SWAP_MARGIN_BEATS = 40.0   # same reach as _scope_points
++GEOMETRY_SWAP_MARGIN_BEATS = 40.0   # _scope_points' pre-filter reach
++GEOMETRY_SWAP_WINDOW_BEATS = 10.0   # _find_bass_swap_beat's search window
+ 
+ 
+ @dataclass
+@@ -614,20 +615,38 @@ def _positioned(clips: list[dict]) -> list[dict]:
+     return sorted(out, key=lambda c: (float(c["arr_time"]), _src(c)[0]))
+ 
+ 
++def _merge(ivs: list[tuple[float, float]]) -> list[tuple[float, float]]:
++    merged: list[tuple[float, float]] = []
++    for s0, s1 in sorted(ivs):
++        if merged and s0 <= merged[-1][1] + 0.01:
++            merged[-1] = (merged[-1][0], max(merged[-1][1], s1))
++        else:
++            merged.append((s0, s1))
++    return merged
++
++
++def _covered(ivs: list[tuple[float, float]], s0: float, s1: float) -> bool:
++    return any(a - 0.01 <= s0 and s1 <= b + 0.01 for a, b in ivs)
++
++
+ def _repeat_groups(clips: list[dict]) -> list[RepeatGroup]:
+     """Find loops, whether apply_loops built them or Sam made them by hand.
+ 
+     A group starts at a clip that is arrangement-contiguous with the clip
+     before it, goes BACKWARDS in source (its source start is earlier than the
+     previous clip's source end), is no longer than that clip, and replays
+-    material the track has already played. Identical clips that follow are
+-    further repeats; a shorter clip starting on the chunk's own start is a
+-    trailing partial. A preceding identical clip that played the chunk in its
+-    natural place (apply_loops puts the first copy where the source was
+-    anyway) is counted into the group, so the notation matches
+-    ARRANGEMENT_REPORT's "8bx7+0b". The real section after the copies (an
+-    outro after tail loops, an intro after intro loops) is longer than the
+-    chunk or starts outside it, and is left alone.
++    material the track has already played - the UNION of what was played,
++    not its span, so a one-off clip from inside a skipped gap is new material
++    (review, 2026-09-15). Identical clips that follow are further repeats; a
++    shorter clip starting on the chunk's own start is a trailing partial. A
++    preceding identical clip that played the chunk in its natural place
++    (apply_loops puts the first copy where the source was anyway) is counted
++    into the group, so the notation matches ARRANGEMENT_REPORT's "8bx7+0b".
++    A single copy is a loop only when it repeats the previous clip's own tail
++    (a last bar played again); any other one-off revisit of earlier material
++    is an edit, not a loop. The real section after the copies (an outro after
++    tail loops, an intro after intro loops) is longer than the chunk or starts
++    outside it, and is left alone.
+     """
+     clips = _positioned(clips)
+     groups: list[RepeatGroup] = []
+@@ -636,12 +655,11 @@ def _repeat_groups(clips: list[dict]) -> list[RepeatGroup]:
+         prev, cur = clips[i - 1], clips[i]
+         p0, p1 = _src(prev)
+         c0, c1 = _src(cur)
+-        played_lo = min(_src(c)[0] for c in clips[:i])
+-        played_hi = max(_src(c)[1] for c in clips[:i])
++        played = _merge([_src(c) for c in clips[:i]])
+         contiguous = abs(float(cur["arr_time"]) - float(prev["arr_end"])) < 0.01
+         backwards = c0 < p1 - 0.01
+         no_longer = (c1 - c0) <= (p1 - p0) + 0.01
+-        replays = c0 >= played_lo - 0.01 and c1 <= played_hi + 0.01
++        replays = _covered(played, c0, c1)
+         if not (contiguous and backwards and no_longer and replays):
+             i += 1
+             continue
+@@ -662,6 +680,10 @@ def _repeat_groups(clips: list[dict]) -> list[RepeatGroup]:
+                 partial = n1 - n0
+                 j += 1
+             break
++        tail_repeat = abs(c1 - p1) < 0.01
++        if reps < 2 and not tail_repeat:
++            i += 1
++            continue
+         groups.append(RepeatGroup(
+             arr_start=float(clips[start]["arr_time"]),
+             arr_end=float(clips[j - 1]["arr_end"]),
+@@ -706,14 +728,19 @@ def _source_bar_at(clips: list[dict], groups: list[RepeatGroup],
+ def _find_swap_arr(out_bass: list[tuple[float, float]],
+                    in_bass: list[tuple[float, float]],
+                    ov_start: float, ov_end: float) -> float | None:
+-    """The bass-swap ARRANGEMENT beat: the outgoing's first kill in the
+-    overlap, else the incoming's first rise. Arrangement beats, unlike source
+-    beats, stay meaningful on a loop clip."""
+-    lo = ov_start - GEOMETRY_SWAP_MARGIN_BEATS
+-    hi = ov_end + GEOMETRY_SWAP_MARGIN_BEATS
++    """The bass-swap ARRANGEMENT beat: the outgoing's first KILL in the
++    overlap (a falling edge, unity to below 0.8), else the incoming's first
++    rise. A falling edge, not any low point: a short outgoing still carries
++    its own earlier bass-in ramp, and a ramp point on the way UP is not a
++    swap (review, 2026-09-15). Arrangement beats, unlike source beats, stay
++    meaningful on a loop clip."""
++    lo = ov_start - GEOMETRY_SWAP_WINDOW_BEATS
++    hi = ov_end + GEOMETRY_SWAP_WINDOW_BEATS
++    prev = None
+     for t, v in out_bass:
+-        if lo <= t <= hi and v < 0.8:
++        if lo <= t <= hi and prev is not None and prev >= 0.8 and v < 0.8:
+             return t
++        prev = v
+     prev = None
+     for t, v in in_bass:
+         if lo <= t <= hi and prev is not None and prev < 0.5 and v >= 0.9:
+@@ -722,6 +749,39 @@ def _find_swap_arr(out_bass: list[tuple[float, float]],
+     return None
+ 
+ 
++def _pinned_swap_event(out_bass: list[tuple[float, float]],
++                       ov_start: float, ov_end: float,
++                       clips: list[dict], origin: float,
++                       src_lo: float, src_hi: float) -> tuple[float, float] | None:
++    """The (arrangement beat, source beat) of the point `_find_bass_swap_beat`
++    picks for the outgoing, reproduced step for step: `_scope_points`' +-40
++    arrangement-beat pre-filter, the source mapping, then the first point
++    below 0.8 inside the source window. `bass_swap_delta` is built from that
++    source beat; this keeps hold of the arrangement beat it came from so the
++    reliability flag judges the SAME event (review, 2026-09-15)."""
++    for t, v in out_bass:
++        if not (ov_start - GEOMETRY_SWAP_MARGIN_BEATS <= t <= ov_end + GEOMETRY_SWAP_MARGIN_BEATS):
++            continue
++        s = _source_beat(t, clips, origin)
++        if s < src_lo - 10 or s > src_hi + 10:
++            continue
++        if v < 0.8:
++            return t, s
++    return None
++
++
++def _delta_event_reliable(pinned: tuple[float, float] | None,
++                          true_kill_arr: float | None,
++                          true_kill_on_loop: bool) -> bool:
++    """`bass_swap_delta` for one side can be trusted only when the source-
++    space finder selected the outgoing's real first kill (the same event the
++    geometry layer sees in playback order) and that kill sits on a section
++    clip, not a loop clip."""
++    if pinned is None or true_kill_arr is None or true_kill_on_loop:
++        return False
++    return abs(pinned[0] - true_kill_arr) <= 1.0
++
++
+ def _natural_intervals(clips: list[dict], groups: list[RepeatGroup],
+                        floor: float) -> list[tuple[float, float]]:
+     """Source intervals played by non-loop clips, cut at `floor`, merged."""
+@@ -780,7 +840,8 @@ def _geometry_side(out_t: "TrackInfo", in_t: "TrackInfo",
+     swap_in_bar, _ = _source_bar_at(in_clips, in_groups, swap_arr)
+     swap_out_bar, swap_out_on_loop = _source_bar_at(out_clips, out_groups, swap_arr)
+     return {
+-        "out_clips": out_clips, "out_groups": out_groups,
++        "out_clips": out_clips, "out_groups": out_groups, "out_bass": out_bass,
++        "ov_start": ov_start, "ov_end": ov_end, "out_origin": out_t.arr_start,
+         "entry_arr": entry_arr, "entry_out_bar": entry_out_bar,
+         "entry_on_loop": entry_on_loop, "intro_trim": intro_trim,
+         "swap_arr": swap_arr, "swap_in_bar": swap_in_bar,
+@@ -861,6 +922,7 @@ def _geometry_diff(c_out_t: "TrackInfo", c_in_t: "TrackInfo",
+             f"overlap_changed:{round(overlap_bars, 1):g}->{round(sam_overlap_bars, 1):g}bars")
+ 
+     record = {
++        "_sides": (c, s),   # for the reliability check; stripped before the entry is written
+         "entry_out_bar": [c["entry_out_bar"], s["entry_out_bar"]],
+         "entry_on_loop": [c["entry_on_loop"], s["entry_on_loop"]],
+         "intro_trim_bars": [c["intro_trim"], s["intro_trim"]],
+@@ -980,7 +1042,10 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
+             getattr(s_out, "bass_points", []), getattr(s_in, "bass_points", []),
+             (c_ov_start, c_ov_end), (s_ov_start, s_ov_end),
+             td.overlap_bars, td.sam_overlap_bars)
+-        td.bass_swap_reliable = td.geometry["swap_out_on_loop"] == [False, False]
++        geometry_sides = td.geometry.pop("_sides")
++        # Settled below once the source-space swaps exist; no delta means
++        # nothing to trust yet.
++        td.bass_swap_reliable = False
+ 
+         if not c_out or not s_out or not c_in or not s_in:
+             td.notes = "Could not match all tracks to automation data"
+@@ -1063,6 +1128,21 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
+             # confidently wrong number.
+             td.bass_swap_delta = td.bass_swap_sam - td.bass_swap_claude
+ 
++        # Is that delta about the real swap? Both sides must have the
++        # source-space finder landing on the outgoing's genuine first kill,
++        # on a section clip. Judged on the SAME point the delta came from
++        # (review, 2026-09-15): a different finder can certify the wrong one.
++        side_windows = ((c_out_ov_start, c_out_ov_end), (s_out_ov_start, s_out_ov_end))
++        reliable = []
++        for side, (src_lo, src_hi), on_loop in zip(
++                geometry_sides, side_windows, td.geometry["swap_out_on_loop"]):
++            pinned = _pinned_swap_event(
++                side["out_bass"], side["ov_start"], side["ov_end"],
++                side["out_clips"], side["out_origin"], src_lo, src_hi)
++            reliable.append(_delta_event_reliable(
++                pinned, side["swap_arr"], on_loop))
++        td.bass_swap_reliable = all(reliable)
++
+         # classify corrections
+         any_change = td.arrangement_changed or bool(geometry_labels)
+ 
+@@ -1302,7 +1382,7 @@ def print_report(diffs: list[TransitionDiff]) -> None:
+ # ── Main ──────────────────────────────────────────────────────────────────────
+ 
+ def _print_geometry(label: str, tracks: list[TrackInfo]) -> None:
+-    print(f"\n{label} geometry — {len(tracks)} tracks in order:")
++    print(f"\n{label} geometry - {len(tracks)} tracks in order:")
+     for track in tracks:
+         print(f"  {_short(track.name):20s}  "
+               f"arr {track.arr_start:6.0f}-{track.arr_end:6.0f}")
