@@ -1671,6 +1671,9 @@ was written).
   default or go into the Phase 2a command in both brains' `mix.md` (frozen sync list).
   Deliberately out of scope: `matched` (it runs before the normal search, so it can change
   transitions that already work), `introloop` (A5: validated, not promoted), `fills`, `bassout`.
+  Evidence from Sam's own tweaks, 2026-09-15: he kept the T5 swap exactly where `phrase` put it
+  (Tommy Farrow's bar-31 dropout on Pat Premier's outro start) while changing everything around
+  it - `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.md`.
   Evidence: `Source/align_engine.py:1084` `Source/align_engine.py:1370` `Source/propose_arrangement.py:2123`
   Owner: Claude. Status: OPEN - evidence first, then Sam's call on the default. Touched: 2026-09-15.
   Peer review: NONE - not yet reviewed.
@@ -1723,6 +1726,28 @@ was written).
   `Receipts/2026-09-15/receipt-D11-a1-transition_review_viz.json`
   Owner: Claude. Status: DONE 2026-09-15. Touched: 2026-09-15.
   Peer review: SOUND - MiniMax `Receipts/2026-09-15/minimax-review-D10-D11.md`
+
+- [ ] **The correction learner reads automation only, so Sam's geometry edits go
+  unclassified** (D12) - `learn_from_correction.py` labelled 5 of the 11 corrections on the
+  15.09.26 August Releases Mix (3 `bass_swap_moved`, 2 `sneak_changed`); the other 6 got an empty
+  `corrections` list although every one changed the arrangement. What Sam did there is geometry:
+  the incoming brought in at the outgoing's late landmark (the `last_bass_drop` hint at T6 and T7,
+  a kick dropout at T4, the last drop's start at T5), both intro front-trims reversed, both 64-bar
+  blends halved, loops of other material removed and loops of the outgoing's own last bars added
+  or extended, outros cut. Two of the three `bass_swap_moved` labels are artifacts too: the
+  learner measures the swap from the outgoing's arrangement start, so cutting Tommy Farrow's
+  first 16 bars reads as "-64 beats" at T6 when the swap landmark did not move, and T9's "+56
+  beats" is a 4-bar fill nudge. `analyze_correction_diff.py` already captures entry, swap and
+  exit cues in source bars (its JSON sits beside the write-up) but nothing reads it. The fix:
+  teach the learner the geometry classes (entry_landmark, intro_trim_reversed, tail_loop_removed
+  and _added, outro_cut, overlap_halved) from that JSON, and measure swap moves in incoming-source
+  bars rather than from the outgoing's clip start. Until then the `pair_history.jsonl` corpus that
+  C7 wants to score against under-describes what Sam corrects most.
+  Evidence: `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.md`
+  `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.diff.json`
+  `Source/learn_from_correction.py:805`
+  Owner: Claude. Status: OPEN - evidence gathered, not built; feeds C7. Touched: 2026-09-15.
+  Peer review: NONE - not yet reviewed.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
 
@@ -2229,7 +2254,15 @@ capped Codex also returned SOUND, and its two unasked findings were closed: a D1
 deliverable receipts accepted, and the reviewed diff is byte-identical to the current code. The
 code is still uncommitted. rev 010122d -> (this write).
 
-## THE COUNT: 8 open, 23 done, 1 dropped (last update 2026-09-15 16:06 [Claude]: D10 and D11
+Last item update: 2026-09-15 17:02 [Claude] - create: D12, found while reviewing Sam's hand-edits
+to all 11 transitions of the 15.09.26 August Releases Mix: the correction learner labelled 5 of
+11 because it classifies automation, not geometry. D9 gained a line of evidence (Sam kept the T5
+swap where the `phrase` anchor put it). D10 and D11 committed since the last fold (1609f3a,
+f6f1fdb, 6b31da7). rev cb42f7e -> (this write).
+
+## THE COUNT: 9 open, 23 done, 1 dropped (last update 2026-09-15 17:02 [Claude]: D12 opened -
+the correction learner misses geometry edits, evidence from Sam's 11 tweaks: 8 -> 9 open. Prior
+update (2026-09-15 16:06 [Claude]): D10 and D11
 checked off SOUND with a MiniMax receipt and four accepted deliverable receipts, code still
 uncommitted: 10 -> 8 open, 21 -> 23 done. Prior update (2026-09-15 15:42 [Claude]): D10 and D11
 opened, both fixed and tested but awaiting review: 8 -> 10 open. Prior update (2026-09-15 15:29

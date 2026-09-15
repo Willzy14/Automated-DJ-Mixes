@@ -1,0 +1,1137 @@
+{
+  "schema_version": "correction_diff_v1",
+  "baseline_als": "Test Project\\15.09.26 August Releases Mix\\Output\\In-Key Mix V2.als",
+  "corrected_als": "Test Project\\15.09.26 August Releases Mix\\Output\\In-Key Mix V2 SW Tweaks Project\\In-Key Mix V2 SW Tweaks.als",
+  "track_count": 12,
+  "transition_count": 11,
+  "all_warp_grids_preserved": true,
+  "tracks": [
+    {
+      "name": "Demarkus Le- A Deep-Felt Love (Ralph Session Extended Remix) 24 Bit MASTER AMENDED",
+      "start_delta_beats": 0.0,
+      "end_delta_beats": 8.0,
+      "baseline_clip_count": 15,
+      "corrected_clip_count": 25,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 784.0,
+          "arrangement_end": 840.0,
+          "source_start": 784.0,
+          "source_end": 792.0,
+          "phrase_beats": 8.0,
+          "repeat_count": 7,
+          "baseline_section": "outro_1"
+        }
+      ],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 792.0,
+          "arrangement_end": 856.0,
+          "source_start": 788.0,
+          "source_end": 792.0,
+          "phrase_beats": 4.0,
+          "repeat_count": 16,
+          "baseline_section": "outro_1"
+        }
+      ]
+    },
+    {
+      "name": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+      "start_delta_beats": 0.0,
+      "end_delta_beats": 0.0,
+      "baseline_clip_count": 8,
+      "corrected_clip_count": 8,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "HNTR - Short Stop (Extended Mix) SW V3",
+      "start_delta_beats": 4.0,
+      "end_delta_beats": 4.0,
+      "baseline_clip_count": 13,
+      "corrected_clip_count": 13,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 1900.0,
+          "arrangement_end": 1932.0,
+          "source_start": 672.0,
+          "source_end": 688.0,
+          "phrase_beats": 16.0,
+          "repeat_count": 2,
+          "baseline_section": "outro_1"
+        }
+      ],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 1904.0,
+          "arrangement_end": 1936.0,
+          "source_start": 672.0,
+          "source_end": 688.0,
+          "phrase_beats": 16.0,
+          "repeat_count": 2,
+          "baseline_section": "outro_1"
+        }
+      ]
+    },
+    {
+      "name": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+      "start_delta_beats": 20.0,
+      "end_delta_beats": 32.0,
+      "baseline_clip_count": 6,
+      "corrected_clip_count": 9,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 2288.0,
+          "arrangement_end": 2312.0,
+          "source_start": 520.0,
+          "source_end": 528.0,
+          "phrase_beats": 8.0,
+          "repeat_count": 3,
+          "baseline_section": "drop_2"
+        }
+      ]
+    },
+    {
+      "name": "Pat Premier - Temptation SW V1",
+      "start_delta_beats": 68.0,
+      "end_delta_beats": 132.05042015276376,
+      "baseline_clip_count": 5,
+      "corrected_clip_count": 5,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+      "start_delta_beats": 196.05042015276376,
+      "end_delta_beats": -0.4101689976691887,
+      "baseline_clip_count": 13,
+      "corrected_clip_count": 8,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 2932.0,
+          "arrangement_end": 3060.0,
+          "source_start": 0.0,
+          "source_end": 32.0,
+          "phrase_beats": 32.0,
+          "repeat_count": 4,
+          "baseline_section": "intro_1"
+        }
+      ],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Arielle Free, Idris Elba - Cause I Can SW V1",
+      "start_delta_beats": 132.05042015276376,
+      "end_delta_beats": 132.05042015276376,
+      "baseline_clip_count": 7,
+      "corrected_clip_count": 7,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+      "start_delta_beats": 191.95078307109543,
+      "end_delta_beats": 235.9921875,
+      "baseline_clip_count": 13,
+      "corrected_clip_count": 16,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 3580.0,
+          "arrangement_end": 3604.0,
+          "source_start": 380.0,
+          "source_end": 384.0,
+          "phrase_beats": 4.0,
+          "repeat_count": 6,
+          "baseline_section": "outro_1"
+        }
+      ],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 3807.9921875,
+          "arrangement_end": 3839.9921875,
+          "source_start": 380.0,
+          "source_end": 384.0,
+          "phrase_beats": 4.0,
+          "repeat_count": 8,
+          "baseline_section": "outro_1"
+        }
+      ]
+    },
+    {
+      "name": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+      "start_delta_beats": 227.9921875,
+      "end_delta_beats": 124.0,
+      "baseline_clip_count": 19,
+      "corrected_clip_count": 11,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 4064.0,
+          "arrangement_end": 4128.0,
+          "source_start": 576.0,
+          "source_end": 584.0,
+          "phrase_beats": 8.0,
+          "repeat_count": 8,
+          "baseline_section": "outro_1"
+        }
+      ],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+      "start_delta_beats": 243.9921875,
+      "end_delta_beats": 227.9921875,
+      "baseline_clip_count": 10,
+      "corrected_clip_count": 11,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+      "start_delta_beats": 243.9921875,
+      "end_delta_beats": 247.9921875,
+      "baseline_clip_count": 7,
+      "corrected_clip_count": 8,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Cevin Fisher - Give Me My Pleasure (Main Mix) 24 Bit MASTER",
+      "start_delta_beats": 243.9921875,
+      "end_delta_beats": 239.9921875,
+      "baseline_clip_count": 15,
+      "corrected_clip_count": 14,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    }
+  ],
+  "transitions": [
+    {
+      "index": 1,
+      "outgoing": "Demarkus Le- A Deep-Felt Love (Ralph Session Extended Remix) 24 Bit MASTER AMENDED",
+      "incoming": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+      "overlap_delta_beats": 8.0,
+      "swap_delta_beats": 0.0,
+      "baseline": {
+        "index": 1,
+        "outgoing": "Demarkus Le- A Deep-Felt Love (Ralph Session Extended Remix) 24 Bit MASTER AMENDED",
+        "incoming": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+        "overlap_start": 720.0,
+        "overlap_end": 912.0,
+        "overlap_beats": 192.0,
+        "overlap_bars": 48.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 7.812499980275334e-09,
+        "swap": {
+          "beat": 784.0,
+          "incoming_rise_beat": 784.0,
+          "outgoing_kill_beat": 784.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 720.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 911.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 784.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 784.0,
+          "source_beat": 784.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 1,
+        "outgoing": "Demarkus Le- A Deep-Felt Love (Ralph Session Extended Remix) 24 Bit MASTER AMENDED",
+        "incoming": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+        "overlap_start": 720.0,
+        "overlap_end": 920.0,
+        "overlap_beats": 200.0,
+        "overlap_bars": 50.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 0.02070657626211106,
+        "swap": {
+          "beat": 784.0,
+          "incoming_rise_beat": 784.0,
+          "outgoing_kill_beat": 784.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 720.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 919.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 784.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 784.0,
+          "source_beat": 784.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 2,
+      "outgoing": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+      "incoming": "HNTR - Short Stop (Extended Mix) SW V3",
+      "overlap_delta_beats": -4.0,
+      "swap_delta_beats": 4.0,
+      "baseline": {
+        "index": 2,
+        "outgoing": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+        "incoming": "HNTR - Short Stop (Extended Mix) SW V3",
+        "overlap_start": 1228.0,
+        "overlap_end": 1328.0,
+        "overlap_beats": 100.0,
+        "overlap_bars": 25.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.4705883955024035e-08,
+        "swap": {
+          "beat": 1260.0,
+          "incoming_rise_beat": 1260.0,
+          "outgoing_kill_beat": 1260.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1228.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1327.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1260.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1260.0,
+          "source_beat": 540.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 2,
+        "outgoing": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+        "incoming": "HNTR - Short Stop (Extended Mix) SW V3",
+        "overlap_start": 1232.0,
+        "overlap_end": 1328.0,
+        "overlap_beats": 96.0,
+        "overlap_bars": 24.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.4705883955024035e-08,
+        "swap": {
+          "beat": 1264.0,
+          "incoming_rise_beat": 1264.0,
+          "outgoing_kill_beat": 1264.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1232.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1327.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1264.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1264.0,
+          "source_beat": 544.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 3,
+      "outgoing": "HNTR - Short Stop (Extended Mix) SW V3",
+      "incoming": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+      "overlap_delta_beats": -16.0,
+      "swap_delta_beats": 4.0,
+      "baseline": {
+        "index": 3,
+        "outgoing": "HNTR - Short Stop (Extended Mix) SW V3",
+        "incoming": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+        "overlap_start": 1756.0,
+        "overlap_end": 1964.0,
+        "overlap_beats": 208.0,
+        "overlap_bars": 52.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 1.5625001736907507e-08,
+        "swap": {
+          "beat": 1900.0,
+          "incoming_rise_beat": 1900.0,
+          "outgoing_kill_beat": 1900.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1756.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1963.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1900.0,
+          "source_beat": 144.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1900.0,
+          "source_beat": 672.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 3,
+        "outgoing": "HNTR - Short Stop (Extended Mix) SW V3",
+        "incoming": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+        "overlap_start": 1776.0,
+        "overlap_end": 1968.0,
+        "overlap_beats": 192.0,
+        "overlap_bars": 48.0,
+        "incoming_entry_level": 0.24444444444444444,
+        "outgoing_exit_level": 1.5625001736907507e-08,
+        "swap": {
+          "beat": 1904.0,
+          "incoming_rise_beat": 1904.0,
+          "outgoing_kill_beat": 1904.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1776.0,
+          "source_beat": 16.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1967.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1904.0,
+          "source_beat": 144.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1904.0,
+          "source_beat": 672.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 4,
+      "outgoing": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+      "incoming": "Pat Premier - Temptation SW V1",
+      "overlap_delta_beats": -36.0,
+      "swap_delta_beats": null,
+      "baseline": {
+        "index": 4,
+        "outgoing": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+        "incoming": "Pat Premier - Temptation SW V1",
+        "overlap_start": 2156.0,
+        "overlap_end": 2284.0,
+        "overlap_beats": 128.0,
+        "overlap_bars": 32.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.5624998184193828e-08,
+        "swap": {
+          "beat": 2220.0,
+          "incoming_rise_beat": 2220.0,
+          "outgoing_kill_beat": 2220.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2156.0,
+          "source_beat": 64.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2283.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2220.0,
+          "source_beat": 128.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2220.0,
+          "source_beat": 464.0,
+          "section": "drop_2"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 4,
+        "outgoing": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+        "incoming": "Pat Premier - Temptation SW V1",
+        "overlap_start": 2224.0,
+        "overlap_end": 2316.0,
+        "overlap_beats": 92.0,
+        "overlap_bars": 23.0,
+        "incoming_entry_level": 1.0,
+        "outgoing_exit_level": 0.49553701401285943,
+        "swap": {
+          "beat": null,
+          "incoming_rise_beat": null,
+          "outgoing_kill_beat": null
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2224.0,
+          "source_beat": -0.050420152763763326,
+          "section": null
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2315.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": null,
+          "source_beat": null,
+          "section": null
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": null,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 5,
+      "outgoing": "Pat Premier - Temptation SW V1",
+      "incoming": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+      "overlap_delta_beats": -64.0,
+      "swap_delta_beats": 132.05042015276376,
+      "baseline": {
+        "index": 5,
+        "outgoing": "Pat Premier - Temptation SW V1",
+        "incoming": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+        "overlap_start": 2284.0,
+        "overlap_end": 2428.0,
+        "overlap_beats": 144.0,
+        "overlap_bars": 36.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 4.999999414501133e-08,
+        "swap": {
+          "beat": 2408.0,
+          "incoming_rise_beat": 2408.0,
+          "outgoing_kill_beat": 2408.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2284.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2427.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2408.0,
+          "source_beat": 124.0,
+          "section": "intro_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2408.0,
+          "source_beat": 316.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 5,
+        "outgoing": "Pat Premier - Temptation SW V1",
+        "incoming": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+        "overlap_start": 2480.0504201527638,
+        "overlap_end": 2560.0504201527638,
+        "overlap_beats": 80.0,
+        "overlap_bars": 20.0,
+        "incoming_entry_level": 0.12010240951547828,
+        "outgoing_exit_level": 4.999999414501133e-08,
+        "swap": {
+          "beat": 2540.0504201527638,
+          "incoming_rise_beat": 2540.0504201527638,
+          "outgoing_kill_beat": 2540.0504201527638
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2480.0504201527638,
+          "source_beat": 64.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2560.050419152764,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2540.0504201527638,
+          "source_beat": 124.0,
+          "section": "intro_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2540.0504201527638,
+          "source_beat": 316.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 6,
+      "outgoing": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+      "incoming": "Arielle Free, Idris Elba - Cause I Can SW V1",
+      "overlap_delta_beats": -132.46058915043295,
+      "swap_delta_beats": 132.05042015276376,
+      "baseline": {
+        "index": 6,
+        "outgoing": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+        "incoming": "Arielle Free, Idris Elba - Cause I Can SW V1",
+        "overlap_start": 2868.0,
+        "overlap_end": 3124.0,
+        "overlap_beats": 256.0,
+        "overlap_bars": 64.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 5.2083327650720435e-09,
+        "swap": {
+          "beat": 2932.0,
+          "incoming_rise_beat": 2932.0,
+          "outgoing_kill_beat": 2932.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2868.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3123.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2932.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2932.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 6,
+        "outgoing": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+        "incoming": "Arielle Free, Idris Elba - Cause I Can SW V1",
+        "overlap_start": 3000.0504201527638,
+        "overlap_end": 3123.589831002331,
+        "overlap_beats": 123.53941084956705,
+        "overlap_bars": 30.884852712391762,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 0.6898989070335044,
+        "swap": {
+          "beat": 3064.0504201527638,
+          "incoming_rise_beat": 3064.0504201527638,
+          "outgoing_kill_beat": 3064.0504201527638
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3000.0504201527638,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3123.589830002331,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3064.0504201527638,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3064.0504201527638,
+          "source_beat": 648.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 7,
+      "outgoing": "Arielle Free, Idris Elba - Cause I Can SW V1",
+      "incoming": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+      "overlap_delta_beats": -59.900362918331666,
+      "swap_delta_beats": 131.9921875,
+      "baseline": {
+        "index": 7,
+        "outgoing": "Arielle Free, Idris Elba - Cause I Can SW V1",
+        "incoming": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+        "overlap_start": 3236.0,
+        "overlap_end": 3356.0,
+        "overlap_beats": 120.0,
+        "overlap_bars": 30.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 3.571428153215095e-08,
+        "swap": {
+          "beat": 3328.0,
+          "incoming_rise_beat": 3328.0,
+          "outgoing_kill_beat": 3328.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3236.0,
+          "source_beat": 36.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3355.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3328.0,
+          "source_beat": 128.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3328.0,
+          "source_beat": 460.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 7,
+        "outgoing": "Arielle Free, Idris Elba - Cause I Can SW V1",
+        "incoming": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+        "overlap_start": 3427.9507830710954,
+        "overlap_end": 3488.0504201527638,
+        "overlap_beats": 60.099637081668334,
+        "overlap_bars": 15.024909270417083,
+        "incoming_entry_level": 0.5278246518770477,
+        "outgoing_exit_level": 0.8225300063382135,
+        "swap": {
+          "beat": 3459.9921875,
+          "incoming_rise_beat": 3459.9921875,
+          "outgoing_kill_beat": 3460.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3427.9507830710954,
+          "source_beat": -0.04921692890457052,
+          "section": null
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3488.050419152764,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3459.9921875,
+          "source_beat": 32.0,
+          "section": null
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3459.9921875,
+          "source_beat": 459.94176734723624,
+          "section": "drop_3"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 8,
+      "outgoing": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+      "incoming": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+      "overlap_delta_beats": 8.0,
+      "swap_delta_beats": 227.9921875,
+      "baseline": {
+        "index": 8,
+        "outgoing": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+        "incoming": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+        "overlap_start": 3488.0,
+        "overlap_end": 3616.0,
+        "overlap_beats": 128.0,
+        "overlap_bars": 32.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.5624998184193828e-08,
+        "swap": {
+          "beat": 3552.0,
+          "incoming_rise_beat": 3552.0,
+          "outgoing_kill_beat": 3552.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3488.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3615.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3552.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3552.0,
+          "source_beat": 352.0,
+          "section": "drop_2"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 8,
+        "outgoing": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+        "incoming": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+        "overlap_start": 3715.9921875,
+        "overlap_end": 3851.9921875,
+        "overlap_beats": 136.0,
+        "overlap_bars": 34.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.3888887262503147e-08,
+        "swap": {
+          "beat": 3779.9921875,
+          "incoming_rise_beat": 3779.9921875,
+          "outgoing_kill_beat": 3779.9921875
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3715.9921875,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3851.9921865,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3779.9921875,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3779.9921875,
+          "source_beat": 352.0,
+          "section": "drop_2"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 9,
+      "outgoing": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+      "incoming": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+      "overlap_delta_beats": -119.9921875,
+      "swap_delta_beats": 243.9921875,
+      "baseline": {
+        "index": 9,
+        "outgoing": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+        "incoming": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+        "overlap_start": 3904.0,
+        "overlap_end": 4160.0,
+        "overlap_beats": 256.0,
+        "overlap_bars": 64.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 5.208335096540395e-09,
+        "swap": {
+          "beat": 3968.0,
+          "incoming_rise_beat": 3968.0,
+          "outgoing_kill_beat": 3968.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3904.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4159.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3968.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3968.0,
+          "source_beat": 480.0,
+          "section": "fill_2"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 9,
+        "outgoing": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+        "incoming": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+        "overlap_start": 4147.9921875,
+        "overlap_end": 4284.0,
+        "overlap_beats": 136.0078125,
+        "overlap_bars": 34.001953125,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 0.23604753561851194,
+        "swap": {
+          "beat": 4211.9921875,
+          "incoming_rise_beat": 4211.9921875,
+          "outgoing_kill_beat": 4212.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4147.9921875,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4283.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4211.9921875,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4211.9921875,
+          "source_beat": 496.0,
+          "section": "drop_5"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 10,
+      "outgoing": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+      "incoming": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+      "overlap_delta_beats": -16.0,
+      "swap_delta_beats": 243.9921875,
+      "baseline": {
+        "index": 10,
+        "outgoing": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+        "incoming": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+        "overlap_start": 4608.0,
+        "overlap_end": 4740.0,
+        "overlap_beats": 132.0,
+        "overlap_bars": 33.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.4705887285693109e-08,
+        "swap": {
+          "beat": 4672.0,
+          "incoming_rise_beat": 4672.0,
+          "outgoing_kill_beat": 4672.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4608.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4739.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4672.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4672.0,
+          "source_beat": 768.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 10,
+        "outgoing": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+        "incoming": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+        "overlap_start": 4851.9921875,
+        "overlap_end": 4967.9921875,
+        "overlap_beats": 116.0,
+        "overlap_bars": 29.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 0.23529413235294616,
+        "swap": {
+          "beat": 4915.9921875,
+          "incoming_rise_beat": 4915.9921875,
+          "outgoing_kill_beat": 4915.9921875
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4851.9921875,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4967.9921865,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4915.9921875,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4915.9921875,
+          "source_beat": 768.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 11,
+      "outgoing": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+      "incoming": "Cevin Fisher - Give Me My Pleasure (Main Mix) 24 Bit MASTER",
+      "overlap_delta_beats": 4.0,
+      "swap_delta_beats": 243.9921875,
+      "baseline": {
+        "index": 11,
+        "outgoing": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+        "incoming": "Cevin Fisher - Give Me My Pleasure (Main Mix) 24 Bit MASTER",
+        "overlap_start": 5156.0,
+        "overlap_end": 5280.0,
+        "overlap_beats": 124.0,
+        "overlap_bars": 31.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.6666672264520344e-08,
+        "swap": {
+          "beat": 5220.0,
+          "incoming_rise_beat": 5220.0,
+          "outgoing_kill_beat": 5220.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 5156.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 5279.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 5220.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 5220.0,
+          "source_beat": 612.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 11,
+        "outgoing": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+        "incoming": "Cevin Fisher - Give Me My Pleasure (Main Mix) 24 Bit MASTER",
+        "overlap_start": 5399.9921875,
+        "overlap_end": 5527.9921875,
+        "overlap_beats": 128.0,
+        "overlap_bars": 32.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 0.0,
+        "swap": {
+          "beat": 5463.9921875,
+          "incoming_rise_beat": 5463.9921875,
+          "outgoing_kill_beat": 5463.9921875
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 5399.9921875,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 5527.9921865,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 5463.9921875,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 5463.9921875,
+          "source_beat": 612.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    }
+  ]
+}
