@@ -731,6 +731,31 @@ was written).
   Evidence: `Test Project/10.09.26 Tech House Heldout/Output/AB/{A,B,C}/Mix {A,B,C}.als` (all
   three checked directly, identical pattern); `Test Project/10.09.26 Tech House Heldout/Audio/`
   (files verified present, correctly named, complete, not corrupt).
+
+  **ROOT CAUSE TRACED FURTHER, 2026-09-15 - still not built, needs a peer-reviewed plan.**
+  Confirmed directly where the bad path actually propagates from: `propose_arrangement.py`
+  itself never touches `SampleRef`/`RelativePath`/`AudioClip` XML at all (grepped, zero hits) -
+  clip duplication happens in `Source/apply_loops.py`'s `clone_clip()` (line 304), which takes
+  an existing `<AudioClip>` block's raw TEXT as a template and stamps out repositioned copies
+  from it, opaque-text-style, matching this whole codebase's established line/regex ALS-editing
+  convention (the same style `extract_sections_als.py` uses, per E3 above). It never inspects or
+  rewrites `SampleRef`/`RelativePath` specifically - so the wrong relative-path DEPTH baked into
+  whatever ALS originally seeded these clips (most likely wherever Ableton itself first wrote
+  the master/sections ALS) propagates PASSIVELY through every downstream clone, all the way to
+  the AB-comparison's `Output/AB/<side>/Mix <side>.als` - two levels deeper than wherever it was
+  computed for. There is no single wrong line to fix; the actual gap is that NOTHING anywhere in
+  the pipeline recomputes `RelativePath` for the file's REAL final save depth. Most plausible fix
+  shape (not attempted): a new post-processing pass in `apply_automation.py` (the last script to
+  write the final ALS) that, right before save, locates the real Audio/ folder the same way
+  `_find_audio_dir()` already does (2026-09-12 fix, walks upward through ancestors rather than
+  assuming a fixed depth) and rewrites every clip's `RelativePath` to match. This would touch the
+  FileRef of every clip in EVERY mix's final output ALS (not just AB comparisons - the bug's
+  visible effect is AB-comparison-specific only because that's the one output depth that's
+  currently wrong; a normal single-mix build happens to sit at the same depth the original
+  master ALS was computed for, by luck not by design), so a wrong rewrite could make references
+  WORSE, not better. Deserves its own peer-reviewed plan before code, same bar as D1/D6/D8 above
+  - not attempted blind this session; no peer was free when this was traced (MiniMax and a
+  Claude subagent were both mid-review on C5/C2).
   Owner: Claude. Peer review: NONE - not yet reviewed.
 
 ## B - Sam's decisions (nothing here should be built without his ruling)
@@ -1108,7 +1133,7 @@ was written).
   under B3 above; this line stays for the trail, do not action separately from B3's breakdown.
   Owner: Claude. Peer review: n/a - superseded, not built.
 
-- [ ] **Automation style (QUICK_SWAP/STANDARD/LONG_BLEND) is still chosen purely by overlap
+- [x] **Automation style (QUICK_SWAP/STANDARD/LONG_BLEND) is still chosen purely by overlap
   length, unchanged by today's margin fix** (C2) - confirmed directly
   (`Source/apply_automation.py:809-816`): `overlap_bars < 24` -> QUICK_SWAP regardless of
   whether the outgoing has real content to fade across. This is the SAME root cause as the
@@ -1134,9 +1159,29 @@ was written).
   and correctly built for other/future transitions where a short overlap genuinely has more than
   1 bar of remaining content.
   Full suite 713/6/0 -> 718/6/0.
-  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed.
+  **Peer-reviewed 2026-09-15 - MiniMax + an independent Claude subagent, both full reviewers**
+  (Codex durably capped; Kimi hit its own 5-hour cap on this exact dispatch, recorded in the
+  quota ledger, substituted with a Claude subagent per CLAUDE.md's standing guidance). Both
+  independently confirmed the content-aware branch is correctly landmark-only-gated (the
+  `not aligner_chosen or not outgoing_has_content` short-circuit never evaluates the second
+  operand on the legacy path) and that the new tests genuinely discriminate old vs new code -
+  the subagent went further and proved this empirically, not just by reading: it re-ran the new
+  tests against the pre-C2 commit (1b9b0a4) in an isolated worktree and confirmed 2 of 5 tests
+  actually fail there. **The subagent found one real, independent gap MiniMax's static read
+  missed**: `propose_arrangement.py:1971-1974` computes its own SEPARATE `selected_style` field
+  (written into `ARRANGEMENT_REPORT.json`, documented in `AI_CONTEXT.md:1064`) using the OLD
+  overlap-length-only rule this fix patched - C2 fixed the rule `apply_automation.py` actually
+  ACTS on, but missed this second, now-stale copy of the same decision. Confirmed directly:
+  `selected_style` has zero readers anywhere in `Source/` or `Tests/` (grepped) - report-only,
+  zero effect on real automation or audio output, but the JSON report will now silently disagree
+  with real behaviour for exactly the transitions C2 exists to fix. Low severity, spun off as
+  its own item (C9) rather than folded into this one, since it's independently closeable and
+  C2's own fix is otherwise clean.
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax + Claude subagent (Kimi-capped
+  substitute), one real follow-on finding (spun off as C9), no finding required a change to
+  C2's own diff.
 
-- [ ] **`align_engine.py`'s overlap/loop-size admissibility caps were frozen module constants,
+- [x] **`align_engine.py`'s overlap/loop-size admissibility caps were frozen module constants,
   never actually reading the policy threaded through the call chain** (C5) - landing-order item
   under B3 above. `MAX_OVERLAP_BARS`/`MAX_LANDMARK_OVERLAP_BARS`/`MAX_LOOP_REPEATS`/
   `MAX_LOOP_EXTENSION_BARS` were computed once from `INTERIM_V1` at import time and never
@@ -1168,9 +1213,35 @@ was written).
   number.)
   Full suite 718/6/0 -> 724/6/0.
   Files changed: `Source/align_engine.py`, `Tests/test_policy_threading.py` (new).
-  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed (this touches
-  `align_engine.py`, the core alignment engine every mix's transition-point selection runs
-  through - same review bar as A1-A4's changes to equally central modules).
+  **Peer-reviewed 2026-09-15 - MiniMax + an independent Claude subagent** (same dispatch as C2
+  above). Both independently confirmed all six functions are genuinely fixed (grepped every bare
+  reference to the four constant names; remaining ones are the legacy `align_pair` branch,
+  correctly out of scope) and that `pick_cue_bounded_drum_loop`'s `policy=None` default cannot
+  crash (`policy = policy or _DEFAULT_POLICY` runs before any attribute access). Both confirmed
+  "zero behaviour change for INTERIM_V1" is STRUCTURALLY guaranteed by `_DEFAULT_POLICY =
+  INTERIM_V1`, not an accident of SAM_V1 currently sharing its values (the subagent additionally
+  confirmed SAM_V1 has zero production call sites at all - referenced only in its own definition
+  and tests). The subagent re-ran the new tests against the pre-fix commit (353fb85) in an
+  isolated worktree: 3 of 6 genuinely fail there, empirical proof the tests discriminate.
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax + Claude subagent (Kimi-capped
+  substitute, same dispatch as C2), no findings on this item's own diff.
+
+- [ ] **`propose_arrangement.py`'s `ARRANGEMENT_REPORT.json` computes its own stale copy of
+  automation-style selection, now out of sync with C2's fix** (C9) - found by the Claude subagent
+  reviewing C2, 2026-09-15. `propose_arrangement.py:1971-1974` writes a `selected_style` field
+  (`"quick_swap" if overlap_bars < 24 else "long_blend" if overlap_bars > 36 else "standard"`)
+  using the exact overlap-length-only rule C2 patched in `apply_automation.py` - but this is a
+  SEPARATE computation C2 never touched, so the report now silently disagrees with what
+  `apply_automation.py` actually builds for any transition where C2's new content-aware check
+  changes the outcome. Confirmed directly: `selected_style` has zero readers anywhere in
+  `Source/` or `Tests/` (grepped) - report-only, no effect on real automation or audio today,
+  which is why this is its own low-severity item rather than blocking C2. Same class of bug as
+  C5 (frozen/duplicated decision logic, one copy fixed and one forgotten) - the actual fix is
+  almost certainly to make this field consult `outgoing_has_post_swap_content` the same way C2
+  did, or to just remove the field if nothing will ever read it.
+  Evidence: `Source/propose_arrangement.py:1971-1974` (Claude subagent, verified directly by
+  Claude); `Documentation/AI_CONTEXT.md:1064` (field documented as part of the report schema).
+  Owner: Claude. Peer review: NONE - not yet reviewed (not yet built).
 
 - [x] **Production tempo-arc builds are blocked without MIK even though the certified BPM
   already exists** (C3) - `t.bpm`/`camelot`/`energy` are populated ONLY from the MIK database;
@@ -1318,7 +1389,7 @@ was written).
   `Source/automated_dj_mixes/orchestrator.py:638` (Astra).
   Owner: Claude. Peer review: NONE - not yet reviewed.
 
-- [ ] **Wire the already-built `hints_from_stem_result` into `/mix`'s manual hint-authoring
+- [x] **Wire the already-built `hints_from_stem_result` into `/mix`'s manual hint-authoring
   step** (D5) - the derivation exists and has a `--write-hints` flag, but Phase 1f still has Sam
   or Claude read four timestamps per track off the DETECT picture by eye. A prior audit measured
   ~20 min/project and ~2 misreads per 10 tracks for the manual version. Derive-then-adjust
@@ -1347,7 +1418,20 @@ was written).
   change to code that already ships and already runs inside the real `/mix` pipeline today. Stated
   plainly rather than silently assumed.
   Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`.
-  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed (docs-only change).
+  **Peer-reviewed 2026-09-15 - MiniMax** (Codex durably capped; a single thorough reviewer judged
+  proportionate for a docs-only change, unlike C2/C5's dual-review bar for core algorithm code).
+  No material objections - confirmed the rewritten Phase 1d/1f reads as a coherent, self-
+  contained workflow for an agent following it cold, and that the C4 cross-reference (optional
+  hint fields legacy-path-only) is honestly stated. One minor structural observation (the spot-
+  check criteria sit in 1d, textually before the 1f command that produces the values it checks;
+  the two sections cross-reference each other so the intent is reconstructable, but a future
+  edit could relocate the spot-check paragraph to sit right after 1f's command block) - noted as
+  a nice-to-have, not required before closing this out. Two behavioral claims about
+  `stem_detector.py` (exact-filename-key matching, `hints_from_stem_result()`'s fallback
+  guarantee) were flagged as unverifiable from the docs alone, consistent with this item's own
+  stated "not independently re-validated at runtime" caveat above - not a new gap.
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax, no findings required a text
+  change.
 
 - [ ] **Surface vocal/density clash evidence to Sam as short suspect passages instead of leaving
   it as shadow-only logging** (D6) - vocal regions already gate loop-source selection, but the
@@ -1384,7 +1468,23 @@ was written).
   corpus checked here currently do) - but NOT claimed as solving this item's own motivating
   example, which remains open.
   Files changed: `Source/alignment_feasibility.py`.
-  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed.
+  **Peer-reviewed 2026-09-15 - MiniMax.** No material objections to the code change itself:
+  confirmed `feasible()` genuinely requires BOTH stages to succeed (line-verified), confirmed
+  the broad `except Exception` doesn't newly over-catch (BaseException still propagates,
+  unchanged from before), confirmed the "does-not-reproduce" claim is plausible from the code
+  (`plan_fill_or_cut` returning `[]` is a normal return, not an exception). Verified the test
+  suite's honesty directly: 3 of 4 tests genuinely test the new wiring (the
+  align-succeeds-but-plan-raises monkeypatch test is "the real test of the fix" - would catch
+  the `plan_fill_or_cut` call being accidentally removed); the 4th (the 380-pair corpus
+  regression) is confirmed to be an honest COUNT-PIN, not a fix-tester - it would silently pass
+  even if the new call were deleted, since no pair in this corpus currently makes
+  `plan_fill_or_cut` raise, and the test's own docstring already says so. **Left open, not
+  checked off**: the code addition is sound, but this item's own motivating problem (loop
+  planning failing for feasible-alignment pairs) remains genuinely unaddressed since it doesn't
+  reproduce as originally cited - a SOUND review of a partial, honestly-scoped improvement is
+  not the same as the item being solved.
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax (reviewing the code change as
+  built; the item's own underlying problem stays open).
 
 - [ ] **Playlist-complete recovery for borderline-beatgrid tracks is never auto-attempted**
   (D8) - `refit_grid_from_stem.py` is the documented escalation path for exactly the kind of
@@ -1452,7 +1552,7 @@ was written).
   left open rather than attempted in the time available this session.
   Owner: Claude. Peer review: NONE - not yet reviewed (investigation only, no code written).
 
-- [ ] **`AI_CONTEXT.md` and `/mix` have drifted from what the code actually does** (E2): "What's
+- [x] **`AI_CONTEXT.md` and `/mix` have drifted from what the code actually does** (E2): "What's
   Next" still opens with 2026-09-10 and 2026-09-01 TOPs and carries May-era items;
   `seal_listening_test.py`'s documented CLI (two positional WAVs) doesn't match its real one
   (`--side LABEL=path`, repeatable, plus `--twin-of`/`--out-dir`/`--seed`); `/mix` says A/B, the
@@ -1463,9 +1563,9 @@ was written).
   Evidence: `Documentation/AI_CONTEXT.md:1290-1411` (Fable); `Claude Code Brain/commands/mix.md:427,439-446,458,585`
   (Fable + Astra).
 
-  **PARTIALLY ADDRESSED, 2026-09-15 - real sub-claims fixed, others checked and not reproduced,
-  one already stale from natural file evolution.** Six distinct sub-claims, checked individually
-  rather than assumed as one bundle:
+  **ALL SIX SUB-CLAIMS ACCOUNTED FOR, 2026-09-15 - real ones fixed, others confirmed not
+  reproduced, one already stale from natural file evolution.** Six distinct sub-claims, checked
+  individually rather than assumed as one bundle:
   1. **"What's Next" opens with stale 2026-09-10/2026-09-01 TOPs" - already resolved by
      subsequent sessions' own normal work, not this one.** The file's own "TOP" convention rotates
      naturally (each session's real next-step supersedes the last, older ones marked
@@ -1476,11 +1576,23 @@ was written).
      own docstring already had the correct `--side LABEL=path`/`--twin-of`/`--out-dir`/`--seed`
      usage (confirmed directly against the real `argparse` block) - mix.md just never caught up.
      Rewrote the example + added an explanatory note in both brains (`diff -w -B` clean after).
-  3. **"`/mix` says A/B, the code builds A/B/C"** and 4. **"`/mix` says to commit the held-out
-     project, `.gitignore` ignores `Test Project/`"** - checked directly (grepped both files for
-     the cited phrasing), NEITHER reproduced under a quick pass. Not claimed as fixed (nothing
-     changed for either), but not confirmed as still-real either - a deeper read of both full
-     files would be needed to rule these out properly, which this pass didn't do.
+  3. **"`/mix` says A/B, the code builds A/B/C" - CONFIRMED NOT REPRODUCED, MiniMax full-file
+     read, 2026-09-15.** The doc is internally consistent: `build_ab_comparison.py` builds
+     exactly two sides (A/B), and every A/B/C mention in `mix.md` refers to `seal_listening_
+     test.py`'s CLI supporting a THIRD side as an optional listen-time extension (repeated
+     `--side` flags), not a claim the pipeline itself builds three. No contradiction found after
+     reading the whole staged file, not just grepping for the cited phrase.
+  4. **"`/mix` says to commit the held-out project, `.gitignore` ignores `Test Project/`" -
+     CONFIRMED NOT REPRODUCED AS STATED, same MiniMax pass.** The doc does instruct committing
+     "the held-out project" (generic phrasing) but never names `Test Project/` specifically and
+     never mentions `.gitignore` at all - so the doc's own text carries no literal contradiction
+     to point at. Whether the INSTRUCTION nonetheless conflicts with the real `.gitignore` entry
+     (which does exclude `Test Project/`) is a separate question the doc alone can't settle -
+     genuinely worth Sam's awareness (committing "the held-out project" today silently does
+     nothing, since git ignores it), but not a documentation-accuracy defect to fix in mix.md's
+     own text. **Followed up and confirmed real**: spun off as its own item, E6, below - the
+     instruction is genuinely silently a no-op, just not in the exact shape this sub-claim
+     originally named.
   5. **Two hint overrides documented as closed but actually inert - REAL, FIXED as part of C4
      and D5 this session** (see those items) - `intro_skip_bars`/`loop_source_sec` no longer
      claim CLOSED in either mix.md copy.
@@ -1492,6 +1604,16 @@ was written).
      `Source/Archive/` precedent from the Rekordbox removal). Confirmed no live file references
      the old paths (only historical log/doc entries do, correctly left untouched per this
      project's "never edit history" convention).
+
+  **Peer-reviewed 2026-09-15 - MiniMax.** No material objections to sub-claim 2's fix (the
+  rewritten `seal_listening_test.py` example matches the real post-2026-09-10 argparse form, the
+  explanatory note is self-contained and correct). Independently settled sub-claims 3 and 4 by
+  reading the whole staged file rather than just grepping the cited phrase - both confirmed not
+  reproduced as originally stated (see above); sub-claim 4's real substance was then followed up
+  and spun off as E6. All six sub-claims are now accounted for one way or another - closing this
+  out rather than leaving it open on sub-claims that turned out not to be documentation defects.
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax, no findings required a further
+  text change beyond what was already fixed.
   Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`,
   `Documentation/Archive/TOMORROW.md` (moved), `Documentation/Archive/TODO_ARRANGE_MIX.md`
   (moved), `Documentation/Archive/PIPELINE_AUDIT.md` (moved), `Documentation/Archive/CODEX_REVIEW.md`
@@ -1548,8 +1670,8 @@ was written).
   _Stem Analysis/SECTIONS_STEM_*.json` (validated 2026-06-09 against Sam's own hand-edited
   In-Key Mix V16, byte-for-byte). Confirmed directly: no `08.06.26 Mix` folder exists anywhere
   under this machine's `Test Project/` (it's gitignored, so not recoverable from git history
-  either). A background sweep of the F:/G: backup drives (per CLAUDE.md, this machine's "Master
-  Back Up" archives) is still running as of this write and has so far turned up only an
+  either). A full background sweep of the F:/G: backup drives (per CLAUDE.md, this machine's
+  "Master Back Up" archives) completed and found NOTHING - the only hit anywhere was one
   unrelated filename coincidence (a different project's audio file happens to contain
   "08.06.26" as a date stamp) - those drives back up Sam's mastering-business work folders, not
   this coding project's scratch/test fixtures, so the prior is low that they hold it.
@@ -1585,6 +1707,28 @@ was written).
   space, or keep it around.** Not attempting that call myself - it's real data, not code.
   Owner: Claude. Peer review: NONE - not yet reviewed (pure file-move + doc-read, no code
   changed; judged proportionate to skip a peer round for this one).
+
+- [ ] **`/mix`'s "commit the held-out project" instruction is silently a no-op** (E6) - found
+  while MiniMax was settling one of E2's sub-claims, 2026-09-15. `mix.md:491` says "Commit the
+  held-out project itself (so the verification chain is reproducible)" with no qualification
+  about which files - read as written, that means the whole `Test Project/<name>/` tree.
+  Confirmed directly: `.gitignore:45` is a blanket `Test Project/` exclusion, no negation
+  patterns anywhere for it. `git add` on a gitignored path does nothing and prints nothing (no
+  `-f`) - so an operator following this instruction literally would see no error and believe the
+  verification chain is now reproducible, when nothing was actually committed. Real, silent,
+  exactly the failure class this project's whole validation culture exists to catch. Not fixed
+  this session (found late, in the middle of finalizing other review dispatches) - the fix is
+  either (a) scope the instruction down to the SPECIFIC small files that should be committed
+  (the result doc, the plan doc - both already named in the same sentence and NOT under `Test
+  Project/`) and drop "commit the held-out project itself", or (b) if the intent really is to
+  version the held-out project's own small artifacts (hints, ALS, JSON reports - not the
+  multi-hundred-MB audio), carve a narrower `.gitignore` exception for those specific file types
+  under `Test Project/`. (b) is the bigger, riskier change (a `.gitignore` exception is easy to
+  get wrong and could suddenly start tracking huge WAVs); (a) is a one-line doc edit. Needs Sam's
+  read on which was actually intended before either is built.
+  Evidence: `Claude Code Brain/commands/mix.md:491`, `.gitignore:45` (both confirmed directly).
+  Owner: Claude, decision needs Sam on intent. Peer review: NONE - not yet reviewed (not yet
+  built).
 
 ## F - Carried, deferred on purpose (not open work - listed so they are not silently rediscovered)
 
@@ -1847,7 +1991,26 @@ content there; the swap POINT itself, item c's job, is what T2 actually needs). 
 718/6/0 -> 724/6/0 across both. Neither yet peer-reviewed; item (c)'s full 5-step scope written
 up under B3 above. rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 18 open, 8 done, 1 dropped (last update 2026-09-15 13:05 [Claude]: E3
+## THE COUNT: 16 open, 12 done, 1 dropped (last update 2026-09-15 13:50 [Claude]: D5 + E2
+(review debt) MiniMax-reviewed SOUND (single reviewer, proportionate for docs-only/low-risk
+changes, unlike C2/C5's dual-review bar) - both CHECKED OFF: 17 -> 15 open, 10 -> 12 done. D7
+also MiniMax-reviewed SOUND but left OPEN (the code addition is sound; the item's own
+motivating problem - loop planning failing for feasible pairs - remains genuinely unaddressed
+since it never reproduced, so a sound review of a partial fix is not the same as the item being
+solved) - no count change from D7. E2's own review settled two long-uncertain sub-claims by
+reading the whole file rather than grepping (neither reproduced as stated) - but sub-claim 4's
+real substance (mix.md's "commit the held-out project" instruction is a silent no-op under the
+real .gitignore) was confirmed genuinely true and spun off as a new item, E6 - GATED TO SAM on
+intent: 15 -> 16 open. Net this update: 16 open, 12 done. Prior update (2026-09-15 13:35
+[Claude]): C2 + C5
+(review debt, both already-merged since 2026-09-14) peer-reviewed - MiniMax + an independent
+Claude subagent (Kimi hit its own 5-hour cap on this exact dispatch, substituted with a Claude
+subagent per CLAUDE.md's Kimi-capped guidance) - both CHECKED OFF SOUND: 18 open -> 16 open (C2,
+C5 close) -> 17 open (C9 opens, see below); 8 -> 10 done. The subagent's C2 review found one
+real, low-severity follow-on gap (propose_arrangement.py's ARRANGEMENT_REPORT.json computes a
+second, now-stale copy of the same style-selection rule C2 patched elsewhere, zero real-world
+effect - report-only, no readers) - spun off as its own new item, C9, rather than folded in.
+Prior update (2026-09-15 13:05 [Claude]): E3
 (extract_sections_als.py attribute-order fragility) built + tested (5 new tests, proved-the-test
 against a real pre-fix stash) + MiniMax-reviewed SOUND (Codex still durably capped) - CHECKED
 OFF: 19 -> 18 open, 7 -> 8 done. E5 (stale Output-folder artifacts) partially actioned - the
