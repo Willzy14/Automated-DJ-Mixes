@@ -38,11 +38,29 @@ def parse_sections_als(als_path: Path) -> dict:
         if not track_name:
             continue
 
-        # Find every AudioClip in this track
+        # Find every AudioClip in this track. Split on the tag name only
+        # ("<AudioClip ") - NOT on a fixed `Id="..." Time="..."` attribute
+        # order (found in review: a real, silent-failure bug - valid XML
+        # that reorders AudioClip's own attributes, or that Ableton itself
+        # could plausibly write differently across versions, made every
+        # clip in the track vanish from the parsed result with zero error,
+        # falling `apply_automation` back to whatever sections JSON already
+        # existed on disk - potentially stale - rather than the .als just
+        # re-extracted). `Time` is now read the same attribute-order-
+        # independent way every OTHER field on this clip already is
+        # (CurrentEnd/LoopStart/LoopEnd/Name/Color below), searched only
+        # within the clip's own OPENING TAG (up to its first unescaped `>`)
+        # so it can never accidentally match an unrelated `Time=` deeper in
+        # the clip body.
         clips = []
-        clip_blocks = re.split(r'<AudioClip Id="\d+" Time="', track_body)
+        clip_blocks = re.split(r"<AudioClip ", track_body)
         for cb in clip_blocks[1:]:
-            time_match = re.match(r'(-?[\d.]+)"', cb)
+            tag_end = cb.find(">")
+            open_tag = cb[:tag_end] if tag_end >= 0 else cb
+            # Substring match on the attribute NAME, not anchored - would also match a
+            # hypothetical StartTime=/EndTime="..." if one ever appeared on AudioClip's
+            # opening tag. None do today (MiniMax review, 2026-09-15) - flagged, not fixed.
+            time_match = re.search(r'Time="(-?[\d.]+)"', open_tag)
             if not time_match:
                 continue
             arr_time = float(time_match.group(1))

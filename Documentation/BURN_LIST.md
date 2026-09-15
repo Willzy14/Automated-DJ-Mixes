@@ -1373,7 +1373,31 @@ was written).
   but nothing tries it automatically before excluding a track. In commissioned work this is
   either a track Sam mixes in by hand, or a client conversation that shouldn't be necessary.
   Evidence: held-out `REVIEW_A.md` (Fable); carded 2026-07-16.
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **INVESTIGATED, 2026-09-15 - NOT BUILT, needs a peer-reviewed plan first.** Confirmed directly:
+  `refit_grid_from_stem.py` has zero automatic call sites anywhere in the live pipeline
+  (grepped) - `enforce_beatgrid_quality` (`Source/validate_beatgrid.py:376`) only ever READS an
+  already-written `<project>/Hints/grid_overrides.json`, it never invokes the refit script
+  itself. So the structural gap this item names is real. But the item's own motivating example
+  is murkier than it first reads: the FAIL message text quoted in `REVIEW_A.md` ("stem grid is
+  16ms OFF its own kicks... out of its 4-to-floor range") is generated ONLY by the
+  `stem_fitted=True` branch of `verdict_from`, which requires a `grid_overrides.json` entry with
+  `phase_source: "drum-stem-kicks"` to exist for that track - meaning a refit was ALREADY
+  attempted (by a human, at some point) for this to have fired at all. Checked directly: no
+  `grid_overrides.json` exists anywhere under the held-out project today - either it existed
+  when `REVIEW_A.md` was generated and has since been cleaned up (it's gitignored, so no history
+  to check), or the message text was paraphrased rather than a literal terminal capture. Either
+  way, it's unconfirmed whether AUTO-attempting the refit would have rescued this specific
+  track, since the FAIL message's own "out of its 4-to-floor range" framing suggests a
+  structural rhythm mismatch (Afro/Latin-influenced) that a same-algorithm retry likely
+  reproduces rather than fixes. The general automation gap stands regardless of this one
+  example. Did not build against this ambiguity - this touches a safety-relevant gate with a
+  documented past incident (the "09.06.26 Todd bug" drift case cited in the gate's own
+  RuntimeError text), which per this project's own `/codex-review` standing trigger deserves a
+  peer-reviewed plan before code, not solo blind building. No peer was free this session (Codex
+  durably capped, MiniMax mid-review on E3) - queued for next peer availability rather than
+  guessed at.
+  Owner: Claude. Peer review: NONE - not yet reviewed (investigation only, no code written).
 
 ## E - Hygiene / technical debt (does not affect output quality today)
 
@@ -1433,13 +1457,43 @@ was written).
   (moved).
   Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed.
 
-- [ ] **`extract_sections_als.py`'s parser is silently broken by XML attribute reordering** (E3)
+- [x] **`extract_sections_als.py`'s parser is silently broken by XML attribute reordering** (E3)
   - valid XML, but all clips vanish from its parsed result if `<AudioClip>`'s attributes are
   reordered, which would fall `apply_automation` back to the (potentially stale) sections JSON
   without any error. Found by Codex during this week's margin-fix review, logged not fixed at
   the time (commit 98efcbb) - carried here so it doesn't get lost.
   Evidence: `Source/extract_sections_als.py:44`.
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **BUILT + TESTED + REVIEWED, 2026-09-15.** `parse_sections_als`'s per-clip split changed from
+  the fixed-order `re.split(r'<AudioClip Id="\d+" Time="', track_body)` to tag-name-only
+  `re.split(r"<AudioClip ", track_body)`, with `Time` then read via a regex SCOPED to just the
+  clip's own opening tag (`cb[:cb.find(">")]`) - the same attribute-order-independent pattern
+  already used for CurrentEnd/LoopStart/LoopEnd/Name/Color a few lines below. Confirmed directly
+  the dropped `Id` requirement was never consumed elsewhere in the function.
+  5 new tests (`Tests/test_parse_sections_als.py`, this function had zero direct coverage
+  before - confirmed `Tests/test_extract_sections_als.py` monkeypatches it out and
+  `Tests/test_als_gate_hardening.py` only mentions it in a comment, never calls it): normal order,
+  Time-before-Id (the exact bug), extra attributes between Id and Time, two clips surviving
+  mixed ordering, and a scoping guard against a decoy `Time=` deeper in the clip body.
+  **Proved-the-test**: hit a fixture bug first try (`<AudioTrack>` with no trailing space/attr
+  doesn't match the - unchanged - track-splitting regex, so all 5 failed for the WRONG reason);
+  fixed the fixture, re-ran: 3 of 5 genuinely fail pre-fix (`git stash` on the tracked file) for
+  the bug's exact mechanism, 2 correctly pass either way (normal-order and tag-scoping aren't
+  reordering-dependent). All 5 pass post-fix. Full suite: 774 passed, 6 skipped (was 769/6).
+  **Peer-reviewed - MiniMax** (Codex still durably capped, resets 2026-09-19, so MiniMax ran
+  solo as full reviewer per CLAUDE.md's "Codex/Kimi capped -> MiniMax stand-in" guidance):
+  confirmed the fix genuinely order-independent and correct; flagged 2 theoretical-only
+  fragilities (substring name-match could collide with a hypothetical `StartTime=`/`EndTime=`
+  attribute that doesn't exist on AudioClip today; `>` inside a quoted attribute value would
+  truncate the tag-scoping too early, same silent-skip shape as the original bug, no plausible
+  real Ableton trigger) - both same-class-narrower-axis as the bug just fixed, neither a
+  regression, both left as documented (comment added), not fixed. Gave an honest, accurate
+  critique of test 5 (weak as a pure discriminator, valid as a future-regression guard - matches
+  what the test's own docstring already claimed). Verdict: "No material objections. Ship it."
+  Files changed: `Source/extract_sections_als.py`, `Tests/test_parse_sections_als.py` (new).
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax (Codex-capped substitute, real
+  staged files via room_peer_review.ps1, no findings required a code change beyond one
+  documentation comment).
 
 - [ ] **6 skipped tests are explained, not defects - but the explanation itself points at a real
   gap** (E4): 4 skips are a missing June golden fixture, 2 are intentional non-applicable cases,
@@ -1448,13 +1502,48 @@ was written).
   read as such.
   Evidence: `Tests/test_align_engine_golden.py:24`, `Tests/test_swap_selection_replay.py:64`
   (Astra).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **INVESTIGATED, 2026-09-15 - GATED TO SAM.** The fixture is `Test Project/08.06.26 Mix/
+  _Stem Analysis/SECTIONS_STEM_*.json` (validated 2026-06-09 against Sam's own hand-edited
+  In-Key Mix V16, byte-for-byte). Confirmed directly: no `08.06.26 Mix` folder exists anywhere
+  under this machine's `Test Project/` (it's gitignored, so not recoverable from git history
+  either). A background sweep of the F:/G: backup drives (per CLAUDE.md, this machine's "Master
+  Back Up" archives) is still running as of this write and has so far turned up only an
+  unrelated filename coincidence (a different project's audio file happens to contain
+  "08.06.26" as a date stamp) - those drives back up Sam's mastering-business work folders, not
+  this coding project's scratch/test fixtures, so the prior is low that they hold it.
+  **What's actually needed: Sam's word on whether this fixture exists anywhere (another
+  machine, an external drive) or whether it should be regenerated from scratch** - regenerating
+  means knowing which 10 source tracks made up "08.06.26 Mix" and re-running stem separation +
+  section detection on them (a real GPU/Demucs cost, not something to trigger speculatively).
+  Not attempting either path without his input.
+  Owner: Sam. Peer review: NONE - not yet reviewed.
 
 - [ ] **Stale artifacts sitting beside this week's rebuilt files** (E5): `Mix A_pre-fix-
   backup.als`, a 614MB stale `Mix A.wav` no RENDER_CHECK.md any longer describes, and
   RENDER_CHECK.md itself describing an artifact that's already been superseded twice this week.
   Cheap cleanup once A2 lands.
   Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **PARTIALLY DONE, 2026-09-15.** The RENDER_CHECK.md-superseded half turned out to already be
+  resolved organically - this week's A1-A5 work replaced the single `RENDER_CHECK.md` with
+  per-side `RENDER_CHECK_A/B/C.md` + `.json` (dated 2026-09-14 11:26-12:10), and `RENDER_CHECK_A
+  .json`'s own `"render"` field confirmed directly to point at the CURRENT `Tech House Heldout
+  Mix A (14.09.26).wav` (617MB, the real A2 fresh-bounce output) - nothing stale left describing
+  a superseded artifact. For the two literal stale files: confirmed neither is git-tracked
+  (`Test Project/` is gitignored wholesale) and confirmed the old 614MB `10.09.26 Tech House
+  Heldout Mix A.wav` (Sep 11, pre-A2) is referenced nowhere live - only in the historical
+  `Documentation/Plans/burn-list-2026-09-13/fable-sweep-result.md` planning doc, correctly left
+  untouched per this project's "never edit history" convention. Per this session's standing
+  "prefer a reversible step over deleting" guidance, both stale files were MOVED (not
+  permanently deleted) to `Test Project/10.09.26 Tech House Heldout/Output/_Stale Archive
+  (E5)/` - `Mix A_pre-fix-backup.als` (752KB) and the 614MB WAV. This gets them out of the way
+  of anyone (human or AI) reading the Output folder, without a one-way destructive delete on
+  ~615MB of real rendered audio that isn't guaranteed byte-reproducible from a pipeline re-run.
+  **GATED TO SAM: whether to actually hard-delete `_Stale Archive (E5)/` and reclaim the disk
+  space, or keep it around.** Not attempting that call myself - it's real data, not code.
+  Owner: Claude. Peer review: NONE - not yet reviewed (pure file-move + doc-read, no code
+  changed; judged proportionate to skip a peer round for this one).
 
 ## F - Carried, deferred on purpose (not open work - listed so they are not silently rediscovered)
 
@@ -1717,15 +1806,24 @@ content there; the swap POINT itself, item c's job, is what T2 actually needs). 
 718/6/0 -> 724/6/0 across both. Neither yet peer-reviewed; item (c)'s full 5-step scope written
 up under B3 above. rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 19 open, 7 done, 1 dropped (last update 2026-09-15 12:40 [Claude]: C6 built
-(bass_out_payoff tier) + Codex-reviewed SOUND, merged - C6 was always a sub-bullet under B3, not
-its own checkbox, so this did not change the count on its own. C3 (stem-grid BPM fallback) built,
-Codex + MiniMax reviewed SOUND (Codex capped mid-session, MiniMax substituted per CLAUDE.md's
-standing guidance, caught one real bool-coercion gap Codex's own rounds had missed) - CHECKED OFF,
-first count change this update: 20 -> 19 open, 6 -> 7 done. C7 Step 0 (pair_history
-canonicalisation) built + Codex/MiniMax reviewed SOUND, same real findings fixed - stays a
-sub-bullet under B3 (Step 1 unbuilt), no count change. D5 (wire --write-hints into /mix docs), D7
-(feasibility checker also validates loop planning, honest negative result on its own cited
-example), E2 (stale docs archived + seal_listening_test.py CLI doc fixed) all built, not yet
-peer-reviewed - no count change (still open). D3 investigated, found blocked (fresh render WAV
-not present on this machine) - no count change. 19 open, 7 done, 1 dropped)
+## THE COUNT: 18 open, 8 done, 1 dropped (last update 2026-09-15 13:05 [Claude]: E3
+(extract_sections_als.py attribute-order fragility) built + tested (5 new tests, proved-the-test
+against a real pre-fix stash) + MiniMax-reviewed SOUND (Codex still durably capped) - CHECKED
+OFF: 19 -> 18 open, 7 -> 8 done. E5 (stale Output-folder artifacts) partially actioned - the
+RENDER_CHECK.md half was already resolved organically by this week's A-series work (confirmed
+directly, nothing stale left); the two literal stale files (a 752KB backup ALS, a 614MB stale
+WAV) confirmed unreferenced by anything live and MOVED (not deleted) to a `_Stale Archive (E5)/`
+subfolder, reversible - final hard-delete is GATED TO SAM (real rendered audio, not code, not
+mine to permanently destroy). Stays open (not checked off) pending that call. No count change.
+Prior update (2026-09-15 12:40 [Claude]): C6 built (bass_out_payoff tier) + Codex-reviewed
+SOUND, merged - C6 was always a sub-bullet under B3, not its own checkbox, so this did not
+change the count on its own. C3 (stem-grid BPM fallback) built, Codex + MiniMax reviewed SOUND
+(Codex capped mid-session, MiniMax substituted per CLAUDE.md's standing guidance, caught one
+real bool-coercion gap Codex's own rounds had missed) - CHECKED OFF, first count change that
+update: 20 -> 19 open, 6 -> 7 done. C7 Step 0 (pair_history canonicalisation) built +
+Codex/MiniMax reviewed SOUND, same real findings fixed - stays a sub-bullet under B3 (Step 1
+unbuilt), no count change. D5 (wire --write-hints into /mix docs), D7 (feasibility checker also
+validates loop planning, honest negative result on its own cited example), E2 (stale docs
+archived + seal_listening_test.py CLI doc fixed) all built, not yet peer-reviewed - no count
+change (still open). D3 investigated, found blocked (fresh render WAV not present on this
+machine) - no count change. 18 open, 8 done, 1 dropped)
