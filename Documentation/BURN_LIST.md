@@ -760,7 +760,7 @@ was written).
 
 ## B - Sam's decisions (nothing here should be built without his ruling)
 
-- [ ] **Four pre-built features are sitting behind disabled flags with real evidence already
+- [x] **Four pre-built features are sitting behind disabled flags with real evidence already
   gathered, and nobody has ruled on any of them** (B1): `LOOP_SELF_SIMILARITY_TIERA`'s
   AND-vs-replacement semantics; `width_cues`; `soft_intro_outro`'s R2/R4 section-detection soft
   rules; `BASS_RESIDUAL_ENABLED` (two full mixes of zero-firings evidence now exist - House 10
@@ -894,6 +894,11 @@ was written).
   if you want it picked up. `LOOP_SELF_SIMILARITY_TIERA` above is no longer in this category - it
   needed the same kind of real technical work (an AND-semantics rebuild + re-replay), and that
   work is now done.
+
+  **DECIDED, 2026-09-15 (Sam, asked directly): leave BASS_RESIDUAL_ENABLED off, park it.** No
+  calibration work commissioned. This closes out B1 - all four sub-flags now have a final,
+  explicit disposition (three enabled with real evidence + re-verification, one deliberately
+  parked with the reason on record).
   Evidence: `Source/align_engine.py:58-69,364-388,499-503` (LOOP_SELF_SIMILARITY_TIERA, updated
   2026-09-15 - AND-semantics rebuild + fresh 80,815-window replay, superseding the 2026-09-14
   "not yet built" note); `Source/stem_detector.py:769` (width_cues/soft_intro_outro flips);
@@ -907,7 +912,7 @@ was written).
   staged files, "NO MATERIAL OBJECTIONS", 2 real findings both adopted and fixed same-session, see
   above; BASS_RESIDUAL_ENABLED remains Sam's open call, not built - n/a).
 
-- [ ] **An untracked Ableton 12.4.3 template is being picked nondeterministically by mtime,
+- [x] **An untracked Ableton 12.4.3 template is being picked nondeterministically by mtime,
   and it's already the one every recent mix actually used** (B2) - `_find_template` rglobs
   `Templates/` and breaks ties by newest mtime; with the current track-count range it now
   resolves to `Templates/DJ Mix Template 2026-2 Project/DJ Mix Template 2026.als`, which is
@@ -918,7 +923,23 @@ was written).
   shipping. Sam's call: commit/promote the 12.4.3 file as canonical, or make the template an
   explicit setting instead of an mtime tie-break.
   Evidence: `Source/automated_dj_mixes/orchestrator.py:100-113` (Fable).
-  Owner: Sam. Peer review: NONE - not yet reviewed.
+
+  **DECIDED + DONE, 2026-09-15 (Sam, asked directly): commit the 12.4.3 file as canonical.**
+  Verified all four `.als` files under `Templates/` directly before touching anything (track
+  count + `Creator=` Ableton version, read from each file's own decompressed XML): the tracked
+  root `Templates/DJ Mix Template 2026.als` was 12 tracks/Ableton 12.3 (stale, 2026-05-14); the
+  untracked `Templates/DJ Mix Template 2026-2 Project/DJ Mix Template 2026.als` was 12
+  tracks/Ableton 12.4.3 (2026-08-13, newer mtime - confirmed this is the one `_find_template`'s
+  tie-break actually resolves to today). Copied the 2026-2 Project file's content over the
+  tracked root file - `_find_template`'s rglob+mtime-tie-break mechanism is UNCHANGED (Sam didn't
+  ask for the resolution logic itself to change), but the canonical, git-tracked copy on disk is
+  now the real 12.4.3 template, so a fresh clone gets the actual currently-shipping template
+  without needing the untracked project folder present. Full suite re-run clean after the swap:
+  780 passed, 6 skipped (unaffected - zero test references `_find_template` at all, confirmed by
+  grep, so this was a pure content fix with no test surface to update).
+  Files changed: `Templates/DJ Mix Template 2026.als` (content replaced).
+  Owner: Claude. Peer review: NONE - not yet reviewed (content swap only, no logic changed;
+  judged proportionate to skip a peer round - flag if Sam wants one anyway).
 
 - [x] **Whether to scope the deeper swap-first redesign (item "c") NOW, in parallel with the
   blind listen, rather than waiting for it to fail first** (B3) - the redesign's own landing
@@ -1226,7 +1247,7 @@ was written).
   Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax + Claude subagent (Kimi-capped
   substitute, same dispatch as C2), no findings on this item's own diff.
 
-- [ ] **`propose_arrangement.py`'s `ARRANGEMENT_REPORT.json` computes its own stale copy of
+- [x] **`propose_arrangement.py`'s `ARRANGEMENT_REPORT.json` computes its own stale copy of
   automation-style selection, now out of sync with C2's fix** (C9) - found by the Claude subagent
   reviewing C2, 2026-09-15. `propose_arrangement.py:1971-1974` writes a `selected_style` field
   (`"quick_swap" if overlap_bars < 24 else "long_blend" if overlap_bars > 36 else "standard"`)
@@ -1241,7 +1262,31 @@ was written).
   did, or to just remove the field if nothing will ever read it.
   Evidence: `Source/propose_arrangement.py:1971-1974` (Claude subagent, verified directly by
   Claude); `Documentation/AI_CONTEXT.md:1064` (field documented as part of the report schema).
-  Owner: Claude. Peer review: NONE - not yet reviewed (not yet built).
+
+  **BUILT + TESTED, 2026-09-15.** `generate_report` now overwrites `selected_style` inside its
+  existing `if al is not None:` block using the exact same rule `apply_automation.py`'s C2 fix
+  uses (`LANDMARK_POLICIES` membership gates whether `outgoing_has_post_swap_content` applies at
+  all; legacy/non-landmark alignments keep the byte-identical original overlap-length-only rule).
+  `LANDMARK_POLICIES` imported locally inside `generate_report`, matching this file's own
+  existing pattern elsewhere. The old eager overlap-length-only computation stays as the fallback
+  for the `al is None` case (no matching alignment for that pair index) - unchanged behaviour
+  there. 6 new tests (`Tests/test_arrangement_report_style.py` - `generate_report` had zero
+  direct test coverage before this, confirmed by grep). Proved-the-test: stashed the fix, re-ran
+  all 6 - exactly 1 fails (the real discriminator: landmark policy + short overlap + real content
+  now reads "standard" instead of "quick_swap"), the other 5 pass either way (correctly - they
+  exercise paths the fix doesn't touch: legacy path, cold-ending content, long overlap, no-al
+  fallback, medium overlap). Restored the fix, all 6 pass. Full suite 774/0/6 -> 780/0/6.
+  Files changed: `Source/propose_arrangement.py`, `Tests/test_arrangement_report_style.py` (new).
+  **Peer-reviewed 2026-09-15 - MiniMax.** No material objections. Verified field-for-field the
+  mirrored rule is genuinely identical to `apply_automation.py`'s own C2 rule (thresholds, gate
+  condition, default, string values, `overlap_bars` source all matched); confirmed the legacy
+  path collapses to exactly the original overlap-length-only test via short-circuit evaluation;
+  confirmed no path leaves the eager default wrong-but-unoverwritten; confirmed the
+  `LANDMARK_POLICIES` local import is correctly scoped and matches the file's own established
+  precedent (3 other identical import lines); independently re-ran the "zero readers" grep
+  (confirmed: only the writer + its own test reference `selected_style` anywhere); hand-traced
+  all 6 tests against old vs new code and confirmed the "exactly 1 discriminates" claim exactly.
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax, no findings required a change.
 
 - [x] **Production tempo-arc builds are blocked without MIK even though the certified BPM
   already exists** (C3) - `t.bpm`/`camelot`/`energy` are populated ONLY from the MIK database;
@@ -1349,14 +1394,19 @@ was written).
   blind or without a plan review.
   Owner: Claude. Peer review: NONE - not yet reviewed (investigation only, no code written).
 
-- [ ] **Mix endings need a real trim/fade decision, not silent-tail warnings every time** (D2) -
+- [x] **Mix endings need a real trim/fade decision, not silent-tail warnings every time** (D2) -
   the held-out render's last 7.4s sit at -62dBFS (Jewel Kid's own documented fade-out), and
   `render_check`'s `exposed_solo` check flags it every time with no trimming mechanism to act on
   it. Astra frames this correctly: this needs an ending/trim policy decision, not automatic
   treatment as broken internal silence (which it isn't).
   Evidence: `Test Project/10.09.26 Tech House Heldout/Output/RENDER_CHECK.md:21` (Fable, path may
   be stale - re-render first); `Source/render_check.py:1501` (Astra).
-  Owner: Claude, decision needs Sam on the policy. Peer review: NONE - not yet reviewed.
+
+  **DECIDED, 2026-09-15 (Sam, asked directly): leave the warning as-is.** No auto-trim, no
+  smarter fade-recognition - the noise is harmless and not worth building against. Closes the
+  open question (what policy?) even though no code changes; the warning keeps firing on every
+  render exactly as it does today, by explicit choice.
+  Owner: Claude. Peer review: n/a - Sam's own decision, nothing built.
 
 - [ ] **Two other real render warnings on this project need fresh-render re-measurement before
   any repair is sized** (D3): the T2 transition_dip (3.23dB, sub-band deficit) is UNBRACKETED -
@@ -1378,6 +1428,9 @@ was written).
   one-off manual re-run with a larger `TRANSITION_DIP_SPAN_BEATS`, not a standing code path -
   so there is nothing to fix in code here either, only a re-render + manual re-measurement to do
   once the WAV exists again (on whichever machine actually has it, or after a fresh bounce).
+
+  **ASKED, 2026-09-15 - Sam: leave it parked.** Not chasing a fresh bounce right now. Stays open,
+  genuinely blocked, revisit whenever a fresh render happens to exist on some machine.
   Owner: Claude. Peer review: NONE - not yet reviewed (blocked, not built).
 
 - [ ] **Restore reliable key/harmonic metadata without re-depending on MIK's UI automation**
@@ -1658,7 +1711,7 @@ was written).
   staged files via room_peer_review.ps1, no findings required a code change beyond one
   documentation comment).
 
-- [ ] **6 skipped tests are explained, not defects - but the explanation itself points at a real
+- [x] **6 skipped tests are explained, not defects - but the explanation itself points at a real
   gap** (E4): 4 skips are a missing June golden fixture, 2 are intentional non-applicable cases,
   no `xfail` markers found anywhere. Recovering the missing golden fixture would restore real
   regression coverage; the skips themselves are not 6 outstanding mix defects and should not be
@@ -1680,9 +1733,15 @@ was written).
   means knowing which 10 source tracks made up "08.06.26 Mix" and re-running stem separation +
   section detection on them (a real GPU/Demucs cost, not something to trigger speculatively).
   Not attempting either path without his input.
-  Owner: Sam. Peer review: NONE - not yet reviewed.
 
-- [ ] **Stale artifacts sitting beside this week's rebuilt files** (E5): `Mix A_pre-fix-
+  **DECIDED, 2026-09-15 (Sam, asked directly): let it go, not worth chasing.** The 4 dependent
+  skips (`Tests/test_align_engine_golden.py`, `Tests/test_swap_selection_replay.py`) are accepted
+  as permanent - their own skip reasons already correctly describe why (missing fixture), so no
+  code or message change needed. Closes the open question; the coverage gap itself is not
+  recovered, by explicit choice.
+  Owner: Sam. Peer review: n/a - Sam's own decision, nothing built.
+
+- [x] **Stale artifacts sitting beside this week's rebuilt files** (E5): `Mix A_pre-fix-
   backup.als`, a 614MB stale `Mix A.wav` no RENDER_CHECK.md any longer describes, and
   RENDER_CHECK.md itself describing an artifact that's already been superseded twice this week.
   Cheap cleanup once A2 lands.
@@ -1703,12 +1762,12 @@ was written).
   (E5)/` - `Mix A_pre-fix-backup.als` (752KB) and the 614MB WAV. This gets them out of the way
   of anyone (human or AI) reading the Output folder, without a one-way destructive delete on
   ~615MB of real rendered audio that isn't guaranteed byte-reproducible from a pipeline re-run.
-  **GATED TO SAM: whether to actually hard-delete `_Stale Archive (E5)/` and reclaim the disk
-  space, or keep it around.** Not attempting that call myself - it's real data, not code.
+  **DECIDED + DONE, 2026-09-15 (Sam, asked directly): delete them.** `_Stale Archive (E5)/`
+  (both files, ~615MB total) permanently removed. Reclaimed the disk space.
   Owner: Claude. Peer review: NONE - not yet reviewed (pure file-move + doc-read, no code
   changed; judged proportionate to skip a peer round for this one).
 
-- [ ] **`/mix`'s "commit the held-out project" instruction is silently a no-op** (E6) - found
+- [x] **`/mix`'s "commit the held-out project" instruction is silently a no-op** (E6) - found
   while MiniMax was settling one of E2's sub-claims, 2026-09-15. `mix.md:491` says "Commit the
   held-out project itself (so the verification chain is reproducible)" with no qualification
   about which files - read as written, that means the whole `Test Project/<name>/` tree.
@@ -1727,8 +1786,17 @@ was written).
   get wrong and could suddenly start tracking huge WAVs); (a) is a one-line doc edit. Needs Sam's
   read on which was actually intended before either is built.
   Evidence: `Claude Code Brain/commands/mix.md:491`, `.gitignore:45` (both confirmed directly).
-  Owner: Claude, decision needs Sam on intent. Peer review: NONE - not yet reviewed (not yet
-  built).
+
+  **DECIDED + DONE, 2026-09-15 (Sam, asked directly): narrow the doc instruction (option a).**
+  Dropped "commit the held-out project itself" from both `Claude Code Brain/commands/mix.md` and
+  `Codex Brain/commands/mix.md` - the sentence now only instructs committing the result doc next
+  to its plan doc in `Documentation/Mix Patterns Library/` (both already outside the gitignored
+  `Test Project/`), plus an explanatory note that the held-out project itself is never committed
+  and why, so a future reader doesn't have to re-derive this. Both brains content-verified
+  identical after edit (`diff -w -B` clean).
+  Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`.
+  Owner: Claude. Peer review: NONE - not yet reviewed (one-line doc edit, Sam's own explicit
+  decision on intent; judged proportionate to skip a peer round).
 
 ## F - Carried, deferred on purpose (not open work - listed so they are not silently rediscovered)
 
@@ -1991,7 +2059,21 @@ content there; the swap POINT itself, item c's job, is what T2 actually needs). 
 718/6/0 -> 724/6/0 across both. Neither yet peer-reviewed; item (c)'s full 5-step scope written
 up under B3 above. rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 16 open, 12 done, 1 dropped (last update 2026-09-15 13:50 [Claude]: D5 + E2
+## THE COUNT: 9 open, 19 done, 1 dropped (last update 2026-09-15 14:15 [Claude]: C9 MiniMax-
+reviewed SOUND, no findings - CHECKED OFF: 16 -> 15 open, 12 -> 13 done. Then walked all 7
+Sam-gated items past Sam directly, one question at a time (AskUserQuestion), and executed every
+decision same-turn: B1 (park BASS_RESIDUAL_ENABLED - no calibration work commissioned), B2
+(commit the 12.4.3 Ableton template as canonical - the tracked root template's content replaced
+with the actually-used 12.4.3 file, verified via track-count + Ableton Creator= string on all 4
+candidate .als files before touching anything), D2 (leave the mix-ending silent-tail warning
+as-is, no auto-trim), E4 (let the missing golden fixture go, accept the 4 dependent skips as
+permanent), E5 (hard-delete the archived stale files - ~615MB reclaimed), E6 (narrow mix.md's
+"commit the held-out project" instruction rather than carve a .gitignore exception - both brain
+copies fixed, diff -w -B clean) - 6 of 7 CHECKED OFF (D3 stays open, genuinely blocked, Sam
+confirmed leaving it parked rather than chasing a fresh render): 15 -> 9 open, 13 -> 19 done.
+Full suite 780/0/6 throughout, re-run clean after the template swap specifically (zero test
+references _find_template, confirmed by grep - pure content fix). Prior update (2026-09-15
+13:50 [Claude]): D5 + E2
 (review debt) MiniMax-reviewed SOUND (single reviewer, proportionate for docs-only/low-risk
 changes, unlike C2/C5's dual-review bar) - both CHECKED OFF: 17 -> 15 open, 10 -> 12 done. D7
 also MiniMax-reviewed SOUND but left OPEN (the code addition is sound; the item's own

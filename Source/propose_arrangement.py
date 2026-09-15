@@ -1876,6 +1876,8 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
     pipeline decision. Includes key, BPM, energy, harmonic compatibility,
     loop source, and style selection so runs are debuggable from JSON alone.
     """
+    from align_engine import LANDMARK_POLICIES
+
     track_lookup = {t.name: t for t in plan.tracks}
     playback_by_name = (
         {track.display_name: track for track in plan.mix_plan.tracks}
@@ -1968,6 +1970,9 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
             "loop_source": loop_source,
             "overlap_policy": ov.overlap_policy,
             "loop_target_marker": ov.loop_target_marker,
+            # Overlap-length-only fallback, overwritten below once `al` is
+            # available (burn list C9) - kept here so a pair with no
+            # matching alignment (al is None) still gets a value.
             "selected_style": (
                 "quick_swap" if ov.overlap_bars < 24
                 else "long_blend" if ov.overlap_bars > 36
@@ -1988,6 +1993,25 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
             t["swap_progress"] = al.swap_progress
             t["outgoing_has_post_swap_content"] = al.outgoing_has_post_swap_content
             t["landmark_policy"] = _landmark_policy_label(al.alignment_policy)
+            # Burn list C9 (2026-09-15): this report used to compute
+            # selected_style from overlap length alone, a second, unpatched
+            # copy of the exact rule burn list C2 fixed in
+            # apply_automation.py's real style selection - report-only
+            # (selected_style has no reader anywhere in Source/ or Tests/,
+            # confirmed by grep) but silently disagreed with what
+            # apply_automation.py actually builds for any transition C2's
+            # fix changes. Same rule, same landmark-policy-only scoping:
+            # the legacy/non-landmark path (al.alignment_policy not in
+            # LANDMARK_POLICIES) keeps the exact original overlap-length-
+            # only computation above, byte-identical to before.
+            aligner_chosen = al.alignment_policy in LANDMARK_POLICIES
+            if ov.overlap_bars > 36:
+                t["selected_style"] = "long_blend"
+            elif ov.overlap_bars < 24 and (
+                    not aligner_chosen or not al.outgoing_has_post_swap_content):
+                t["selected_style"] = "quick_swap"
+            else:
+                t["selected_style"] = "standard"
             t["musical_landmark_candidates"] = [
                 candidate for candidate in _final_landmark_candidates(plan, al)
                 if (candidate["arrangement_end_beat"] >= ov.overlap_start
