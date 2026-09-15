@@ -304,6 +304,68 @@ def ordered_tracks(sections: dict) -> list[TrackInfo]:
     return tracks
 
 
+def fill_missing_bpm_from_stem_grid(tracks: list[TrackInfo],
+                                    stem_dir: Path) -> dict[str, float]:
+    """Backfill `t.bpm` for any track MIK left empty, from the owned
+    stem-grid detector's own certified BPM (burn list C3).
+
+    Reads each `SECTIONS_STEM_*.json` in `stem_dir` for its `"bpm"` field
+    (the same JSON `align_engine.load_track` reads for sections/landmarks -
+    the certified number was already computed in this same run, it just
+    isn't in the merged `sections_path` file `ordered_tracks` builds from).
+    Never overwrites an existing `t.bpm` - MIK stays authoritative when both
+    exist, matching every other field the MIK-enrichment step sets. Matches
+    on `SECTIONS_STEM_*.json`'s own `"track"` field, trying both the raw
+    `t.name` and its HTML-unescaped form (the same escaped/unescaped
+    inconsistency the MIK wav-path lookup already works around: the field is
+    unescaped, "There's", while `t.name` can carry the sections-JSON-escaped
+    form, "There&apos;s").
+
+    Returns {track_name: filled_bpm} for whatever was actually changed, so
+    the caller can log it without re-deriving what happened.
+    """
+    import html
+
+    missing = [t for t in tracks if not t.bpm]
+    if not missing or not stem_dir.exists():
+        return {}
+
+    grid_bpm_by_name: dict[str, float] = {}
+    for j in stem_dir.glob("SECTIONS_STEM_*.json"):
+        try:
+            meta = json.loads(j.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        track_name = meta.get("track")
+        bpm_raw = meta.get("bpm")
+        if not track_name or not bpm_raw:
+            continue
+        # A single malformed/nonsensical BPM in one track's cache must not
+        # crash the whole fallback (found in review, 2026-09-15): the old
+        # bare float(bpm) raised uncaught on a non-numeric string, and even
+        # a successful but nonsensical conversion (nan, a negative number)
+        # passed the old truthy-only check and would have silently poisoned
+        # a --tempo-arc build with garbage. Same 60-200 BPM sanity range
+        # `propose_arrangement`'s own project_bpm validation already uses
+        # (line ~249) - not a new number invented for this function.
+        try:
+            bpm = float(bpm_raw)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(bpm) or not 60.0 <= bpm <= 200.0:
+            continue
+        grid_bpm_by_name[track_name] = bpm
+
+    filled: dict[str, float] = {}
+    for t in missing:
+        grid_bpm = (grid_bpm_by_name.get(t.name)
+                    or grid_bpm_by_name.get(html.unescape(t.name)))
+        if grid_bpm:
+            t.bpm = grid_bpm
+            filled[t.name] = grid_bpm
+    return filled
+
+
 def first_drop_source(track: TrackInfo) -> float | None:
     """Source-beat position of the track's first drop section."""
     for s in track.sections:
@@ -1221,6 +1283,23 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                         t.energy = mik.energy
     except ImportError:
         pass
+
+    # -- BPM fallback: the owned stem-grid detector (burn list C3) --
+    # MIK is the ONLY source above; when it's absent or its DB doesn't cover a
+    # track, t.bpm stays None even though the owned stem-grid detector already
+    # measured and CERTIFIED every track's BPM in this same run (it's what
+    # produced the sections JSON this function is already reading) -- the
+    # certified number just isn't in THIS merged sections_path file, only in
+    # each track's own SECTIONS_STEM_*.json sibling. --tempo-arc then hard-
+    # raises "tempo arc needs a certified BPM for every track" even when a
+    # real, already-computed number exists on disk.
+    stem_dir_for_bpm = als_path.parent.parent / "_Stem Analysis"
+    if not stem_dir_for_bpm.exists():
+        stem_dir_for_bpm = als_path.parent / "_Stem Analysis"
+    filled = fill_missing_bpm_from_stem_grid(tracks, stem_dir_for_bpm)
+    for name, bpm in filled.items():
+        print(f"  {name[:50]} — BPM from owned stem-grid detector "
+              f"({bpm:.2f}), MIK had none")
 
     for t in tracks:
         hint = _hint_for(hints, t.name)

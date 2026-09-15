@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-from align_engine import _align_pair_landmark_aware, load_track
+from align_engine import _align_pair_landmark_aware, load_track, plan_fill_or_cut
 from automated_dj_mixes.transition_policy import get_policy
 
 
@@ -52,11 +52,33 @@ def load_tracks(project: Path):
 
 
 def feasible(outgoing, incoming, policy) -> bool:
+    """A pair is only genuinely usable if BOTH stages the real build runs
+    succeed: alignment itself, AND the loop/cut planning that follows it
+    (burn list D7) - a "feasible" pair that then RAISES from
+    `plan_fill_or_cut` (clean-loop availability, repeat limits, named-cue
+    reachability, or locked-swap constraints the alignment step never
+    checks) is not usable at all, it just fails one stage later.
+
+    Honest limitation, not glossed over: this closes the "plan_fill_or_cut
+    raises" failure MODE, which is real and worth catching, but direct
+    re-testing of burn list D7's own original citation (2 of 267
+    alignment-successful pairs in the 14.08.26 corpus, e.g. Doorly & Harry
+    Choo Choo Romero -> Christoph - The Rise) found `plan_fill_or_cut` does
+    NOT raise for that pair today - it returns 0 specs after printing a
+    "[loop quality] no candidate survived" message, which is a graceful
+    degradation (no loop needed/found), not an exception. Corpus-wide: this
+    fix changes ZERO of the 267 alignment-feasible pairs' verdicts (267/267
+    either way, confirmed by running the full matrix with and without it) -
+    whatever the original 2/267 finding actually measured, it is not
+    reproduced by this check as currently scoped. Kept anyway because it is
+    a real, strictly-safer check with no downside; the original finding's
+    actual mechanism (possibly only visible through the full apply_
+    automation/propose_arrangement pipeline, not an isolated align+plan
+    call) is unconfirmed follow-up work, not solved here."""
     try:
-        _align_pair_landmark_aware(outgoing, incoming, policy)
+        al = _align_pair_landmark_aware(outgoing, incoming, policy)
+        plan_fill_or_cut(outgoing, incoming, al, policy)
         return True
-    except ValueError:
-        return False
     except Exception:
         return False
 

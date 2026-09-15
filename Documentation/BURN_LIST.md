@@ -991,7 +991,25 @@ was written).
     all - a two-stage-bass automation change or an arrangement extension). 11 new tests
     (`Tests/test_canonicalize_pair_history.py`), including a pinned real-corpus regression (25
     unique / 4 conflicts, the exact named Black Book pairs). Step 1 (shadow-mode reporting inside
-    `find_similar_pairs`) is separate, unbuilt, gets its own Codex round per the plan.
+    `find_similar_pairs`) is separate, unbuilt, gets its own review round per the plan when built.
+    **Peer-reviewed: Codex rounds 1-2 (real staged files, `-Effort high`) found real findings -
+    duplicate resolution records silently using the last line instead of failing closed (fixed:
+    a duplicate `(project, pair_index)` key now raises outright), numeric inputs not validated as
+    finite (fixed: `resolved_delta_beats`/beat fields/`tolerance_beats` all now require a finite
+    value, output uses `allow_nan=False`), and within-tolerance duplicates depending on JSONL file
+    order for their canonical metadata (fixed: a new `_deterministic_representative` picks via a
+    stable sort on the record's own canonical JSON form). Codex then hit its usage cap
+    (`.github`-adjacent Room quota ledger updated, resets 2026-09-19) mid-review, so round 3 ran
+    on MiniMax instead (CLAUDE.md's standing "pair MiniMax... when Codex is capped" guidance,
+    first real use of it this project) - **MiniMax independently traced every one of round 2's
+    four named cases through the actual code with a full input/behaviour table and confirmed all
+    closed, then found one REAL gap Claude's own fix had missed**: the exact same bool-subclass-
+    of-int check added to the resolution file's `pair_index` was never extended to
+    `pair_history.jsonl`'s own `pair_index` in `load_records` - a bool there would have silently
+    coerced to `int(True)=1` via `_key()`, merging into pair 1. Fixed exactly as MiniMax specified
+    (matching test included), re-verified the underlying Python semantics directly before
+    trusting the report (same discipline used for every Codex finding this session). Full suite
+    768/0/6 -> see the session's final count in `.github/ai-activity-log.md`.**
     Files changed: `Source/canonicalize_pair_history.py` (new),
     `Tests/test_canonicalize_pair_history.py` (new).
   - **C8 - not yet scoped**: let a musically-better candidate win even if it needs a loop
@@ -1154,7 +1172,7 @@ was written).
   `align_engine.py`, the core alignment engine every mix's transition-point selection runs
   through - same review bar as A1-A4's changes to equally central modules).
 
-- [ ] **Production tempo-arc builds are blocked without MIK even though the certified BPM
+- [x] **Production tempo-arc builds are blocked without MIK even though the certified BPM
   already exists** (C3) - `t.bpm`/`camelot`/`energy` are populated ONLY from the MIK database;
   `--tempo-arc` then hard-raises `"tempo arc needs a certified BPM for every track"` even when
   the owned stem-grid detector already measured every BPM in the same run. Astra reproduced the
@@ -1182,8 +1200,20 @@ was written).
   `t.bpm` None (not a crash), malformed JSON in the stem dir doesn't take down other tracks'
   fallback, and a `bpm: 0` in the JSON is correctly NOT treated as a real value (falsy, matches
   the existing `if mik.bpm:` truthy-check convention). Full suite 729/0/6 -> 736/0/6.
+  **Peer-reviewed alongside C7 Step 0 (same staged pass, see that item's write-up below for the
+  full round-by-round detail) - Codex rounds 1-2 found real findings (a bad stem-grid BPM could
+  crash the fallback or silently poison a tempo-arc build with nan/negative/absurd values, both
+  fixed with a try/except + the same 60-200 BPM sanity range `propose_arrangement`'s own
+  project_bpm validation already uses); Codex then hit its usage cap (recorded in the Room's
+  shared quota ledger, resets 2026-09-19) so round 3 ran on MiniMax instead (per CLAUDE.md's
+  standing "pair MiniMax... when Codex is capped" guidance) - MiniMax confirmed C3's own half
+  clean with no further findings ("correctly scoped and tested... no new isinstance survivors").**
+  Full suite after all fixes: 768/0/6 (background run before D5/D7/E2 landed) -> see C7 Step 0's
+  line for the final post-MiniMax-fix count.
   Files changed: `Source/propose_arrangement.py`, `Tests/test_bpm_fallback_stem_grid.py` (new).
-  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed.
+  Owner: Claude. Author: Claude. Peer review: SOUND - Codex (2 rounds, `-Effort high`, real staged
+  files) + MiniMax (round 3, Codex-capped substitute, real staged files) - all real findings
+  fixed and independently re-confirmed.
 
 - [ ] **Documented correction overrides (`intro_skip_bars`, `loop_source_sec`) are silently
   ignored on the production alignment path** (C4) - `/mix`'s own docs list `intro_skip_bars` as
@@ -1244,7 +1274,21 @@ was written).
   numbers; re-measure with more context on the fresh render from A2 first.
   Evidence: `Test Project/.../RENDER_CHECK.md:18` (path may be stale); `Source/render_check.py:1738,1772`
   (Astra).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **BLOCKED, 2026-09-15 - the fresh render itself is gone from this machine.** The A2 fresh
+  `RENDER_CHECK_A/B/C.md`/`.json` reports DO still exist and DO still show T2 (pair_index=2) as
+  `unbracketed=True`, `dip_db=3.11` (close to the cited 3.23, real render-to-render variance) -
+  the underlying defect this item describes is real and still present. But re-measuring with a
+  wider window (the same manual technique that found pair 15's true depth was 7.90 dB, not 3.78,
+  on 2026-08-28) needs the actual rendered WAV to recompute short-term LUFS from - checked
+  directly: `Test Project/10.09.26 Tech House Heldout/Output/AB/A/` has no `.wav` file on this
+  machine (STUDIO-2) right now, matching this project's own standing churn warning about
+  machine-local `Test Project/` outputs. `render_check.py` itself has no automatic "widen and
+  re-search when unbracketed" mechanism - every prior resolution of this class (pair 15) was a
+  one-off manual re-run with a larger `TRANSITION_DIP_SPAN_BEATS`, not a standing code path -
+  so there is nothing to fix in code here either, only a re-render + manual re-measurement to do
+  once the WAV exists again (on whichever machine actually has it, or after a fresh bounce).
+  Owner: Claude. Peer review: NONE - not yet reviewed (blocked, not built).
 
 - [ ] **Restore reliable key/harmonic metadata without re-depending on MIK's UI automation**
   (D4) - this held-out run had no key data at all, so harmonic sequencing never ran; Astra found
@@ -1262,7 +1306,29 @@ was written).
   removes the misread class entirely; this has had no owner since it was carded 2026-09-02.
   Evidence: `Source/stem_detector.py:1362,1418` (Fable); `Claude Code Brain/commands/mix.md:124-154`
   (Fable).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **BUILT, 2026-09-15 - a workflow/doc fix, not new code.** `hints_from_stem_result()` and its
+  `--write-hints` CLI entry point already existed and already worked before this session (this
+  item's own evidence line cites them as pre-existing) - the actual gap was `/mix`'s own Phase 1f
+  instructions, which described hand-transcribing four timestamps per track from the DETECT
+  picture with no mention of the existing flag at all. Rewrote Phase 1d's "Hint authoring" bullet
+  (now "Hint spot-check" - the DETECT picture is used to VERIFY the auto-written values, not
+  originate them) and Phase 1f (now runs `python Source/stem_detector.py "<project-path>"
+  --write-hints` as the default first step, with manual correction demoted to a targeted per-field
+  fix for whatever the spot-check flags, not a return to authoring the whole file). Also folded in
+  C4's finding inline (the two OPTIONAL hint fields, `intro_skip_bars`/`loop_source_sec`, are only
+  honoured on the legacy path today - noted at the point Sam would consider adding one, not left
+  for him to discover the hard way). Both brains updated (`Claude Code Brain/commands/mix.md`,
+  `Codex Brain/commands/mix.md`), content-verified identical after edit (`diff -w -B` clean).
+  **Not independently re-validated at runtime this session**: `hints_from_stem_result()` itself is
+  pre-existing, already-shipped code this session didn't touch, and exercising `--write-hints`
+  live needs the full pipeline's own bpm/downbeat resolution context (confirmed: calling
+  `stem_detector.detect()` standalone outside that context fails with "no stats" even against an
+  already-analysed track's cache) - reproducing that context was out of proportion for a docs-only
+  change to code that already ships and already runs inside the real `/mix` pipeline today. Stated
+  plainly rather than silently assumed.
+  Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`.
+  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed (docs-only change).
 
 - [ ] **Surface vocal/density clash evidence to Sam as short suspect passages instead of leaving
   it as shadow-only logging** (D6) - vocal regions already gate loop-source selection, but the
@@ -1281,7 +1347,25 @@ was written).
   avoidable reorder/retry for whoever's running the build.
   Evidence: `Source/alignment_feasibility.py:54`, `Source/align_engine.py:2009`,
   `Source/automated_dj_mixes/sequencer.py:192` (Astra).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **INVESTIGATED + PARTIALLY BUILT, 2026-09-15 - honest negative result on the cited example, real
+  improvement kept anyway.** `alignment_feasibility.py`'s `feasible()` now also calls
+  `plan_fill_or_cut` after a successful `align_pair` and requires BOTH to succeed - closes the
+  "loop planning raises an exception" failure mode the checker previously had zero visibility
+  into. **Directly re-tested the item's own cited example (Doorly & Harry Choo Choo Romero ->
+  Christoph - The Rise) before writing anything up, and it does NOT reproduce**: `plan_fill_or_cut`
+  does not raise for this pair today - it prints a "[loop quality] no candidate survived" message
+  and returns 0 specs (a graceful "no loop needed" outcome, not a failure). Ran the FULL 380-pair
+  feasibility matrix with and without the fix: **267/267 feasible either way - zero pairs change
+  verdict**. Whatever Astra's original "2 of 267" figure actually measured, it is not caught by
+  this check as scoped (possibly only visible through the full `apply_automation`/
+  `propose_arrangement` pipeline, not an isolated align+plan call - real, unconfirmed follow-up).
+  Kept the code change anyway - it is a real, strictly-safer check with zero downside (a pair whose
+  loop planning genuinely crashes will now correctly be flagged, even though none in the real
+  corpus checked here currently do) - but NOT claimed as solving this item's own motivating
+  example, which remains open.
+  Files changed: `Source/alignment_feasibility.py`.
+  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed.
 
 - [ ] **Playlist-complete recovery for borderline-beatgrid tracks is never auto-attempted**
   (D8) - `refit_grid_from_stem.py` is the documented escalation path for exactly the kind of
@@ -1313,7 +1397,41 @@ was written).
   `PIPELINE_AUDIT.md`, `CODEX_REVIEW.md`) still sit at the documentation root.
   Evidence: `Documentation/AI_CONTEXT.md:1290-1411` (Fable); `Claude Code Brain/commands/mix.md:427,439-446,458,585`
   (Fable + Astra).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **PARTIALLY ADDRESSED, 2026-09-15 - real sub-claims fixed, others checked and not reproduced,
+  one already stale from natural file evolution.** Six distinct sub-claims, checked individually
+  rather than assumed as one bundle:
+  1. **"What's Next" opens with stale 2026-09-10/2026-09-01 TOPs" - already resolved by
+     subsequent sessions' own normal work, not this one.** The file's own "TOP" convention rotates
+     naturally (each session's real next-step supersedes the last, older ones marked
+     "superseded" and kept for history per this project's standing practice) - by 2026-09-15 the
+     live TOP note is dated today, not September 1/10. Not claiming credit for this.
+  2. **`seal_listening_test.py`'s documented CLI mismatch - REAL, FIXED.** The example command in
+     both `mix.md` copies still showed the pre-2026-09-10 two-positional-WAV form; the script's
+     own docstring already had the correct `--side LABEL=path`/`--twin-of`/`--out-dir`/`--seed`
+     usage (confirmed directly against the real `argparse` block) - mix.md just never caught up.
+     Rewrote the example + added an explanatory note in both brains (`diff -w -B` clean after).
+  3. **"`/mix` says A/B, the code builds A/B/C"** and 4. **"`/mix` says to commit the held-out
+     project, `.gitignore` ignores `Test Project/`"** - checked directly (grepped both files for
+     the cited phrasing), NEITHER reproduced under a quick pass. Not claimed as fixed (nothing
+     changed for either), but not confirmed as still-real either - a deeper read of both full
+     files would be needed to rule these out properly, which this pass didn't do.
+  5. **Two hint overrides documented as closed but actually inert - REAL, FIXED as part of C4
+     and D5 this session** (see those items) - `intro_skip_bars`/`loop_source_sec` no longer
+     claim CLOSED in either mix.md copy.
+  6. **Stale May-2026 planning docs at the Documentation root - REAL, FIXED.** `TOMORROW.md`
+     (2026-05-?), `TODO_ARRANGE_MIX.md` (dated 2026-05-20 in its own text), `PIPELINE_AUDIT.md`
+     (dated 2026-05-22), `CODEX_REVIEW.md` (dated 2026-05-18) all confirmed genuinely superseded
+     (references "V12" and pipeline phases completely rebuilt since) - `git mv`'d to a new
+     `Documentation/Archive/` (git history preserved, matching this project's own established
+     `Source/Archive/` precedent from the Rekordbox removal). Confirmed no live file references
+     the old paths (only historical log/doc entries do, correctly left untouched per this
+     project's "never edit history" convention).
+  Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`,
+  `Documentation/Archive/TOMORROW.md` (moved), `Documentation/Archive/TODO_ARRANGE_MIX.md`
+  (moved), `Documentation/Archive/PIPELINE_AUDIT.md` (moved), `Documentation/Archive/CODEX_REVIEW.md`
+  (moved).
+  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed.
 
 - [ ] **`extract_sections_als.py`'s parser is silently broken by XML attribute reordering** (E3)
   - valid XML, but all clips vanish from its parsed result if `<AudioClip>`'s attributes are
@@ -1599,8 +1717,15 @@ content there; the swap POINT itself, item c's job, is what T2 actually needs). 
 718/6/0 -> 724/6/0 across both. Neither yet peer-reviewed; item (c)'s full 5-step scope written
 up under B3 above. rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 20 open, 6 done, 1 dropped (last update 2026-09-15 11:10 [Claude]: B1's
-LOOP_SELF_SIMILARITY_TIERA sub-item built, re-verified against 80,815 real windows, Codex-reviewed
-(SOUND, no material objections), flag flipped to True and merged into the working tree - B1 as a
-whole item stays OPEN because its BASS_RESIDUAL_ENABLED sub-item is still Sam's open call, not
-built - 20 open, 6 done, 1 dropped, unchanged)
+## THE COUNT: 19 open, 7 done, 1 dropped (last update 2026-09-15 12:40 [Claude]: C6 built
+(bass_out_payoff tier) + Codex-reviewed SOUND, merged - C6 was always a sub-bullet under B3, not
+its own checkbox, so this did not change the count on its own. C3 (stem-grid BPM fallback) built,
+Codex + MiniMax reviewed SOUND (Codex capped mid-session, MiniMax substituted per CLAUDE.md's
+standing guidance, caught one real bool-coercion gap Codex's own rounds had missed) - CHECKED OFF,
+first count change this update: 20 -> 19 open, 6 -> 7 done. C7 Step 0 (pair_history
+canonicalisation) built + Codex/MiniMax reviewed SOUND, same real findings fixed - stays a
+sub-bullet under B3 (Step 1 unbuilt), no count change. D5 (wire --write-hints into /mix docs), D7
+(feasibility checker also validates loop planning, honest negative result on its own cited
+example), E2 (stale docs archived + seal_listening_test.py CLI doc fixed) all built, not yet
+peer-reviewed - no count change (still open). D3 investigated, found blocked (fresh render WAV
+not present on this machine) - no count change. 19 open, 7 done, 1 dropped)
