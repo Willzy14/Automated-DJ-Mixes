@@ -134,6 +134,7 @@ class OverlapAnalysis:
     intro_trim: tuple | None = None   # (track_name, clip_name, trim_beats) — partial front trim
     break_skip_shift: tuple | None = None  # (track_name, threshold_beat, delta) — pull drop onto swap
     outro_split: tuple | None = None       # (track_name, clip_name, skip_beats, keep_end_beats)
+    front_cut: tuple | None = None         # (track_name, clip_name, cut_beats) — decisions: cut a clip's front, pull the rest in
     shift_delta: float = 0.0
     similar_pairs: list[dict] = field(default_factory=list)
     overlap_policy: str = "standard_48"
@@ -906,29 +907,38 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
 
     Source/target are in track-native bars; bars->beats is *4.
     """
-    from align_engine import LANDMARK_POLICIES
+    from align_engine import DECISIONS_POLICY, LANDMARK_POLICIES
     for fc in getattr(al, "fills_cuts", None) or []:
         if fc.kind == "outgoing_tail" and (fc.reps >= 1 or fc.partial_bars > 0):
             outro = next((s for s in out_track.sections if _label(s) == "outro"), None)
-            if not outro:
+            if not outro and getattr(al, "alignment_policy", "") != DECISIONS_POLICY:
                 continue
             chunk_beats = (fc.source_end_bar - fc.source_start_bar) * 4.0
             partial_beats = fc.partial_bars * 4.0
             ext = fc.reps * chunk_beats + partial_beats          # total fill (exact)
             source_start = fc.source_start_bar * 4.0
             source_end = fc.source_end_bar * 4.0
-            outro_source_start = float(outro["source_start_beats"])
-            if (source_start >= outro_source_start
-                    and getattr(al, "alignment_policy", "legacy_v1") not in LANDMARK_POLICIES):
-                previous = pre_outro_section(out_track)
-                source_end = outro_source_start
-                source_start = source_end - chunk_beats
-                if previous is None or source_start < previous["source_start_beats"]:
-                    raise ValueError(
-                        f"No full-energy pre-outro loop window for '{out_track.name}'"
-                    )
-                analysis.notes += "; moved tail-loop source before fading outro"
-            insert_at = float(outro["arr_time"])
+            if outro:
+                outro_source_start = float(outro["source_start_beats"])
+                if (source_start >= outro_source_start
+                        and getattr(al, "alignment_policy", "legacy_v1") not in LANDMARK_POLICIES):
+                    previous = pre_outro_section(out_track)
+                    source_end = outro_source_start
+                    source_start = source_end - chunk_beats
+                    if previous is None or source_start < previous["source_start_beats"]:
+                        raise ValueError(
+                            f"No full-energy pre-outro loop window for '{out_track.name}'"
+                        )
+                    analysis.notes += "; moved tail-loop source before fading outro"
+                insert_at = float(outro["arr_time"])
+                loop_base = outro.get("name", "tail")
+            else:
+                # A decision looping a track that has no outro (Zaro on the
+                # 15.09.26 mix): the copies go after its last clip, nothing
+                # is pushed back.
+                last = out_track.sections[-1]
+                insert_at = float(last["arr_end"])
+                loop_base = last.get("name", "tail")
             shifted_tail = [
                 section for section in out_track.sections
                 if float(section.get("arr_time", -math.inf)) >= insert_at
@@ -940,7 +950,7 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                 source_beat_end=source_end,
                 count=fc.reps,
                 insert_at_beat=insert_at,
-                clip_name="{}_tail_loop".format(outro.get("name", "tail")),
+                clip_name="{}_tail_loop".format(loop_base),
                 tail_partial_beats=partial_beats,                # land exactly on the marker
                 shifts_before_insert=[
                     (section.get("name", ""), float(ext))
@@ -956,6 +966,59 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                 analysis.loop_target_marker = fc.target_marker_name
             analysis.notes += "; out tail loop {:.0f}bx{:d}+{:.0f}b".format(
                 chunk_beats, fc.reps, partial_beats)
+        elif fc.kind == "outgoing_cut" and fc.skip_bars > 0:
+            # Decision: remove the FRONT of a named outgoing clip and pull it
+            # and everything after it in, so the track jumps forward in
+            # source with no gap (Switch Disco skipping the first 10 bars of
+            # its last drop at the swap). Executed by
+            # apply_loops.cut_named_clip_front_and_pull after the shifts and
+            # before the loops, so a tail loop plans against the cut track.
+            sec = next((s for s in out_track.sections
+                        if s.get("name") == fc.clip_name), None)
+            if sec is None:
+                raise ValueError(
+                    f"outgoing_cut: clip '{fc.clip_name}' not found on '{out_track.name}'")
+            cut_beats = fc.skip_bars * 4.0
+            if cut_beats >= float(sec["arr_end"]) - float(sec["arr_time"]) - 0.001:
+                raise ValueError(
+                    f"outgoing_cut: {fc.skip_bars:g} bars is the whole of '{fc.clip_name}' "
+                    f"on '{out_track.name}'")
+            analysis.front_cut = (out_track.name, fc.clip_name, cut_beats)
+            threshold = float(sec["arr_time"])
+            sec["source_start_beats"] = float(sec["source_start_beats"]) + cut_beats
+            sec["arr_end"] = float(sec["arr_end"]) - cut_beats
+            for s in out_track.sections:
+                if s is not sec and float(s["arr_time"]) > threshold + 0.001:
+                    s["arr_time"] -= cut_beats
+                    s["arr_end"] -= cut_beats
+            out_track.arr_end -= cut_beats
+            analysis.notes += "; outgoing cut {:.0f}b from the front of {}".format(
+                fc.skip_bars, fc.clip_name)
+        elif fc.kind == "outro_skip" and fc.skip_bars > 0:
+            # Decision: skip a middle stretch of a named outgoing clip but keep
+            # its own ending (RUZE's outro, 4 bars out of the middle, last 5
+            # kept). Same ALS operation as the break-skip's outro trim.
+            sec = next((s for s in out_track.sections
+                        if s.get("name") == fc.clip_name), None)
+            if sec is None:
+                raise ValueError(
+                    f"outro_skip: clip '{fc.clip_name}' not found on '{out_track.name}'")
+            skip_beats = fc.skip_bars * 4.0
+            keep_beats = fc.keep_end_bars * 4.0
+            if skip_beats + keep_beats >= float(sec["arr_end"]) - float(sec["arr_time"]) - 0.001:
+                raise ValueError(
+                    f"outro_skip: skip {fc.skip_bars:g} + kept ending {fc.keep_end_bars:g} "
+                    f"bars is not shorter than '{fc.clip_name}' on '{out_track.name}'")
+            analysis.outro_split = (out_track.name, fc.clip_name, skip_beats, keep_beats)
+            threshold = float(sec["arr_end"])
+            sec["arr_end"] = threshold - skip_beats
+            for s in out_track.sections:
+                if s is not sec and float(s["arr_time"]) >= threshold - 0.001:
+                    s["arr_time"] -= skip_beats
+                    s["arr_end"] -= skip_beats
+            out_track.arr_end -= skip_beats
+            analysis.notes += "; outro skip {:.0f}b inside {}, ending kept".format(
+                fc.skip_bars, fc.clip_name)
         elif fc.kind == "intro_cut":
             # The cut lands strictly INSIDE the intro (guaranteed by
             # plan_fill_or_cut's partial-trim guard), so front-trim the intro clip
@@ -1283,8 +1346,14 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                         warp_mode: int | str | None = None,
                         dry_run: bool = False,
                         transition_policy: str = "interim_v1",
-                        tempo_arc: bool = False) -> ArrangementPlan:
+                        tempo_arc: bool = False,
+                        decisions_path: Path | None = None) -> ArrangementPlan:
     """Propose and optionally apply a full arrangement.
+
+    `decisions_path`: a JSON file of per-transition decisions (Claude-arranged
+    mode). Pairs it names are built from the decision instead of the anchor
+    search; everything downstream is the production path. See
+    align_engine.alignment_from_decision for the shape.
 
     Steps:
       1. Load sections JSON -> build track list
@@ -1416,9 +1485,23 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             print(f"  WARNING: align_engine does not yet honour intro_skip_bars "
                   f"(set on {len(skipped)} track(s)) — positions ignore that trim. "
                   f"Use USE_ALIGN_ENGINE=False for hinted intro-skips until cuts land.")
+        decisions = None
+        if decisions_path is not None:
+            raw = json.loads(Path(decisions_path).read_text(encoding="utf-8"))
+            items = raw["transitions"] if isinstance(raw, dict) else raw
+            decisions = {int(d["pair_index"]): d for d in items}
+            print(f"\n--- Claude-arranged: {len(decisions)} decision(s) from "
+                  f"{Path(decisions_path).name} ---")
+            for k in sorted(decisions):
+                d = decisions[k]
+                print(f"  T{k}: entry out-bar {d['entry_out_bar']}, trim {d.get('intro_trim_bars', 0)}, "
+                      f"swap in-bar {d['swap_in_bar']}"
+                      + (", tail loop" if d.get("tail_loop") else "")
+                      + (", front cut" if d.get("outgoing_cut") else "")
+                      + (", outro skip" if d.get("outro_skip") else ""))
         positions, alignments = compute_aligned_positions(
             tracks, stem_dir, order=[t.name for t in tracks],
-            policy=get_policy(transition_policy))
+            policy=get_policy(transition_policy), decisions=decisions)
     else:
         print("\n--- Natural-fill alignment (legacy) ---")
         positions = compute_natural_positions(tracks)
@@ -1453,6 +1536,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
     all_trims: list[tuple] = []      # (track_name, clip_name, trim_beats) front trims
     all_break_skips: list[tuple] = []  # (track_name, threshold_beat, delta) — pull drop onto swap
     all_outro_splits: list[tuple] = []  # (track_name, clip_name, skip_beats, keep_end_beats)
+    all_front_cuts: list[tuple] = []    # (track_name, clip_name, cut_beats) — decisions only
 
     for i in range(len(tracks) - 1):
         out_t = tracks[i]
@@ -1486,6 +1570,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             all_break_skips.append(analysis.break_skip_shift)
         if analysis.outro_split:
             all_outro_splits.append(analysis.outro_split)
+        if analysis.front_cut:
+            all_front_cuts.append(analysis.front_cut)
 
         # Print summary
         status_icon = {"ok": "+", "short": "!", "long": "!", "none": "X"}
@@ -1690,12 +1776,13 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                 "warp_assignment": "per_track_explicit_v1" if warp_mode is not None else "inherited_v1",
             },
             tool_versions={"propose_arrangement": "mix_plan_v1"},
-            human_overrides=(
-                {
-                    "project_bpm": f"{project_bpm:.6f}",
-                }
-                if project_bpm is not None else {}
-            ),
+            human_overrides={
+                **({"project_bpm": f"{project_bpm:.6f}"} if project_bpm is not None else {}),
+                **({"arrangement_decisions": "{}:{}".format(
+                        Path(decisions_path).name,
+                        _sha256_file(Path(decisions_path))[:12])}
+                   if decisions_path is not None else {}),
+            },
         )
         write_mix_plan(plan.mix_plan, mix_plan_path)
         print(f"  MixPlan: {mix_plan_path} ({plan.mix_plan.plan_hash})")
@@ -1805,6 +1892,26 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                 else:
                     print("  WARNING: clip '{}' not found to trim on '{}'".format(
                         clip_name, tname[:40]))
+
+        # Step 1.7: Decision front-cuts — remove the front of a named outgoing
+        # clip and pull it and every later clip in. After shifts and intro trims
+        # (positions final), before loops (a tail loop's insert point was
+        # planned against the cut track).
+        if all_front_cuts:
+            from apply_loops import cut_named_clip_front_and_pull
+            als_tracks = find_track_line_ranges(lines)
+            for track_name, clip_name, cut_beats in all_front_cuts:
+                matched = _match_track(track_name, als_tracks)
+                if not matched:
+                    print("  WARNING: track '{}' not found for front cut".format(track_name[:40]))
+                    continue
+                start, end, tname = matched
+                ok = cut_named_clip_front_and_pull(lines, start, end, clip_name, cut_beats)
+                if not ok:
+                    raise ValueError(
+                        f"front cut: clip '{clip_name}' not found on '{tname}'")
+                print("  Front cut: '{}' on '{}' by {:.0f} beats, later clips pulled in".format(
+                    clip_name, tname[:40], cut_beats))
 
         # Step 2: Apply loop extensions
         if all_loops:
@@ -2183,6 +2290,11 @@ def main():
                              "lane under held-out test (see Heldout Replay "
                              "Plan V2)")
 
+    parser.add_argument("--decisions", type=Path, default=None,
+                        help="Claude-arranged mode: a JSON file of per-transition decisions "
+                             "(entry bar, intro trim, swap bar, tail loop / cut). Pairs it "
+                             "names bypass the anchor search; see align_engine."
+                             "alignment_from_decision for the shape.")
     parser.add_argument("--cue-signals", default="",
                         help="Comma-separated analysis signals to admit as alignment "
                              "anchors, e.g. 'fills,phrase,deep,bassout,introloop,matched,hints'. Default (empty) reproduces "
@@ -2215,6 +2327,7 @@ def main():
         dry_run=args.dry_run,
         transition_policy=args.transition_policy,
         tempo_arc=args.tempo_arc,
+        decisions_path=args.decisions,
     )
 
     # Generate report

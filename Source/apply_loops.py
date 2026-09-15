@@ -1045,6 +1045,61 @@ def split_clip_skip_before_end(lines: list[str], track_start: int, track_end: in
     return True
 
 
+def cut_named_clip_front_and_pull(lines: list[str], track_start: int, track_end: int,
+                                  clip_name: str, cut_beats: float) -> bool:
+    """Remove the FIRST cut_beats of the named clip and pull it AND every later
+    clip on the track earlier by the same amount, so the track jumps forward in
+    its source with no gap. Unlike trim_named_clip_front (which leaves the gap
+    for the outgoing to cover), this is for the OUTGOING side of a decision:
+    Switch Disco skipping the first 10 bars of its last drop at the swap so it
+    gets out sooner (arrangement decisions, 2026-09-15). Returns True if applied."""
+    if cut_beats <= 0:
+        return False
+    es, ee = find_clip_events(lines, track_start, track_end)
+    if es < 0:
+        return False
+    span = _find_named_clip_span(lines, es, ee, {clip_name})
+    if span is None:
+        return False
+    a, b = span
+    T = ls = le = None
+    for k in range(a, b + 1):
+        s = lines[k].strip()
+        if "<AudioClip " in s and 'Time="' in s:
+            mm = re.search(r'Time="([^"]+)"', s)
+            if mm:
+                T = float(mm.group(1))
+        elif "<LoopStart " in s and 'Value="' in s and ls is None:
+            mm = re.search(r'Value="([^"]+)"', s)
+            if mm:
+                ls = float(mm.group(1))
+        elif "<LoopEnd " in s and 'Value="' in s and le is None:
+            mm = re.search(r'Value="([^"]+)"', s)
+            if mm:
+                le = float(mm.group(1))
+    if T is None or ls is None or le is None:
+        return False
+    if cut_beats >= (le - ls) - 0.001:            # the whole clip - refuse
+        return False
+    # 1) the clip itself: source start moves later by cut_beats, its arrangement
+    #    start stays put and its end comes in by cut_beats.
+    for k in range(a, b + 1):
+        s = lines[k].strip()
+        if "<CurrentEnd " in s and 'Value="' in s:
+            lines[k] = re.sub(r'Value="[^"]+"', f'Value="{T + (le - ls) - cut_beats}"',
+                              lines[k], count=1)
+        elif ("<LoopStart " in s or "<HiddenLoopStart " in s) and 'Value="' in s:
+            mm = re.search(r'Value="([^"]+)"', s)
+            if mm:
+                lines[k] = re.sub(r'Value="[^"]+"', f'Value="{float(mm.group(1)) + cut_beats}"',
+                                  lines[k], count=1)
+    # 2) every clip that starts after this one comes in by cut_beats (the
+    #    threshold sits just past T so the cut clip itself, at exactly T,
+    #    stays where it is).
+    shift_clips_from_beat(lines, track_start, track_end, T + 0.01, -cut_beats)
+    return True
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():

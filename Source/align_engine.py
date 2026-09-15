@@ -217,7 +217,12 @@ CUE_CONFIG = CueConfig()
 #: (tail_anchor_rescue_v1) classified as legacy would re-enable intro
 #: loops/cuts that its CueConfig flags are supposed to gate (Codex review
 #: 2026-08-20: 31/65 rescued pairs acquired loop/cut specs with flags off).
-LANDMARK_POLICIES = ("paired_landmarks_v2", "tail_anchor_rescue_v1")
+#: claude_decisions_v1 (2026-09-15): the arrangement came from a per-transition
+#: decisions file (propose_arrangement --decisions) instead of the anchor
+#: search. It is a landmark policy in every downstream sense - the swap is a
+#: named point, trusted as given, and both tracks are split there.
+DECISIONS_POLICY = "claude_decisions_v1"
+LANDMARK_POLICIES = ("paired_landmarks_v2", "tail_anchor_rescue_v1", DECISIONS_POLICY)
 
 
 @dataclass
@@ -708,7 +713,10 @@ class FillCutSpec:
     target_marker_bar: float = 0.0     # the marker being reached (audit)
     partial_bars: float = 0.0          # loops: shorter FINAL chunk to land exactly on the marker
     skip_bars: float = 0.0             # break_skip: bars removed (the dropped break's length)
+                                       # outgoing_cut / outro_skip: bars removed from the named clip
+    keep_end_bars: float = 0.0         # outro_skip: bars of the clip's own ending kept after the skip
     clip_name: str = ""                # break_skip: the incoming break clip to drop
+                                       # outgoing_cut / outro_skip: the outgoing clip to shorten
     target_marker_name: str = ""       # named section/dropout reached by a loop
     note: str = ""
     # entry_extension only, shadow instrumentation (2026-09-10): how "busy" the
@@ -2437,9 +2445,139 @@ def plan_fill_or_cut(o, i, al, policy=None):
     return specs
 
 
-def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
+# ── Decisions: an arrangement dictated per transition ────────────────────────
+#
+# Claude-arranged mode (Sam, 2026-09-15: "re-run this one in Claude-arranged
+# mode"). Instead of the anchor search, each transition is DECIDED from the
+# evidence - where the incoming enters on the outgoing's own bars, how much of
+# its intro plays, which incoming bar takes the bass, what the outgoing's tail
+# does - and the pipeline executes it through the same Alignment / FillCutSpec
+# path as any other policy, so the report, MixPlan, loops, automation and
+# every gate are unchanged. A decision is a dict:
+#   pair_index, out_track, in_track           (names are checked, not trusted)
+#   entry_out_bar    outgoing source bar where the incoming's first kept clip starts
+#   intro_trim_bars  bars cut from the front of the incoming (0 = whole intro)
+#   swap_in_bar      incoming source bar that takes the bass
+#   tail_loop        {source_start_bar, source_end_bar, reps, partial_bars, target}  (optional)
+#   outgoing_cut     {clip, cut_bars}            front of that clip removed, later clips pulled in
+#   outro_skip       {clip, skip_bars, keep_end_bars}   a middle skip that keeps the clip's ending
+#   swap_cue / out_cue / reason               (audit text)
+
+
+def _decision_names_match(track: "Track", wanted: str) -> bool:
+    import html
+    a = html.unescape(str(wanted)).strip().lower()
+    b = html.unescape(track.name).strip().lower()
+    return a == b or a.startswith(b[:30]) or b.startswith(a[:30])
+
+
+def alignment_from_decision(o: "Track", i: "Track", decision: dict,
+                            policy=None) -> Alignment:
+    """An Alignment built from a decision instead of the anchor search.
+
+    The swap is locked exactly like any other alignment (handoff_bar_out is
+    the outgoing's own bar, pre-loop). Only the decision's own arithmetic is
+    checked here; the final overlap caps are the plan validator's job, after
+    loops and cuts have settled the geometry."""
+    for key, track in (("out_track", o), ("in_track", i)):
+        wanted = decision.get(key)
+        if wanted and not _decision_names_match(track, wanted):
+            raise ValueError(
+                f"decision for pair {decision.get('pair_index')} names {key} "
+                f"'{wanted}' but the pipeline has '{track.name}'")
+    entry_out = float(decision["entry_out_bar"])
+    trim = float(decision.get("intro_trim_bars") or 0.0)
+    swap_in = float(decision["swap_in_bar"])
+    if trim < 0 or swap_in <= trim:
+        raise ValueError(
+            f"decision for pair {decision.get('pair_index')}: swap_in_bar {swap_in:g} "
+            f"must come after the intro trim ({trim:g} bars)")
+    arr_offset = entry_out - trim
+    if arr_offset < 0:
+        raise ValueError(
+            f"decision for pair {decision.get('pair_index')}: the incoming would start "
+            f"before the outgoing (entry {entry_out:g} - trim {trim:g})")
+    handoff_out = arr_offset + swap_in
+    if handoff_out > o.n_bars + 1e-6:
+        raise ValueError(
+            f"decision for pair {decision.get('pair_index')}: the swap lands on outgoing "
+            f"bar {handoff_out:g}, after '{o.name}' ends at bar {o.n_bars}")
+    overlap = float(o.n_bars) - arr_offset
+    if overlap <= 0:
+        raise ValueError(
+            f"decision for pair {decision.get('pair_index')}: no overlap "
+            f"(entry {entry_out:g} on a {o.n_bars}-bar track)")
+    swap_cue = str(decision.get("swap_cue") or "swap")
+    return Alignment(
+        out_name=o.name, in_name=i.name,
+        handoff_bar_out=handoff_out,
+        handoff_kind=f"decision:{swap_cue}",
+        anchor_bar_in=swap_in,
+        arr_offset_bars=arr_offset,
+        overlap_bars=overlap,
+        score=0,
+        alignment_policy=DECISIONS_POLICY,
+        intro_cut_bars=trim,
+        paired_cues=[{
+            "arrangement_bar": handoff_out,
+            "outgoing_labels": [f"decision:{decision.get('out_cue') or ''}".rstrip(":")],
+            "incoming_source_bar": swap_in,
+            "incoming_labels": [f"decision:{swap_cue}"],
+        }],
+        swap_progress=(swap_in / overlap) if overlap > 0 else None,
+        notes=[f"decision: {decision.get('reason') or ''}".strip()],
+    )
+
+
+def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutSpec]:
+    """The loops and cuts a decision asks for, as FillCutSpecs.
+
+    Cuts come first so a tail loop is planned against the shortened outgoing."""
+    specs: list[FillCutSpec] = []
+    pair = decision.get("pair_index")
+    cut = decision.get("outgoing_cut")
+    if cut:
+        if float(cut["cut_bars"]) <= 0:
+            raise ValueError(f"decision for pair {pair}: outgoing_cut needs cut_bars > 0")
+        specs.append(FillCutSpec(kind="outgoing_cut", clip_name=str(cut["clip"]),
+                                 skip_bars=float(cut["cut_bars"]), note="decision"))
+    skip = decision.get("outro_skip")
+    if skip:
+        if float(skip["skip_bars"]) <= 0 or float(skip["keep_end_bars"]) <= 0:
+            raise ValueError(f"decision for pair {pair}: outro_skip needs skip_bars "
+                             "and keep_end_bars > 0")
+        specs.append(FillCutSpec(kind="outro_skip", clip_name=str(skip["clip"]),
+                                 skip_bars=float(skip["skip_bars"]),
+                                 keep_end_bars=float(skip["keep_end_bars"]), note="decision"))
+    loop = decision.get("tail_loop")
+    if loop:
+        s0, s1 = float(loop["source_start_bar"]), float(loop["source_end_bar"])
+        reps = int(loop["reps"])
+        partial = float(loop.get("partial_bars") or 0.0)
+        if s1 <= s0 or reps < 0 or (reps == 0 and partial <= 0):
+            raise ValueError(f"decision for pair {pair}: tail_loop geometry is empty")
+        ext = reps * (s1 - s0) + partial
+        specs.append(FillCutSpec(
+            kind="outgoing_tail", reps=reps, source_start_bar=s0, source_end_bar=s1,
+            partial_bars=partial, target_marker_bar=float(o.n_bars) + ext,
+            target_marker_name=f"decision:{loop.get('target') or 'tail'}", note="decision"))
+    trim = float(decision.get("intro_trim_bars") or 0.0)
+    if trim > 0:
+        specs.append(FillCutSpec(kind="intro_cut", cut_to_bar=trim,
+                                 target_marker_bar=float(decision["swap_in_bar"]),
+                                 note="decision"))
+    return specs
+
+
+def compute_aligned_positions(tracks, stem_dir, order=None, policy=None,
+                              decisions=None):
     """Bass-to-bass ABSOLUTE arrangement positions for the whole mix — a drop-in
     replacement for propose_arrangement.compute_natural_positions().
+
+    `decisions` (optional): {pair_index: decision dict} - a pair with a
+    decision is built by alignment_from_decision / fills_from_decision instead
+    of align_pair / plan_fill_or_cut; every other pair, and everything after
+    the alignment, is unchanged.
 
     `tracks` is the propose_arrangement TrackInfo list, already in mix order, with
     arr_start/arr_end in arrangement BEATS. Reads the SECTIONS_STEM_*.json the
@@ -2497,9 +2635,14 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
     arr_pos = {0: 0.0}                                       # keyed by INDEX (names may repeat)
     alignments = []
     contraction = 0.0       # left-shift owed to a break-skip at the PREVIOUS pair (beats)
+    decisions = decisions or {}
     for k in range(1, len(tracks)):
         o, i = stems[resolved[k - 1]], stems[resolved[k]]
-        al = align_pair(o, i, policy)
+        decision = decisions.get(k)
+        if decision is not None:
+            al = alignment_from_decision(o, i, decision, policy)
+        else:
+            al = align_pair(o, i, policy)
         prev = arr_pos[k - 1]
         # A break-skip at an earlier pair tightened the timeline (its incoming lost a
         # break), so THIS track + the swap into it move left by `contraction`. The
@@ -2512,7 +2655,10 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
         al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
         al.landmark_candidates = report_landmark_candidates(o, i, al, prev, new)
         al.vocal_regions_arrangement = report_vocal_regions(o, i, prev, new)
-        al.fills_cuts = plan_fill_or_cut(o, i, al, policy)   # loops/cuts around the swap
+        if decision is not None:
+            al.fills_cuts = fills_from_decision(o, i, decision)
+        else:
+            al.fills_cuts = plan_fill_or_cut(o, i, al, policy)   # loops/cuts around the swap
         # Computed AFTER plan_fill_or_cut, not right after align_pair (Codex
         # review, 2026-09-13): an outgoing-tail loop genuinely extends the
         # outgoing past its native n_bars (Christoph -> A Studio: flag would
