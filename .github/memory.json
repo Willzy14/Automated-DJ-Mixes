@@ -685,7 +685,18 @@
         "Burn list Lane B: several built-but-disabled feature flags need Sam's ruling; whether to scope the deeper swap-first redesign (item c) now rather than after the listen.",
         "Burn list Lane C (the real leverage point): pair_history.jsonl holds 16+ real Sam corrections and nothing currently reads them to make a decision - this is the input data for item (c)."
       ]
+    },
+    {
+      "date": "2026-09-15",
+      "brain": "Claude + Codex (worktree-isolated plan review)",
+      "summary": "Ran the A5 blind listen (new sealed-test tooling: seal_listening_test.py, extract_transition_excerpts.py, record_bounce_manifest.py) across T1-T8, decoded Sam's real notes: sam_v1 hits an explicit kill condition (repeated, twin-confirmed preference for interim_v1), sam_v1+introloop validated-not-promoted. interim_v1 stays default. Writeup: Documentation/Mix Patterns Library/Heldout Replay Result 02.md. Sam's own verdict on the test method: too slow, low signal - don't default to this heavy protocol again (saved to memory blind-listening-test-too-heavy). B3 sequencing decided+scoped for real (traced the actual align_engine.py call path): C5 -> C6 -> C7 -> C8 landing order, old C1 folded into C7. C5 built+tested: align_engine.py's six candidate/geometry functions were silently reading frozen module constants instead of the passed-in TransitionPolicy - fixed to thread policy caps through properly, 6 new tests, zero changed outcomes on the 380-pair baseline, merged 1b9b0a4. C2 built+tested: apply_automation.py's style selection now checks outgoing post-swap content before defaulting to QUICK_SWAP - honest negative result, zero real-world change on the actual motivating Freejak->HARTY case, 8964dcc. Codex round-1 plan review of the C6/C7/C8 redesign ran in an isolated git worktree (.claude/worktrees/codex-c6c7c8-review/) - 8 findings recorded in BURN_LIST.md, plan document not yet revised against them. B1's four disabled flags fully resolved: width_cues + soft_intro_outro flipped to True by default (ed29de3, verified against real Tier-A compute path, 2 synthetic-fixture test files pinned width_cues=False); LOOP_SELF_SIMILARITY_TIERA and BASS_RESIDUAL_ENABLED correctly identified as unsafe to flip yet with specific evidenced reasons (tiera: replacement-semantics would un-catch 404 real rejections alongside 791 new catches, needs an AND-semantics rebuild; bass residual: unresolved Codex FATAL + a corrected mis-citation, weak ROI even fixed - 4/79 real masters qualify). Two evidence mis-citations found and corrected in the burn list's own B1 writeup along the way. Sam's explicit direction for next session: build the tiera AND-semantics rebuild FIRST. Full suite: 725 passed, 0 failed (background run, prior gate 120s timeout).",
+      "pending": [
+        "FIRST next session (Sam's explicit direction): build LOOP_SELF_SIMILARITY_TIERA's AND-semantics rebuild - split _loop_self_similarity/evaluate_loop_quality into two separate scores (base 5-key + tiera-augmented), fail if either fails, then re-verify against the real 15,268-window historical corpus (confirm the 791 evidenced catches land with zero of the 404 prior un-catches reintroduced) before flipping the default.",
+        "Revise Documentation/Plans/swap-first-redesign/c6-c7-c8-plan.md (in .claude/worktrees/codex-c6c7c8-review/) against Codex's 8 round-1 findings, then get a round-2 Codex review before building C6.",
+        "BASS_RESIDUAL_ENABLED stays parked (weak real-world case even fixed) unless Sam names a specific mix where the bass cutoff actually bothered him.",
+        "B2 (untracked Ableton 12.4.3 template picked nondeterministically by mtime) - still open, not re-raised since the initial burn list survey."
+      ]
     }
   ],
-  "last_modified": "2026-09-13"
+  "last_modified": "2026-09-15"
 }
