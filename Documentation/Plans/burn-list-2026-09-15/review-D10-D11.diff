@@ -1,0 +1,122 @@
+diff --git a/Source/apply_automation.py b/Source/apply_automation.py
+index 4c958fc..0ec4e4e 100644
+--- a/Source/apply_automation.py
++++ b/Source/apply_automation.py
+@@ -1333,21 +1333,11 @@ def _fix_sample_ref_paths(lines: list[str], output_path: Path,
+         # .as_posix() double-slashes a UNC root (//nas/share/...) - Ableton
+         # already parses that fine (the original baked-in paths had the
+         # same exposure; this fix does not introduce it).
+-        new_abs = found.as_posix()
+-        # Re-escape for XML on the way back out - html.unescape above
+-        # decoded &apos; to a real apostrophe (Wired Masters' own track
+-        # names use both a real filesystem apostrophe AND the &apos;
+-        # escaped form in this project's ALS convention, e.g. "HARTY -
+-        # There's A Party Going On"); writing the raw apostrophe back
+-        # would still be valid XML (this file already delimits every
+-        # Value with double quotes, so an unescaped ' needs no escaping
+-        # by the XML spec itself), but every OTHER FileRef this fix
+-        # leaves untouched still uses &apos;, and this whole codebase
+-        # locates filenames elsewhere with plain string/regex matching
+-        # against that escaped form - stay consistent with it rather
+-        # than introduce one differently-encoded value in the file.
+-        new_rel = new_rel.replace("'", "&apos;")
+-        new_abs = new_abs.replace("'", "&apos;")
++        # absolute(), not resolve(): audio_dir can be relative, and resolve() swaps a junction for its target.
++        new_abs = found.absolute().as_posix()
++        # Undo the unescape above in full: a bare & is invalid XML; ' stays &apos; like untouched FileRefs.
++        new_rel = html.escape(new_rel, quote=False).replace('"', "&quot;").replace("'", "&apos;")
++        new_abs = html.escape(new_abs, quote=False).replace('"', "&quot;").replace("'", "&apos;")
+         block = _RELATIVE_PATH_ATTR_RE.sub(
+             lambda m: m.group(1) + new_rel + m.group(2), block, count=1)
+         block = _ABSOLUTE_PATH_ATTR_RE.sub(
+diff --git a/Source/extract_sections_als.py b/Source/extract_sections_als.py
+index 37caadb..c5929c0 100644
+--- a/Source/extract_sections_als.py
++++ b/Source/extract_sections_als.py
+@@ -145,7 +145,7 @@ def main():
+     # Pretty print summary
+     print()
+     for track_name, clips in data.items():
+-        if not track_name or "Audio" in track_name:
++        if not track_name:
+             continue  # skip empty template tracks
+         print(f"\n{track_name}:")
+         for c in clips:
+diff --git a/Source/transition_review_viz.py b/Source/transition_review_viz.py
+index 747a190..a591905 100644
+--- a/Source/transition_review_viz.py
++++ b/Source/transition_review_viz.py
+@@ -366,7 +366,7 @@ def main():
+     if arranged_als is not None:
+         sections = {name: clips
+                     for name, clips in parse_sections_als(arranged_als).items()
+-                    if clips and "Audio" not in name}
++                    if clips}
+         print(f"Geometry from arranged ALS: {arranged_als.name}")
+     else:
+         with open(json_path, encoding="utf-8") as f:
+diff --git a/Source/validate_hints_vs_sections.py b/Source/validate_hints_vs_sections.py
+index 7ea2d03..bca2ab7 100644
+--- a/Source/validate_hints_vs_sections.py
++++ b/Source/validate_hints_vs_sections.py
+@@ -139,7 +139,7 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
+     rows = 0
+     matched_hint_keys: set[str] = set()
+     for raw_track_name, secs in sections_data.items():
+-        if not raw_track_name or "Audio" in raw_track_name or not secs:
++        if not raw_track_name or not secs:
+             continue
+         # Sections JSON keys come straight from ALS XML, so "&" arrives as
+         # "&amp;" (2026-09-02: three of ten tracks silently skipped on it).
+diff --git a/Tests/test_sample_ref_paths.py b/Tests/test_sample_ref_paths.py
+index 3e09537..5b8b158 100644
+--- a/Tests/test_sample_ref_paths.py
++++ b/Tests/test_sample_ref_paths.py
+@@ -316,3 +316,47 @@ def test_case_insensitive_match_resolves_to_the_real_on_disk_name(tmp_path):
+     assert '<RelativePath Value="../../../Audio/kick.wav" />' in fixed
+     assert f'<Path Value="{audio_dir.as_posix()}/kick.wav" />' in fixed
+     assert "KICK.wav" not in fixed
++
++
++def test_ampersand_in_filename_is_re_escaped_and_output_parses(tmp_path):
++    """A bare & written back (RUZE & Chesster, 2026-09-15) made the whole ALS unloadable."""
++    import xml.etree.ElementTree as ET
++
++    audio_dir = _make_audio_dir(tmp_path, ["RUZE & Chesster - Another Night.wav"])
++    output_path = tmp_path / "Output" / "Mix.als"
++    output_path.parent.mkdir(parents=True)
++
++    block = _file_ref_block(
++        rel_path="../Audio/RUZE &amp; Chesster - Another Night.wav",
++        abs_path="G:/machine1/Audio/RUZE &amp; Chesster - Another Night.wav",
++    )
++    text = _wrap_clip("intro_1", _sample_ref(block))
++
++    fixed = "".join(_fix_sample_ref_paths(_lines(text), output_path, audio_dir))
++
++    assert '<RelativePath Value="../Audio/RUZE &amp; Chesster - Another Night.wav" />' in fixed
++    assert "RUZE & Chesster" not in fixed
++    ET.fromstring(fixed)
++
++
++def test_relative_audio_dir_still_writes_an_absolute_path_value(tmp_path, monkeypatch):
++    """The pipeline runs from the repo root with relative project paths."""
++    import re
++
++    _make_audio_dir(tmp_path, ["Track One.wav"])
++    (tmp_path / "Output").mkdir()
++    monkeypatch.chdir(tmp_path)
++
++    block = _file_ref_block(
++        rel_path="../Audio/Track One.wav",
++        abs_path="G:/machine1/Audio/Track One.wav",
++    )
++    text = _wrap_clip("intro_1", _sample_ref(block))
++
++    fixed = "".join(_fix_sample_ref_paths(
++        _lines(text), Path("Output") / "Mix.als", Path("Audio")))
++
++    written = re.search(r'<Path Value="([^"]*)"', fixed).group(1)
++    assert Path(written).is_absolute()
++    assert Path(written).samefile(tmp_path / "Audio" / "Track One.wav")
++    assert '<RelativePath Value="../Audio/Track One.wav" />' in fixed

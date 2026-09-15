@@ -1,0 +1,19 @@
+{
+  "attempt": "D10-a1",
+  "checked_at": "2026-09-15T16:04:55",
+  "kind": "burn-list-receipt",
+  "mtime": "2026-09-15T15:38:32",
+  "path": "C:\\Users\\Carillon\\Wired Masters Dropbox\\Sam Wills\\0.1---GIT HUB---\\Automated DJ Mixes\\Source\\apply_automation.py",
+  "prior_hash": null,
+  "reasons": [],
+  "result": "ACCEPTED",
+  "sha256": "76621e97a99150248f86b3aaf67f71d3267e333eb5209b9ede78da20b114914a",
+  "size": 81411,
+  "started": "2026-09-15T15:29:00",
+  "validation": {
+    "command": "python -m pytest Tests/test_sample_ref_paths.py -q -p no:cacheprovider",
+    "exempt": null,
+    "exit": 0,
+    "tail": "13 passed in 1.12s"
+  }
+}

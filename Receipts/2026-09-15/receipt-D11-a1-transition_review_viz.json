@@ -1,0 +1,19 @@
+{
+  "attempt": "D11-a1-transition_review_viz",
+  "checked_at": "2026-09-15T16:05:07",
+  "kind": "burn-list-receipt",
+  "mtime": "2026-09-15T15:47:23",
+  "path": "C:\\Users\\Carillon\\Wired Masters Dropbox\\Sam Wills\\0.1---GIT HUB---\\Automated DJ Mixes\\Source\\transition_review_viz.py",
+  "prior_hash": null,
+  "reasons": [],
+  "result": "ACCEPTED",
+  "sha256": "1b95d837d8c3ddcccbfef27ec54fd929dee91f668277c69106542a4827073805",
+  "size": 20099,
+  "started": "2026-09-15T15:00:00",
+  "validation": {
+    "command": "python -m pytest Tests/test_validate_hints_vs_sections.py Tests/test_extract_sections_als.py Tests/test_transition_review_viz.py -q -p no:cacheprovider",
+    "exempt": null,
+    "exit": 0,
+    "tail": "8 passed in 0.48s"
+  }
+}

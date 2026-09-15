@@ -1,0 +1,19 @@
+{
+  "attempt": "D11-a1-extract_sections_als",
+  "checked_at": "2026-09-15T16:05:04",
+  "kind": "burn-list-receipt",
+  "mtime": "2026-09-15T15:11:50",
+  "path": "C:\\Users\\Carillon\\Wired Masters Dropbox\\Sam Wills\\0.1---GIT HUB---\\Automated DJ Mixes\\Source\\extract_sections_als.py",
+  "prior_hash": null,
+  "reasons": [],
+  "result": "ACCEPTED",
+  "sha256": "2d6c99824b72dc6fa840cfd2c485cba8dfe0679e1ac7b96cd50050605ee7312c",
+  "size": 6862,
+  "started": "2026-09-15T15:00:00",
+  "validation": {
+    "command": "python -m pytest Tests/test_validate_hints_vs_sections.py Tests/test_extract_sections_als.py Tests/test_transition_review_viz.py -q -p no:cacheprovider",
+    "exempt": null,
+    "exit": 0,
+    "tail": "8 passed in 0.43s"
+  }
+}

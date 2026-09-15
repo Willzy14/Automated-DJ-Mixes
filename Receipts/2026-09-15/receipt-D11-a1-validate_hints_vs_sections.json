@@ -1,0 +1,19 @@
+{
+  "attempt": "D11-a1-validate_hints_vs_sections",
+  "checked_at": "2026-09-15T16:05:00",
+  "kind": "burn-list-receipt",
+  "mtime": "2026-09-15T15:11:46",
+  "path": "C:\\Users\\Carillon\\Wired Masters Dropbox\\Sam Wills\\0.1---GIT HUB---\\Automated DJ Mixes\\Source\\validate_hints_vs_sections.py",
+  "prior_hash": null,
+  "reasons": [],
+  "result": "ACCEPTED",
+  "sha256": "6ff1ee98d94661d4928e33d31fa55175385730e86a5bc7d91379543dd712779b",
+  "size": 11302,
+  "started": "2026-09-15T15:00:00",
+  "validation": {
+    "command": "python -m pytest Tests/test_validate_hints_vs_sections.py Tests/test_extract_sections_als.py Tests/test_transition_review_viz.py -q -p no:cacheprovider",
+    "exempt": null,
+    "exit": 0,
+    "tail": "8 passed in 0.41s"
+  }
+}

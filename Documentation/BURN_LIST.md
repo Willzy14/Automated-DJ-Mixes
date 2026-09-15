@@ -1648,6 +1648,82 @@ was written).
   guessed at.
   Owner: Claude. Peer review: NONE - not yet reviewed (investigation only, no code written).
 
+- [ ] **The built fixes for long intros and short outros are switched off in the standard
+  `/mix` run** (D9) - Sam's long-intro rule ("count back from the first cue", a swap around the
+  one-minute mark; cue signals `deep` and `phrase`) and his short-outro rule ("run back 16 bars
+  from the last beat"; cue signal `rescue`, the tail-anchor rescue) are built, tested and merged,
+  but both are opt-in `--cue-signals` flags and the `/mix` Phase 2a command passes none. So a
+  standard run hard-raises "No paired section/dropout alignment" on a short-outro into
+  long-intro pair. Sam, 2026-09-15: "this problem shouldn't exist... i thought this was already
+  fixed?", then "there is one for the outro as well so add to the burn list to check about both".
+  Found live on the 15.09.26 August Releases Mix, T5 Pat Premier -> Tommy Farrow: the default
+  raised, `rescue` alone and `rescue,deep` still raised, and `rescue,deep,phrase` aligned it -
+  swap at Tommy Farrow bar 31 (1:00.0, his kick dropout) against Pat Premier bar 79 of 84, a
+  36-bar overlap. A per-pair align_pair comparison showed the other 10 transitions identical to
+  the default. `deep` correctly stood aside here (it only fires when the first real intro cue is
+  past bar 32, and Tommy Farrow has one at bar 31). Pat Premier's own outro-loop candidates all
+  failed the loop-quality checks (silence_fraction, insert_level_match, worst_beat_dip - consistent
+  with its hard ending), so an outgoing loop was not available on this pair either. The check,
+  both halves: (1) replay the 380-pair alignment baseline corpus under `rescue,deep,phrase` and
+  count identical / rescued / newly-raising / changed pairs - the code only tries these anchors
+  after the normal drop-anchor search finds nothing, so zero changed pairs is the expected result
+  and anything else is a finding; (2) if clean, Sam decides whether they become the CueConfig
+  default or go into the Phase 2a command in both brains' `mix.md` (frozen sync list).
+  Deliberately out of scope: `matched` (it runs before the normal search, so it can change
+  transitions that already work), `introloop` (A5: validated, not promoted), `fills`, `bassout`.
+  Evidence: `Source/align_engine.py:1084` `Source/align_engine.py:1370` `Source/propose_arrangement.py:2123`
+  Owner: Claude. Status: OPEN - evidence first, then Sam's call on the default. Touched: 2026-09-15.
+  Peer review: NONE - not yet reviewed.
+
+- [x] **A6's sample-path rewrite wrote a bare & into the final ALS, so any track with & in its
+  filename made the whole set unloadable** (D10) - DONE 2026-09-15, uncommitted. The rewrite now
+  fully re-escapes the values it writes and writes an absolute Path.
+  Found live on the 15.09.26 August Releases Mix: Phase 3 wrote `In-Key Mix V2.als` with 20
+  invalid lines (every RUZE & Chesster FileRef) and its own ALS check refused it. Cause: the A6
+  rewrite in apply_automation.py unescapes RelativePath/Path to look the file up, then re-escaped
+  only apostrophes on the way out. Second defect in the same function: the Path it wrote was
+  relative whenever the script ran with relative project paths, which is how /mix runs it.
+  The fix applies html.escape plus both quotes, keeping apostrophes as &apos;. It uses absolute()
+  rather than resolve(), so a Dropbox junction is not swapped for its target. Two regression tests:
+  the exact case against the committed code gives an XML parse error and a relative Path, and
+  against the fix it parses with an absolute Path. The rebuilt V2 passed strict validate_als and
+  the 89-check MixPlan reconciliation.
+  Reviews: MiniMax returned SOUND (the independent review, receipt below). A Claude subagent
+  standing in for Codex (capped until 2026-09-19) also returned SOUND, with 290 tests passing:
+  `Documentation/Plans/burn-list-2026-09-15/claude-review-D10-D11.md`. The reviewed diff is
+  byte-identical to the current code (sha256 59a8eac9f8cb).
+  Author: Claude. Evidence: `Source/apply_automation.py:1337` sha256:76621e97a991
+  `Tests/test_sample_ref_paths.py:321` `Receipts/2026-09-15/receipt-D10-a1.json`
+  Owner: Claude. Status: DONE 2026-09-15. Touched: 2026-09-15.
+  Peer review: SOUND - MiniMax `Receipts/2026-09-15/minimax-review-D10-D11.md`
+
+- [x] **Tracks with "Audio" in their title were silently dropped from the hint check and the
+  transition review** (D11) - DONE 2026-09-15, uncommitted. The substring filter is gone from all
+  three scripts, and a regression test pins it.
+  validate_hints_vs_sections.py, extract_sections_als.py and transition_review_viz.py each skipped
+  any track whose name contains "Audio", a filter meant for empty template tracks. Tommy Farrow's
+  real title ("New Audio 27.07.26 Extended MIx") tripped it on the 15.09.26 August Releases Mix.
+  The hint check failed with "no matching sections track", the extraction summary printed 11 of
+  12 tracks, and the Phase 4 review drew 10 of 11 transitions (Pat Premier straight into Arielle
+  Free).
+  The filter was never load-bearing. parse_sections_als only keeps tracks that have clips, so the
+  remaining no-clips checks do the real job, and extract_sections_als's filter only ever touched
+  the console summary. Hint check re-run: 46 of 46 rows. The Phase 4 review now draws 11 of 11
+  transitions.
+  The regression test was added after both reviews, on the Claude reviewer's suggestion. It fails
+  on the committed code and passes on the fix, and the reviewed production code is unchanged.
+  transition_review_viz.py's filter sits inline in main() with no unit test; the real-project
+  re-render covers it. The same filter in diff_sections.py, sections_blind_viz.py,
+  sections_compare_viz.py and validate_sections_review.py is off the /mix path and left alone.
+  Author: Claude. Evidence: `Source/validate_hints_vs_sections.py:142` sha256:6ff1ee98d946
+  `Source/extract_sections_als.py:148` sha256:2d6c99824b72 `Source/transition_review_viz.py:369`
+  sha256:1b95d837d8c3 `Tests/test_validate_hints_vs_sections.py:107`
+  `Receipts/2026-09-15/receipt-D11-a1-validate_hints_vs_sections.json`
+  `Receipts/2026-09-15/receipt-D11-a1-extract_sections_als.json`
+  `Receipts/2026-09-15/receipt-D11-a1-transition_review_viz.json`
+  Owner: Claude. Status: DONE 2026-09-15. Touched: 2026-09-15.
+  Peer review: SOUND - MiniMax `Receipts/2026-09-15/minimax-review-D10-D11.md`
+
 ## E - Hygiene / technical debt (does not affect output quality today)
 
 - [ ] **Render-check has real blind spots on every production (tempo-arc) mix, currently
@@ -2136,7 +2212,30 @@ content there; the swap POINT itself, item c's job, is what T2 actually needs). 
 718/6/0 -> 724/6/0 across both. Neither yet peer-reviewed; item (c)'s full 5-step scope written
 up under B3 above. rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 7 open, 21 done, 1 dropped (last update 2026-09-15 14:55 [Claude]: A6 (AB-comparison
+Last item update: 2026-09-15 15:29 [Claude] - create: D9, found live on the 15.09.26 August
+Releases Mix and asked for by Sam ("there is one for the outro as well so add to the burn list
+to check about both"). The long-intro and short-outro alignment fixes are built but opt-in, and
+the standard `/mix` Phase 2 run never enables them. rev 1d80397 -> (this write).
+
+Last item update: 2026-09-15 15:42 [Claude] - create: D10 and D11, two bugs found and fixed while
+building the 15.09.26 August Releases Mix (a bare & written into the final ALS by A6's path
+rewrite; tracks with "Audio" in the title dropped from the Phase 1 hint check). Both fixed, tested
+and uncommitted, neither peer-reviewed yet. rev d5d7e67 -> (this write).
+
+Last item update: 2026-09-15 16:06 [Claude] - refill: D10 and D11 DONE. MiniMax returned SOUND
+(the independent review, receipt in Receipts/2026-09-15/). A Claude subagent standing in for
+capped Codex also returned SOUND, and its two unasked findings were closed: a D11 regression test
+(fails on the committed code, passes on the fix) and D11's missing evidence path. Four
+deliverable receipts accepted, and the reviewed diff is byte-identical to the current code. The
+code is still uncommitted. rev 010122d -> (this write).
+
+## THE COUNT: 8 open, 23 done, 1 dropped (last update 2026-09-15 16:06 [Claude]: D10 and D11
+checked off SOUND with a MiniMax receipt and four accepted deliverable receipts, code still
+uncommitted: 10 -> 8 open, 21 -> 23 done. Prior update (2026-09-15 15:42 [Claude]): D10 and D11
+opened, both fixed and tested but awaiting review: 8 -> 10 open. Prior update (2026-09-15 15:29
+[Claude]): D9 opened - the
+built long-intro and short-outro alignment fixes are off in the standard `/mix` run; check both,
+then Sam decides on the default: 7 -> 8 open. Prior update (2026-09-15 14:55 [Claude]): A6 (AB-comparison
 ALS broken sample paths) and D6 (vocal-clash + density suspect-passage report) both built,
 tested against real corpus data, and MiniMax-reviewed twice each (plan then code) - both CHECKED
 OFF SOUND: 9 -> 7 open, 19 -> 21 done. Real bugs caught during each build that neither plan
