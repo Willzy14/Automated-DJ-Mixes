@@ -316,3 +316,47 @@ def test_case_insensitive_match_resolves_to_the_real_on_disk_name(tmp_path):
     assert '<RelativePath Value="../../../Audio/kick.wav" />' in fixed
     assert f'<Path Value="{audio_dir.as_posix()}/kick.wav" />' in fixed
     assert "KICK.wav" not in fixed
+
+
+def test_ampersand_in_filename_is_re_escaped_and_output_parses(tmp_path):
+    """A bare & written back (RUZE & Chesster, 2026-09-15) made the whole ALS unloadable."""
+    import xml.etree.ElementTree as ET
+
+    audio_dir = _make_audio_dir(tmp_path, ["RUZE & Chesster - Another Night.wav"])
+    output_path = tmp_path / "Output" / "Mix.als"
+    output_path.parent.mkdir(parents=True)
+
+    block = _file_ref_block(
+        rel_path="../Audio/RUZE &amp; Chesster - Another Night.wav",
+        abs_path="G:/machine1/Audio/RUZE &amp; Chesster - Another Night.wav",
+    )
+    text = _wrap_clip("intro_1", _sample_ref(block))
+
+    fixed = "".join(_fix_sample_ref_paths(_lines(text), output_path, audio_dir))
+
+    assert '<RelativePath Value="../Audio/RUZE &amp; Chesster - Another Night.wav" />' in fixed
+    assert "RUZE & Chesster" not in fixed
+    ET.fromstring(fixed)
+
+
+def test_relative_audio_dir_still_writes_an_absolute_path_value(tmp_path, monkeypatch):
+    """The pipeline runs from the repo root with relative project paths."""
+    import re
+
+    _make_audio_dir(tmp_path, ["Track One.wav"])
+    (tmp_path / "Output").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    block = _file_ref_block(
+        rel_path="../Audio/Track One.wav",
+        abs_path="G:/machine1/Audio/Track One.wav",
+    )
+    text = _wrap_clip("intro_1", _sample_ref(block))
+
+    fixed = "".join(_fix_sample_ref_paths(
+        _lines(text), Path("Output") / "Mix.als", Path("Audio")))
+
+    written = re.search(r'<Path Value="([^"]*)"', fixed).group(1)
+    assert Path(written).is_absolute()
+    assert Path(written).samefile(tmp_path / "Audio" / "Track One.wav")
+    assert '<RelativePath Value="../Audio/Track One.wav" />' in fixed

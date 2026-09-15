@@ -1333,21 +1333,11 @@ def _fix_sample_ref_paths(lines: list[str], output_path: Path,
         # .as_posix() double-slashes a UNC root (//nas/share/...) - Ableton
         # already parses that fine (the original baked-in paths had the
         # same exposure; this fix does not introduce it).
-        new_abs = found.as_posix()
-        # Re-escape for XML on the way back out - html.unescape above
-        # decoded &apos; to a real apostrophe (Wired Masters' own track
-        # names use both a real filesystem apostrophe AND the &apos;
-        # escaped form in this project's ALS convention, e.g. "HARTY -
-        # There's A Party Going On"); writing the raw apostrophe back
-        # would still be valid XML (this file already delimits every
-        # Value with double quotes, so an unescaped ' needs no escaping
-        # by the XML spec itself), but every OTHER FileRef this fix
-        # leaves untouched still uses &apos;, and this whole codebase
-        # locates filenames elsewhere with plain string/regex matching
-        # against that escaped form - stay consistent with it rather
-        # than introduce one differently-encoded value in the file.
-        new_rel = new_rel.replace("'", "&apos;")
-        new_abs = new_abs.replace("'", "&apos;")
+        # absolute(), not resolve(): audio_dir can be relative, and resolve() swaps a junction for its target.
+        new_abs = found.absolute().as_posix()
+        # Undo the unescape above in full: a bare & is invalid XML; ' stays &apos; like untouched FileRefs.
+        new_rel = html.escape(new_rel, quote=False).replace('"', "&quot;").replace("'", "&apos;")
+        new_abs = html.escape(new_abs, quote=False).replace('"', "&quot;").replace("'", "&apos;")
         block = _RELATIVE_PATH_ATTR_RE.sub(
             lambda m: m.group(1) + new_rel + m.group(2), block, count=1)
         block = _ABSOLUTE_PATH_ATTR_RE.sub(
