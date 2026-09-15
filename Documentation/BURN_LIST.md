@@ -683,7 +683,7 @@ was written).
   Owner: Sam (the listen itself). Peer review: n/a - this is Sam's verdict, not a build (see the
   validator note under THE COUNT).
 
-- [ ] **Every AB-comparison ALS bakes in a machine-specific absolute path AND a relative path one
+- [x] **Every AB-comparison ALS bakes in a machine-specific absolute path AND a relative path one
   folder-level too shallow, so opening one on a different machine reliably shows offline samples**
   (A6) - found live, 2026-09-14, while Sam tried to bounce Side A of the Tech House Heldout
   comparison and Ableton reported track 2 (Yellody) and the last track (Jewel Kid) as offline;
@@ -756,7 +756,46 @@ was written).
   WORSE, not better. Deserves its own peer-reviewed plan before code, same bar as D1/D6/D8 above
   - not attempted blind this session; no peer was free when this was traced (MiniMax and a
   Claude subagent were both mid-review on C5/C2).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **BUILT + TESTED + VERIFIED, 2026-09-15.** Plan reviewed by MiniMax first (no blockers, 6
+  refinements requested), all 6 folded in before any code was written. New
+  `_fix_sample_ref_paths` + `_resolve_audio_file` in `apply_automation.py`, called once right
+  before the final `compress_als` write. Per-clip fail-safe (a `FileRef` whose filename can't be
+  resolved under the real `Audio/` folder - factory content, an `.amxd` device, an empty unused
+  slot - is left completely untouched, never guessed at); regex scoped to one `<FileRef>` block
+  at a time via `re.finditer`-style matching, never a doc-wide greedy capture. 11 new tests
+  (`Tests/test_sample_ref_paths.py` - zero direct coverage of this code path before). **Two real
+  bugs caught during implementation, neither anticipated in the plan review**: (1) a
+  case-insensitivity trap - `Path.exists()` resolves case-INSENSITIVELY on Windows/macOS
+  default, so a differently-cased basename passed the naive existence check while silently
+  keeping the WRONG case in the written path (caught by my own new test, which failed against
+  the first-draft code); fixed with `_resolve_audio_file`, a proper directory scan that always
+  returns the file's real on-disk name. (2) an XML-escaping bug found by the real-corpus
+  dry-run itself - 2 of the 9 real tracks in the staged project ("There's A Party", "Deep House
+  Pumpin'") have `&apos;`-escaped apostrophes in their stored paths; comparing the raw escaped
+  text against the real filesystem name never matched, silently leaving those two tracks unfixed
+  via the fail-safe. Fixed with `html.unescape` before the filesystem lookup (matching this
+  file's own established convention for track names) and a re-escape on the way back out.
+  **Real-corpus validated, not just synthetic**: ran the fix against the actual staged
+  `Test Project/10.09.26 Tech House Heldout/Output/AB/A/Mix A.als` - after both bug fixes, all 88
+  real audio `FileRef` blocks resolve correctly (was 65/88 before the escaping fix), confirmed
+  idempotent, and confirmed the fixed output passes this project's own real `validate_als.py`
+  gate end-to-end (wrote the fixed content through the actual `compress_als` function, not just
+  inspected the text). The 3 tracks Sam actually reported broken (Yellody, Freejak, Jewel Kid)
+  are all in the fixed set; 6 more tracks that "worked" only via Ableton's undocumented
+  cross-project cache got corrected too, as a bonus.
+  Full suite 780/0/6 -> 791/0/6.
+  Files changed: `Source/apply_automation.py`, `Tests/test_sample_ref_paths.py` (new).
+  **Peer-reviewed twice - MiniMax (plan, then code).** Code review: "No material objections.
+  Ship as-is." Verified every one of its own 6 plan-stage requests actually landed in the code
+  (not just claimed), independently re-traced the regex-scoping discipline and the exact-match-
+  precedence guarantee in `_resolve_audio_file`, confirmed the two real bugs' regression tests
+  genuinely exercise what they claim. One optional defense-in-depth suggestion (also escape `&`,
+  not just `'`) explicitly recommended AGAINST by the reviewer itself (no `&` in Sam's real
+  credits corpus; the existing `validate_als.py` gate would hard-fail rather than silently
+  corrupt if one ever appeared) - left as-is per that recommendation.
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax (plan + code, both rounds), no
+  findings required a further change.
 
 ## B - Sam's decisions (nothing here should be built without his ruling)
 

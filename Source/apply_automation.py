@@ -1225,6 +1225,139 @@ def _find_audio_dir(als_path: Path, max_levels: int = 8) -> Path | None:
     return None
 
 
+# Burn list A6. Matches one <FileRef>...</FileRef> block AT A TIME
+# (re.finditer/sub with this pattern walks match-by-match - never a
+# doc-wide greedy capture, which would let a single match span multiple
+# FileRefs and rewrite every clip to the same path).
+_FILEREF_BLOCK_RE = re.compile(r"<FileRef>.*?</FileRef>", re.DOTALL)
+# The ONLY two attributes this fix is allowed to touch, each matched only
+# within one already-isolated <FileRef> block's own text. Everything else
+# inside FileRef (RelativePathType, Type, LivePackName/Id,
+# OriginalFileSize, OriginalCrc, SourceHint) - and everything outside it
+# (clip timing, loop points, automation, names) - is never read or
+# rewritten. A <FileRef> also carries non-audio references (an .amxd
+# device, or an empty unused slot with both values "") - those fall
+# through the basename/existence check below and are left untouched.
+_RELATIVE_PATH_ATTR_RE = re.compile(r'(<RelativePath Value=")[^"]*(")')
+_ABSOLUTE_PATH_ATTR_RE = re.compile(r'(<Path Value=")[^"]*(")')
+
+
+def _resolve_audio_file(audio_dir: Path, basename: str) -> Path | None:
+    """The real on-disk file matching *basename* under audio_dir, or None.
+
+    Path.exists() alone is not enough: NTFS/APFS default to case-
+    INSENSITIVE lookup, so `(audio_dir / "KICK.wav").exists()` can return
+    True when the real file is `kick.wav` - using that Path object as-is
+    would silently write the WRONG-CASE name into the ALS (works today by
+    OS luck, breaks the moment the file is read from a case-sensitive
+    filesystem). Scan once, prefer an exact case match, fall back to a
+    case-insensitive one, and always return the file's REAL on-disk name.
+    """
+    try:
+        entries = list(audio_dir.iterdir())
+    except OSError:
+        return None
+    ci_match = None
+    for p in entries:
+        if not p.is_file():
+            continue
+        if p.name == basename:
+            return p
+        if ci_match is None and p.name.lower() == basename.lower():
+            ci_match = p
+    return ci_match
+
+
+def _fix_sample_ref_paths(lines: list[str], output_path: Path,
+                          audio_dir: Path | None) -> list[str]:
+    """Rewrite every clip's SampleRef/FileRef to the REAL Audio/ folder at
+    output_path's actual save depth, on THIS machine (burn list A6).
+
+    clone_clip (apply_loops.py) duplicates AudioClip blocks - including
+    their embedded SampleRef/FileRef - as opaque template TEXT, so whatever
+    depth/machine a clip's paths were originally correct for propagates
+    unchanged through every downstream copy. A normal single-mix build
+    (<project>/Output/Mix.als) happens to sit at the depth the source was
+    originally computed for; build_ab_comparison.py's deeper layout
+    (<project>/Output/AB/<side>/Mix <side>.als) does not, so every track
+    shows OFFLINE in Ableton when the ALS is opened on a different machine
+    (or even the same machine with a different Dropbox drive letter) than
+    it was built on (Sam, 2026-09-14).
+
+    Runs once, right before the final write - PROVENANCE-AGNOSTIC (it
+    rewrites the final in-memory text, so it does not matter which
+    upstream step originally set a wrong value; fixing further upstream
+    would only buy a cleaner intermediate file that is never opened
+    cross-machine) and PER-CLIP FAIL-SAFE: a FileRef whose filename cannot
+    be found under audio_dir is left completely untouched, never guessed
+    at - it may be a Live Pack / factory-library reference that never
+    lived under this project's own Audio/ at all, not a genuinely missing
+    file.
+
+    Surgical XML text rewrite, not Ableton's own "Collect All and Save":
+    this whole pipeline is offline XML editing by design - that is the
+    entire reason apply_automation.py exists, doing in seconds what
+    CollectAllAndSave needs Live open and minutes of interactive GUI time
+    for. Routing the final write through LiveAPI would defeat that.
+    """
+    if audio_dir is None:
+        return lines
+    import html
+    text = "".join(lines)
+
+    def _fix_one(match: re.Match) -> str:
+        block = match.group(0)
+        # ALS attribute values are XML-escaped (&apos; etc., same as track
+        # names - see the html.unescape use a few lines above in this
+        # file) - unescape before treating either value as a filesystem
+        # name, or a real apostrophe'd filename (e.g. "There's A Party")
+        # never matches its own &apos;-escaped form and silently falls
+        # through the fail-safe as if it were missing.
+        rel_m = re.search(r'<RelativePath Value="([^"]*)"', block)
+        rel_value = html.unescape(rel_m.group(1)) if rel_m else ""
+        abs_m = re.search(r'<Path Value="([^"]*)"', block)
+        abs_value = html.unescape(abs_m.group(1)) if abs_m else ""
+        basename = (
+            Path(rel_value).name if rel_value.strip() else
+            Path(abs_value).name if abs_value.strip() else
+            None
+        )
+        if not basename:
+            return block  # nothing to anchor on - leave alone
+
+        found = _resolve_audio_file(audio_dir, basename)
+        if found is None:
+            return block  # not one of ours (factory content, missing) - leave alone
+
+        new_rel = os.path.relpath(found, output_path.parent).replace("\\", "/")
+        # .as_posix() double-slashes a UNC root (//nas/share/...) - Ableton
+        # already parses that fine (the original baked-in paths had the
+        # same exposure; this fix does not introduce it).
+        new_abs = found.as_posix()
+        # Re-escape for XML on the way back out - html.unescape above
+        # decoded &apos; to a real apostrophe (Wired Masters' own track
+        # names use both a real filesystem apostrophe AND the &apos;
+        # escaped form in this project's ALS convention, e.g. "HARTY -
+        # There's A Party Going On"); writing the raw apostrophe back
+        # would still be valid XML (this file already delimits every
+        # Value with double quotes, so an unescaped ' needs no escaping
+        # by the XML spec itself), but every OTHER FileRef this fix
+        # leaves untouched still uses &apos;, and this whole codebase
+        # locates filenames elsewhere with plain string/regex matching
+        # against that escaped form - stay consistent with it rather
+        # than introduce one differently-encoded value in the file.
+        new_rel = new_rel.replace("'", "&apos;")
+        new_abs = new_abs.replace("'", "&apos;")
+        block = _RELATIVE_PATH_ATTR_RE.sub(
+            lambda m: m.group(1) + new_rel + m.group(2), block, count=1)
+        block = _ABSOLUTE_PATH_ATTR_RE.sub(
+            lambda m: m.group(1) + new_abs + m.group(2), block, count=1)
+        return block
+
+    text = _FILEREF_BLOCK_RE.sub(_fix_one, text)
+    return text.splitlines(keepends=True)
+
+
 def measure_track_levelling(tracks, audio_dir: Path) -> dict[str, float]:
     """The levelling offsets in dB, per track name, WITHOUT writing anything.
 
@@ -1509,6 +1642,9 @@ def main() -> None:
         _apply_track_levelling(lines, tracks, audio_dir)
     else:
         print("\n  [levelling] Audio folder not found near the .als — skipped")
+
+    # ── fix SampleRef/FileRef paths for THIS save location (burn list A6) ──
+    lines = _fix_sample_ref_paths(lines, output_path, audio_dir)
 
     # ── write output ──────────────────────────────────────────────────
     print(f"\nWriting {output_path.name} ...")
