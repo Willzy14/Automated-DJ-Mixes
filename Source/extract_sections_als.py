@@ -145,7 +145,7 @@ def main():
     # Pretty print summary
     print()
     for track_name, clips in data.items():
-        if not track_name or "Audio" in track_name:
+        if not track_name:
             continue  # skip empty template tracks
         print(f"\n{track_name}:")
         for c in clips:

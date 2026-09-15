@@ -102,3 +102,14 @@ def test_first_drop_matches_nearest_drop_not_only_first(tmp_path):
         _hints_for_basic(first_drop_bar=84))  # 20 bars from nearest drop
     code2, errors2, report2 = validate(proj2, version=1)
     assert code2 != 0
+
+
+def test_track_with_audio_in_its_title_is_validated(tmp_path):
+    """A real title containing "Audio" was once skipped as a template track (2026-09-15)."""
+    name = "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER"
+    hints = {f"{name}.wav": _hints_for_basic()["A & B - Track 24 Bit MASTER.wav"]}
+    proj = _write_project(tmp_path, BASIC_SECTIONS, hints, stem_name=name)
+    code, errors, report = validate(proj, version=1)
+    assert code == 0, f"expected PASS, got {code}: {errors}\n{report}"
+    assert "no matching sections track" not in report
+    assert f"| {name[:40]} | first_drop_sec |" in report

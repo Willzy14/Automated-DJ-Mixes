@@ -139,7 +139,7 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
     rows = 0
     matched_hint_keys: set[str] = set()
     for raw_track_name, secs in sections_data.items():
-        if not raw_track_name or "Audio" in raw_track_name or not secs:
+        if not raw_track_name or not secs:
             continue
         # Sections JSON keys come straight from ALS XML, so "&" arrives as
         # "&amp;" (2026-09-02: three of ten tracks silently skipped on it).

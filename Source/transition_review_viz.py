@@ -366,7 +366,7 @@ def main():
     if arranged_als is not None:
         sections = {name: clips
                     for name, clips in parse_sections_als(arranged_als).items()
-                    if clips and "Audio" not in name}
+                    if clips}
         print(f"Geometry from arranged ALS: {arranged_als.name}")
     else:
         with open(json_path, encoding="utf-8") as f:
