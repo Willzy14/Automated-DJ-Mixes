@@ -876,11 +876,11 @@ was written).
   corrected); `Source/bass_residual.py:1-70`, `.github/ai-activity-log.md:256,263` (BASS_RESIDUAL,
   corrected); `Tools/tiera_loop_replay.py` (rewritten for AND-gate verdicts, multi-directory
   pooling); `Tests/test_tiera_loop_similarity.py` (rewritten, 23 tests).
-  Owner: Sam. Author: Claude (width_cues, soft_intro_outro, LOOP_SELF_SIMILARITY_TIERA). Peer
-  review: width_cues/soft_intro_outro - NONE, not yet reviewed. LOOP_SELF_SIMILARITY_TIERA - SOUND
-  - Codex (1 round, `-Effort high`, real staged files, "NO MATERIAL OBJECTIONS", 2 real findings
-  both adopted and fixed same-session, see above). BASS_RESIDUAL_ENABLED remains Sam's open call,
-  not built.
+  Owner: Sam. Author: Claude (width_cues, soft_intro_outro, LOOP_SELF_SIMILARITY_TIERA).
+  Peer review: NONE - not yet reviewed overall (mixed per sub-flag: width_cues/soft_intro_outro
+  NONE, not yet reviewed; LOOP_SELF_SIMILARITY_TIERA SOUND - Codex, 1 round, `-Effort high`, real
+  staged files, "NO MATERIAL OBJECTIONS", 2 real findings both adopted and fixed same-session, see
+  above; BASS_RESIDUAL_ENABLED remains Sam's open call, not built - n/a).
 
 - [ ] **An untracked Ableton 12.4.3 template is being picked nondeterministically by mtime,
   and it's already the one every recent mix actually used** (B2) - `_find_template` rglobs
@@ -926,15 +926,80 @@ was written).
   - **C2 (folded in here as the first real signal-aware change)**: automation style stops
     ignoring whether the outgoing has real content to fade across. **BUILT + TESTED + VERIFIED,
     2026-09-14** (see below).
-  - **C6 - not yet built**: retire "first admissible anchor wins" for the primary search pass;
-    always rank globally, the way the rescue pass already does. Medium risk - could change real
-    outcomes, needs the 380-pair sweep re-run and a Codex review before landing.
-  - **C7 (was C1) - not yet built**: feed `pair_history.jsonl`'s actual swap-delta data into
-    candidate scoring, not just a notes string. Needs a defensible weighting scheme designed
-    first (e.g. how many similar corrections, in which direction, before nudging a score).
+  - **C6 - RESCOPED then BUILT + TESTED, 2026-09-15.** The original "retire first-admissible-
+    anchor-wins, rank globally" proposal was reviewed by Codex across 4 plan rounds
+    (`Documentation/Plans/swap-first-redesign/c6-c7-c8-plan.md`) and materially changed by a
+    direct empirical investigation of the T2 trigger case (Freejak->HARTY): the original proposal
+    turned out to be a COMPLETE NO-OP for T2 (only one incoming anchor is ever admissible for that
+    pair, so nothing is missed by returning early on it) and was DROPPED, not built - Codex's own
+    round-2 review proved the proposed anti-gaming rule could never fire in the primary pass at
+    all (`drop_payoff` requires `incoming_anchor < first_drop_bar`, which is structurally false for
+    every anchor in the very list being searched, since `first_drop_bar` IS that list's own
+    minimum). What actually blocked T2 was a DIFFERENT mechanism entirely: ranking among OUTGOING
+    anchor candidates within the ONE admissible incoming anchor. Built instead: a new
+    `bass_out_payoff` rank-tuple tier in `_search_anchors` (`Source/align_engine.py`) - ranks
+    higher than `weighted_score` but below `drop_payoff`, rewarding a candidate that lands exactly
+    on the outgoing track's own `bass_out_bar` (when it's not `bass_out_is_end`) - directly
+    implementing this file's own documented arrangement model for the one decision point that
+    didn't yet honour it. Verified the EXISTING `CUE_CONFIG.emit_bass_out` weight-boost mechanism
+    first (Codex's own suggestion) - confirmed empirically it changes nothing for T2, and worked
+    out precisely why: it boosts a cue's weight, but `weighted_score` sums every coincidental
+    cue-pair across the WHOLE overlap window, and the boosted cue sits inside BOTH competing
+    candidates' windows, so the boost cancels out - proving a discrete tier (not any cue-weight
+    value) was the only fix that could work. Fixes T2's own real geometry: `handoff_bar_out`
+    164->148, `overlap_bars` 17->33, matching the structurally correct point (the T2 EXACT swap
+    beat, bar 157, is still unreachable - it was never a registered cue at all, out of scope for
+    this or any of C6/C7/C8 as currently conceivable, stated plainly in the plan rather than
+    silently expected). 5 new tests (`Tests/test_bass_out_payoff.py`), 2 of 5 proved to fail
+    against the pre-fix code (git-stashed and re-run). 380-pair baseline: 18 pairs moved, EVERY ONE
+    independently verified (not assumed) to converge on that pair's own outgoing track's real
+    `bass_out_bar`, three outgoing tracks account for all 18 - inspected before refreshing, per
+    this project's own established discipline. Full suite 741/0/6.
+    **Codex code review (real staged files, `-Effort high`): "NO MATERIAL OBJECTIONS."** Confirmed
+    independently: implementation matches the agreed contract exactly (null guard, `not
+    bass_out_is_end`, exact `round(float(...))` match, tuple order); only evaluates already-
+    admissible candidates, cannot create one; `round()` is consistent with `_mix_cues` (no bar-
+    normalisation off-by-one); `rank_all=True` pooling changes selection only, not admissibility;
+    the 2/5 proved-the-test failures are credible. One MINOR, adopted: the original
+    `test_drop_payoff_still_dominates_bass_out_payoff` only inspected one candidate's tuple slots,
+    which cannot actually prove one tier dominates another - Codex noted "the current code is
+    correct" (not a functional bug) but asked for a real two-candidate competition if the test's
+    own dominance claim was meant literally. Rebuilt with a genuine `rank_all=True` pooling
+    scenario (two incoming anchors, two outgoing cues engineered so bar 36's bass_out-tier
+    candidate is reachable ONLY from one anchor and bar 44's drop-payoff-tier candidate ONLY from
+    the other - confirmed by direct admissibility-window arithmetic before writing the fixture,
+    not guessed) - pooling now proves the drop_payoff candidate actually wins the competition, not
+    just that its own tuple slot holds the right value. Re-verified proved-the-test (2 of 5 still
+    fail against the stashed pre-fix code). Full suite 741/0/6 -> unchanged count (test rewritten,
+    not added).
+    Files changed: `Source/align_engine.py`, `Tests/test_bass_out_payoff.py` (new).
+  - **C7 (was C1), Step 0 BUILT + TESTED, 2026-09-15 - Step 1 (shadow mode) not yet built.** New
+    `Source/canonicalize_pair_history.py`: derives the swap-beat delta from the two beat fields
+    directly (never the raw `bass_swap_delta_beats` field, which can be absent or stale on BOTH
+    sides of a real conflict - the exact Black Book pair 4 case Codex's round-3 review found),
+    groups by (project, pair_index), and FAILS CLOSED on any disagreement (verdict OR derived
+    delta beyond a 4-beat/1-bar tolerance) - a conflicting group is excluded from the canonical
+    dataset entirely until a human-authored resolution record exists for it (schema: `resolved_
+    verdict`, `resolved_delta_beats`, `resolved_by`, `date`, `reason`), never auto-resolved by
+    "keep the latest" (the real duplicates share the same 2026-05-21 timestamp - there's no
+    recency signal to even tiebreak on). Run against the real corpus: 34 raw records reduce to
+    exactly 25 unique (project, pair_index) observations (matching the figure the plan review
+    independently derived by hand) - 21 canonical, 4 real conflicts, all in Black Book x Defected
+    V2 (pairs 3/4/5/7 - two different disagreement shapes: pairs 3/4 disagree on the derived
+    delta itself, pairs 5/7 have IDENTICAL zero delta but disagree on VERDICT, because the
+    coarser `auto_diff` logging source can't see a correction that doesn't move the swap beat at
+    all - a two-stage-bass automation change or an arrangement extension). 11 new tests
+    (`Tests/test_canonicalize_pair_history.py`), including a pinned real-corpus regression (25
+    unique / 4 conflicts, the exact named Black Book pairs). Step 1 (shadow-mode reporting inside
+    `find_similar_pairs`) is separate, unbuilt, gets its own Codex round per the plan.
+    Files changed: `Source/canonicalize_pair_history.py` (new),
+    `Tests/test_canonicalize_pair_history.py` (new).
   - **C8 - not yet scoped**: let a musically-better candidate win even if it needs a loop
     extension to become geometrically valid, instead of discarding it before it's ever compared.
-    The deepest, highest-risk piece - deliberately left unscoped until C5/C6/C7 are proven.
+    The deepest, highest-risk piece - deliberately left unscoped until C5/C6/C7 are proven. The T2
+    investigation above also found C8 was never going to reach T2's exact bar (157) either - it's
+    not a registered cue, so C8's real value is letting OTHER geometrically-infeasible-but-
+    musically-strong candidates compete, not a second route to T2 specifically.
 
   **CODEX PLAN REVIEW, ROUND 1, 2026-09-14: "REVISE THE PLAN BEFORE BUILDING C6."** Run in a real
   isolated git worktree (`.claude/worktrees/codex-c6c7c8-review`, `-AllowRepoRoot` - confirmed
@@ -1099,17 +1164,57 @@ was written).
   (confirmed unreliable on this Home PC specifically).
   Evidence: `Source/propose_arrangement.py:1125-1132`, `:1299-1301` (Fable + Astra,
   independently, matching line numbers).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **BUILT + TESTED, 2026-09-15.** New `fill_missing_bpm_from_stem_grid(tracks, stem_dir)`
+  (`Source/propose_arrangement.py`, called right after the existing MIK-enrichment block, same
+  `als_path.parent.parent / "_Stem Analysis"` lookup pattern `compute_aligned_positions` already
+  uses a few lines below it) reads each track's own `SECTIONS_STEM_*.json` (`"bpm"` field - the
+  same file `align_engine.load_track` reads for sections/landmarks, confirmed directly it already
+  carries a certified `bpm` alongside `n_bars`/`sections`/`signals`/`track`) and fills `t.bpm`
+  ONLY for tracks MIK left empty - MIK stays authoritative on conflict, matching every other field
+  in that block. Handles the same escaped/unescaped track-name inconsistency the MIK lookup
+  already works around (confirmed directly: `SECTIONS_STEM_*.json`'s own `"track"` field is
+  unescaped, `TrackInfo.name` can carry the sections-JSON-escaped form). Extracted as a small,
+  independently-testable function (this project's established pattern, e.g. C5's C5-era
+  `_resolve_inherited_tempo_and_warp_modes`) rather than left inline. 7 new tests
+  (`Tests/test_bpm_fallback_stem_grid.py`): fills when MIK left it empty, MIK stays authoritative
+  on conflict, the escaping case, no-stem-dir and track-absent-from-stem-dir both correctly leave
+  `t.bpm` None (not a crash), malformed JSON in the stem dir doesn't take down other tracks'
+  fallback, and a `bpm: 0` in the JSON is correctly NOT treated as a real value (falsy, matches
+  the existing `if mik.bpm:` truthy-check convention). Full suite 729/0/6 -> 736/0/6.
+  Files changed: `Source/propose_arrangement.py`, `Tests/test_bpm_fallback_stem_grid.py` (new).
+  Owner: Claude. Author: Claude. Peer review: NONE - not yet reviewed.
 
 - [ ] **Documented correction overrides (`intro_skip_bars`, `loop_source_sec`) are silently
   ignored on the production alignment path** (C4) - `/mix`'s own docs list `intro_skip_bars` as
   a CLOSED gap; `propose_arrangement.py` itself warns that `align_engine` (the production path,
   `USE_ALIGN_ENGINE=True`) does not honour it. `loop_source_sec` only affects the legacy
-  loop-planning branch. An approved correction from a previous session does not survive
-  regeneration - exactly the kind of thing that causes Sam to re-fix the same thing twice.
+  loop-planning branch (`_plan_loop_extensions`, gated `elif not USE_ALIGN_ENGINE`). An approved
+  correction from a previous session does not survive regeneration - exactly the kind of thing
+  that causes Sam to re-fix the same thing twice.
   Evidence: `Source/propose_arrangement.py:562,664,1151,1190` (Astra);
   `Claude Code Brain/commands/mix.md:585` (Fable, same finding).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **INVESTIGATED 2026-09-15 - real current impact is ZERO, docs fixed, the actual wiring
+  deliberately NOT attempted this round.** Confirmed directly (not assumed): `align_engine`'s own
+  `plan_fill_or_cut` has its OWN separate cut/loop generation (`intro_cut`, `incoming_intro`,
+  `outgoing_tail` specs) that is entirely AUTOMATIC (e.g. `intro_cut` fires when the swap lands
+  inside a break/fill section) - it has no hand-authored-hint-consuming mechanism at all today,
+  genuinely different machinery from the legacy `_plan_loop_extensions` these two hints feed.
+  Scanned every real `track_hints.json` in this project's history (6 files, every real project
+  that has ever used the hints pipeline): **zero tracks, ever, have set either hint to a non-zero
+  value.** This is a real, documented gap with a plausible future-correction risk, but it has not
+  yet cost Sam a single re-fix. Given the proper wiring is genuine align_engine design work at the
+  same risk tier as C6 (a new hint-consuming mechanism integrated with `plan_fill_or_cut`'s
+  existing intro_cut/incoming_intro mutual-exclusion logic, needing the same baseline-verification
+  + Codex-review rigor) - not attempted this round, deliberately, rather than rushed. **What WAS
+  fixed:** `/mix`'s docs (`Claude Code Brain/commands/mix.md` and `Codex Brain/commands/mix.md`,
+  content-verified identical after edit, `diff -w -B` clean) no longer claim these are CLOSED -
+  both rows now say OPEN on the production path, with the confirmed mechanism and the
+  zero-real-usage finding recorded inline so a future session doesn't have to re-derive it.
+  Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`.
+  Owner: Claude. Author: Claude (docs only this round). Peer review: NONE - not yet reviewed (docs
+  fix only; the actual wiring is unbuilt, real follow-up work).
 
 ## D - Real, buildable polish reductions (smaller, each affects every mix)
 

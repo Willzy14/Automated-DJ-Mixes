@@ -1490,8 +1490,30 @@ def _search_anchors(anchor_bars, o, i, outgoing, incoming, window_start,
                     and incoming_anchor < first_drop_bar < overlap):
                 drop_payoff = 1
 
+            # burn list C6 (2026-09-15): the outgoing's own natural bass-out
+            # point, ranked as its own tier -- NOT folded into weighted_score,
+            # because weighted_score sums every coincidental cue-pair across
+            # the WHOLE overlap window, and the T2 real-world case proved a
+            # candidate sharing bass_out_bar with ANOTHER candidate's window
+            # (e.g. it's that candidate's own window start) gets the SAME
+            # weight boost applied to both -- the relative gap never changes,
+            # which is exactly why the existing CUE_CONFIG.emit_bass_out
+            # weight-boost mechanism measurably changes 0 of 380 historical
+            # decisions (re-confirmed directly against this real pair before
+            # this tier was written; see Documentation/BURN_LIST.md item C6).
+            # Ranks an already-admissible cue only -- outgoing_anchor must
+            # already be a real `outgoing` cue for this candidate to exist at
+            # all; this never generates a new candidate. Exact integer-bar
+            # match only, no tolerance. Null-guarded: bass_out_bar is
+            # nullable while bass_out_is_end defaults False.
+            bass_out_payoff = 0
+            if (o.bass_out_bar is not None and not o.bass_out_is_end
+                    and outgoing_anchor == round(float(o.bass_out_bar))):
+                bass_out_payoff = 1
+
             rank = (
                 drop_payoff,
+                bass_out_payoff,
                 weighted_score,
                 int(entry_paired) + int(exit_paired),
                 -abs(progress - 0.65),
