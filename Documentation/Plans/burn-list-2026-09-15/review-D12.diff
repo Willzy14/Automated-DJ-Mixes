@@ -1,0 +1,730 @@
+diff --git a/Source/learn_from_correction.py b/Source/learn_from_correction.py
+index ee8965a..4087bb3 100644
+--- a/Source/learn_from_correction.py
++++ b/Source/learn_from_correction.py
+@@ -336,6 +336,10 @@ class TransitionDiff:
+     verdict: str = "correct"
+     classified_style: str = "standard"
+     notes: str = ""
++    geometry: dict | None = None
++    # False when the swap sits on a loop clip on either side: the source-anchored
++    # bass_swap_delta above is then not comparable (burn list D12).
++    bass_swap_reliable: bool = True
+ 
+ 
+ def _classify_style(td_out_vol: ParamDiff | None,
+@@ -548,6 +552,332 @@ def _scope_points(points: list[tuple[float, float]],
+             if zone_start - margin <= t <= zone_end + margin]
+ 
+ 
++# ── Geometry corrections ─────────────────────────────────────────────────────
++#
++# The automation diff below compares each track's envelopes in its own
++# SOURCE-audio frame. That is the right frame for a resized section clip and
++# the wrong one for a LOOP clip: a tail loop cut from a track's intro maps the
++# swap to source beat 0, outside the overlap's source window, and
++# _find_bass_swap_beat then lands on whatever point comes next (15.09.26
++# August Releases Mix T6 read "-64 beats" for a swap that had not moved).
++# Sam's hand edits on that mix were mostly geometry the automation diff has
++# no name for: where the incoming enters, how much of its intro plays, whether
++# the outgoing loops its last bars or runs out, where the swap sits on the
++# INCOMING. This layer reads the clip geometry of both ALS files directly and
++# labels those. It never changes the automation diff's own fields; it only
++# gates the bass_swap_moved label when the swap sits on a loop clip, where
++# that label cannot be trusted. Burn list D12.
++
++GEOMETRY_MIN_MOVE_BARS = 1.0
++GEOMETRY_MIN_OVERLAP_DELTA_BARS = 4.0
++GEOMETRY_MIN_CUT_BARS = 2.0
++GEOMETRY_SWAP_MARGIN_BEATS = 40.0   # same reach as _scope_points
++
++
++@dataclass
++class RepeatGroup:
++    """Consecutive clips that replay material the track has already played."""
++    arr_start: float
++    arr_end: float
++    source_start: float
++    source_end: float
++    reps: int
++    partial_beats: float = 0.0
++
++    @property
++    def chunk_beats(self) -> float:
++        return self.source_end - self.source_start
++
++    def label(self) -> str:
++        # apply_loops / ARRANGEMENT_REPORT notation: 8bx7+0b
++        return (f"{_bars(self.chunk_beats)}bx{self.reps}"
++                f"+{_bars(self.partial_beats)}b")
++
++
++def _bars(beats: float) -> str:
++    # + 0.0 turns a clip's "-0" LoopStart into 0, not "-0"
++    return f"{round(beats / 4.0, 1) + 0.0:g}"
++
++
++def _src(clip: dict) -> tuple[float, float]:
++    return float(clip["source_start_beats"]), float(clip["source_end_beats"])
++
++
++def _positioned(clips: list[dict]) -> list[dict]:
++    """Clips with real geometry, in arrangement order. Zero-length editing
++    leftovers (Ableton keeps them in the XML) are dropped."""
++    out = [c for c in clips
++           if c.get("arr_time") is not None and c.get("arr_end") is not None
++           and c.get("source_start_beats") is not None
++           and c.get("source_end_beats") is not None
++           and float(c["arr_end"]) - float(c["arr_time"]) > 0.01]
++    return sorted(out, key=lambda c: (float(c["arr_time"]), _src(c)[0]))
++
++
++def _repeat_groups(clips: list[dict]) -> list[RepeatGroup]:
++    """Find loops, whether apply_loops built them or Sam made them by hand.
++
++    A group starts at a clip that is arrangement-contiguous with the clip
++    before it, goes BACKWARDS in source (its source start is earlier than the
++    previous clip's source end), is no longer than that clip, and replays
++    material the track has already played. Identical clips that follow are
++    further repeats; a shorter clip starting on the chunk's own start is a
++    trailing partial. A preceding identical clip that played the chunk in its
++    natural place (apply_loops puts the first copy where the source was
++    anyway) is counted into the group, so the notation matches
++    ARRANGEMENT_REPORT's "8bx7+0b". The real section after the copies (an
++    outro after tail loops, an intro after intro loops) is longer than the
++    chunk or starts outside it, and is left alone.
++    """
++    clips = _positioned(clips)
++    groups: list[RepeatGroup] = []
++    i = 1
++    while i < len(clips):
++        prev, cur = clips[i - 1], clips[i]
++        p0, p1 = _src(prev)
++        c0, c1 = _src(cur)
++        played_lo = min(_src(c)[0] for c in clips[:i])
++        played_hi = max(_src(c)[1] for c in clips[:i])
++        contiguous = abs(float(cur["arr_time"]) - float(prev["arr_end"])) < 0.01
++        backwards = c0 < p1 - 0.01
++        no_longer = (c1 - c0) <= (p1 - p0) + 0.01
++        replays = c0 >= played_lo - 0.01 and c1 <= played_hi + 0.01
++        if not (contiguous and backwards and no_longer and replays):
++            i += 1
++            continue
++        start = i - 1 if abs(p0 - c0) < 0.01 and abs(p1 - c1) < 0.01 else i
++        reps = i - start + 1
++        partial = 0.0
++        j = i + 1
++        while j < len(clips):
++            nxt = clips[j]
++            n0, n1 = _src(nxt)
++            if abs(float(nxt["arr_time"]) - float(clips[j - 1]["arr_end"])) >= 0.01:
++                break
++            if abs(n0 - c0) < 0.01 and abs(n1 - c1) < 0.01:
++                reps += 1
++                j += 1
++                continue
++            if abs(n0 - c0) < 0.01 and n1 < c1 - 0.01:
++                partial = n1 - n0
++                j += 1
++            break
++        groups.append(RepeatGroup(
++            arr_start=float(clips[start]["arr_time"]),
++            arr_end=float(clips[j - 1]["arr_end"]),
++            source_start=c0, source_end=c1, reps=reps, partial_beats=partial))
++        i = j
++    return groups
++
++
++def _in_group(clip: dict, groups: list[RepeatGroup]) -> bool:
++    t0, t1 = float(clip["arr_time"]), float(clip["arr_end"])
++    return any(g.arr_start - 0.01 <= t0 and t1 <= g.arr_end + 0.01 for g in groups)
++
++
++def _containing_clip(clips: list[dict], beat: float) -> dict | None:
++    strict = [c for c in clips
++              if float(c["arr_time"]) <= beat < float(c["arr_end"])]
++    if len(strict) == 1:
++        return strict[0]
++    fuzzy = [c for c in clips
++             if float(c["arr_time"]) - 0.01 <= beat <= float(c["arr_end"]) + 0.01]
++    if not fuzzy:
++        return None
++    return max(fuzzy, key=lambda c: float(c["arr_time"]))
++
++
++def _source_bar_at(clips: list[dict], groups: list[RepeatGroup],
++                   beat: float | None) -> tuple[float | None, bool]:
++    """(source bar at an arrangement beat, whether that beat sits on a loop).
++
++    On a loop clip the source position is not comparable across files, so the
++    bar is None and the flag says why."""
++    if beat is None:
++        return None, False
++    clip = _containing_clip(clips, beat)
++    if clip is None:
++        return None, False
++    if _in_group(clip, groups):
++        return None, True
++    return round((_src(clip)[0] + beat - float(clip["arr_time"])) / 4.0, 1) + 0.0, False
++
++
++def _find_swap_arr(out_bass: list[tuple[float, float]],
++                   in_bass: list[tuple[float, float]],
++                   ov_start: float, ov_end: float) -> float | None:
++    """The bass-swap ARRANGEMENT beat: the outgoing's first kill in the
++    overlap, else the incoming's first rise. Arrangement beats, unlike source
++    beats, stay meaningful on a loop clip."""
++    lo = ov_start - GEOMETRY_SWAP_MARGIN_BEATS
++    hi = ov_end + GEOMETRY_SWAP_MARGIN_BEATS
++    for t, v in out_bass:
++        if lo <= t <= hi and v < 0.8:
++            return t
++    prev = None
++    for t, v in in_bass:
++        if lo <= t <= hi and prev is not None and prev < 0.5 and v >= 0.9:
++            return t
++        prev = v
++    return None
++
++
++def _natural_intervals(clips: list[dict], groups: list[RepeatGroup],
++                       floor: float) -> list[tuple[float, float]]:
++    """Source intervals played by non-loop clips, cut at `floor`, merged."""
++    ivs = []
++    for c in clips:
++        if _in_group(c, groups):
++            continue
++        s0, s1 = _src(c)
++        s0 = max(s0, floor)
++        if s1 > s0:
++            ivs.append((s0, s1))
++    ivs.sort()
++    merged: list[tuple[float, float]] = []
++    for s0, s1 in ivs:
++        if merged and s0 <= merged[-1][1] + 0.01:
++            merged[-1] = (merged[-1][0], max(merged[-1][1], s1))
++        else:
++            merged.append((s0, s1))
++    return merged
++
++
++def _beats_missing(a: list[tuple[float, float]],
++                   b: list[tuple[float, float]]) -> float:
++    """Total length of `a` not covered by `b` (both merged interval lists)."""
++    missing = 0.0
++    for a0, a1 in a:
++        cursor = a0
++        for b0, b1 in b:
++            if b1 <= cursor or b0 >= a1:
++                continue
++            if b0 > cursor:
++                missing += b0 - cursor
++            cursor = max(cursor, b1)
++            if cursor >= a1:
++                break
++        if cursor < a1:
++            missing += a1 - cursor
++    return missing
++
++
++def _geometry_side(out_t: "TrackInfo", in_t: "TrackInfo",
++                   out_bass: list[tuple[float, float]],
++                   in_bass: list[tuple[float, float]],
++                   ov_start: float, ov_end: float) -> dict:
++    out_clips = _positioned(out_t.clips)
++    in_clips = _positioned(in_t.clips)
++    out_groups = _repeat_groups(out_clips)
++    in_groups = _repeat_groups(in_clips)
++    entry_arr = (min(float(c["arr_time"]) for c in in_clips)
++                 if in_clips else in_t.arr_start)
++    entry_out_bar, entry_on_loop = _source_bar_at(out_clips, out_groups, entry_arr)
++    first_natural_in = next((c for c in in_clips if not _in_group(c, in_groups)), None)
++    intro_trim = (round(_src(first_natural_in)[0] / 4.0, 1) + 0.0
++                  if first_natural_in is not None else None)
++    swap_arr = _find_swap_arr(out_bass, in_bass, ov_start, ov_end)
++    swap_in_bar, _ = _source_bar_at(in_clips, in_groups, swap_arr)
++    swap_out_bar, swap_out_on_loop = _source_bar_at(out_clips, out_groups, swap_arr)
++    return {
++        "out_clips": out_clips, "out_groups": out_groups,
++        "entry_arr": entry_arr, "entry_out_bar": entry_out_bar,
++        "entry_on_loop": entry_on_loop, "intro_trim": intro_trim,
++        "swap_arr": swap_arr, "swap_in_bar": swap_in_bar,
++        "swap_out_bar": swap_out_bar, "swap_out_on_loop": swap_out_on_loop,
++        "tail_after_swap": (round((out_t.arr_end - swap_arr) / 4.0, 1)
++                            if swap_arr is not None else None),
++        "tail_loops": [g.label() for g in out_groups
++                       if g.arr_end > entry_arr - 0.01],
++        "intro_loops": [g.label() for g in in_groups
++                        if swap_arr is None or g.arr_start < swap_arr - 0.01],
++    }
++
++
++def _fmt_move(delta: float) -> str:
++    return f"{round(delta, 1):+g}"
++
++
++def _geometry_diff(c_out_t: "TrackInfo", c_in_t: "TrackInfo",
++                   s_out_t: "TrackInfo", s_in_t: "TrackInfo",
++                   c_out_bass, c_in_bass, s_out_bass, s_in_bass,
++                   c_ov: tuple[float, float], s_ov: tuple[float, float],
++                   overlap_bars: float, sam_overlap_bars: float | None,
++                   ) -> tuple[dict, list[str]]:
++    """Compare transition geometry between the two ALS files.
++
++    Returns the pair_history `geometry` record and the correction labels."""
++    c = _geometry_side(c_out_t, c_in_t, c_out_bass, c_in_bass, *c_ov)
++    s = _geometry_side(s_out_t, s_in_t, s_out_bass, s_in_bass, *s_ov)
++    labels: list[str] = []
++
++    if (c["entry_out_bar"] is not None and s["entry_out_bar"] is not None
++            and abs(s["entry_out_bar"] - c["entry_out_bar"]) >= GEOMETRY_MIN_MOVE_BARS):
++        labels.append(
++            f"entry_moved_out:{_fmt_move(s['entry_out_bar'] - c['entry_out_bar'])}bars")
++
++    if (c["intro_trim"] is not None and s["intro_trim"] is not None
++            and abs(s["intro_trim"] - c["intro_trim"]) >= GEOMETRY_MIN_MOVE_BARS):
++        labels.append(f"intro_trim:{c['intro_trim']:g}->{s['intro_trim']:g}bars")
++
++    if c["swap_arr"] is not None and s["swap_arr"] is None:
++        labels.append("swap_removed")
++    elif c["swap_arr"] is None and s["swap_arr"] is not None:
++        labels.append("swap_added")
++    else:
++        if (c["swap_in_bar"] is not None and s["swap_in_bar"] is not None
++                and abs(s["swap_in_bar"] - c["swap_in_bar"]) >= GEOMETRY_MIN_MOVE_BARS):
++            labels.append(
++                f"swap_moved_in:{_fmt_move(s['swap_in_bar'] - c['swap_in_bar'])}bars")
++        if (c["swap_out_bar"] is not None and s["swap_out_bar"] is not None
++                and abs(s["swap_out_bar"] - c["swap_out_bar"]) >= GEOMETRY_MIN_MOVE_BARS):
++            labels.append(
++                f"swap_moved_out:{_fmt_move(s['swap_out_bar'] - c['swap_out_bar'])}bars")
++
++    for kind in ("tail_loops", "intro_loops"):
++        c_l, s_l = ",".join(c[kind]), ",".join(s[kind])
++        tag = kind[:-1]  # tail_loop / intro_loop
++        if c_l and not s_l:
++            labels.append(f"{tag}_removed:{c_l}")
++        elif s_l and not c_l:
++            labels.append(f"{tag}_added:{s_l}")
++        elif c_l != s_l:
++            labels.append(f"{tag}_changed:{c_l}->{s_l}")
++
++    # Outgoing material the pipeline played after the (later of the two)
++    # entry points that Sam's version skips or trims away.
++    cut_bars = None
++    if c["entry_out_bar"] is not None and s["entry_out_bar"] is not None:
++        floor = max(c["entry_out_bar"], s["entry_out_bar"]) * 4.0
++        cut_bars = round(_beats_missing(
++            _natural_intervals(c["out_clips"], c["out_groups"], floor),
++            _natural_intervals(s["out_clips"], s["out_groups"], floor)) / 4.0, 1)
++        if cut_bars >= GEOMETRY_MIN_CUT_BARS:
++            labels.append(f"outro_cut:{cut_bars:g}bars")
++
++    if (sam_overlap_bars is not None
++            and abs(sam_overlap_bars - overlap_bars) >= GEOMETRY_MIN_OVERLAP_DELTA_BARS):
++        labels.append(
++            f"overlap_changed:{round(overlap_bars, 1):g}->{round(sam_overlap_bars, 1):g}bars")
++
++    record = {
++        "entry_out_bar": [c["entry_out_bar"], s["entry_out_bar"]],
++        "entry_on_loop": [c["entry_on_loop"], s["entry_on_loop"]],
++        "intro_trim_bars": [c["intro_trim"], s["intro_trim"]],
++        "swap_arr_beat": [c["swap_arr"], s["swap_arr"]],
++        "swap_in_bar": [c["swap_in_bar"], s["swap_in_bar"]],
++        "swap_out_bar": [c["swap_out_bar"], s["swap_out_bar"]],
++        "swap_out_on_loop": [c["swap_out_on_loop"], s["swap_out_on_loop"]],
++        "tail_after_swap_bars": [c["tail_after_swap"], s["tail_after_swap"]],
++        "out_tail_loops": [c["tail_loops"], s["tail_loops"]],
++        "in_intro_loops": [c["intro_loops"], s["intro_loops"]],
++        "outro_cut_bars": cut_bars,
++        "overlap_bars": [round(overlap_bars, 1),
++                         None if sam_overlap_bars is None else round(sam_overlap_bars, 1)],
++    }
++    return record, labels
++
++
+ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
+                         sam_auto: dict[str, TrackAutomation],
+                         claude_tracks: list[TrackInfo],
+@@ -644,8 +974,19 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
+         s_out = _find_auto(sam_auto, s_out_t.name)
+         s_in = _find_auto(sam_auto, s_in_t.name)
+ 
++        td.geometry, geometry_labels = _geometry_diff(
++            c_out_t, c_in_t, s_out_t, s_in_t,
++            getattr(c_out, "bass_points", []), getattr(c_in, "bass_points", []),
++            getattr(s_out, "bass_points", []), getattr(s_in, "bass_points", []),
++            (c_ov_start, c_ov_end), (s_ov_start, s_ov_end),
++            td.overlap_bars, td.sam_overlap_bars)
++        td.bass_swap_reliable = td.geometry["swap_out_on_loop"] == [False, False]
++
+         if not c_out or not s_out or not c_in or not s_in:
+             td.notes = "Could not match all tracks to automation data"
++            td.corrections.extend(geometry_labels)
++            if geometry_labels:
++                td.verdict = "corrected"
+             diffs.append(td)
+             continue
+ 
+@@ -723,11 +1064,14 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
+             td.bass_swap_delta = td.bass_swap_sam - td.bass_swap_claude
+ 
+         # classify corrections
+-        any_change = td.arrangement_changed
++        any_change = td.arrangement_changed or bool(geometry_labels)
+ 
+         if td.out_bass and td.out_bass.changed:
+             any_change = True
+-            if td.bass_swap_delta is not None:
++            # Only when the swap sits on real section clips on both sides;
++            # on a loop clip the source-anchored delta is not comparable and
++            # the geometry labels below carry the swap moves instead.
++            if td.bass_swap_delta is not None and td.bass_swap_reliable:
+                 delta = td.bass_swap_delta
+                 if abs(delta) > 2:
+                     td.corrections.append(
+@@ -758,6 +1102,8 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
+                 td.corrections.append(
+                     f"sneak_changed:{c_sneak}->{s_sneak}")
+ 
++        td.corrections.extend(geometry_labels)
++
+         if any_change:
+             td.verdict = "corrected"
+         else:
+@@ -836,6 +1182,9 @@ def diff_to_jsonl_entry(td: TransitionDiff,
+         "timestamp": str(date.today()),
+         "verdict": td.verdict,
+     }
++    if td.geometry is not None:
++        entry["geometry"] = td.geometry
++        entry["bass_swap_reliable"] = td.bass_swap_reliable
+ 
+     # detect boundary swap
+     if (td.bass_swap_claude is not None
+@@ -878,7 +1227,9 @@ def print_report(diffs: list[TransitionDiff]) -> None:
+     for td in diffs:
+         mark = {"correct": "OK", "corrected": "FIX"}.get(td.verdict, "SKIP")
+         swap_info = ""
+-        if td.bass_swap_delta is not None:
++        if td.bass_swap_delta is not None and not td.bass_swap_reliable:
++            swap_info = "  swap sits on a loop clip - source delta not comparable, see geometry"
++        elif td.bass_swap_delta is not None:
+             if abs(td.bass_swap_delta) > 2:
+                 delta = td.bass_swap_delta
+                 swap_info = f"  swap moved {delta:+.0f} beats ({delta/4:+.0f} bars)"
+@@ -913,6 +1264,23 @@ def print_report(diffs: list[TransitionDiff]) -> None:
+             for c in td.corrections:
+                 print(f"          >> {c}")
+ 
++        if td.geometry:
++            g = td.geometry
++
++            def pair(key: str) -> str:
++                a, b = g[key]
++                fa = "-" if a is None else f"{a:g}"
++                fb = "-" if b is None else f"{b:g}"
++                return f"{fa}->{fb}"
++
++            loops = "/".join(",".join(x) or "none" for x in g["out_tail_loops"])
++            print(f"          geometry: entry out-bar {pair('entry_out_bar')} | "
++                  f"intro trim {pair('intro_trim_bars')} | "
++                  f"swap in-bar {pair('swap_in_bar')} out-bar {pair('swap_out_bar')} | "
++                  f"tail after swap {pair('tail_after_swap_bars')} | "
++                  f"tail loops {loops}"
++                  + (f" | cut {g['outro_cut_bars']:g}b" if g.get("outro_cut_bars") else ""))
++
+     print(f"\n{'='*70}")
+ 
+     # summary of correction types
+diff --git a/Tests/test_learn_geometry_corrections.py b/Tests/test_learn_geometry_corrections.py
+new file mode 100644
+index 0000000..407b08a
+--- /dev/null
++++ b/Tests/test_learn_geometry_corrections.py
+@@ -0,0 +1,285 @@
++"""Geometry corrections in learn_from_correction (burn list D12).
++
++Shapes are taken from Sam's 2026-09-15 edits to the 15.09.26 August Releases
++Mix, where the automation diff alone labelled 5 of 11 transitions and got two
++of those wrong. Beats are arrangement beats; source beats are the clip's
++LoopStart/LoopEnd.
++"""
++import sys
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Source"))
++
++from learn_from_correction import (  # noqa: E402
++    TrackAutomation,
++    _repeat_groups,
++    analyse_transitions,
++    ordered_tracks_from_clip_records,
++)
++
++
++def _clip(name, start, end, source_start, source_end=None):
++    return {
++        "name": name,
++        "label": name.rsplit("_", 1)[0],
++        "label_n": 1,
++        "arr_time": float(start),
++        "arr_end": float(end),
++        "source_start_beats": float(source_start),
++        "source_end_beats": float(
++            source_end if source_end is not None else source_start + (end - start)),
++    }
++
++
++def _copies(name, start, source_start, source_end, reps):
++    length = source_end - source_start
++    return [_clip(name, start + i * length, start + (i + 1) * length,
++                  source_start, source_end) for i in range(reps)]
++
++
++def _labels(groups):
++    return [g.label() for g in groups]
++
++
++# ── repeat-group detection ──────────────────────────────────────────────────
++
++def test_pipeline_tail_loop_counts_its_natural_first_copy():
++    """apply_loops puts copy 1 where the source was anyway; the report calls
++    that 2bx7+0b, so the group must include it."""
++    clips = [_clip("drop_4", 0, 784, 0, 784)]
++    clips += _copies("outro_1_tail_loop", 784, 784, 792, 7)
++    clips += [_clip("outro_1", 840, 912, 784, 856)]
++    assert _labels(_repeat_groups(clips)) == ["2bx7+0b"]
++
++
++def test_hand_made_last_bars_loop_with_trailing_partial():
++    """Zaro: the last 2 bars repeated three times, then one bar of it."""
++    clips = [_clip("drop_2", 2160, 2288, 400, 528)]
++    clips += _copies("drop_2", 2288, 520, 528, 3)
++    clips += [_clip("drop_2", 2312, 2316, 520, 524)]
++    assert _labels(_repeat_groups(clips)) == ["2bx3+1b"]
++
++
++def test_the_real_outro_after_loop_copies_is_not_a_partial():
++    """HNTR: two 4-bar copies, then the outro restarts on the same source
++    beat but runs 8 bars - a section, not a partial repeat."""
++    clips = [_clip("drop_5", 1804, 1900, 576, 672)]
++    clips += _copies("outro_1_tail_loop", 1900, 672, 688, 2)
++    clips += [_clip("outro_1", 1932, 1964, 672, 704)]
++    assert _labels(_repeat_groups(clips)) == ["4bx2+0b"]
++
++
++def test_forward_skip_and_landmark_split_are_not_loops():
++    """A cut (RUZE's outro jumps 800 -> 816) and a clip split at the swap
++    (Zaro's drop_2) both keep moving forward in source."""
++    cut = [_clip("drop_4", 4480, 4668, 576, 764),
++           _clip("outro_1", 4668, 4672, 764, 768),
++           _clip("outro_1", 4672, 4704, 768, 800),
++           _clip("outro_1", 4704, 4724, 816, 836)]
++    split = [_clip("drop_2", 2156, 2220, 400, 464),
++             _clip("drop_2", 2220, 2284, 464, 528)]
++    assert _repeat_groups(cut) == []
++    assert _repeat_groups(split) == []
++
++
++def test_intro_loop_copies_before_the_natural_intro():
++    """An intro loop replays a chunk before the track proper starts; the
++    real intro after it starts outside the chunk and is left alone."""
++    clips = _copies("intro_1_intro_loop", 700, 16, 32, 6)
++    clips += [_clip("intro_1", 796, 860, 0, 64)]
++    assert _labels(_repeat_groups(clips)) == ["4bx6+0b"]
++
++
++# ── transition labels ───────────────────────────────────────────────────────
++
++def _run(baseline, corrected, c_auto, s_auto):
++    return analyse_transitions(
++        c_auto, s_auto,
++        ordered_tracks_from_clip_records(baseline),
++        ordered_tracks_from_clip_records(corrected))
++
++
++def test_tail_loop_removed_and_swap_on_loop_marks_bass_swap_unreliable():
++    """T6, Tommy Farrow -> Arielle Free. The pipeline's swap sat on the first
++    copy of a tail loop cut from the intro (source 0..32); Sam removed the
++    loop and let the track run out. The swap did not move on the incoming
++    (bar 16 both times). The old label read bass_swap_moved:-64beats."""
++    baseline = {
++        "Out": [_clip("drop_3", 2732, 2932, 448, 648)]
++               + _copies("outro_1_tail_loop", 2932, 0, 32, 4)
++               + [_clip("outro_1", 3060, 3124, 648, 712)],
++        "In": [_clip("intro_1", 2868, 2932, 0, 64),
++               _clip("drop_1", 2932, 3124, 64, 256)],
++    }
++    corrected = {
++        "Out": [_clip("drop_3", 2864, 3124, 448, 708)],
++        "In": [_clip("intro_1", 3000, 3064, 0, 64),
++               _clip("drop_1", 3064, 3256, 64, 256)],
++    }
++    c_auto = {"Out": TrackAutomation("Out", bass_points=[(2932.0, 1.0), (2932.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(2868.0, 0.18), (2932.0, 0.18), (2932.0, 1.0)])}
++    s_auto = {"Out": TrackAutomation("Out", bass_points=[(3064.0, 1.0), (3064.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(3000.0, 0.18), (3064.0, 0.18), (3064.0, 1.0)])}
++
++    [td] = _run(baseline, corrected, c_auto, s_auto)
++
++    assert td.bass_swap_reliable is False
++    assert not any(c.startswith("bass_swap_moved") for c in td.corrections)
++    assert "tail_loop_removed:8bx4+0b" in td.corrections
++    assert "overlap_changed:64->31bars" in td.corrections
++    assert not any(c.startswith("swap_moved") for c in td.corrections)
++    assert td.geometry["swap_in_bar"] == [16.0, 16.0]
++    assert td.geometry["swap_out_on_loop"] == [True, False]
++    assert td.geometry["entry_out_bar"] == [146.0, 146.0]
++    assert td.geometry["tail_after_swap_bars"] == [48.0, 15.0]
++    assert td.verdict == "corrected"
++
++
++def test_intro_trim_reversed_entry_later_swap_removed_loop_added():
++    """T4, Zaro -> Pat Premier. Sam restored the 16-bar intro trim, brought
++    Pat Premier in 16 bars later (at the kick dropout), looped Zaro's last 2
++    bars, and did no EQ swap at all."""
++    baseline = {
++        "Out": [_clip("drop_2", 2156, 2220, 400, 464),
++                _clip("drop_2", 2220, 2284, 464, 528)],
++        "In": [_clip("intro_1", 2156, 2220, 64, 128),
++               _clip("drop_1", 2220, 2316, 128, 224)],
++    }
++    corrected = {
++        "Out": [_clip("drop_2", 2160, 2288, 400, 528)]
++               + _copies("drop_2", 2288, 520, 528, 3)
++               + [_clip("drop_2", 2312, 2316, 520, 524)],
++        "In": [_clip("intro_1", 2224, 2352, 0, 128),
++               _clip("drop_1", 2352, 2448, 128, 224)],
++    }
++    c_auto = {"Out": TrackAutomation("Out", bass_points=[(2220.0, 1.0), (2220.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(2156.0, 0.18), (2220.0, 0.18), (2220.0, 1.0)])}
++    s_auto = {"Out": TrackAutomation("Out", bass_points=[(2224.0, 1.0), (2318.0, 0.97)]),
++              "In": TrackAutomation("In", bass_points=[(2224.0, 0.52), (2286.0, 0.75), (2352.0, 1.0)])}
++
++    [td] = _run(baseline, corrected, c_auto, s_auto)
++
++    assert "intro_trim:16->0bars" in td.corrections
++    assert "entry_moved_out:+16bars" in td.corrections
++    assert "swap_removed" in td.corrections
++    assert "tail_loop_added:2bx3+1b" in td.corrections
++    assert "overlap_changed:32->23bars" in td.corrections
++    assert td.geometry["swap_arr_beat"] == [2220.0, None]
++
++
++def test_swap_moved_on_the_incoming_to_its_bass_in():
++    """T7, Arielle Free -> Coldabank. Whole intro restored (9-bar trim gone),
++    swap moved from Coldabank's drop_1 (bar 32) to its intro bar 8, on the
++    same Arielle bar (her outro start, 115)."""
++    baseline = {
++        "Out": [_clip("drop_3", 3236, 3328, 368, 460),
++                _clip("outro_1", 3328, 3356, 460, 488)],
++        "In": [_clip("intro_1", 3236, 3296, 36, 96),
++               _clip("break_1", 3296, 3328, 96, 128),
++               _clip("drop_1", 3328, 3392, 128, 192)],
++    }
++    corrected = {
++        "Out": [_clip("drop_3", 3368, 3460, 368, 460),
++                _clip("outro_1", 3460, 3488, 460, 488)],
++        "In": [_clip("intro_1", 3428, 3524, 0, 96),
++               _clip("break_1", 3524, 3556, 96, 128),
++               _clip("drop_1", 3556, 3620, 128, 192)],
++    }
++    c_auto = {"Out": TrackAutomation("Out", bass_points=[(3328.0, 1.0), (3328.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(3236.0, 0.18), (3328.0, 0.18), (3328.0, 1.0)])}
++    s_auto = {"Out": TrackAutomation("Out", bass_points=[(3460.0, 1.0), (3460.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(3428.0, 0.18), (3460.0, 0.18), (3460.0, 1.0)])}
++
++    [td] = _run(baseline, corrected, c_auto, s_auto)
++
++    assert "swap_moved_in:-24bars" in td.corrections
++    assert "intro_trim:9->0bars" in td.corrections
++    assert "entry_moved_out:+15bars" in td.corrections
++    assert not any(c.startswith("swap_moved_out") for c in td.corrections)
++    assert td.geometry["swap_out_bar"] == [115.0, 115.0]
++    assert td.geometry["swap_in_bar"] == [32.0, 8.0]
++
++
++def test_outro_cut_and_swap_moved_on_the_outgoing():
++    """T9, Switch Disco -> RUZE. RUZE enters 4 bars later so its drop lands
++    after the fill; Switch Disco then skips 10 bars and its 2-bar x8 tail
++    loop is gone. In Switch Disco's source the swap moved +14 bars (the
++    4-bar shift plus the 10-bar cut); on RUZE it did not move."""
++    baseline = {
++        "Out": [_clip("drop_4", 3872, 3968, 384, 480),
++                _clip("fill_2", 3968, 3984, 480, 496),
++                _clip("drop_5", 3984, 4064, 496, 576)]
++               + _copies("outro_1_tail_loop", 4064, 576, 584, 8)
++               + [_clip("outro_1", 4128, 4160, 576, 608)],
++        "In": [_clip("intro_1", 3904, 3968, 0, 64),
++               _clip("drop_1", 3968, 4032, 64, 128)],
++    }
++    corrected = {
++        "Out": [_clip("drop_4", 4100, 4196, 384, 480),
++                _clip("fill_2", 4196, 4212, 480, 496),
++                _clip("outro_1", 4212, 4284, 536, 608)],
++        "In": [_clip("intro_1", 4148, 4212, 0, 64),
++               _clip("drop_1", 4212, 4276, 64, 128)],
++    }
++    c_auto = {"Out": TrackAutomation("Out", bass_points=[(3968.0, 1.0), (3968.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(3904.0, 0.18), (3968.0, 0.18), (3968.0, 1.0)])}
++    s_auto = {"Out": TrackAutomation("Out", bass_points=[(4212.0, 1.0), (4212.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(4148.0, 0.18), (4212.0, 0.18), (4212.0, 1.0)])}
++
++    [td] = _run(baseline, corrected, c_auto, s_auto)
++
++    assert "entry_moved_out:+4bars" in td.corrections
++    assert "swap_moved_out:+14bars" in td.corrections
++    assert "outro_cut:10bars" in td.corrections
++    assert "tail_loop_removed:2bx8+0b" in td.corrections
++    assert "overlap_changed:64->34bars" in td.corrections
++    assert not any(c.startswith("swap_moved_in") for c in td.corrections)
++    # both swaps sit on real section clips, so the old label is still trusted
++    assert td.bass_swap_reliable is True
++    assert any(c.startswith("bass_swap_moved:+56beats") for c in td.corrections)
++
++
++def test_one_bar_swap_nudge_onto_the_phrase_grid():
++    """T2, Sam Leagas -> HNTR: HNTR moved one bar later so the swap sits on
++    bar 136 of Sam Leagas, not the detected boundary at 135."""
++    baseline = {
++        "Out": [_clip("drop_3", 1104, 1232, 384, 512),
++                _clip("drop_4", 1232, 1260, 512, 540),
++                _clip("outro_1", 1260, 1328, 540, 608)],
++        "In": [_clip("intro_1", 1228, 1260, 0, 32),
++               _clip("drop_1", 1260, 1356, 32, 128)],
++    }
++    corrected = {
++        "Out": [_clip("drop_3", 1104, 1232, 384, 512),
++                _clip("drop_4", 1232, 1264, 512, 544),
++                _clip("outro_1", 1264, 1328, 544, 608)],
++        "In": [_clip("intro_1", 1232, 1264, 0, 32),
++               _clip("drop_1", 1264, 1360, 32, 128)],
++    }
++    c_auto = {"Out": TrackAutomation("Out", bass_points=[(1260.0, 1.0), (1260.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(1228.0, 0.18), (1260.0, 0.18), (1260.0, 1.0)])}
++    s_auto = {"Out": TrackAutomation("Out", bass_points=[(1264.0, 1.0), (1264.0, 0.18)]),
++              "In": TrackAutomation("In", bass_points=[(1232.0, 0.18), (1264.0, 0.18), (1264.0, 1.0)])}
++
++    [td] = _run(baseline, corrected, c_auto, s_auto)
++
++    assert "swap_moved_out:+1bars" in td.corrections
++    assert "entry_moved_out:+1bars" in td.corrections
++    assert not any(c.startswith("swap_moved_in") for c in td.corrections)
++    assert td.geometry["swap_in_bar"] == [8.0, 8.0]
++
++
++def test_identical_transition_has_no_geometry_labels():
++    clips = {
++        "Out": [_clip("drop_1", 0, 400, 0, 400), _clip("outro_1", 400, 464, 400, 464)],
++        "In": [_clip("intro_1", 400, 464, 0, 64), _clip("drop_1", 464, 800, 64, 400)],
++    }
++    auto = {"Out": TrackAutomation("Out", bass_points=[(464.0, 1.0), (464.0, 0.18)]),
++            "In": TrackAutomation("In", bass_points=[(400.0, 0.18), (464.0, 0.18), (464.0, 1.0)])}
++
++    [td] = _run(clips, clips, auto, auto)
++
++    assert td.corrections == []
++    assert td.verdict == "correct"
++    assert td.bass_swap_reliable is True
++    assert td.geometry["outro_cut_bars"] == 0.0

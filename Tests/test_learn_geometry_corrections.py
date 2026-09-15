@@ -82,6 +82,31 @@ def test_forward_skip_and_landmark_split_are_not_loops():
     assert _repeat_groups(split) == []
 
 
+def test_bridge_from_a_skipped_gap_is_not_a_loop():
+    """Review, 2026-09-15: after a forward skip, a short clip from INSIDE the
+    skipped gap is new material. The old [min, max] check called it a loop."""
+    clips = [_clip("intro_1", 0, 256, 0, 256),
+             _clip("drop_2", 256, 456, 500, 700),
+             _clip("bridge_1", 456, 496, 300, 340)]
+    assert _repeat_groups(clips) == []
+
+
+def test_one_off_repeat_of_the_previous_clips_tail_is_a_loop():
+    """Yellody (T11): the outro's last bar played once more."""
+    clips = [_clip("outro_1", 5464, 5524, 612, 672),
+             _clip("outro_1", 5524, 5528, 668, 672)]
+    assert _labels(_repeat_groups(clips)) == ["1bx1+0b"]
+
+
+def test_one_off_revisit_of_earlier_material_is_an_edit_not_a_loop():
+    """A single copy that is not the previous clip's tail is a hand edit."""
+    clips = [_clip("drop_1", 0, 128, 0, 128),
+             _clip("drop_2", 128, 256, 128, 256),
+             _clip("drop_1", 256, 272, 32, 48),
+             _clip("outro_1", 272, 336, 256, 320)]
+    assert _repeat_groups(clips) == []
+
+
 def test_intro_loop_copies_before_the_natural_intro():
     """An intro loop replays a chunk before the track proper starts; the
     real intro after it starts outside the chunk and is left alone."""
@@ -267,6 +292,36 @@ def test_one_bar_swap_nudge_onto_the_phrase_grid():
     assert "entry_moved_out:+1bars" in td.corrections
     assert not any(c.startswith("swap_moved_in") for c in td.corrections)
     assert td.geometry["swap_in_bar"] == [8.0, 8.0]
+
+
+def test_reliability_is_judged_on_the_delta_event_not_a_second_finder():
+    """Review, 2026-09-15. A short outgoing still carries its own earlier
+    bass-in ramp; a ramp point on the way up sits inside the source-space
+    finder's window, so bass_swap_claude comes from the ramp (source 85)
+    while the real first kill (a falling edge at 1105) sits inside a
+    three-copy tail loop. Sam's side kills inside the same loop later. The
+    old flag certified the ramp point as reliable and wrote
+    bass_swap_moved:+10beats to the corpus. Now: not reliable, no label, and
+    the geometry swap is the real kill."""
+    out_clips = ([_clip("drop_1", 1000, 1100, 0, 100)]
+                 + _copies("outro_1_tail_loop", 1100, 90, 100, 3)
+                 + [_clip("outro_1", 1130, 1190, 100, 160)])
+    in_clips = [_clip("intro_1", 1080, 1200, 0, 120)]
+    baseline = {"Out": out_clips, "In": in_clips}
+    corrected = {"Out": list(out_clips), "In": list(in_clips)}
+    c_auto = {"Out": TrackAutomation("Out", bass_points=[
+                  (1060.0, 0.18), (1085.0, 0.5), (1095.0, 1.0), (1105.0, 1.0), (1105.0, 0.18)]),
+              "In": TrackAutomation("In", bass_points=[(1080.0, 0.18), (1105.0, 0.18), (1105.0, 1.0)])}
+    s_auto = {"Out": TrackAutomation("Out", bass_points=[
+                  (1060.0, 0.18), (1085.0, 0.5), (1095.0, 1.0), (1125.0, 1.0), (1125.0, 0.18)]),
+              "In": TrackAutomation("In", bass_points=[(1080.0, 0.18), (1125.0, 0.18), (1125.0, 1.0)])}
+
+    [td] = _run(baseline, corrected, c_auto, s_auto)
+
+    assert td.geometry["swap_arr_beat"] == [1105.0, 1125.0]
+    assert td.geometry["swap_out_on_loop"] == [True, True]
+    assert td.bass_swap_reliable is False
+    assert not any(c.startswith("bass_swap_moved") for c in td.corrections)
 
 
 def test_identical_transition_has_no_geometry_labels():

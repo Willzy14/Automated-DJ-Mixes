@@ -1751,10 +1751,24 @@ was written).
   itself is unchanged and a `bass_swap_reliable` flag says when to trust it. Each pair_history
   entry now carries a `geometry` record. On the real pair it labels all 11, matching the hand
   analysis transition for transition; the 11 corpus entries were replaced with the rebuilt ones.
-  `Tests/test_learn_geometry_corrections.py` (9 tests: loop detection on the pipeline, hand-made,
-  cut and intro-loop shapes; the T2, T4, T6, T7 and T9 transitions; an unchanged one) - the T6
-  test gets no labels and no geometry field on the committed code. The 2 existing learner test
-  files still pass (21 in all). Found while running the full suite: C7's canonicaliser
+  `Tests/test_learn_geometry_corrections.py` (15 tests: loop detection on the pipeline, hand-made,
+  cut, gap-bridge, tail-repeat and intro-loop shapes; the T2, T4, T6, T7 and T9 transitions; the
+  reviewer's ramp-then-loop case; an unchanged one). Proved against the committed learner by
+  running the T6 fixture through it: no corrections at all and no geometry field, so the test
+  cannot pass there. The 2 existing learner test files still pass.
+  **Reviews (2026-09-15):** MiniMax SOUND on the first build (`Receipts/2026-09-15/
+  minimax-review-D12.md`, three notes: the test count was wrong in the docs, the prove-the-test
+  wording was loose, the report prints only the main geometry fields). The Claude stand-in for
+  capped Codex returned CORRECTION with two reproduced defects, both applied the same evening:
+  (1) the reliability flag was judged on a second swap finder (`_find_swap_arr`) and could
+  certify a point the delta was not built from - now `_pinned_swap_event` reproduces the
+  source-space finder's own selection step for step, `_find_swap_arr` requires a falling edge
+  (a ramp point on the way up is not a kill), and a side is reliable only when both land on the
+  same event on a section clip; (2) `_repeat_groups` checked "already played" against a min-max
+  span, so a one-off clip from inside a skipped gap read as a loop - now the union of played
+  intervals, and a single copy counts only when it repeats the previous clip's own tail. Real-pair
+  labels unchanged by either correction. Confirmation on the corrected hash: pending from the
+  same reviewer. Found while running the full suite: C7's canonicaliser
   (`Source/canonicalize_pair_history.py`) reports the new T4 record as malformed because Sam's
   version has no bass swap (`sam_bass_swap_beat` null, `swap_removed` in its corrections) and it
   requires both swap beats to derive a delta. It has no observation class for a removed swap.
