@@ -750,6 +750,17 @@ class Alignment:
     # built without going through compute_aligned_positions - direct
     # align_pair() calls in tests, mainly - is unaffected.
     outgoing_has_post_swap_content: bool = True
+    # Both tracks' vocal_regions, converted to arrangement-beats, NOT yet
+    # filtered against the final (post-loop) overlap window - burn list
+    # D6, same two-step pattern as landmark_candidates: computed once here
+    # (compute_aligned_positions has the Track objects that carry
+    # vocal_regions; propose_arrangement.py's OverlapAnalysis layer only
+    # has TrackInfo, which does not), finalized into OverlapAnalysis.
+    # vocal_clash_ranges once loops have settled the real overlap window.
+    # {"outgoing": [(start_beat, end_beat), ...], "incoming": [...]}.
+    # Report-only - never gates or rejects anything.
+    vocal_regions_arrangement: dict = field(
+        default_factory=lambda: {"outgoing": [], "incoming": []})
 
 
 def report_landmark_candidates(
@@ -800,6 +811,36 @@ def report_landmark_candidates(
             item["suggested_transition_finish_beat"], item["track_role"]
         ),
     )
+
+
+def report_vocal_regions(
+    outgoing: Track,
+    incoming: Track,
+    outgoing_start_beat: float,
+    incoming_start_beat: float,
+) -> dict:
+    """Both tracks' vocal_regions on the arrangement timeline, unfiltered.
+
+    Report-only (burn list D6) - never gates or rejects anything. Mirrors
+    report_landmark_candidates's two-step split: this computes the RAW
+    evidence while Track objects (which carry vocal_regions) are still in
+    scope; final filtering against the post-loop overlap window happens
+    later in propose_arrangement.py, once OverlapAnalysis knows it.
+
+    vocal_regions are stored in each track's OWN NATIVE BARS (see Track's
+    own field comment); landmark_candidates' start_beat/end_beat are
+    already in beats, so this is bar*4.0, not a straight add.
+    """
+    result: dict = {"outgoing": [], "incoming": []}
+    for role, track, track_start in (
+        ("outgoing", outgoing, outgoing_start_beat),
+        ("incoming", incoming, incoming_start_beat),
+    ):
+        for start_bar, end_bar in track.vocal_regions:
+            absolute_start = track_start + float(start_bar) * 4.0
+            absolute_end = track_start + float(end_bar) * 4.0
+            result[role].append((round(absolute_start, 3), round(absolute_end, 3)))
+    return result
 
 
 #: Hard floor for _outgoing_has_post_swap_content's "genuinely nothing left"
@@ -2470,6 +2511,7 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None):
         arr_pos[k] = new
         al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
         al.landmark_candidates = report_landmark_candidates(o, i, al, prev, new)
+        al.vocal_regions_arrangement = report_vocal_regions(o, i, prev, new)
         al.fills_cuts = plan_fill_or_cut(o, i, al, policy)   # loops/cuts around the swap
         # Computed AFTER plan_fill_or_cut, not right after align_pair (Codex
         # review, 2026-09-13): an outgoing-tail loop genuinely extends the

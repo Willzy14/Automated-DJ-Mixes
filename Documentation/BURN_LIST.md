@@ -1525,7 +1525,7 @@ was written).
   Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax, no findings required a text
   change.
 
-- [ ] **Surface vocal/density clash evidence to Sam as short suspect passages instead of leaving
+- [x] **Surface vocal/density clash evidence to Sam as short suspect passages instead of leaving
   it as shadow-only logging** (D6) - vocal regions already gate loop-source selection, but the
   pipeline never compares both tracks' audible vocals ACROSS a transition, and outgoing density
   (the signal behind the entry-extension "chilled-out break" rule) is measured but never acted
@@ -1533,7 +1533,45 @@ was written).
   passages for Sam to listen to first.
   Evidence: `Source/align_engine.py:620,1770,1987` (Astra);
   `Documentation/Reviews/2026-08-27 Analysis Extraction Audit.md:98` (Astra).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **BUILT + TESTED + VERIFIED, 2026-09-15.** Plan reviewed by MiniMax first - caught a real
+  architectural error in the first draft (referenced `Alignment` field names that don't exist,
+  picked the wrong existing pattern to mirror: C2's single boolean `outgoing_has_post_swap_
+  content` instead of the list-shaped `landmark_candidates` two-step precedent). Corrected
+  before any code was written. New `Alignment.vocal_regions_arrangement` + `report_vocal_
+  regions()` in `align_engine.py` (computed once in `compute_aligned_positions`, right beside
+  `landmark_candidates`, while `Track` objects - which carry `vocal_regions` - are still in
+  scope); new `OverlapAnalysis.density_score`/`density_status`/`vocal_clash_ranges` +
+  `_finalize_vocal_clash()` in `propose_arrangement.py` (intersects the raw evidence against the
+  FINAL, post-loop overlap window, called once right after the file's own single
+  `_refresh_overlap_geometry` call site). New standalone `Source/suspect_passages_report.py`
+  (mirrors `seal_listening_test.py`/`record_bounce_manifest.py`'s precedent) - a short markdown
+  list; transitions with nothing to flag are OMITTED entirely, not listed as clean, so the list
+  stays worth reading. 20 new tests across `Tests/test_vocal_clash_detection.py` and
+  `Tests/test_suspect_passages_report.py`. **Real-corpus validated, not just synthetic**:
+  regenerated a real arrangement report for the staged Tech House Heldout project end to end
+  (real `Sections V1.als` + real cached `_Stem Analysis`) and confirmed directly that all 9 real
+  tracks carry genuine `vocal_regions` data (2-8 regions each) - so the result (zero vocal
+  clashes across all 8 real transitions) is a validated true negative about this specific,
+  well-arranged mix, not a missing-data artifact.
+  Full suite 791/0/6 -> 811/0/6 (across both A6 and D6 this session).
+  Files changed: `Source/align_engine.py`, `Source/propose_arrangement.py`,
+  `Source/suspect_passages_report.py` (new), `Tests/test_vocal_clash_detection.py` (new),
+  `Tests/test_suspect_passages_report.py` (new).
+  **Peer-reviewed twice - MiniMax (plan, then code).** Code review independently re-verified
+  every piece of the corrected architecture actually landed as specified (not just claimed),
+  confirmed the bar->beat conversion math, the call-site ordering, and the clamp-then-intersect
+  clash logic are all correct with no false-positive/negative paths. Two small, non-blocking
+  findings, both adopted: (1) a null-vs-absent JSON key gap in the report script (`{"tracks":
+  null}` is legal JSON that `.get(key, [])` doesn't catch) - fixed with `.get(key) or []` +
+  regression test; (2) `vocal_clash_ranges` was reporting the CLAMPED vocal extent rather than
+  its real full range for a vocal straddling the transition window edge - fixed to report the
+  original unclamped range (the clamp only decides whether a clash is in play) + regression
+  test. Explicitly confirmed a plain dict (not a new dataclass) for the clash-range leaf is the
+  right call, consistent with this file's own precedent (`al.paired_cues` is the same
+  list-of-dicts report-leaf shape).
+  Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax (plan + code, both rounds), both
+  findings fixed and re-tested.
 
 - [ ] **"Feasible" alignment pairs can still fail at the next stage (loop planning), and
   sequencing doesn't know that** (D7) - Astra's own corpus replay found 2 of 267
@@ -2098,7 +2136,15 @@ content there; the swap POINT itself, item c's job, is what T2 actually needs). 
 718/6/0 -> 724/6/0 across both. Neither yet peer-reviewed; item (c)'s full 5-step scope written
 up under B3 above. rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 9 open, 19 done, 1 dropped (last update 2026-09-15 14:15 [Claude]: C9 MiniMax-
+## THE COUNT: 7 open, 21 done, 1 dropped (last update 2026-09-15 14:55 [Claude]: A6 (AB-comparison
+ALS broken sample paths) and D6 (vocal-clash + density suspect-passage report) both built,
+tested against real corpus data, and MiniMax-reviewed twice each (plan then code) - both CHECKED
+OFF SOUND: 9 -> 7 open, 19 -> 21 done. Real bugs caught during each build that neither plan
+review anticipated (A6: a Windows case-insensitivity trap + an XML-escaping mismatch, both
+found via real-corpus dry-run, not synthetic tests alone; D6: architecture-level, MiniMax's own
+plan review caught invented field names and the wrong precedent before any code was written).
+Full suite 780 -> 811 passed across both items, 0 regressions, 6 skipped throughout. Prior
+update (2026-09-15 14:15 [Claude]): C9 MiniMax-
 reviewed SOUND, no findings - CHECKED OFF: 16 -> 15 open, 12 -> 13 done. Then walked all 7
 Sam-gated items past Sam directly, one question at a time (AskUserQuestion), and executed every
 decision same-turn: B1 (park BASS_RESIDUAL_ENABLED - no calibration work commissioned), B2

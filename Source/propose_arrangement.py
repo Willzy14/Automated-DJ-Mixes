@@ -139,6 +139,19 @@ class OverlapAnalysis:
     overlap_policy: str = "standard_48"
     loop_target_marker: str | None = None
     notes: str = ""
+    # Burn list D6, report-only (never gates/rejects). density_score/status
+    # mirror FillCutSpec's own fields (entry-extension shadow
+    # instrumentation, _plan_marker_loops) as a structured field instead of
+    # leaving them parseable only out of `notes` prose.
+    density_score: float | None = None
+    density_status: str = ""
+    # Arrangement-beat ranges where BOTH tracks' vocals are audible AND
+    # inside this transition's final (post-loop) overlap window - see
+    # _finalize_vocal_clash. Each item: {"clash_range", "outgoing_range",
+    # "incoming_range"} (all (start_beat, end_beat) tuples) so a report
+    # can show which two vocal passages actually collide, not just that
+    # something does.
+    vocal_clash_ranges: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -625,7 +638,47 @@ def analyse_overlap(out_track: TrackInfo, in_track: TrackInfo,
         _plan_loop_extensions(out_track, in_track, analysis)
 
     _refresh_overlap_geometry(out_track, in_track, analysis)
+    if al is not None:
+        _finalize_vocal_clash(al, analysis)
     return analysis
+
+
+def _finalize_vocal_clash(al, analysis: OverlapAnalysis) -> None:
+    """Intersect al.vocal_regions_arrangement (raw, computed once in
+    compute_aligned_positions) against THIS transition's final, post-loop
+    overlap window - burn list D6. Every outgoing-vocal x incoming-vocal
+    pair that both fall inside [overlap_start, overlap_end) and genuinely
+    overlap each other in time is a clash; anything outside the window, or
+    that doesn't overlap the OTHER track's vocal, is not. Report-only -
+    writes analysis.vocal_clash_ranges, never touches anything that
+    affects what gets built.
+    """
+    evidence = getattr(al, "vocal_regions_arrangement", None)
+    if not evidence:
+        return
+    ov_start, ov_end = analysis.overlap_start, analysis.overlap_end
+    for out_s, out_e in evidence.get("outgoing", []):
+        # Clamped copy decides IF this vocal is in play during the
+        # transition; the ORIGINAL (out_s, out_e) is what gets reported,
+        # so a vocal straddling the window edge still shows its real full
+        # extent (e.g. "started 40 beats before the transition"), not
+        # just the sliver Sam would hear during the overlap itself
+        # (MiniMax code review, 2026-09-15).
+        clamped_out_s, clamped_out_e = max(out_s, ov_start), min(out_e, ov_end)
+        if clamped_out_s >= clamped_out_e:
+            continue
+        for in_s, in_e in evidence.get("incoming", []):
+            clamped_in_s, clamped_in_e = max(in_s, ov_start), min(in_e, ov_end)
+            if clamped_in_s >= clamped_in_e:
+                continue
+            clash_s = max(clamped_out_s, clamped_in_s)
+            clash_e = min(clamped_out_e, clamped_in_e)
+            if clash_s < clash_e:
+                analysis.vocal_clash_ranges.append({
+                    "clash_range": (round(clash_s, 3), round(clash_e, 3)),
+                    "outgoing_range": (round(out_s, 3), round(out_e, 3)),
+                    "incoming_range": (round(in_s, 3), round(in_e, 3)),
+                })
 
 
 def _refresh_overlap_geometry(out_track: TrackInfo, in_track: TrackInfo,
@@ -972,6 +1025,11 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                     analysis.notes += "; density {}".format(
                         f"{fc.density_score:+.1f}dB" if fc.density_score is not None
                         else fc.density_status)
+                    # Structured copy (burn list D6) alongside the prose
+                    # note above - a report script reads this directly
+                    # instead of parsing dB values back out of `notes`.
+                    analysis.density_score = fc.density_score
+                    analysis.density_status = fc.density_status
         elif fc.kind == "break_skip" and fc.skip_bars > 0:
             # Mix CHOICE (Sam 2026-06-09): the incoming enters on a short, no-kick
             # pre-drop break stacked on the outgoing's outro (a dead spot). Drop that
@@ -1978,6 +2036,10 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
                 else "long_blend" if ov.overlap_bars > 36
                 else "standard"),
             "notes": ov.notes,
+            # Burn list D6, report-only.
+            "density_score": ov.density_score,
+            "density_status": ov.density_status,
+            "vocal_clash_ranges": ov.vocal_clash_ranges,
         }
         # align_engine's explicit bass-swap point (so apply_automation doesn't
         # re-derive a different one). Matched by pair index.
