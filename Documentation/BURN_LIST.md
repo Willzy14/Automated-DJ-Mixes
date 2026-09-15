@@ -1727,8 +1727,8 @@ was written).
   Owner: Claude. Status: DONE 2026-09-15. Touched: 2026-09-15.
   Peer review: SOUND - MiniMax `Receipts/2026-09-15/minimax-review-D10-D11.md`
 
-- [ ] **The correction learner read automation only, so Sam's geometry edits went
-  unclassified** (D12) - `learn_from_correction.py` labelled 5 of the 11 corrections on the
+- [x] **The correction learner read automation only, so Sam's geometry edits went
+  unclassified** (D12) - DONE 2026-09-15. `learn_from_correction.py` labelled 5 of the 11 corrections on the
   15.09.26 August Releases Mix (3 `bass_swap_moved`, 2 `sneak_changed`); the other 6 got an empty
   `corrections` list although every one changed the arrangement. What Sam did there is geometry:
   entries pulled later by 1-16 bars (never earlier), both intro front-trims reversed, both 64-bar
@@ -1772,24 +1772,29 @@ was written).
   corrected code and returned SOUND (`Documentation/Plans/burn-list-2026-09-15/
   claude-review-D12-confirmation.md`; suite 830 passed, real-pair labels byte-identical before
   and after). Deliverable receipt on that hash: `Receipts/2026-09-15/receipt-D12-a2.json`,
-  ACCEPTED, 45 learner tests passed. Still not DONE: the only SOUND from a different brain
-  (MiniMax) is bound to the FIRST build's hash, so a MiniMax re-confirmation on 33c07cf54058 was
-  dispatched at 18:35 (`review-brief-D12-confirm.md`, expected at `Receipts/2026-09-15/
-  minimax-review-D12-confirm.md`); SOUND there closes this item. Found while running the full
-  suite: C7's canonicaliser
+  ACCEPTED, 45 learner tests passed. MiniMax's first SOUND was bound to the FIRST build's hash,
+  so a re-confirmation on 33c07cf54058 was dispatched at 18:35 (`review-brief-D12-confirm.md`)
+  and returned SOUND at 19:05 (`Receipts/2026-09-15/minimax-review-D12-confirm.md`): traced
+  `_pinned_swap_event` against `_find_bass_swap_beat` step for step, the falling-edge rule on
+  T6 and T9, the union check on the three new loop tests, and the 12 pre-existing record keys
+  (names, order and meaning unchanged). Two MINOR notes, both already covered by the reliability
+  gate (a `None` swap reads as unreliable), recorded as E7 rather than reopened here. Found
+  while running the full suite: C7's canonicaliser
   (`Source/canonicalize_pair_history.py`) reports the new T4 record as malformed because Sam's
   version has no bass swap (`sam_bass_swap_beat` null, `swap_removed` in its corrections) and it
   requires both swap beats to derive a delta. It has no observation class for a removed swap.
   The corpus pin in `Tests/test_canonicalize_pair_history.py` was re-verified by hand (45
   records, 44 load, 35 unique, the same 4 conflicts) and updated to say so; the canonicaliser is
   untouched - giving it a swap-removed class belongs to C7.
-  Evidence: `Source/learn_from_correction.py:551` `Tests/test_learn_geometry_corrections.py`
+  Author: Claude. Evidence: `Source/learn_from_correction.py:551` sha256:33c07cf54058
+  `Tests/test_learn_geometry_corrections.py` `Receipts/2026-09-15/receipt-D12-a2.json`
   `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.md`
   `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.diff.json`
-  Owner: Claude. Status: OPEN - built, tested, Claude-confirmed on the corrected hash; waiting
-  on MiniMax's re-confirmation of that hash; feeds C7. Touched: 2026-09-15.
-  Peer review: NONE - not yet reviewed (MiniMax SOUND exists only for the superseded first-build
-  hash 168b6051b358; re-confirmation in flight).
+  Owner: Claude. Status: DONE 2026-09-15 - feeds C7 (a swap-removed observation class for the
+  canonicaliser). Touched: 2026-09-15.
+  Peer review: SOUND - MiniMax `Receipts/2026-09-15/minimax-review-D12-confirm.md` (on the
+  corrected hash; first-build SOUND in `Receipts/2026-09-15/minimax-review-D12.md`; Claude
+  stand-in CORRECTION then SOUND in `Documentation/Plans/burn-list-2026-09-15/`)
 
 - [ ] **Claude-arranged mode: the pipeline executes a written per-transition decision instead
   of the anchor search** (D13) - Sam, 2026-09-15, after asking why the pipeline is rule-based
@@ -2053,6 +2058,22 @@ was written).
   Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`.
   Owner: Claude. Peer review: NONE - not yet reviewed (one-line doc edit, Sam's own explicit
   decision on intent; judged proportionate to skip a peer round).
+
+- [ ] **The learner's arrangement-frame swap finder can miss a kill at the edge of its window**
+  (E7) - MiniMax, D12 re-confirmation, 2026-09-15, two MINOR notes on
+  `learn_from_correction._find_swap_arr`: (1) a kill that is the FIRST point inside the +-10
+  window has no `prev`, so the falling-edge rule cannot see it (falsifier: `out_bass=[(80,
+  0.18)]`, window [80, 110]); (2) `prev` carries in from outside the window, so a point below
+  0.8 before the window (`[(50, 0.5), (90, 0.18)]`) hides a real fall inside it. Both return
+  `None`, and the reliability gate then marks the side unreliable (no `bass_swap_moved` label
+  is published), so the failure mode is a withheld label, not a wrong one - the geometry labels
+  still carry the swap move in the track's own bars. Fix when touched: seed `prev` from the last
+  point BEFORE the window, and treat a first in-window point below 0.8 whose pre-window value
+  was >= 0.8 as the edge. Pin both falsifiers as tests.
+  Evidence: `Receipts/2026-09-15/minimax-review-D12-confirm.md` (Q2 and FOUND UNASKED)
+  `Source/learn_from_correction.py:728`
+  Owner: Claude. Status: OPEN. Touched: 2026-09-15.
+  Peer review: NONE - not yet reviewed.
 
 ## F - Carried, deferred on purpose (not open work - listed so they are not silently rediscovered)
 
@@ -2345,7 +2366,15 @@ progressed: Claude stand-in SOUND on the corrected hash 33c07cf54058, receipt D1
 MiniMax re-confirmation on that hash dispatched - stays OPEN until it lands. rev fe813f1 ->
 (this write).
 
-## THE COUNT: 10 open, 23 done, 1 dropped (last update 2026-09-15 18:50 [Claude]: D13 opened -
+Last item update: 2026-09-15 19:10 [Claude] - DONE + create: D12 checked off - MiniMax returned
+SOUND on the corrected learner hash 33c07cf54058 (`Receipts/2026-09-15/minimax-review-D12-
+confirm.md`), joining the accepted D12-a2 receipt and the Claude stand-in's confirmation. Its two
+MINOR `_find_swap_arr` notes opened as E7 (covered by the reliability gate). rev 4e0e3db ->
+(this write).
+
+## THE COUNT: 10 open, 24 done, 1 dropped (last update 2026-09-15 19:10 [Claude]: D12 DONE on
+MiniMax's SOUND for the corrected hash, E7 opened for its two MINOR notes: 10 -> 10 open, 23 ->
+24 done. Prior update (2026-09-15 18:50 [Claude]): D13 opened -
 Claude-arranged mode, built and Phase-2-proven, Phase 3 + scoring pending: 9 -> 10 open. Prior
 update (2026-09-15 17:02 [Claude]): D12 opened -
 the correction learner misses geometry edits, evidence from Sam's 11 tweaks: 8 -> 9 open. Prior

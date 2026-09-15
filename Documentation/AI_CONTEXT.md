@@ -1373,8 +1373,9 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 >    score measures execution fidelity plus what the decision vocabulary cannot express (levels,
 >    T4's no-EQ-swap crossfade, T1's last-bar x16 loop shape); propose what the vocabulary needs
 >    next. Then document `--decisions` in the `/mix` skill (frozen sync list - both brains).
-> 4. D12: read `Receipts/2026-09-15/minimax-review-D12-confirm.md`; SOUND on hash 33c07cf54058
->    closes it (Peer review line, Status DONE, count 10 -> 9, `validate_burn_list.py --baseline`).
+> 4. D12 CLOSED at 19:05 the same evening: MiniMax returned SOUND on hash 33c07cf54058
+>    (`Receipts/2026-09-15/minimax-review-D12-confirm.md`); two MINOR `_find_swap_arr` edge
+>    cases it noted are burn list E7 (already covered by the reliability gate).
 > 5. Still open from today: D9 (defaulting `--cue-signals rescue,deep,phrase`); flag to Sam that
 >    the Dropbox canonical `Claude Code Brain/Memory/MEMORY.md` was overwritten by another
 >    project's 6-line index (files intact - do not silently restore); render check when Sam
