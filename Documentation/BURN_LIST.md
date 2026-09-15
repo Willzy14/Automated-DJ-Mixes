@@ -1754,7 +1754,13 @@ was written).
   `Tests/test_learn_geometry_corrections.py` (9 tests: loop detection on the pipeline, hand-made,
   cut and intro-loop shapes; the T2, T4, T6, T7 and T9 transitions; an unchanged one) - the T6
   test gets no labels and no geometry field on the committed code. The 2 existing learner test
-  files still pass (21 in all).
+  files still pass (21 in all). Found while running the full suite: C7's canonicaliser
+  (`Source/canonicalize_pair_history.py`) reports the new T4 record as malformed because Sam's
+  version has no bass swap (`sam_bass_swap_beat` null, `swap_removed` in its corrections) and it
+  requires both swap beats to derive a delta. It has no observation class for a removed swap.
+  The corpus pin in `Tests/test_canonicalize_pair_history.py` was re-verified by hand (45
+  records, 44 load, 35 unique, the same 4 conflicts) and updated to say so; the canonicaliser is
+  untouched - giving it a swap-removed class belongs to C7.
   Evidence: `Source/learn_from_correction.py:551` `Tests/test_learn_geometry_corrections.py`
   `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.md`
   `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.diff.json`

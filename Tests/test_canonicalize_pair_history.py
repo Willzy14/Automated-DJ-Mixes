@@ -318,19 +318,30 @@ def test_within_tolerance_duplicates_pick_a_deterministic_representative():
 
 @pytest.mark.skipif(not REAL_PAIR_HISTORY.exists(),
                     reason="real pair_history.jsonl unavailable")
-def test_real_corpus_reduces_to_25_unique_observations_with_4_conflicts():
-    """Pinned against the actual project data as it stood 2026-09-15 - the
-    exact figures the C6/C7/C8 plan review rounds derived by hand (25
-    unique, 4 conflicting: Black Book x Defected V2 pairs 3/4/5/7). If this
-    ever changes, it means the real pair_history.jsonl corpus itself
-    changed (new sessions append to it) - re-verify by hand before updating
-    this pin, the same discipline test_alignment_baseline.py uses."""
+def test_real_corpus_reduces_to_35_unique_observations_with_4_conflicts():
+    """Pinned against the actual project data. If this ever changes, it
+    means the real pair_history.jsonl corpus itself changed (new sessions
+    append to it) - re-verify by hand before updating this pin, the same
+    discipline test_alignment_baseline.py uses.
+
+    2026-09-15 (C6/C7/C8 plan rounds): 34 records, 25 unique, 4 conflicting
+    (Black Book x Defected V2 pairs 3/4/5/7), all derived by hand.
+    2026-09-15 later: the 15.09.26 August Releases Mix added 11 records, one
+    per transition, no duplicates, so 45 records and 35 unique; the 4
+    conflicts are unchanged. Its T4 has NO swap in Sam's version (he
+    crossfaded instead - `swap_removed` in its corrections), so
+    `sam_bass_swap_beat` is null and load_records reports it as malformed:
+    the canonicaliser has no observation class for a removed swap yet. That
+    record is real, not broken - see burn list D12/C7."""
     records, malformed = load_records(REAL_PAIR_HISTORY)
-    assert malformed == []
-    assert len(records) == 34
+    assert [(m["record"]["project"], m["record"]["pair_index"], m["error"])
+            for m in malformed] == [
+        ("15.09.26 August Releases Mix", 4, "missing field(s): ['sam_bass_swap_beat']"),
+    ]
+    assert len(records) == 44
 
     result = canonicalize(records)
-    assert len(result.canonical) + len(result.conflicts) == 25
+    assert len(result.canonical) + len(result.conflicts) == 35
 
     conflict_keys = {(c.project, c.pair_index) for c in result.conflicts}
     assert conflict_keys == {
