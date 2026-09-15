@@ -696,6 +696,16 @@
         "BASS_RESIDUAL_ENABLED stays parked (weak real-world case even fixed) unless Sam names a specific mix where the bass cutoff actually bothered him.",
         "B2 (untracked Ableton 12.4.3 template picked nondeterministically by mtime) - still open, not re-raised since the initial burn list survey."
       ]
+    },
+    {
+      "date": "2026-09-15",
+      "brain": "Claude + Codex (real-staged-files review)",
+      "summary": "Built the LOOP_SELF_SIMILARITY_TIERA AND-semantics rebuild per Sam's explicit direction. evaluate_loop_quality (align_engine.py) now computes the base 5-key score (always, unconditional of the flag) and the tiera-augmented 10-key score (only when the flag is on, only gates when measurable) as two separate terms, failing self_similarity if EITHER is below threshold - true AND semantics replacing the old single-blended-score design that could let a strong tiera signal outvote a genuine base failure. LoopQualityResult gained self_similarity_tiera, appended last so all 5 existing positional construction call sites keep working. Tests/test_tiera_loop_similarity.py rewritten (9 functions; two pin the AND-gate directly via monkeypatch); proved-the-test - 7 of 9 changed/new tests fail against the stashed pre-rebuild code. The original 15,268-window corpus no longer exists in a runnable state (no paired section maps) so re-verification ran against every _Stem Analysis corpus currently on this machine with verified exact filename pairing: 11 directories, 119 track-entries (90 unique names - the tool now reports and names the 24 duplicated ones), 80,815 real windows. Result: 831 AND-gate flips, ALL pass->reject (816 evidence-backed CORRECT, 15 SPURIOUS), 0 reject->pass - structurally asserted by the rewritten Tools/tiera_loop_replay.py and empirically confirmed. The same corpus under the old blended design would have produced 500 reject->pass un-catches. Flipped the flag default to True; the frozen alignment-decision baseline (test_alignment_baseline.py) correctly moved on 15/380 pairs, all read and attributed to the tiera term, baseline refreshed deliberately. Full suite 729 passed/0 failed/6 skipped. Codex review (room_peer_review.ps1, -Effort high, real staged files): NO MATERIAL OBJECTIONS, confirmed the AND-gate is structurally monotonic; 2 real findings adopted and fixed same-session (stale defaults-OFF prose; imprecise corpus-independence claims and a silent missing-section-map gap in the replay tool, both now surfaced instead of hidden). Full evidence trail: Documentation/BURN_LIST.md item B1.",
+      "pending": [
+        "Revise Documentation/Plans/swap-first-redesign/c6-c7-c8-plan.md (in .claude/worktrees/codex-c6c7c8-review/) against Codex's 8 round-1 findings, then get a round-2 Codex review before building C6.",
+        "BASS_RESIDUAL_ENABLED stays parked (weak real-world case even fixed) unless Sam names a specific mix where the bass cutoff actually bothered him.",
+        "B2 (untracked Ableton 12.4.3 template picked nondeterministically by mtime) - still open, not re-raised since the initial burn list survey."
+      ]
     }
   ],
   "last_modified": "2026-09-15"

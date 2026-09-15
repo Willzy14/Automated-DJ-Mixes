@@ -55,15 +55,41 @@ LOOP_MAX_INSERT_LEVEL_DROP_DB = 4.5
 LOOP_MIN_SELF_SIMILARITY = 0.65
 LOOP_QUALITY_OVERRIDE_FILENAME = "loop_quality_overrides.json"
 
-# Tier A Phase 2 opt-in: expand the loop-self-similarity feature set with the
-# three band envelopes and the two stereo descriptors the Tier A cache already
-# computes. Flag defaults OFF so the 6b40ccf "pin to base stems" invariant
-# survives unchanged; a test sweep monkey-patches LOOP_SELF_SIMILARITY_TIERA=True
-# to score under the augmented feature set. With the flag ON, ANY missing or
-# zero-length tiera key (the mono-input wart produces zero-length tiera arrays)
-# returns the score as UNMEASURED rather than silently falling back to the
-# 5-key base set -- the accidental coupling 6b40ccf removed.
-LOOP_SELF_SIMILARITY_TIERA = False
+# Tier A Phase 2: adds the three band envelopes and the two stereo
+# descriptors the Tier A cache already computes as a SECOND, separate
+# self-similarity term alongside the base 5-key one -- AND semantics, not a
+# replacement. With the flag on, evaluate_loop_quality computes BOTH the base
+# 5-key score (always, identical to the flag-off call every time) and the
+# tiera-augmented 10-key score, and fails self_similarity if EITHER is below
+# LOOP_MIN_SELF_SIMILARITY -- so turning this on can only ADD a catch the base
+# term would have missed, never remove one the base term already made. ANY
+# missing or zero-length tiera key (the mono-input wart produces zero-length
+# tiera arrays) makes the tiera term UNMEASURED (None) rather than silently
+# falling back to the 5-key base set -- the accidental coupling 6b40ccf
+# removed.
+#
+# History: the ORIGINAL design (719be92, 2026-08-25) replaced the base score
+# outright with a single blended score when this flag was on, rather than
+# supplementing it. A 15,268-window corpus replay at the time found that
+# design flipped 1,262 verdicts -- 791 genuine new catches, but also 404
+# evidence-carrying UN-catches (real bad loops the base score correctly
+# failed that the blended score let pass). The flag was left off pending an
+# AND-semantics rebuild (this file, above) to make that regression class
+# structurally impossible.
+#
+# ENABLED 2026-09-15 (Sam's explicit direction, AI_CONTEXT.md "What's Next")
+# after the AND-semantics rebuild was verified against 80,815 real windows
+# pooled across every _Stem Analysis corpus on this machine that currently
+# has matching cache + section-map pairs (the original 15,268-window corpus
+# no longer exists in a runnable state -- see Documentation/BURN_LIST.md item
+# B1 for the full evidence trail and its methodology caveats): 831 AND-gate
+# flips, ALL pass->reject (0 reject->pass, both asserted structurally
+# impossible by Tools/tiera_loop_replay.py and empirically confirmed across
+# every window), 816 evidence-backed CORRECT + 15 SPURIOUS (same acceptable
+# class as the original build's 15 sub-threshold cases). The same-corpus
+# historical blended-design comparison would have produced 500 reject->pass
+# un-catches -- the exact regression class this rebuild makes impossible.
+LOOP_SELF_SIMILARITY_TIERA = True
 LOOP_TIERA_ENERGY_KEYS = ("tiera_band_low", "tiera_band_mid", "tiera_band_high")
 LOOP_TIERA_SCALAR_KEYS = ("tiera_width", "tiera_lr_corr")
 
@@ -215,6 +241,16 @@ class LoopQualityResult:
     failed_checks: tuple[str, ...]
     waived_checks: tuple[str, ...] = ()
     error: str | None = None
+    # AND semantics (2026-09-15): the tiera-augmented score, populated only
+    # when LOOP_SELF_SIMILARITY_TIERA is True and the tiera keys are
+    # measurable. `self_similarity` above is ALWAYS the base 5-key score
+    # regardless of the flag -- this field is a purely additive second term,
+    # never a replacement for it. None means either the flag is off or the
+    # tiera term was unmeasurable for this window (see
+    # _loop_self_similarity's unmeasured-term rule). Appended as the last
+    # field (not inserted earlier) so every existing positional
+    # LoopQualityResult(...) call site keeps working unchanged.
+    self_similarity_tiera: float | None = None
 
     @property
     def passed(self) -> bool:
@@ -498,10 +534,20 @@ def evaluate_loop_quality(
     insert_mask = _quality_frame_slice(context, insert_start, insert_end, len(mix))
     insert_level = _rms_db(mix[insert_mask])
     insert_drop = float(insert_level - window_level)
+    # AND semantics: the base 5-key score is ALWAYS computed (identical call
+    # to the flag-off behaviour, every time) -- the flag only controls whether
+    # a SECOND, separate tiera-augmented term is also computed and gated.
+    # This is what guarantees the flag can only ever ADD a self_similarity
+    # failure, never remove one: flipping it on never changes what the base
+    # term measures or whether it can fail on its own.
     self_similarity = _loop_self_similarity(
-        context, source_beat_start, source_beat_end,
-        use_tiera=LOOP_SELF_SIMILARITY_TIERA,
+        context, source_beat_start, source_beat_end, use_tiera=False,
     )
+    self_similarity_tiera = None
+    if LOOP_SELF_SIMILARITY_TIERA:
+        self_similarity_tiera = _loop_self_similarity(
+            context, source_beat_start, source_beat_end, use_tiera=True,
+        )
 
     failed = []
     rounded_period = int(round(period))
@@ -514,12 +560,21 @@ def evaluate_loop_quality(
         failed.append("worst_beat_dip")
     if insert_drop > LOOP_MAX_INSERT_LEVEL_DROP_DB:
         failed.append("insert_level_match")
-    # self_similarity can be None when the tiera feature set is on but
-    # unmeasurable (a tiera key absent / zero-length, the mono wart). Skipping
-    # the comparison in that case matches the LOOP_MIN_SELF_SIMILARITY
-    # contract: "you cannot fail a check you could not measure". Every other
-    # check above keeps running and can still fail.
-    if self_similarity is not None and self_similarity < LOOP_MIN_SELF_SIMILARITY:
+    # Either term can be None when unmeasurable (an absent cache entirely for
+    # the base term; the tiera feature set being on but unmeasurable -- a
+    # tiera key absent/zero-length, the mono wart -- for the tiera term).
+    # Skipping a None term matches the LOOP_MIN_SELF_SIMILARITY contract:
+    # "you cannot fail a check you could not measure". AND semantics: fail
+    # self_similarity if EITHER measured term is below threshold, so the
+    # tiera term (when measurable) can only ever ADD this failure, never
+    # suppress a base-term failure that was already there.
+    similarity_failed = (
+        self_similarity is not None and self_similarity < LOOP_MIN_SELF_SIMILARITY
+    ) or (
+        self_similarity_tiera is not None
+        and self_similarity_tiera < LOOP_MIN_SELF_SIMILARITY
+    )
+    if similarity_failed:
         failed.append("self_similarity")
     failed = [check for check in failed if check not in waived]
     return LoopQualityResult(
@@ -530,6 +585,7 @@ def evaluate_loop_quality(
         self_similarity,
         tuple(failed),
         tuple(sorted(waived)),
+        self_similarity_tiera=self_similarity_tiera,
     )
 
 
@@ -548,6 +604,8 @@ def format_loop_quality_result(result: LoopQualityResult) -> str:
         f"max={LOOP_MAX_INSERT_LEVEL_DROP_DB:.1f}; "
         f"self_similarity={number(result.self_similarity)} "
         f"min={LOOP_MIN_SELF_SIMILARITY:.3f}"
+        + (f"; self_similarity_tiera={number(result.self_similarity_tiera)}"
+           if result.self_similarity_tiera is not None else "")
         + (f"; error={result.error}" if result.error else "")
     )
 

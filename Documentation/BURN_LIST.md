@@ -791,19 +791,67 @@ was written).
   SAFETY for the combination, even though R2's own individual contribution specifically was never
   isolated. Verified clean against the real test suite (11/11 in `test_section_soft_rules.py`).
 
-  **`LOOP_SELF_SIMILARITY_TIERA`: NOT ENABLED - a real, documented reason, not neglect.** The
-  module comment's own "test sweep" is a synthetic unit-test file, not corpus evidence - the REAL
-  corpus evidence (the actual 719be92 commit message, not the AI_CONTEXT.md paraphrase) is a
-  15,268-window replay: ON flips 1,262 verdicts - 791 evidenced NEW rejections, but also **404
-  evidence-carrying UN-catches** (real bad loops the current 5-key check correctly fails, that the
-  blended 10-key score would let PASS). This is the exact "AND-vs-replacement semantics" question
-  B1 already named: today's code computes one blended score across all 10 features
-  ("replacement" - a strong tiera signal can outvote a real base-score failure); the candidate fix
-  already on record is AND semantics (compute both scores, fail if EITHER fails, so ON can only
-  ever ADD catches, never remove one) - not built. Flipping the flag AS CODED TODAY would be a
-  real regression, not a safe default change. Needs the AND-semantics version built and re-replayed
-  against the same 15,268-window corpus before this can be turned on - real, scoped follow-up
-  work, not a flip.
+  **`LOOP_SELF_SIMILARITY_TIERA`: ENABLED, 2026-09-15 - AND-semantics rebuild built, tested, and
+  re-verified against real corpus data before the flip, per Sam's explicit direction.**
+  `evaluate_loop_quality` now computes TWO separate self-similarity terms instead of one blended
+  replacement: `self_similarity` (the base 5-key score) is ALWAYS computed, identical to the
+  flag-off call every time; `self_similarity_tiera` (the tiera-augmented 10-key score) is only
+  computed when the flag is on, and only gates the check when it is independently measurable (the
+  existing "cannot fail a check you could not measure" rule for the mono-input wart). The
+  `self_similarity` check now fails if EITHER term is below `LOOP_MIN_SELF_SIMILARITY` - true AND
+  semantics, not a replacement. Because the base term is unconditionally computed and gates on its
+  own regardless of the flag, turning the flag on can only ever ADD a self_similarity failure the
+  base term would have missed; it is now structurally impossible for it to REMOVE one the base
+  term already caught - the exact class of bug the old blended-score design had (791 evidenced new
+  catches, but also 404 evidence-carrying UN-catches per the original 719be92 corpus replay).
+  9 tests rewritten/added in `Tests/test_tiera_loop_similarity.py` (23 total), including two that
+  pin the AND-gate logic directly via monkeypatch (a base failure survives a passing tiera term;
+  a tiera failure adds a catch a passing base term alone would miss) - proved-the-test: 7 of the 9
+  changed/new tests fail against the reverted pre-rebuild code (verified by stashing
+  `align_engine.py` and re-running against the new test file).
+  **Re-verified against real corpus data, not the stale 15,268-window citation** (that exact
+  directory no longer exists in a runnable state - `Test Project/Stephanes Playlist/.../_Stem
+  Analysis` now holds 61 `__stemenv.npz` caches but zero paired `SECTIONS_STEM_*.json`, a real
+  instance of this project's own standing churn warning, not something worth blocking on).
+  `Tools/tiera_loop_replay.py` rewritten to pool multiple corpus directories and derive the actual
+  AND-gate verdict (previously it only compared the raw base score against the raw blended-score
+  replacement) - run against every `_Stem Analysis` folder on this machine that currently has
+  matching `__stemenv.npz` + `SECTIONS_STEM_*.json` pairs (verified exact 1:1 filename pairing in
+  all 11 dirs directly, not just equal counts): **11 project directories, 119 track-entries (90
+  UNIQUE track names - 24 names recur across 2-3 directories, e.g. the same track analysed for
+  both a 23.06.26 and a 24.06.26 test project; NOT fully independent-track coverage, and the tool
+  now prints this breakdown itself rather than leaving it implicit), 80,815 real windows.** Result:
+  **831 AND-gate flips, ALL pass→reject** (816 evidence-backed CORRECT, 15 SPURIOUS - the same
+  acceptable class as the original build's 15 sub-threshold cases, several on the exact
+  Vente/Revoloution tracks the feature was built to catch); **0 reject→pass** - both asserted
+  structurally impossible by the replay tool itself (it raises if the AND-gate ever produces one)
+  and empirically confirmed across all 80,815 windows. A same-corpus run of the ORIGINAL
+  blended-score design (kept in the tool purely as a historical comparison, not what production
+  computes any more) would have produced 500 reject→pass un-catches on this same real data - the
+  exact regression class the AND-gate rebuild makes impossible by construction. Full suite re-run
+  after the flip; see the dated Current State entry for the pass/fail count.
+  **Codex review (`room_peer_review.ps1 -Peer codex`, `-Effort high`, real staged files:
+  `align_engine.py`, `test_tiera_loop_similarity.py`, `tiera_loop_replay.py`): "NO MATERIAL
+  OBJECTIONS. The production AND-gate is structurally monotonic."** Confirmed independently: the
+  base term is always computed and independently retained, the tiera term can only ADD a failure,
+  `None` correctly skips only the tiera half never the base half, cache keys are feature-set-
+  specific (no cross-contamination), and the reject→pass assertion is unreachable by construction.
+  Two real, adopted findings, both fixed same-session: (1) stale "Flag defaults OFF" prose in both
+  `align_engine.py` and the test file's docstring, left over from before the flip - rewritten to
+  describe the current (ON) default and moved the OFF-era history into its own paragraph. (2) the
+  replay's own evidence characterisation was imprecise - "119 tracks" implied full independent-
+  track coverage when 29 of those entries are re-analyses of 24 already-counted names, and the
+  tool didn't enforce or surface a missing section-map pairing (it degrades silently to `sections
+  =[]`, which would make a genuinely CORRECT flip read as SPURIOUS for lack of that one evidence
+  source - verified this run had zero such gaps, but the tool didn't say so on its own). Both
+  fixed: the tool now prints unique-vs-total track counts, names every duplicated track, and warns
+  by name on any track missing its section map; re-ran against the real corpus a second time with
+  the hardened tool - identical numbers (831/816/15/0/500), confirming the fixes were reporting-
+  only and did not mask or change any underlying result. One point Codex raised is NOT a code
+  defect, just an imprecise brief: the review bundle contained only 9 test functions from
+  `test_tiera_loop_similarity.py` while the brief said "23 tests total" - that total was always
+  the combined count of that file (9) plus `test_loop_quality_gate.py` (14) run together, which
+  Codex could not see since only three specific files were staged for the review.
 
   **`BASS_RESIDUAL_ENABLED`: NOT ENABLED - a real, still-open Codex finding, not neglect.**
   `Source/bass_residual.py`'s own module docstring documents an explicit, unresolved FATAL-severity
@@ -815,16 +863,24 @@ was written).
   blocker would mean silently overriding a real, reasoned safety decision, not correcting an
   oversight.
 
-  **Sam's call needed on these last two** - real technical work is required before either can be
-  safely turned on (an AND-semantics rebuild + re-replay for tiera; solo-render calibration for
-  bass residual), not just a flip. Happy to scope either as its own burn list item if you want it
-  picked up.
-  Evidence: `Source/align_engine.py:58-69,364-388,499-503` (LOOP_SELF_SIMILARITY_TIERA, corrected
-  2026-09-14 - real semantics + replay numbers, not the module-comment paraphrase);
-  `Source/stem_detector.py:769` (both flips); `Documentation/AI_CONTEXT.md:416` (soft_intro_outro's
-  real 2/20-improve/0-spurious source, corrected); `Source/bass_residual.py:1-70`,
-  `.github/ai-activity-log.md:256,263` (BASS_RESIDUAL, corrected).
-  Owner: Sam. Author: Claude (width_cues, soft_intro_outro). Peer review: NONE - not yet reviewed.
+  **Sam's call needed on this last one (bass residual)** - real technical work (held-out
+  solo-render calibration for the specific per-track-share-difference estimator) is required
+  before it can safely be turned on, not just a flip. Happy to scope it as its own burn list item
+  if you want it picked up. `LOOP_SELF_SIMILARITY_TIERA` above is no longer in this category - it
+  needed the same kind of real technical work (an AND-semantics rebuild + re-replay), and that
+  work is now done.
+  Evidence: `Source/align_engine.py:58-69,364-388,499-503` (LOOP_SELF_SIMILARITY_TIERA, updated
+  2026-09-15 - AND-semantics rebuild + fresh 80,815-window replay, superseding the 2026-09-14
+  "not yet built" note); `Source/stem_detector.py:769` (width_cues/soft_intro_outro flips);
+  `Documentation/AI_CONTEXT.md:416` (soft_intro_outro's real 2/20-improve/0-spurious source,
+  corrected); `Source/bass_residual.py:1-70`, `.github/ai-activity-log.md:256,263` (BASS_RESIDUAL,
+  corrected); `Tools/tiera_loop_replay.py` (rewritten for AND-gate verdicts, multi-directory
+  pooling); `Tests/test_tiera_loop_similarity.py` (rewritten, 23 tests).
+  Owner: Sam. Author: Claude (width_cues, soft_intro_outro, LOOP_SELF_SIMILARITY_TIERA). Peer
+  review: width_cues/soft_intro_outro - NONE, not yet reviewed. LOOP_SELF_SIMILARITY_TIERA - SOUND
+  - Codex (1 round, `-Effort high`, real staged files, "NO MATERIAL OBJECTIONS", 2 real findings
+  both adopted and fixed same-session, see above). BASS_RESIDUAL_ENABLED remains Sam's open call,
+  not built.
 
 - [ ] **An untracked Ableton 12.4.3 template is being picked nondeterministically by mtime,
   and it's already the one every recent mix actually used** (B2) - `_find_template` rglobs
@@ -1438,4 +1494,8 @@ content there; the swap POINT itself, item c's job, is what T2 actually needs). 
 718/6/0 -> 724/6/0 across both. Neither yet peer-reviewed; item (c)'s full 5-step scope written
 up under B3 above. rev (uncommitted, follows the prior folds above) -> (this write).
 
-## THE COUNT: 20 open, 6 done, 1 dropped (last update 2026-09-14 16:15 [Claude]: B3 decided+scoped (DONE - Sam's call); C5 and C2 built+tested+verified against real data, not yet reviewed; C1's own item superseded, folded into landing-order C7 - 20 open, 6 done, 1 dropped)
+## THE COUNT: 20 open, 6 done, 1 dropped (last update 2026-09-15 11:10 [Claude]: B1's
+LOOP_SELF_SIMILARITY_TIERA sub-item built, re-verified against 80,815 real windows, Codex-reviewed
+(SOUND, no material objections), flag flipped to True and merged into the working tree - B1 as a
+whole item stays OPEN because its BASS_RESIDUAL_ENABLED sub-item is still Sam's open call, not
+built - 20 open, 6 done, 1 dropped, unchanged)

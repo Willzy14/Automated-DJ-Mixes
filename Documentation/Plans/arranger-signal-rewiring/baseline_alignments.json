@@ -4372,7 +4372,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 44.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     206
    ],
@@ -4391,23 +4391,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "density_score": null,
-      "density_status": "",
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx5+0b to section:break_2 230",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 204.0,
-      "target_marker_bar": 230.0,
-      "target_marker_name": "section:break_2"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 1,
@@ -4427,7 +4411,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 28.0,
-   "overlap_policy": "named_landmark_64",
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     190,
     206
@@ -4459,23 +4443,7 @@
     }
    ],
    "plan": {
-    "specs": [
-     {
-      "clip_name": "",
-      "cut_to_bar": 0.0,
-      "density_score": null,
-      "density_status": "",
-      "kind": "outgoing_tail",
-      "note": "loop outro 4bx5+0b to section:break_1 230",
-      "partial_bars": 0.0,
-      "reps": 5,
-      "skip_bars": 0.0,
-      "source_end_bar": 208.0,
-      "source_start_bar": 204.0,
-      "target_marker_bar": 230.0,
-      "target_marker_name": "section:break_1"
-     }
-    ],
+    "specs": [],
     "status": "ok"
    },
    "score": 2,
@@ -4693,7 +4661,7 @@
    ],
    "out": "Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER",
    "overlap_bars": 44.0,
-   "overlap_policy": null,
+   "overlap_policy": "standard_48",
    "paired_cue_bars": [
     206
    ],
@@ -4712,9 +4680,8 @@
     }
    ],
    "plan": {
-    "error": "ValueError",
-    "msg": "Cannot plan outgoing tail loop for 'Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER' -> 'Soulsearcher \u2013 Feelin Love (Ruze & Chesster Extended Remix UPDATE ",
-    "status": "raise"
+    "specs": [],
+    "status": "ok"
    },
    "score": 1,
    "status": "ok",
@@ -6257,8 +6224,8 @@
       "partial_bars": 0.0,
       "reps": 2,
       "skip_bars": 0.0,
-      "source_end_bar": 241.0,
-      "source_start_bar": 233.0,
+      "source_end_bar": 8.0,
+      "source_start_bar": 0.0,
       "target_marker_bar": 261.0,
       "target_marker_name": "section:build_1"
      }
@@ -14717,11 +14684,11 @@
       "density_score": null,
       "density_status": "",
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to landmark:kick_gap_220_224:end 184",
+      "note": "loop outro 1bx8+0b to landmark:kick_gap_220_224:end 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "landmark:kick_gap_220_224:end"
@@ -14818,8 +14785,8 @@
       "partial_bars": 0.0,
       "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 174.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 13.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "landmark:kick_gap_192_256:end"
      }
@@ -14999,8 +14966,8 @@
       "partial_bars": 0.0,
       "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 174.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 13.0,
       "target_marker_bar": 188.0,
       "target_marker_name": "section:fill_1"
      }
@@ -15133,8 +15100,8 @@
       "partial_bars": 0.0,
       "reps": 6,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 174.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 13.0,
       "target_marker_bar": 188.0,
       "target_marker_name": "section:build_1"
      }
@@ -15211,11 +15178,11 @@
       "density_score": null,
       "density_status": "",
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:break_1 184",
+      "note": "loop outro 1bx8+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15419,11 +15386,11 @@
       "density_score": null,
       "density_status": "",
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to landmark:kick_gap_158_160:end 184",
+      "note": "loop outro 1bx8+0b to landmark:kick_gap_158_160:end 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "landmark:kick_gap_158_160:end"
@@ -15526,11 +15493,11 @@
       "density_score": null,
       "density_status": "",
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:break_1 184",
+      "note": "loop outro 1bx8+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15592,11 +15559,11 @@
       "density_score": null,
       "density_status": "",
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:break_1 184",
+      "note": "loop outro 1bx8+0b to section:break_1 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:break_1"
@@ -15747,11 +15714,11 @@
       "density_score": null,
       "density_status": "",
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to section:drop_2 184",
+      "note": "loop outro 1bx8+0b to section:drop_2 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "section:drop_2"
@@ -15815,11 +15782,11 @@
       "density_score": null,
       "density_status": "",
       "kind": "outgoing_tail",
-      "note": "loop outro 2bx4+0b to landmark:kick_gap_190_192:end 184",
+      "note": "loop outro 1bx8+0b to landmark:kick_gap_190_192:end 184",
       "partial_bars": 0.0,
-      "reps": 4,
+      "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
+      "source_end_bar": 175.0,
       "source_start_bar": 174.0,
       "target_marker_bar": 184.0,
       "target_marker_name": "landmark:kick_gap_190_192:end"
@@ -15916,8 +15883,8 @@
       "partial_bars": 0.0,
       "reps": 8,
       "skip_bars": 0.0,
-      "source_end_bar": 176.0,
-      "source_start_bar": 174.0,
+      "source_end_bar": 15.0,
+      "source_start_bar": 13.0,
       "target_marker_bar": 192.0,
       "target_marker_name": "landmark:kick_gap_124_224:end"
      }

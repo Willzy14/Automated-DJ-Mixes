@@ -4,26 +4,55 @@ Source/align_engine.py.
 The Tier A cache adds tiera_band_{low,mid,high} (per-frame 3-band envelopes,
 dB-meaned into the beat feature row, same path as the base stems) and
 tiera_width + tiera_lr_corr (per-frame stereo descriptors, plain-meaned into
-the row) to the loop-self-similarity cosine. The flag LOOP_SELF_SIMILARITY_TIERA
-defaults OFF so the 6b40ccf "pin to base stems" invariant survives unchanged;
-a test sweep flips it ON to score under the augmented feature set.
+the row) to the loop-self-similarity cosine. LOOP_SELF_SIMILARITY_TIERA
+defaults ON (since 2026-09-15, after the AND-semantics rebuild below was
+verified). Every test in this module still pins the flag OFF around itself
+(the `_flag_off` fixture) and flips it ON explicitly where the flag's own
+behaviour is under test, so the 6b40ccf "pin to base stems" invariant for the
+OFF state stays covered regardless of the flag's current default.
+
+AND semantics (2026-09-15 rebuild): when the flag is ON, evaluate_loop_quality
+computes TWO separate self-similarity terms -- the base 5-key score (always,
+identical to the flag-off call) and the tiera-augmented 10-key score -- and
+fails the self_similarity check if EITHER measured term is below
+LOOP_MIN_SELF_SIMILARITY. This replaces the original design, which computed
+ONE blended score and let it REPLACE the base score outright when the flag
+was on. The corpus replay that first measured the original design (719be92,
+15,268 windows) found the blended score flipped 1,262 verdicts: 791 genuine
+new catches, but also 404 evidence-carrying UN-catches -- real bad loops the
+base score correctly failed that the blended score let pass, because a
+strong tiera signal could outvote a genuine base-score failure. AND semantics
+makes that class of regression structurally impossible: the base term is
+always computed and always gates on its own, so the flag can only ever ADD a
+self_similarity failure, never remove one.
 
 What we pin here:
   a. Flag OFF + tiera-augmented context produces the same score as a context
      WITHOUT tiera keys (the 6b40ccf invariant survives this change).
-  b. Flag ON + augmented context where the texture defect is visible only in
-     tiera features. Flag OFF passes self_similarity, flag ON fails it -- the
-     discriminating pair that proves the test can fail.
-  c. Flag ON + context without tiera keys: self_similarity is None, the check
-     is skipped, every other check (period/silence/worst_beat_dip/
+  b. The base term (self_similarity) is IDENTICAL whether the flag is off or
+     on -- the flag never changes what the base term measures or whether it
+     can fail on its own.
+  c. AND-gate logic, pinned directly via monkeypatch so it does not depend on
+     any specific audio fixture: a base-term failure survives even when the
+     tiera-augmented term would pass on its own (the exact shape of the
+     historical 404-un-catch bug), and a tiera-term failure adds a catch the
+     base term alone would have missed.
+  d. Flag ON + a real audio-shaped defect visible only in tiera features:
+     self_similarity_tiera drops below threshold and "self_similarity" lands
+     in failed_checks, while self_similarity (base) is unaffected.
+  e. Flag ON + context without tiera keys, or with zero-length tiera arrays
+     (the mono wart): self_similarity_tiera is None, the tiera term is
+     skipped ("cannot fail a check you could not measure"), and the base
+     term + every other check (period/silence/worst_beat_dip/
      insert_level_match) still runs and can still fail.
-  d. Flag ON + tiera keys present but zero-length (the mono wart): same
-     unmeasured handling as (c).
-  e. Cache re-key: same context scored OFF then ON returns different values,
-     and OFF again returns the original -- no stale cross-set reuse.
+  f. Cache re-key at the _loop_self_similarity level (unchanged by this
+     rebuild -- evaluate_loop_quality now calls it twice per window when the
+     flag is on, once per feature set, so this invariant matters more than
+     ever): base-only and tiera-augmented calls on the same context return
+     distinct, correctly-cached values with no stale cross-set reuse.
 
-Each test uses pytest's monkeypatch to flip the flag and ALWAYS restores it
-to False (never leaves it True for the next test).
+Each test that flips the flag uses pytest's monkeypatch, which always
+restores it to False after the test.
 """
 
 import sys
@@ -176,59 +205,160 @@ def test_flag_off_augmented_context_matches_base_only_score():
     off_aug = evaluate_loop_quality(augmented, 16, 32, 16)
 
     assert off_aug.self_similarity == off_base.self_similarity
+    assert off_aug.self_similarity_tiera is None
+    assert off_base.self_similarity_tiera is None
 
 
-def test_flag_on_catches_texture_defect_visible_only_in_tiera_features():
-    """Discriminating pair: build beat levels where every base envelope is
-    dead flat (no defect visible to the 6b40ccf base set), but tiera_width
-    steps hard halfway through and the tiera_band_* + tiera_lr_corr follow.
-    Flag OFF: base-only cosine sees constant columns -> high similarity -> PASS.
-    Flag ON: the 10-column augmented cosine catches the step -> low similarity -> FAIL.
-    This is the negative control that proves the test can fail."""
-    from align_engine import LOOP_SELF_SIMILARITY_TIERA, evaluate_loop_quality
+def test_base_term_is_identical_regardless_of_flag_state():
+    """AND semantics core invariant: the base term never changes when the
+    flag flips. Uses the defect context (a real texture change visible only
+    in tiera columns) precisely because under the OLD replacement design
+    flag ON would have produced a DIFFERENT self_similarity value here (the
+    blended 10-key score) -- this is the discriminating case that proves the
+    base term is now genuinely independent of the flag."""
+    from align_engine import evaluate_loop_quality
     import align_engine
 
     defect_ctx = _context_with_tiera([0.1] * 64, tiera_shape="defect")
 
     align_engine.LOOP_SELF_SIMILARITY_TIERA = False
     off = evaluate_loop_quality(defect_ctx, 16, 32, 16)
-    # Sanity: flag OFF ignores the tiera arrays, so the cosine is high.
-    assert "self_similarity" not in off.failed_checks
 
     align_engine.LOOP_SELF_SIMILARITY_TIERA = True
     on = evaluate_loop_quality(defect_ctx, 16, 32, 16)
-    # Sanity: flag ON sees the tiera defect, cosine collapses, check fails.
+
+    assert on.self_similarity == off.self_similarity
+
+
+def test_and_gate_base_failure_survives_a_passing_tiera_term(monkeypatch):
+    """The core guarantee this rebuild exists for, pinned directly against
+    the gate logic via monkeypatch (no dependency on any specific audio
+    fixture managing to reproduce the dilution effect): a base-term failure
+    must survive even when the tiera-augmented term independently passes.
+    This is exactly the shape of the historical bug (719be92's 404
+    evidence-carrying un-catches) -- under the OLD single-blended-score
+    design, a healthy tiera-augmented score could outvote a genuine base
+    failure outright. Proved-the-test: reverting evaluate_loop_quality to
+    call `_loop_self_similarity(context, s, e, use_tiera=LOOP_SELF_SIMILARITY_TIERA)`
+    once (the pre-rebuild single-term gate) makes this test fail, because
+    with the flag on it would only ever see the healthy 0.90 tiera value and
+    never gate on the failing 0.40 base value at all."""
+    import align_engine
+    from align_engine import evaluate_loop_quality
+
+    ctx = _context([0.1] * 64)
+
+    def fake_selfsim(context, s, e, use_tiera=False):
+        return 0.40 if not use_tiera else 0.90
+
+    monkeypatch.setattr(align_engine, "_loop_self_similarity", fake_selfsim)
+    monkeypatch.setattr(align_engine, "LOOP_SELF_SIMILARITY_TIERA", True)
+
+    result = evaluate_loop_quality(ctx, 16, 32, 16)
+
+    assert result.self_similarity == 0.40
+    assert result.self_similarity_tiera == 0.90
+    assert "self_similarity" in result.failed_checks
+
+
+def test_and_gate_tiera_failure_adds_a_catch_base_alone_would_miss(monkeypatch):
+    """The other half of AND semantics: a failing tiera term must ADD a
+    self_similarity failure even when the base term independently passes --
+    this is the "791 genuine new catches" side of the original evidence,
+    which the rebuild must preserve, not just the un-catch fix."""
+    import align_engine
+    from align_engine import evaluate_loop_quality
+
+    ctx = _context([0.1] * 64)
+
+    def fake_selfsim(context, s, e, use_tiera=False):
+        return 0.90 if not use_tiera else 0.40
+
+    monkeypatch.setattr(align_engine, "_loop_self_similarity", fake_selfsim)
+    monkeypatch.setattr(align_engine, "LOOP_SELF_SIMILARITY_TIERA", True)
+
+    result = evaluate_loop_quality(ctx, 16, 32, 16)
+
+    assert result.self_similarity == 0.90
+    assert result.self_similarity_tiera == 0.40
+    assert "self_similarity" in result.failed_checks
+
+
+def test_and_gate_both_terms_passing_is_a_clean_pass(monkeypatch):
+    """Control case: both terms healthy -> no self_similarity failure."""
+    import align_engine
+    from align_engine import evaluate_loop_quality
+
+    ctx = _context([0.1] * 64)
+
+    def fake_selfsim(context, s, e, use_tiera=False):
+        return 0.90
+
+    monkeypatch.setattr(align_engine, "_loop_self_similarity", fake_selfsim)
+    monkeypatch.setattr(align_engine, "LOOP_SELF_SIMILARITY_TIERA", True)
+
+    result = evaluate_loop_quality(ctx, 16, 32, 16)
+
+    assert "self_similarity" not in result.failed_checks
+
+
+def test_flag_on_catches_texture_defect_visible_only_in_tiera_features():
+    """Real (non-mocked) audio-shaped case: build beat levels where every
+    base envelope is dead flat (no defect visible to the 6b40ccf base set),
+    but tiera_width steps hard halfway through and the tiera_band_* +
+    tiera_lr_corr follow. Flag OFF: self_similarity_tiera is never computed,
+    self_similarity (base) passes. Flag ON: self_similarity_tiera drops below
+    threshold and self_similarity (base) is untouched -- the ADD-a-catch
+    case with real, non-mocked envelope data."""
+    from align_engine import evaluate_loop_quality
+    import align_engine
+
+    defect_ctx = _context_with_tiera([0.1] * 64, tiera_shape="defect")
+
+    align_engine.LOOP_SELF_SIMILARITY_TIERA = False
+    off = evaluate_loop_quality(defect_ctx, 16, 32, 16)
+    assert "self_similarity" not in off.failed_checks
+    assert off.self_similarity_tiera is None
+
+    align_engine.LOOP_SELF_SIMILARITY_TIERA = True
+    on = evaluate_loop_quality(defect_ctx, 16, 32, 16)
     assert "self_similarity" in on.failed_checks
-    # And OFF/ON differ on the same context (the discriminating property).
-    assert on.self_similarity != off.self_similarity
+    assert on.self_similarity_tiera is not None
+    assert on.self_similarity_tiera < align_engine.LOOP_MIN_SELF_SIMILARITY
+    # The base term is untouched by the flag flip -- the defect is caught by
+    # the ADDITIONAL tiera term, not by any change to the base measurement.
+    assert on.self_similarity == off.self_similarity
 
 
 def test_flag_on_unmeasured_when_tiera_keys_absent_keeps_other_checks():
-    """Flag ON + context WITHOUT tiera keys: self_similarity is None, the
-    LOOP_MIN_SELF_SIMILARITY check is skipped, and the OTHER checks still
-    bite -- a real silence defect on the same window must still fail
-    silence_fraction. This is the "you cannot fail a check you could not
-    measure" rule."""
+    """Flag ON + context WITHOUT tiera keys: self_similarity_tiera is None,
+    the tiera half of the check is skipped, and the OTHER (independent)
+    checks still bite. Deliberately isolates insert_level_match rather than
+    silence/dip: the window itself is perfectly flat (self-similarity = 1.0,
+    a clean base-term pass) while only the beat ADJACENT to the insert point
+    is loud, so this fixture exercises "tiera unmeasured does not block an
+    unrelated check" without also tripping self_similarity on its own --
+    proving genuine independence between the checks rather than two checks
+    both firing on the same underlying texture change."""
     from align_engine import evaluate_loop_quality
     import align_engine
 
     align_engine.LOOP_SELF_SIMILARITY_TIERA = True
 
-    # Base-only context: 24% silence mid-window via a deep dip on the last
-    # 4 beats. silence_fraction is the only thing that should bite; the
-    # other checks (period, dip, insert_level) must stay clean.
-    levels = [0.1] * 48 + [0.1] * 12 + [1e-4] * 4
+    # Beat 15 (the insert-adjacent beat) is loud; beats 16-63 (including the
+    # whole 16-32 window under test) are flat and quiet.
+    levels = [0.1] * 15 + [1.0] + [0.1] * 48
     ctx = _context(levels)  # no tiera keys at all
-    result = evaluate_loop_quality(ctx, 48, 64, 48)
+    result = evaluate_loop_quality(ctx, 16, 32, 16)
 
-    assert result.self_similarity is None
+    assert result.self_similarity is not None
+    assert result.self_similarity_tiera is None
     assert "self_similarity" not in result.failed_checks
-    assert "silence_fraction" in result.failed_checks
-    # "Other checks keep running" is evidenced by silence_fraction failing
-    # despite the tiera term being unmeasured. The deep dip also trips
-    # worst_beat_dip here (the two checks share the same beat-level RMS path),
-    # which is the OPPOSITE of what we want to guard against -- we want
-    # unmeasured tiera NOT to suppress any other check.
+    assert "insert_level_match" in result.failed_checks
+    # "Other checks keep running" is evidenced by insert_level_match failing
+    # despite the tiera term being unmeasured, while self_similarity (base)
+    # independently stays a clean pass -- unmeasured tiera does not suppress
+    # any other check, and does not get conflated with the base term either.
 
 
 def test_flag_on_unmeasured_when_tiera_arrays_are_zero_length():
@@ -236,8 +366,8 @@ def test_flag_on_unmeasured_when_tiera_arrays_are_zero_length():
     exist) but have length 0 (ensure_tier_a_arrays emits empty arrays for a
     mono source). Flag ON must still treat this as unmeasured -- the brief
     is explicit that ANY of the 5 tiera keys being zero-length collapses the
-    term. Same handling as the absent case in (c); no exception, no silent
-    fallback to the base score."""
+    term. Same handling as the absent case above; no exception, no silent
+    fallback that turns the tiera term into a duplicate of the base term."""
     from align_engine import evaluate_loop_quality
     import align_engine
 
@@ -247,34 +377,34 @@ def test_flag_on_unmeasured_when_tiera_arrays_are_zero_length():
     # No silence defect in this context -- a clean pass-otherwise window.
     result = evaluate_loop_quality(ctx, 16, 32, 16)
 
-    assert result.self_similarity is None
+    assert result.self_similarity is not None
+    assert result.self_similarity_tiera is None
     assert "self_similarity" not in result.failed_checks
     assert result.passed
 
 
 def test_cache_rekey_prevents_stale_cross_set_reuse():
-    """Cache re-key: the same LoopQualityContext scored under OFF, then ON,
-    then OFF again must return distinct values for the first two flag states
-    and the ORIGINAL value for the final OFF state. If the cache reused the
-    ON z-matrix for the second OFF call, OFF would silently change. The
-    per-feature-set cache key (tuple(keys)) prevents that."""
-    from align_engine import evaluate_loop_quality
-    import align_engine
+    """Cache re-key at the _loop_self_similarity level (unchanged by the AND-
+    semantics rebuild -- evaluate_loop_quality now calls this function twice
+    per window when the flag is on, once per feature set, so this invariant
+    matters even more than before): base-only, then tiera-augmented, then
+    base-only again on the SAME context must return distinct values for the
+    first two calls and the ORIGINAL value for the final base-only call. If
+    the cache reused the tiera z-matrix for the second base-only call, that
+    call would silently change. The per-feature-set cache key (tuple(keys))
+    prevents that."""
+    from align_engine import _loop_self_similarity
 
     # Augmented context with a tiera feature step -- the augmented feature
     # set produces a clearly different cosine from the base-only set.
     defect_ctx = _context_with_tiera([0.1] * 64, tiera_shape="defect")
 
-    align_engine.LOOP_SELF_SIMILARITY_TIERA = False
-    off_first = evaluate_loop_quality(defect_ctx, 16, 32, 16).self_similarity
+    off_first = _loop_self_similarity(defect_ctx, 16, 32, use_tiera=False)
+    on_value = _loop_self_similarity(defect_ctx, 16, 32, use_tiera=True)
+    off_second = _loop_self_similarity(defect_ctx, 16, 32, use_tiera=False)
 
-    align_engine.LOOP_SELF_SIMILARITY_TIERA = True
-    on_value = evaluate_loop_quality(defect_ctx, 16, 32, 16).self_similarity
-
-    align_engine.LOOP_SELF_SIMILARITY_TIERA = False
-    off_second = evaluate_loop_quality(defect_ctx, 16, 32, 16).self_similarity
-
-    # Flag flips produce distinct scores on the same context.
+    # Feature-set flips produce distinct scores on the same context.
     assert on_value != off_first
-    # Second OFF reuses the cached base-only z-matrix -- exact float match.
+    # Second base-only call reuses the cached base-only z-matrix -- exact
+    # float match.
     assert off_second == off_first
