@@ -336,6 +336,10 @@ class TransitionDiff:
     verdict: str = "correct"
     classified_style: str = "standard"
     notes: str = ""
+    geometry: dict | None = None
+    # False when the swap sits on a loop clip on either side: the source-anchored
+    # bass_swap_delta above is then not comparable (burn list D12).
+    bass_swap_reliable: bool = True
 
 
 def _classify_style(td_out_vol: ParamDiff | None,
@@ -548,6 +552,332 @@ def _scope_points(points: list[tuple[float, float]],
             if zone_start - margin <= t <= zone_end + margin]
 
 
+# ── Geometry corrections ─────────────────────────────────────────────────────
+#
+# The automation diff below compares each track's envelopes in its own
+# SOURCE-audio frame. That is the right frame for a resized section clip and
+# the wrong one for a LOOP clip: a tail loop cut from a track's intro maps the
+# swap to source beat 0, outside the overlap's source window, and
+# _find_bass_swap_beat then lands on whatever point comes next (15.09.26
+# August Releases Mix T6 read "-64 beats" for a swap that had not moved).
+# Sam's hand edits on that mix were mostly geometry the automation diff has
+# no name for: where the incoming enters, how much of its intro plays, whether
+# the outgoing loops its last bars or runs out, where the swap sits on the
+# INCOMING. This layer reads the clip geometry of both ALS files directly and
+# labels those. It never changes the automation diff's own fields; it only
+# gates the bass_swap_moved label when the swap sits on a loop clip, where
+# that label cannot be trusted. Burn list D12.
+
+GEOMETRY_MIN_MOVE_BARS = 1.0
+GEOMETRY_MIN_OVERLAP_DELTA_BARS = 4.0
+GEOMETRY_MIN_CUT_BARS = 2.0
+GEOMETRY_SWAP_MARGIN_BEATS = 40.0   # same reach as _scope_points
+
+
+@dataclass
+class RepeatGroup:
+    """Consecutive clips that replay material the track has already played."""
+    arr_start: float
+    arr_end: float
+    source_start: float
+    source_end: float
+    reps: int
+    partial_beats: float = 0.0
+
+    @property
+    def chunk_beats(self) -> float:
+        return self.source_end - self.source_start
+
+    def label(self) -> str:
+        # apply_loops / ARRANGEMENT_REPORT notation: 8bx7+0b
+        return (f"{_bars(self.chunk_beats)}bx{self.reps}"
+                f"+{_bars(self.partial_beats)}b")
+
+
+def _bars(beats: float) -> str:
+    # + 0.0 turns a clip's "-0" LoopStart into 0, not "-0"
+    return f"{round(beats / 4.0, 1) + 0.0:g}"
+
+
+def _src(clip: dict) -> tuple[float, float]:
+    return float(clip["source_start_beats"]), float(clip["source_end_beats"])
+
+
+def _positioned(clips: list[dict]) -> list[dict]:
+    """Clips with real geometry, in arrangement order. Zero-length editing
+    leftovers (Ableton keeps them in the XML) are dropped."""
+    out = [c for c in clips
+           if c.get("arr_time") is not None and c.get("arr_end") is not None
+           and c.get("source_start_beats") is not None
+           and c.get("source_end_beats") is not None
+           and float(c["arr_end"]) - float(c["arr_time"]) > 0.01]
+    return sorted(out, key=lambda c: (float(c["arr_time"]), _src(c)[0]))
+
+
+def _repeat_groups(clips: list[dict]) -> list[RepeatGroup]:
+    """Find loops, whether apply_loops built them or Sam made them by hand.
+
+    A group starts at a clip that is arrangement-contiguous with the clip
+    before it, goes BACKWARDS in source (its source start is earlier than the
+    previous clip's source end), is no longer than that clip, and replays
+    material the track has already played. Identical clips that follow are
+    further repeats; a shorter clip starting on the chunk's own start is a
+    trailing partial. A preceding identical clip that played the chunk in its
+    natural place (apply_loops puts the first copy where the source was
+    anyway) is counted into the group, so the notation matches
+    ARRANGEMENT_REPORT's "8bx7+0b". The real section after the copies (an
+    outro after tail loops, an intro after intro loops) is longer than the
+    chunk or starts outside it, and is left alone.
+    """
+    clips = _positioned(clips)
+    groups: list[RepeatGroup] = []
+    i = 1
+    while i < len(clips):
+        prev, cur = clips[i - 1], clips[i]
+        p0, p1 = _src(prev)
+        c0, c1 = _src(cur)
+        played_lo = min(_src(c)[0] for c in clips[:i])
+        played_hi = max(_src(c)[1] for c in clips[:i])
+        contiguous = abs(float(cur["arr_time"]) - float(prev["arr_end"])) < 0.01
+        backwards = c0 < p1 - 0.01
+        no_longer = (c1 - c0) <= (p1 - p0) + 0.01
+        replays = c0 >= played_lo - 0.01 and c1 <= played_hi + 0.01
+        if not (contiguous and backwards and no_longer and replays):
+            i += 1
+            continue
+        start = i - 1 if abs(p0 - c0) < 0.01 and abs(p1 - c1) < 0.01 else i
+        reps = i - start + 1
+        partial = 0.0
+        j = i + 1
+        while j < len(clips):
+            nxt = clips[j]
+            n0, n1 = _src(nxt)
+            if abs(float(nxt["arr_time"]) - float(clips[j - 1]["arr_end"])) >= 0.01:
+                break
+            if abs(n0 - c0) < 0.01 and abs(n1 - c1) < 0.01:
+                reps += 1
+                j += 1
+                continue
+            if abs(n0 - c0) < 0.01 and n1 < c1 - 0.01:
+                partial = n1 - n0
+                j += 1
+            break
+        groups.append(RepeatGroup(
+            arr_start=float(clips[start]["arr_time"]),
+            arr_end=float(clips[j - 1]["arr_end"]),
+            source_start=c0, source_end=c1, reps=reps, partial_beats=partial))
+        i = j
+    return groups
+
+
+def _in_group(clip: dict, groups: list[RepeatGroup]) -> bool:
+    t0, t1 = float(clip["arr_time"]), float(clip["arr_end"])
+    return any(g.arr_start - 0.01 <= t0 and t1 <= g.arr_end + 0.01 for g in groups)
+
+
+def _containing_clip(clips: list[dict], beat: float) -> dict | None:
+    strict = [c for c in clips
+              if float(c["arr_time"]) <= beat < float(c["arr_end"])]
+    if len(strict) == 1:
+        return strict[0]
+    fuzzy = [c for c in clips
+             if float(c["arr_time"]) - 0.01 <= beat <= float(c["arr_end"]) + 0.01]
+    if not fuzzy:
+        return None
+    return max(fuzzy, key=lambda c: float(c["arr_time"]))
+
+
+def _source_bar_at(clips: list[dict], groups: list[RepeatGroup],
+                   beat: float | None) -> tuple[float | None, bool]:
+    """(source bar at an arrangement beat, whether that beat sits on a loop).
+
+    On a loop clip the source position is not comparable across files, so the
+    bar is None and the flag says why."""
+    if beat is None:
+        return None, False
+    clip = _containing_clip(clips, beat)
+    if clip is None:
+        return None, False
+    if _in_group(clip, groups):
+        return None, True
+    return round((_src(clip)[0] + beat - float(clip["arr_time"])) / 4.0, 1) + 0.0, False
+
+
+def _find_swap_arr(out_bass: list[tuple[float, float]],
+                   in_bass: list[tuple[float, float]],
+                   ov_start: float, ov_end: float) -> float | None:
+    """The bass-swap ARRANGEMENT beat: the outgoing's first kill in the
+    overlap, else the incoming's first rise. Arrangement beats, unlike source
+    beats, stay meaningful on a loop clip."""
+    lo = ov_start - GEOMETRY_SWAP_MARGIN_BEATS
+    hi = ov_end + GEOMETRY_SWAP_MARGIN_BEATS
+    for t, v in out_bass:
+        if lo <= t <= hi and v < 0.8:
+            return t
+    prev = None
+    for t, v in in_bass:
+        if lo <= t <= hi and prev is not None and prev < 0.5 and v >= 0.9:
+            return t
+        prev = v
+    return None
+
+
+def _natural_intervals(clips: list[dict], groups: list[RepeatGroup],
+                       floor: float) -> list[tuple[float, float]]:
+    """Source intervals played by non-loop clips, cut at `floor`, merged."""
+    ivs = []
+    for c in clips:
+        if _in_group(c, groups):
+            continue
+        s0, s1 = _src(c)
+        s0 = max(s0, floor)
+        if s1 > s0:
+            ivs.append((s0, s1))
+    ivs.sort()
+    merged: list[tuple[float, float]] = []
+    for s0, s1 in ivs:
+        if merged and s0 <= merged[-1][1] + 0.01:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], s1))
+        else:
+            merged.append((s0, s1))
+    return merged
+
+
+def _beats_missing(a: list[tuple[float, float]],
+                   b: list[tuple[float, float]]) -> float:
+    """Total length of `a` not covered by `b` (both merged interval lists)."""
+    missing = 0.0
+    for a0, a1 in a:
+        cursor = a0
+        for b0, b1 in b:
+            if b1 <= cursor or b0 >= a1:
+                continue
+            if b0 > cursor:
+                missing += b0 - cursor
+            cursor = max(cursor, b1)
+            if cursor >= a1:
+                break
+        if cursor < a1:
+            missing += a1 - cursor
+    return missing
+
+
+def _geometry_side(out_t: "TrackInfo", in_t: "TrackInfo",
+                   out_bass: list[tuple[float, float]],
+                   in_bass: list[tuple[float, float]],
+                   ov_start: float, ov_end: float) -> dict:
+    out_clips = _positioned(out_t.clips)
+    in_clips = _positioned(in_t.clips)
+    out_groups = _repeat_groups(out_clips)
+    in_groups = _repeat_groups(in_clips)
+    entry_arr = (min(float(c["arr_time"]) for c in in_clips)
+                 if in_clips else in_t.arr_start)
+    entry_out_bar, entry_on_loop = _source_bar_at(out_clips, out_groups, entry_arr)
+    first_natural_in = next((c for c in in_clips if not _in_group(c, in_groups)), None)
+    intro_trim = (round(_src(first_natural_in)[0] / 4.0, 1) + 0.0
+                  if first_natural_in is not None else None)
+    swap_arr = _find_swap_arr(out_bass, in_bass, ov_start, ov_end)
+    swap_in_bar, _ = _source_bar_at(in_clips, in_groups, swap_arr)
+    swap_out_bar, swap_out_on_loop = _source_bar_at(out_clips, out_groups, swap_arr)
+    return {
+        "out_clips": out_clips, "out_groups": out_groups,
+        "entry_arr": entry_arr, "entry_out_bar": entry_out_bar,
+        "entry_on_loop": entry_on_loop, "intro_trim": intro_trim,
+        "swap_arr": swap_arr, "swap_in_bar": swap_in_bar,
+        "swap_out_bar": swap_out_bar, "swap_out_on_loop": swap_out_on_loop,
+        "tail_after_swap": (round((out_t.arr_end - swap_arr) / 4.0, 1)
+                            if swap_arr is not None else None),
+        "tail_loops": [g.label() for g in out_groups
+                       if g.arr_end > entry_arr - 0.01],
+        "intro_loops": [g.label() for g in in_groups
+                        if swap_arr is None or g.arr_start < swap_arr - 0.01],
+    }
+
+
+def _fmt_move(delta: float) -> str:
+    return f"{round(delta, 1):+g}"
+
+
+def _geometry_diff(c_out_t: "TrackInfo", c_in_t: "TrackInfo",
+                   s_out_t: "TrackInfo", s_in_t: "TrackInfo",
+                   c_out_bass, c_in_bass, s_out_bass, s_in_bass,
+                   c_ov: tuple[float, float], s_ov: tuple[float, float],
+                   overlap_bars: float, sam_overlap_bars: float | None,
+                   ) -> tuple[dict, list[str]]:
+    """Compare transition geometry between the two ALS files.
+
+    Returns the pair_history `geometry` record and the correction labels."""
+    c = _geometry_side(c_out_t, c_in_t, c_out_bass, c_in_bass, *c_ov)
+    s = _geometry_side(s_out_t, s_in_t, s_out_bass, s_in_bass, *s_ov)
+    labels: list[str] = []
+
+    if (c["entry_out_bar"] is not None and s["entry_out_bar"] is not None
+            and abs(s["entry_out_bar"] - c["entry_out_bar"]) >= GEOMETRY_MIN_MOVE_BARS):
+        labels.append(
+            f"entry_moved_out:{_fmt_move(s['entry_out_bar'] - c['entry_out_bar'])}bars")
+
+    if (c["intro_trim"] is not None and s["intro_trim"] is not None
+            and abs(s["intro_trim"] - c["intro_trim"]) >= GEOMETRY_MIN_MOVE_BARS):
+        labels.append(f"intro_trim:{c['intro_trim']:g}->{s['intro_trim']:g}bars")
+
+    if c["swap_arr"] is not None and s["swap_arr"] is None:
+        labels.append("swap_removed")
+    elif c["swap_arr"] is None and s["swap_arr"] is not None:
+        labels.append("swap_added")
+    else:
+        if (c["swap_in_bar"] is not None and s["swap_in_bar"] is not None
+                and abs(s["swap_in_bar"] - c["swap_in_bar"]) >= GEOMETRY_MIN_MOVE_BARS):
+            labels.append(
+                f"swap_moved_in:{_fmt_move(s['swap_in_bar'] - c['swap_in_bar'])}bars")
+        if (c["swap_out_bar"] is not None and s["swap_out_bar"] is not None
+                and abs(s["swap_out_bar"] - c["swap_out_bar"]) >= GEOMETRY_MIN_MOVE_BARS):
+            labels.append(
+                f"swap_moved_out:{_fmt_move(s['swap_out_bar'] - c['swap_out_bar'])}bars")
+
+    for kind in ("tail_loops", "intro_loops"):
+        c_l, s_l = ",".join(c[kind]), ",".join(s[kind])
+        tag = kind[:-1]  # tail_loop / intro_loop
+        if c_l and not s_l:
+            labels.append(f"{tag}_removed:{c_l}")
+        elif s_l and not c_l:
+            labels.append(f"{tag}_added:{s_l}")
+        elif c_l != s_l:
+            labels.append(f"{tag}_changed:{c_l}->{s_l}")
+
+    # Outgoing material the pipeline played after the (later of the two)
+    # entry points that Sam's version skips or trims away.
+    cut_bars = None
+    if c["entry_out_bar"] is not None and s["entry_out_bar"] is not None:
+        floor = max(c["entry_out_bar"], s["entry_out_bar"]) * 4.0
+        cut_bars = round(_beats_missing(
+            _natural_intervals(c["out_clips"], c["out_groups"], floor),
+            _natural_intervals(s["out_clips"], s["out_groups"], floor)) / 4.0, 1)
+        if cut_bars >= GEOMETRY_MIN_CUT_BARS:
+            labels.append(f"outro_cut:{cut_bars:g}bars")
+
+    if (sam_overlap_bars is not None
+            and abs(sam_overlap_bars - overlap_bars) >= GEOMETRY_MIN_OVERLAP_DELTA_BARS):
+        labels.append(
+            f"overlap_changed:{round(overlap_bars, 1):g}->{round(sam_overlap_bars, 1):g}bars")
+
+    record = {
+        "entry_out_bar": [c["entry_out_bar"], s["entry_out_bar"]],
+        "entry_on_loop": [c["entry_on_loop"], s["entry_on_loop"]],
+        "intro_trim_bars": [c["intro_trim"], s["intro_trim"]],
+        "swap_arr_beat": [c["swap_arr"], s["swap_arr"]],
+        "swap_in_bar": [c["swap_in_bar"], s["swap_in_bar"]],
+        "swap_out_bar": [c["swap_out_bar"], s["swap_out_bar"]],
+        "swap_out_on_loop": [c["swap_out_on_loop"], s["swap_out_on_loop"]],
+        "tail_after_swap_bars": [c["tail_after_swap"], s["tail_after_swap"]],
+        "out_tail_loops": [c["tail_loops"], s["tail_loops"]],
+        "in_intro_loops": [c["intro_loops"], s["intro_loops"]],
+        "outro_cut_bars": cut_bars,
+        "overlap_bars": [round(overlap_bars, 1),
+                         None if sam_overlap_bars is None else round(sam_overlap_bars, 1)],
+    }
+    return record, labels
+
+
 def analyse_transitions(claude_auto: dict[str, TrackAutomation],
                         sam_auto: dict[str, TrackAutomation],
                         claude_tracks: list[TrackInfo],
@@ -644,8 +974,19 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
         s_out = _find_auto(sam_auto, s_out_t.name)
         s_in = _find_auto(sam_auto, s_in_t.name)
 
+        td.geometry, geometry_labels = _geometry_diff(
+            c_out_t, c_in_t, s_out_t, s_in_t,
+            getattr(c_out, "bass_points", []), getattr(c_in, "bass_points", []),
+            getattr(s_out, "bass_points", []), getattr(s_in, "bass_points", []),
+            (c_ov_start, c_ov_end), (s_ov_start, s_ov_end),
+            td.overlap_bars, td.sam_overlap_bars)
+        td.bass_swap_reliable = td.geometry["swap_out_on_loop"] == [False, False]
+
         if not c_out or not s_out or not c_in or not s_in:
             td.notes = "Could not match all tracks to automation data"
+            td.corrections.extend(geometry_labels)
+            if geometry_labels:
+                td.verdict = "corrected"
             diffs.append(td)
             continue
 
@@ -723,11 +1064,14 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
             td.bass_swap_delta = td.bass_swap_sam - td.bass_swap_claude
 
         # classify corrections
-        any_change = td.arrangement_changed
+        any_change = td.arrangement_changed or bool(geometry_labels)
 
         if td.out_bass and td.out_bass.changed:
             any_change = True
-            if td.bass_swap_delta is not None:
+            # Only when the swap sits on real section clips on both sides;
+            # on a loop clip the source-anchored delta is not comparable and
+            # the geometry labels below carry the swap moves instead.
+            if td.bass_swap_delta is not None and td.bass_swap_reliable:
                 delta = td.bass_swap_delta
                 if abs(delta) > 2:
                     td.corrections.append(
@@ -757,6 +1101,8 @@ def analyse_transitions(claude_auto: dict[str, TrackAutomation],
             if c_sneak and s_sneak and abs(c_sneak - s_sneak) > 0.01:
                 td.corrections.append(
                     f"sneak_changed:{c_sneak}->{s_sneak}")
+
+        td.corrections.extend(geometry_labels)
 
         if any_change:
             td.verdict = "corrected"
@@ -836,6 +1182,9 @@ def diff_to_jsonl_entry(td: TransitionDiff,
         "timestamp": str(date.today()),
         "verdict": td.verdict,
     }
+    if td.geometry is not None:
+        entry["geometry"] = td.geometry
+        entry["bass_swap_reliable"] = td.bass_swap_reliable
 
     # detect boundary swap
     if (td.bass_swap_claude is not None
@@ -878,7 +1227,9 @@ def print_report(diffs: list[TransitionDiff]) -> None:
     for td in diffs:
         mark = {"correct": "OK", "corrected": "FIX"}.get(td.verdict, "SKIP")
         swap_info = ""
-        if td.bass_swap_delta is not None:
+        if td.bass_swap_delta is not None and not td.bass_swap_reliable:
+            swap_info = "  swap sits on a loop clip - source delta not comparable, see geometry"
+        elif td.bass_swap_delta is not None:
             if abs(td.bass_swap_delta) > 2:
                 delta = td.bass_swap_delta
                 swap_info = f"  swap moved {delta:+.0f} beats ({delta/4:+.0f} bars)"
@@ -912,6 +1263,23 @@ def print_report(diffs: list[TransitionDiff]) -> None:
         if td.corrections:
             for c in td.corrections:
                 print(f"          >> {c}")
+
+        if td.geometry:
+            g = td.geometry
+
+            def pair(key: str) -> str:
+                a, b = g[key]
+                fa = "-" if a is None else f"{a:g}"
+                fb = "-" if b is None else f"{b:g}"
+                return f"{fa}->{fb}"
+
+            loops = "/".join(",".join(x) or "none" for x in g["out_tail_loops"])
+            print(f"          geometry: entry out-bar {pair('entry_out_bar')} | "
+                  f"intro trim {pair('intro_trim_bars')} | "
+                  f"swap in-bar {pair('swap_in_bar')} out-bar {pair('swap_out_bar')} | "
+                  f"tail after swap {pair('tail_after_swap_bars')} | "
+                  f"tail loops {loops}"
+                  + (f" | cut {g['outro_cut_bars']:g}b" if g.get("outro_cut_bars") else ""))
 
     print(f"\n{'='*70}")
 

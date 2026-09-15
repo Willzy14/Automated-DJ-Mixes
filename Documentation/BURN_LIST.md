@@ -1727,26 +1727,38 @@ was written).
   Owner: Claude. Status: DONE 2026-09-15. Touched: 2026-09-15.
   Peer review: SOUND - MiniMax `Receipts/2026-09-15/minimax-review-D10-D11.md`
 
-- [ ] **The correction learner reads automation only, so Sam's geometry edits go
+- [ ] **The correction learner read automation only, so Sam's geometry edits went
   unclassified** (D12) - `learn_from_correction.py` labelled 5 of the 11 corrections on the
   15.09.26 August Releases Mix (3 `bass_swap_moved`, 2 `sneak_changed`); the other 6 got an empty
   `corrections` list although every one changed the arrangement. What Sam did there is geometry:
-  the incoming brought in at the outgoing's late landmark (the `last_bass_drop` hint at T6 and T7,
-  a kick dropout at T4, the last drop's start at T5), both intro front-trims reversed, both 64-bar
+  entries pulled later by 1-16 bars (never earlier), both intro front-trims reversed, both 64-bar
   blends halved, loops of other material removed and loops of the outgoing's own last bars added
-  or extended, outros cut. Two of the three `bass_swap_moved` labels are artifacts too: the
-  learner measures the swap from the outgoing's arrangement start, so cutting Tommy Farrow's
-  first 16 bars reads as "-64 beats" at T6 when the swap landmark did not move, and T9's "+56
-  beats" is a 4-bar fill nudge. `analyze_correction_diff.py` already captures entry, swap and
-  exit cues in source bars (its JSON sits beside the write-up) but nothing reads it. The fix:
-  teach the learner the geometry classes (entry_landmark, intro_trim_reversed, tail_loop_removed
-  and _added, outro_cut, overlap_halved) from that JSON, and measure swap moves in incoming-source
-  bars rather than from the outgoing's clip start. Until then the `pair_history.jsonl` corpus that
-  C7 wants to score against under-describes what Sam corrects most.
-  Evidence: `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.md`
+  or extended, outros cut, one swap moved onto the incoming's bass-in, one swap dropped for a
+  crossfade. One of the three `bass_swap_moved` labels was wrong: the swap finder works in
+  source-audio beats, so at T6, where the pipeline's swap sat on a tail loop cut from Tommy
+  Farrow's intro (source beat 0), the real swap fell outside its window and it reported the
+  track's last automation point instead ("-64 beats" for a swap that had not moved). T9's "+56
+  beats" was right in Switch Disco's own bars (a 4-bar entry shift plus a 10-bar cut).
+  **Built 2026-09-15 by Claude, uncommitted, awaiting review.** A geometry layer beside the
+  automation diff (`_repeat_groups`, `_geometry_diff` and friends in
+  `Source/learn_from_correction.py`): it reads clip geometry from both ALS files and emits
+  `entry_moved_out`, `intro_trim`, `swap_moved_in`, `swap_moved_out`, `swap_removed`/`swap_added`,
+  `tail_loop_added`/`_removed`/`_changed` (also `intro_loop_*`), `outro_cut` and
+  `overlap_changed`, each in the affected track's own bars. Loops are found by shape (a clip that
+  goes backwards in source and replays played material), so Sam's hand-made loops count too, in
+  ARRANGEMENT_REPORT's "8bx7+0b" notation. The old `bass_swap_moved` label and the report's
+  "swap moved" line are withheld when the swap sits on a loop clip on either side; the field
+  itself is unchanged and a `bass_swap_reliable` flag says when to trust it. Each pair_history
+  entry now carries a `geometry` record. On the real pair it labels all 11, matching the hand
+  analysis transition for transition; the 11 corpus entries were replaced with the rebuilt ones.
+  `Tests/test_learn_geometry_corrections.py` (9 tests: loop detection on the pipeline, hand-made,
+  cut and intro-loop shapes; the T2, T4, T6, T7 and T9 transitions; an unchanged one) - the T6
+  test gets no labels and no geometry field on the committed code. The 2 existing learner test
+  files still pass (21 in all).
+  Evidence: `Source/learn_from_correction.py:551` `Tests/test_learn_geometry_corrections.py`
+  `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.md`
   `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.diff.json`
-  `Source/learn_from_correction.py:805`
-  Owner: Claude. Status: OPEN - evidence gathered, not built; feeds C7. Touched: 2026-09-15.
+  Owner: Claude. Status: OPEN - built and tested, awaiting review; feeds C7. Touched: 2026-09-15.
   Peer review: NONE - not yet reviewed.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
