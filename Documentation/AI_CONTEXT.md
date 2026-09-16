@@ -1354,8 +1354,33 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
+> **TOP (2026-09-16, later same day): D13 is DONE - built, scored, peer-reviewed, findings fixed.**
+> Codex + MiniMax dispatched in parallel; Codex genuinely capped (confirmed live, resets 2026-09-19
+> 11:48 AM), re-routed to a Claude subagent per the standing capped-seat rule. Both independently
+> found the same 2 write-up errors (T5/T6/T9 sneak values reversed, T1's bar-count claim false) and
+> the same 1 real code gap - `alignment_from_decision`/`fills_from_decision` never bounded
+> `swap_in_bar`/`tail_loop` source bars against the incoming/outgoing track's own real length.
+> Fixed in `Source/align_engine.py` (2 new tests, each proved to fail pre-fix via `git stash`);
+> real 15.09.26 decisions file re-verified clean through Phase 2 + Phase 3 + both validation gates
+> after the fix, byte-identical output; full suite 845/0/6. MiniMax's extra claim (T5's
+> `swap_progress` at "0.97" exceeding the anchor search's 0.95 cap) was checked directly against
+> the real report and the specific number was wrong (actual 0.86) - the general point held anyway
+> (T4 genuinely sits at `swap_progress == 1.0` by design), documented in mix.md as a deliberate
+> difference rather than gated. 3 lower-priority findings (name-match prefix looseness, pair_index
+> collision, unrounded fractional bars) opened as burn list E8 rather than fixed blind. **D13
+> CHECKED OFF SOUND.** Full write-up + disposition:
+> `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Claude Arranged vs Sam
+> Tweaks.md`. **NEXT SESSION:** (1) report the D13 result to Sam if not already done - geometry is
+> strong (10/11 within 1 bar), levels and a genuine no-EQ-swap crossfade aren't expressible yet;
+> (2) D9 (defaulting `--cue-signals rescue,deep,phrase`) still open, untouched all session; (3) E8
+> (schema hardening, real but low priority) - fix when a real decisions file hits one; (4) the
+> Dropbox canonical `Claude Code Brain/Memory/MEMORY.md` overwrite is STILL unresolved (flagged to
+> Sam twice now, 2026-09-15 and 2026-09-16, not actioned - do not silently restore); (5) render
+> check when Sam bounces `Output/In-Key Mix V2 SW Tweaks.wav`.
+>
 > **TOP (2026-09-15 evening, Sam's standing instruction "tee the next session up to start off
-> where you leave it"): FINISH THE CLAUDE-ARRANGED RUN (burn list D13), in this order.**
+> where you leave it"): FINISH THE CLAUDE-ARRANGED RUN (burn list D13), in this order. Superseded
+> by the entry above - kept for the trail.**
 > 1. Phase 3 on the Claude-arranged ALS, exactly as Phase 3 ran for V2 (`Test Project/15.09.26
 >    August Releases Mix/Output/phase3_log.txt` shows the V2 run) but with the D13 artefacts:
 >    `python Source/apply_automation.py "<proj>/Output/In-Key Mix V3 Claude Arranged.als"

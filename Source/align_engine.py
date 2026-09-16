@@ -2492,6 +2492,10 @@ def alignment_from_decision(o: "Track", i: "Track", decision: dict,
         raise ValueError(
             f"decision for pair {decision.get('pair_index')}: swap_in_bar {swap_in:g} "
             f"must come after the intro trim ({trim:g} bars)")
+    if swap_in > i.n_bars + 1e-6:
+        raise ValueError(
+            f"decision for pair {decision.get('pair_index')}: swap_in_bar {swap_in:g} "
+            f"is past '{i.name}' end at bar {i.n_bars}")
     arr_offset = entry_out - trim
     if arr_offset < 0:
         raise ValueError(
@@ -2556,6 +2560,10 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
         partial = float(loop.get("partial_bars") or 0.0)
         if s1 <= s0 or reps < 0 or (reps == 0 and partial <= 0):
             raise ValueError(f"decision for pair {pair}: tail_loop geometry is empty")
+        if s1 > o.n_bars + 1e-6:
+            raise ValueError(
+                f"decision for pair {pair}: tail_loop source_end_bar {s1:g} is past "
+                f"'{o.name}' end at bar {o.n_bars}")
         ext = reps * (s1 - s0) + partial
         specs.append(FillCutSpec(
             kind="outgoing_tail", reps=reps, source_start_bar=s0, source_end_bar=s1,

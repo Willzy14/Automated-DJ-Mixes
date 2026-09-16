@@ -719,7 +719,31 @@
         "Burn list D9 (defaulting cue signals rescue,deep,phrase) still open; Sam's Dropbox canonical Claude Code Brain/Memory/MEMORY.md was overwritten by another project's 6-line index - flag to Sam, do not silently restore.",
         "Render check when Sam bounces Output/In-Key Mix V2 SW Tweaks.wav."
       ]
+    },
+    {
+      "date": "2026-09-16",
+      "brain": "Claude (Sonnet 5)",
+      "summary": "Phase 3 on the Claude-arranged build (D13), the first job carried over from the prior session. apply_automation.py run on In-Key Mix V3 Claude Arranged.als -> In-Key Mix V4 Claude Arranged.als with its own ARRANGEMENT_REPORT/MIX_PLAN paths (V2's production files untouched): exit 0, in-process MixPlan reconciliation PASS, standalone validate_als.py strict PASS, standalone validate_mix_plan_als.py 87/87 checks PASS. Scored against Sam's hand-tweaked In-Key Mix V2 SW Tweaks.als via learn_from_correction.py --dry-run --bpm 127.16: 10 of 11 transitions land within 1 bar of Sam's hand geometry (T2/T3/T10 exact, zero classified corrections). Two real gaps in the decision vocabulary confirmed by the score: T4 has no way to express a genuine no-EQ-swap crossfade (Sam kills no bass at all; the schema only has a swap position, so it's approximated at the intro phrase point per rule R6's own documented fallback), and T7 shows the vocabulary cannot decide levels at all (sneak point 0.10 decided vs Sam's 0.53, the biggest single miss, alongside a 1-bar entry/swap drift). Wrote the comparison note and copied the decisions file into Documentation/Mix Patterns Library/. Documented --decisions in the /mix skill (new section 2a.5) in both the Claude Code Brain and Codex Brain copies (frozen sync list), diff -w -B clean. Updated BURN_LIST.md D13 with the full result - still OPEN, not yet peer-reviewed.",
+      "pending": [
+        "D13 needs peer review before it can be checked off - dispatch to MiniMax (Codex was usage-capped as of 2026-09-15, resets 2026-09-19; re-probe before assuming still capped) + a Claude subagent as stand-in second reviewer per the project's Codex/Kimi-capped standing guidance (Kimi confirmed EMPTY, sticky ~168h as of this session).",
+        "Report the T4/T7 findings to Sam plainly before further Claude-arranged builds - the mode is strong on geometry (10/11 within 1 bar) but cannot express levels or a no-swap crossfade yet; either is a real follow-on feature, not a bug, if Sam wants it closed.",
+        "Burn list D9 (defaulting the rescue,deep,phrase cue signals) still open, untouched this session.",
+        "Render check when Sam bounces Output/In-Key Mix V2 SW Tweaks.wav (untouched this session).",
+        "Dropbox canonical Claude Code Brain/Memory/MEMORY.md is still overwritten by a different project's index as of session start 2026-09-16 (flagged to Sam, not actioned) - carries over from the 2026-09-15 pending note, still unresolved."
+      ]
+    },
+    {
+      "date": "2026-09-16",
+      "brain": "Claude (Sonnet 5)",
+      "summary": "D13 (Claude-arranged mode) peer review, second half of the session. Dispatched Codex + MiniMax in parallel via room_peer_review.ps1; Codex was genuinely capped (confirmed live, resets 2026-09-19 11:48 AM - not a refusal), re-routed to a Claude subagent per the standing capped-seat rule. Both independently found the same two write-up errors (T5/T6/T9 sneak values reversed, T1's bar-count claim false) and the same one real code gap (alignment_from_decision/fills_from_decision never bounded swap_in_bar/tail_loop source bars against the incoming/outgoing track's own real length). Fixed Source/align_engine.py with 2 new tests proved to fail pre-fix via git stash; real decisions file re-verified clean through Phase 2 + Phase 3 + both validation gates after the fix, byte-identical output; full suite 845/0/6. Corrected the write-up's unsupported '5 exact' claim to 3. Checked MiniMax's swap_progress claim (T5 at '0.97') directly against the real ARRANGEMENT_REPORT - the specific number was wrong (actual 0.86), but the general point (decision mode doesn't gate swap_progress the way the anchor search does) held because T4 genuinely sits at 1.0 by design - documented in mix.md rather than gated, since gating would break a real shipped transition. Opened E8 for three lower-priority, unexercised hardening findings. D13 CHECKED OFF SOUND - both independent reviews converged and both sets of findings were fixed and re-verified.",
+      "pending": [
+        "D9 (defaulting the rescue,deep,phrase cue signals) still open, untouched across both halves of this session.",
+        "Burn list E8 (Claude-arranged decision schema hardening: name-match prefix looseness, pair_index collision, unrounded fractional bars) - real but low priority, fix when a real decisions file hits one or before the mode sees wider use.",
+        "Report the D13 result to Sam plainly if not already done in-session: geometry is strong (10/11 within 1 bar), levels and a genuine no-EQ-swap crossfade are not expressible yet - real follow-on features if he wants them.",
+        "Dropbox canonical Claude Code Brain/Memory/MEMORY.md is still overwritten by a different project's index as of this session's start - flagged to Sam twice now (2026-09-15, 2026-09-16), not actioned. Still unresolved.",
+        "Render check when Sam bounces Output/In-Key Mix V2 SW Tweaks.wav (untouched this session)."
+      ]
     }
   ],
-  "last_modified": "2026-09-15"
+  "last_modified": "2026-09-16"
 }

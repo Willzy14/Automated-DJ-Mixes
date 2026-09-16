@@ -84,6 +84,10 @@ def test_intro_trim_moves_the_track_origin_back_so_the_kept_clip_starts_at_entry
     ({"entry_out_bar": 210, "swap_in_bar": 16}, "after"),      # swap at 226 > 214 bars
     ({"intro_trim_bars": 16, "swap_in_bar": 8}, "intro trim"),  # swap inside the cut
     ({"in_track": "Somebody Else - Other Song"}, "names in_track"),
+    # 152-bar IN: a swap_in_bar past its own end must be refused even though it fits
+    # comfortably inside the 214-bar OUT (found in peer review, 2026-09-16: the
+    # outgoing-side bound was checked, the incoming-side one was not).
+    ({"entry_out_bar": 10, "swap_in_bar": 160}, "past.*end"),
 ])
 def test_impossible_decisions_are_refused_with_the_reason(bad, message):
     with pytest.raises(ValueError, match=message):
@@ -114,6 +118,14 @@ def test_cuts_are_planned_before_the_tail_loop_and_the_loop_targets_the_extended
     assert loop.target_marker_bar == 214 + 14
     assert loop.target_marker_name == "decision:drop_2"
     assert fills[0].clip_name == "drop_4" and fills[0].skip_bars == 10
+
+
+def test_a_tail_loop_past_the_outgoing_end_is_refused():
+    # 214-bar OUT: a loop source past its own end must be refused (found in peer
+    # review, 2026-09-16 - only source_end_bar > source_start_bar was checked).
+    with pytest.raises(ValueError, match="past.*end"):
+        AE.fills_from_decision(OUT, IN, _decision(
+            tail_loop={"source_start_bar": 210, "source_end_bar": 220, "reps": 2}))
 
 
 def test_an_empty_loop_or_cut_is_refused():

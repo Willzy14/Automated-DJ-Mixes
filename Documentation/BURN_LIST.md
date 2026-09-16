@@ -1796,7 +1796,7 @@ was written).
   corrected hash; first-build SOUND in `Receipts/2026-09-15/minimax-review-D12.md`; Claude
   stand-in CORRECTION then SOUND in `Documentation/Plans/burn-list-2026-09-15/`)
 
-- [ ] **Claude-arranged mode: the pipeline executes a written per-transition decision instead
+- [x] **Claude-arranged mode: the pipeline executes a written per-transition decision instead
   of the anchor search** (D13) - Sam, 2026-09-15, after asking why the pipeline is rule-based
   when Claude's judgement could arrange directly: "yeah do that, re-run this one in
   Claude-arranged mode". Built the same evening: `propose_arrangement.py --decisions FILE`
@@ -1819,18 +1819,69 @@ was written).
   difference was the new `keep_end_bars: 0.0` key in every serialised FillCutSpec (proved: the
   refreshed baseline's git diff is 142 added `keep_end_bars` lines and nothing else); baseline
   refreshed per its own procedure, then 3 of 3 baseline tests pass.
-  LEFT TO DO: Phase 3 (`apply_automation.py` with the Claude-arranged report + MixPlan paths),
-  strict gate + reconciliation, then `learn_from_correction.py --dry-run` Claude-arranged vs
-  `In-Key Mix V2 SW Tweaks.als` to score it with the geometry-aware learner, then a note to
-  Sam on what the mode can and cannot express. The /mix skill (frozen sync list, both brains)
-  does not yet document `--decisions`.
+  **UPDATE 2026-09-16 [Claude]: Phase 3 + scoring + docs done.** `apply_automation.py` on
+  `In-Key Mix V3 Claude Arranged.als` -> `In-Key Mix V4 Claude Arranged.als` (own
+  `ARRANGEMENT_REPORT`/`MIX_PLAN` paths, V2's files untouched): exit 0, in-process MixPlan
+  reconciliation PASS. `validate_als.py` strict PASS. Standalone `validate_mix_plan_als.py`
+  87/87 checks PASS. Scored against `In-Key Mix V2 SW Tweaks.als` with
+  `learn_from_correction.py --dry-run --bpm 127.16`: **10 of 11 transitions land within 1 bar
+  of Sam's hand geometry** (3 exact-to-the-beat: T2, T3, T10 with zero classified corrections,
+  plus T1/T5/T6/T8/T9/T11 exact bars with only tail-loop-shape or sneak-level deltas). Two real
+  vocabulary gaps found: **T4** - the schema has no "no EQ swap" case, so Sam's genuine no-swap
+  crossfade (bass eases in gradually, no handoff point) gets approximated as a swap at the
+  intro phrase point (rule R6's own documented fallback); **T7** - entry/swap off by 1 bar each
+  and sneak level far off (0.10 decided vs Sam's 0.53) - the biggest miss, likely from levels not
+  being decidable at all (see below). Full write-up:
+  `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Claude Arranged vs Sam
+  Tweaks.md`, decisions file copied alongside it. `--decisions` now documented in `/mix` (new
+  2a.5 section, both brain copies, `diff -w -B` clean).
+  **What it cannot express, confirmed by the score:** (1) levels - sneak point and every
+  volume/bass automation value stay `apply_automation.py`'s own rules, not decidable in the
+  decision schema; (2) a genuine no-EQ-swap crossfade (T4) - the schema only has a swap
+  *position*, never "no swap at all".
   Evidence: `Source/align_engine.py:2453` `Source/propose_arrangement.py:896`
   `Source/apply_loops.py:1048` `Tests/test_arrangement_decisions.py`
-  `Test Project/15.09.26 August Releases Mix/Hints/arrangement_decisions.json` (gitignored
-  project folder; a copy belongs in `Documentation/Mix Patterns Library/` once scored)
-  Owner: Claude. Status: OPEN - built and Phase-2-proven; Phase 3 + scoring next session.
-  Touched: 2026-09-15.
-  Peer review: NONE - not yet reviewed.
+  `Test Project/15.09.26 August Releases Mix/Output/{In-Key Mix V4 Claude Arranged.als,
+  MIX_PLAN_RECONCILIATION Claude Arranged.json, phase3_claude_arranged_log.txt,
+  phase3c_claude_arranged_vs_sam_tweaks_dryrun.txt}` (gitignored project folder)
+  `Claude Code Brain/commands/mix.md` `Codex Brain/commands/mix.md`
+  **UPDATE 2026-09-16 [Claude], later same day: reviewed, findings fixed, CHECKED OFF SOUND.**
+  Dispatched to Codex (genuinely capped, confirmed live - resets 2026-09-19 11:48 AM, not a
+  refusal) and MiniMax in parallel via `room_peer_review.ps1`; Codex's seat re-routed to a Claude
+  subagent per the standing capped-seat rule. Both independently reviewed the code, the write-up
+  and the mix.md doc against the raw dry-run output, and both independently caught the SAME two
+  write-up errors: T5/T6/T9's sneak values had decided/Sam reversed, and T1's "(same total bars)"
+  claim was false (14 vs 16 bars) - both fixed in the write-up. The subagent also flagged "5 of
+  11 exact-to-the-beat" as unsupported by the raw data; corrected to 3 (T2/T3/T10, the only
+  transitions with an empty corrections list) both here and in the write-up.
+  Both also independently found the SAME real code gap: `alignment_from_decision` bounded the
+  swap against the outgoing track's length but never the incoming's, and `fills_from_decision`'s
+  `tail_loop` never bounded its source bars against the outgoing's length either - a malformed
+  decision in either case would have silently produced a wrong arrangement instead of raising.
+  Fixed in `Source/align_engine.py`; 2 new tests (`Tests/test_arrangement_decisions.py`, proved
+  to fail against the pre-fix code via `git stash`); real 15.09.26 decisions file re-verified
+  clean through Phase 2 + Phase 3 + both validation gates after the fix (byte-identical result);
+  full suite 845 passed, 0 failed, 6 skipped (was 843/0/6 pre-fix, +2 new tests).
+  MiniMax additionally flagged `swap_progress` as ungated in decision mode vs the anchor search's
+  `MIN/MAX_SWAP_PROGRESS` (0.25-0.95), citing T5 at "0.97" - checked directly against
+  `ARRANGEMENT_REPORT Claude Arranged.json` and T5 is actually 0.86, inside bounds (MiniMax's
+  specific number was wrong). The general point still holds: T4 genuinely sits at
+  `swap_progress == 1.0` (Zaro has no outro, ends cold) - gating this would have broken a real,
+  intentional transition in the shipped mix, so documented as a deliberate design difference in
+  mix.md rather than gated. mix.md also corrected: `tail_loop` is NOT no-outro-only (T1/T3 loop
+  existing outros), and `out_cue` does not feed `handoff_kind` (only `swap_cue` does).
+  Lower-priority findings NOT fixed this session, noted in mix.md instead: `_decision_names_match`
+  accepts a loose 30-char prefix match; a duplicate/out-of-range `pair_index` is silently
+  accepted/ignored; fractional bar values aren't rounded. None exercised by the real decisions
+  file - real but not urgent, revisit if a future decisions file hits one.
+  Receipts: `Receipts/2026-09-16/minimax-review-D13.md`, `Receipts/2026-09-16/claude-subagent-
+  review-D13.md` (includes disposition).
+  Owner: Claude. Status: DONE - built, scored, documented, reviewed by 2 independent lenses,
+  both sets of findings fixed and re-verified.
+  Touched: 2026-09-16.
+  Peer review: MiniMax SOUND-with-corrections (adopted) + Claude subagent standing in for capped
+  Codex SOUND-with-corrections (adopted), both independent, both converged on the same core
+  findings.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
 
@@ -2074,6 +2125,27 @@ was written).
   `Source/learn_from_correction.py:728`
   Owner: Claude. Status: OPEN. Touched: 2026-09-15.
   Peer review: NONE - not yet reviewed.
+
+- [ ] **Claude-arranged mode's decision schema (D13) has three unhardened edges, none exercised
+  by a real decisions file yet** (E8) - found by MiniMax and a Claude subagent during D13's peer
+  review, 2026-09-16, alongside the two real bugs already fixed there (swap_in_bar / tail_loop
+  bounds, see D13's own entry). Lower confidence / lower priority, left open rather than fixed
+  blind: (1) `_decision_names_match` (`align_engine.py:2467`) accepts a 30-character prefix
+  match (`a.startswith(b[:30]) or b.startswith(a[:30])`) - two tracks sharing a long common
+  prefix could silently match the wrong one; (2) a duplicate or out-of-range `pair_index` in the
+  decisions file is silently accepted/ignored (`propose_arrangement.py:1492`,
+  `{int(d["pair_index"]): d for d in items}` - a dict comprehension, so a repeated index just
+  overwrites, and an index outside the real transition count is never referenced, never flagged);
+  (3) fractional `entry_out_bar`/`swap_in_bar` propagate unrounded through
+  `alignment_from_decision` into downstream bar/beat arithmetic - benign today, unverified
+  whether it stays benign once a decision file is authored by something less careful than a
+  by-hand review. Fix when a real decisions file actually hits one of these, or before this
+  becomes a wider-used mode.
+  Evidence: `Receipts/2026-09-16/minimax-review-D13.md`, `Receipts/2026-09-16/claude-subagent-
+  review-D13.md`, `Source/align_engine.py:2467`, `Source/propose_arrangement.py:1492`.
+  Owner: Claude. Status: OPEN. Touched: 2026-09-16.
+  Peer review: found BY peer review (MiniMax + Claude subagent, D13's round) - the finding
+  itself is peer-sourced; no separate review of a fix, since nothing has been fixed yet.
 
 ## F - Carried, deferred on purpose (not open work - listed so they are not silently rediscovered)
 
@@ -2372,7 +2444,30 @@ confirm.md`), joining the accepted D12-a2 receipt and the Claude stand-in's conf
 MINOR `_find_swap_arr` notes opened as E7 (covered by the reliability gate). rev 4e0e3db ->
 (this write).
 
-## THE COUNT: 10 open, 24 done, 1 dropped (last update 2026-09-15 19:10 [Claude]: D12 DONE on
+Last item update: 2026-09-16 10:20 [Claude] - progress: D13 - Phase 3 run on the Claude-arranged
+build (own ARRANGEMENT_REPORT/MIX_PLAN paths, V2 untouched), all gates PASS (validate_als strict,
+87/87 MixPlan reconciliation), scored against Sam's hand tweaks: 10 of 11 transitions within 1 bar
+of his geometry, 2 real vocabulary gaps found (no-EQ-swap crossfade at T4, levels not decidable at
+all, biggest at T7). Write-up + decisions copy in Mix Patterns Library. `--decisions` documented in
+`/mix` (2a.5, both brain copies, diff -w -B clean). Still OPEN - not yet peer-reviewed. Count
+unchanged: still 10 open. rev 70d272d -> (this write).
+
+Last item update: 2026-09-16 10:50 [Claude] - DONE + create: D13 checked off - Codex (genuinely
+capped, confirmed live) re-routed to a Claude subagent, ran in parallel with MiniMax; both
+independently caught the same 2 write-up errors (T5/T6/T9 sneak direction, T1 bar count) and the
+same 1 real code gap (swap_in_bar / tail_loop bounds unchecked against the incoming/outgoing
+track's own length) - write-up and mix.md corrected, code fixed with 2 proved-to-fail-pre-fix
+tests, real decisions file re-verified clean post-fix, full suite 845/0/6. MiniMax's extra
+swap_progress claim checked directly against the real ARRANGEMENT_REPORT and its specific number
+(T5 at 0.97) was wrong (actual 0.86) - the general point stood anyway (T4 genuinely at 1.0,
+documented as deliberate) so kept, the wrong specific number was not. 3 lower-priority findings
+(name-match prefix, pair_index collision, unrounded fractional bars) opened as E8 rather than
+fixed blind - real but unexercised by the shipped decisions file. rev 70d272d -> (this write).
+
+## THE COUNT: 10 open, 25 done, 1 dropped (last update 2026-09-16 10:50 [Claude]: D13 DONE on 2
+independent reviewers' converged findings, both fixed and re-verified; E8 opened for the 3
+lower-priority findings neither review's fix touched: 10 -> 9 -> 10 open, 24 -> 25 done. Prior
+update (2026-09-15 19:10 [Claude]): D12 DONE on
 MiniMax's SOUND for the corrected hash, E7 opened for its two MINOR notes: 10 -> 10 open, 23 ->
 24 done. Prior update (2026-09-15 18:50 [Claude]): D13 opened -
 Claude-arranged mode, built and Phase-2-proven, Phase 3 + scoring pending: 9 -> 10 open. Prior

@@ -1,0 +1,110 @@
+{
+  "project": "15.09.26 August Releases Mix",
+  "author": "Claude",
+  "date": "2026-09-15",
+  "method": "Decided from the Phase 1 evidence (DETECT pictures, section maps, cue lists, hints) plus the rules Sam's own edits taught earlier today. Written before this arrangement was built; scored afterwards against Sam's SW Tweaks with learn_from_correction.py.",
+  "rules": [
+    "R1 Swap on the incoming's first drop, or on its bass-in phrase point when the drop is far in, against a real cue on the outgoing (outro start, kick dropout, last drop end); snap to the outgoing's 8-bar grid when the detected boundary is an odd-bar section.",
+    "R2 The incoming enters late: 8-16 of its own intro bars before the swap; the whole intro when the outgoing can run out under it. Never trim an intro to force a drop onto a landmark.",
+    "R3 Blend 16-34 bars; up to about 50 only when the outgoing's own last bars loop cleanly under the incoming's intro and first drop.",
+    "R4 After the swap the outgoing gets 12-18 bars, then out. Loop its own last 1-2 bars if it ends cold; cut its outro down if it is long; never build the tail from other material.",
+    "R5 A fill on the outgoing finishes before the swap.",
+    "R6 If the outgoing's last drop ends before the incoming's drop, a crossfade, not an EQ kill (automation only; not expressible here, so the swap is put at the incoming's mid-intro phrase point on the outgoing's natural end)."
+  ],
+  "transitions": [
+    {
+      "pair_index": 1,
+      "out_track": "Demarkus Le- A Deep-Felt Love (Ralph Session Extended Remix) 24 Bit MASTER AMENDED",
+      "in_track": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+      "entry_out_bar": 180, "intro_trim_bars": 0, "swap_in_bar": 16,
+      "swap_cue": "drop_1", "out_cue": "outro_start bar 196",
+      "tail_loop": {"source_start_bar": 196, "source_end_bar": 198, "reps": 7, "partial_bars": 0, "target": "Sam Leagas drop_2"},
+      "reason": "Sam Leagas's drop_1 on Demarkus's outro start. Sam Leagas's drop_1 is 16 bars then a 16-bar build; Demarkus's 18-bar outro would end 2 bars into that build, ragged. Its own first 2 outro bars loop x7 (quality 0.63, clean) so it runs under the build and leaves exactly on drop_2 (bar 48): the R3 exception, the outgoing's own last bars under the incoming's intro and first drop, 48-bar blend. The alternative, cutting the outro to end on the build, was rejected because the build would run solo. R1, R3."
+    },
+    {
+      "pair_index": 2,
+      "out_track": "Sam Leagas - Bad Behaviours (Extended Mix) SW V2",
+      "in_track": "HNTR - Short Stop (Extended Mix) SW V3",
+      "entry_out_bar": 128, "intro_trim_bars": 0, "swap_in_bar": 8,
+      "swap_cue": "drop_1", "out_cue": "bar 136, 8-bar grid (detected outro 135 is a 7-bar section)",
+      "reason": "HNTR's intro is 8 bars. Sam Leagas's detected outro at 135 sits on an odd 7-bar drop_4 (BAR-MATH flag); the swap goes on the grid line 136. 16 bars of Sam Leagas after the swap, no loop. R1, R4."
+    },
+    {
+      "pair_index": 3,
+      "out_track": "HNTR - Short Stop (Extended Mix) SW V3",
+      "in_track": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+      "entry_out_bar": 136, "intro_trim_bars": 4, "swap_in_bar": 36,
+      "swap_cue": "drop_1", "out_cue": "outro_start bar 168",
+      "tail_loop": {"source_start_bar": 168, "source_end_bar": 172, "reps": 2, "partial_bars": 0, "target": "Zaro drop_1 + 16"},
+      "reason": "Zaro's first 4 bars carry loud one-off hits in the other stem (DETECT), so it enters at its bar 4 on HNTR's build_2 grid line 136; its drop_1 lands on HNTR's outro start. HNTR's 8-bar outro plus 4 bars x2 gives 16 after the swap. 48-bar blend, allowed by R3 because the loop is HNTR's own outro. R1, R3, R4."
+    },
+    {
+      "pair_index": 4,
+      "out_track": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+      "in_track": "Pat Premier - Temptation SW V1",
+      "entry_out_bar": 116, "intro_trim_bars": 0, "swap_in_bar": 16,
+      "swap_cue": "intro phrase bar 16", "out_cue": "natural end bar 132, then the looped tail",
+      "tail_loop": {"source_start_bar": 130, "source_end_bar": 132, "reps": 3, "partial_bars": 1, "target": "Pat Premier intro"},
+      "reason": "Zaro has no outro and ends cold at 132; Pat Premier's whole 32-bar intro plays from Zaro's kick dropout at 116 (R2). Zaro's last 2 bars loop 3.5 times so it runs out 9 bars before Pat Premier's drop (R4, R6). The swap sits at Zaro's natural end on Pat Premier's bar 16; the looped bars play bass-cut, which is the fade."
+    },
+    {
+      "pair_index": 5,
+      "out_track": "Pat Premier - Temptation SW V1",
+      "in_track": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+      "entry_out_bar": 64, "intro_trim_bars": 16, "swap_in_bar": 31,
+      "swap_cue": "kick dropout at 1:00 (bar 31)", "out_cue": "outro_start bar 79",
+      "reason": "Tommy Farrow's bar-31 dropout on Pat Premier's outro start, the anchor Sam kept. Tommy Farrow's 44-bar intro is the one intro cut here: its first 16 bars go so it enters on Pat Premier's last drop (bar 64) with 15 bars of intro before the swap (R2). Pat Premier's 5-bar outro plays out; every loop candidate on it fails the quality gate, so no loop."
+    },
+    {
+      "pair_index": 6,
+      "out_track": "Tommy Farrow - Falling (New Audio 27.07.26 Extended MIx) 24 Bit MASTER",
+      "in_track": "Arielle Free, Idris Elba - Cause I Can SW V1",
+      "entry_out_bar": 146, "intro_trim_bars": 0, "swap_in_bar": 16,
+      "swap_cue": "drop_1", "out_cue": "drop_3 end / outro_start bar 162",
+      "reason": "Arielle's drop_1 on Tommy Farrow's drop_3 end. Tommy Farrow's own 16-bar outro is the tail (R4), so no loop: the pipeline's 64-bar blend came from looping his intro drums, which R4 forbids. 32-bar blend."
+    },
+    {
+      "pair_index": 7,
+      "out_track": "Arielle Free, Idris Elba - Cause I Can SW V1",
+      "in_track": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+      "entry_out_bar": 106, "intro_trim_bars": 0, "swap_in_bar": 9,
+      "swap_cue": "bass-in phrase (bar 8-9)", "out_cue": "outro_start bar 115",
+      "reason": "Arielle's outro is 7 bars and Coldabank's drop is 32 bars in, so the swap goes on Coldabank's bass-in phrase against Arielle's outro start (R1 fallback), whole intro (R2), Arielle runs out 7 bars later (R4; her loop candidates fail quality). Bass-in reads as bar 8 on the DETECT; the swap is on bar 9 so the blend clears the 16-bar minimum."
+    },
+    {
+      "pair_index": 8,
+      "out_track": "Coldabank -Never Say Sorry (Extended Mix) SW V3 AMENDED",
+      "in_track": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+      "entry_out_bar": 72, "intro_trim_bars": 0, "swap_in_bar": 16,
+      "swap_cue": "drop_1", "out_cue": "kick dropout bar 88",
+      "tail_loop": {"source_start_bar": 95, "source_end_bar": 96, "reps": 6, "partial_bars": 0, "target": "Switch Disco break_1 start"},
+      "reason": "Switch Disco's drop_1 on Coldabank's kick dropout at 88. Coldabank ends cold 10 bars later; its last bar loops x6 (quality 0.64) so it ends exactly on Switch Disco's break_1 start (bar 32), 16 after the swap. R1, R4."
+    },
+    {
+      "pair_index": 9,
+      "out_track": "Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER",
+      "in_track": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+      "entry_out_bar": 108, "intro_trim_bars": 0, "swap_in_bar": 16,
+      "swap_cue": "drop_1", "out_cue": "fill_2 end bar 124",
+      "outgoing_cut": {"clip": "drop_5", "cut_bars": 10},
+      "reason": "RUZE's drop_1 lands after Switch Disco's 4-bar fill_2, not on it (R5). RUZE's drop_1 is 16 bars then a 32-bar break, so Switch Disco should be gone soon after: its last drop loses its first 10 bars at the swap and plays its last 10 plus the 8-bar outro, 18 after the swap (R4), ending 2 bars into RUZE's break. No loop."
+    },
+    {
+      "pair_index": 10,
+      "out_track": "RUZE & Chesster - Another Night (Ranger Trucco Extended Remix) 24 Bit MASTER",
+      "in_track": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+      "entry_out_bar": 176, "intro_trim_bars": 0, "swap_in_bar": 16,
+      "swap_cue": "drop_1", "out_cue": "kick dropout bar 192",
+      "outro_skip": {"clip": "outro_1", "skip_bars": 4, "keep_end_bars": 5},
+      "reason": "Yellody's drop_1 on RUZE's dropout at 192. Yellody's drop_1 is 12 bars then a break; RUZE's 18-bar outro would run 5 bars into that break, so 4 bars come out of its middle and it keeps its last 5, ending 1 bar into the break, 13 after the swap (R4)."
+    },
+    {
+      "pair_index": 11,
+      "out_track": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+      "in_track": "Cevin Fisher - Give Me My Pleasure (Main Mix) 24 Bit MASTER",
+      "entry_out_bar": 137, "intro_trim_bars": 0, "swap_in_bar": 16,
+      "swap_cue": "drop_1", "out_cue": "outro_start bar 153",
+      "reason": "Cevin Fisher's drop_1 on Yellody's outro start; Yellody's 15-bar outro is the tail (R4). 31-bar blend, no loop."
+    }
+  ]
+}
