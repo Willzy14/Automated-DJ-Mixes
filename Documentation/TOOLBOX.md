@@ -152,6 +152,16 @@ Automated diff tool for PROPOSE-LEARN cycle. Extracts automation envelopes from 
 Key types: `TrackAutomation`, `ParamDiff`, `TransitionDiff` (with `classified_style`).
 Key functions: `extract_track_automation()`, `analyse_transitions()`, `_classify_style()` (sneak level + bass kill depth + instant swap detection), `diff_to_jsonl_entry()`, `print_report()`, `main()`.
 
+### `Source/extract_teaching_mix_cards.py`
+**Added 2026-09-16.** For Claude's own judgement, never read by the pipeline - Sam's explicit framing ("this is not for the bots"). Extracts one case-study card per real transition from all 20 historical mixes in `Teaching Mixes/`, covering two distinct Ableton automation mechanisms: Mechanism 1, the zone-bus DJ-mixer pattern (song tracks carry only arrangement; the actual mix move lives on shared A/B Return-track `<AutomationEnvelope>`s fed by each track's own sends); Mechanism 2, direct per-track automation via the older inline `<ArrangerAutomation>` XML (no shared bus - Volume/GainLo/Cutoff drawn straight onto the track's own devices). 19 of 20 files have real extracted data (only Gbox Side 3 has none - its real curves are on parameters not currently classified as a mix move).
+
+Key types: `AutomationPoint`, `ZoneAutomation`, `TrackDirectAutomation`, `TrackInfo`.
+Key functions: `extract()`, `find_transitions()`, `_track_zone()` (resolves by send POSITION via `enumerate()`, never the raw `TrackSendHolder` `Id=` attribute - that attribute is not a reliable index), `_track_direct_automation()`, `_value_to_db()` (Ableton's linear-to-dB gain curve, `20*log10(v)`), `_summarize_curve()`, `build_card()`.
+Output: `Documentation/Mix Patterns Library/Teaching Mixes Cards/` - one `.md` per mix plus `INDEX.md` (full mechanism writeup, coverage numbers, peer review history).
+
+### `Source/canonicalize_pair_history.py` - `shadow_swap_preference()`
+**Added 2026-09-16 (burn list C7 Step 1).** Similarity-weighted (BPM 0.3 / section-shape 0.7) suggestion drawn from `pair_history.jsonl`'s canonical pairs, wired into `propose_arrangement.py`'s `OverlapAnalysis.shadow_swap_preference` field as REPORT-ONLY (never gates a decision). Evaluated honestly via `Source/evaluate_shadow_swap_preference.py` (leave-one-project-out): 19% hit rate vs. a 68% trivial "predict zero" baseline on the real 31-pair corpus - the signal currently LOSES to doing nothing. Kept in place, not promoted; the evaluation harness stays for testing a future, better signal against the same honest bar.
+
 ### `Source/analyze_correction_diff.py`
 **Added 2026-07-16.** Read-only, source-aware comparison for a generated full-mix ALS and Sam's manually corrected copy. Reconstructs actual clip geometry and source ranges, proves warp-grid/mode preservation, remaps stale corrected clip names through the baseline section map, detects repeated source phrases, rebuilds each corrected overlap, and compares entry/swap/exit cues plus Utility/bass automation. Writes a machine-readable `correction_diff_v1` JSON. Use this before `learn_from_correction.py` whenever arrangement positions or loops changed; the older learner assumes one fixed arrangement and otherwise confuses movement with automation correction.
 

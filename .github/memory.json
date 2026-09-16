@@ -786,6 +786,22 @@
         "Render check when Sam bounces Output/In-Key Mix V2 SW Tweaks.wav - untouched all session.",
         "Nothing from C10 (rounds 1-3) or C7 Step 1 is committed - only D13s Phase 3 work was committed earlier this session (one commit, 929b2cd). Confirm with Sam before committing the rest."
       ]
+    },
+    {
+      "date": "2026-09-16",
+      "brain": "Claude (Sonnet 5)",
+      "summary": "Sixth block: committed C7 Step 1 + all of C10 (519d484, 39 files, 4880 insertions, excluding pre-existing unrelated Templates/ artifacts), pushed both this and the prior D13 commit (929b2cd). Then Sam raised a separate, machine-level issue: Dropbox on STUDIO-2 reported ~148,000 files trying to upload, already fixed once before on the Home PC but not here. Filesystem-based investigation (dropbox-exclude-build-dirs.ps1 -WhatIf/-real, git loose-object counts) ruled out the two known causes as insufficient (7 folders/75 files newly excluded, only 2,096 loose git objects total) and found a real-but-partial third candidate (~4,994 Ableton .asd cache files) before a full recursive scan got stuck on Dropbox's own Cloud Filter overhead. Pivoted to reading Dropbox's own internal sync-engine database directly (%LOCALAPPDATA%\\Dropbox\\instance1\\sync\\nucleus.sqlite3, copied read-only first) instead of scanning the filesystem - found the dominant cause by extension-tallying local_tree's tracked files: 58,541 .eml entries, traced to a real folder on disk (Chat GPT/samwireOutlook Sent Emailspst/Sent Items/, confirmed 58,499 files there directly) - a bulk Outlook PST-to-EML export Sam ran via a purchased converter tool (receipt on disk, Aug 2025), landed straight into a synced Dropbox folder. Excluded it via the existing :com.dropbox.ignored local-only flag (source .pst untouched). Also excluded the 4,994 .asd files individually (they sit flat next to real .wav audio, so folder-level exclusion wasn't possible) - the bulk PowerShell write initially failed on 4,993 of 4,994 files with a cryptic 'object does not exist' error, root-caused to PowerShell's -Path treating literal '[' ']' characters (common in this business's label-tagged folder names, e.g. '[Defected]') as wildcards; fixed by switching to -LiteralPath, then all 4,992 remaining succeeded. A third lead (js/ts/map files, ~47k in the sync database) was checked and ruled out as a false alarm - that project's build folders were already correctly excluded from an earlier sweep; the database entries were stale historical index rows, not a live queue. Restarted the Dropbox client to force it to notice the new flags; confirmed the flags are correctly set on disk but Dropbox's own internal queue count had not measurably dropped within the session's observation window - consistent with how the much larger 2026-08-27 sweep on this same machine also took real wall-clock time to drain, not a sign the fix failed.",
+      "pending": [
+        "Confirm with Sam next session whether the Dropbox queue has actually drained (check the app's own sync count) - the fix is verified correct on disk but was not confirmed to have visibly reduced Dropbox's displayed count before this session ended.",
+        "STUDIO-2 still needs git config --global gc.auto 500 applied (Home PC has had it since 2026-09-12) - directly relevant after this session's Dropbox clog work but not applied, since it's a global machine setting, not a repo change. Tick the CLAUDE.md checklist once done.",
+        "D9 (defaulting the rescue,deep,phrase cue signals) - investigation started, not completed, still the top real open item in this repo.",
+        "If Sam wants full 20/20 Teaching Mixes coverage, Gbox Side 3's unclassified curves (Send/DryWet/Tempo) are the only gap.",
+        "Cutoff (AutoFilter frequency) still reported as raw units, not Hz-converted - real, smaller follow-on.",
+        "Burn list E8 (D13 decision-schema hardening) - real, low priority, untouched.",
+        "Dropbox canonical Claude Code Brain/Memory/MEMORY.md overwrite - flagged repeatedly across this whole session, still unresolved, needs Sam's explicit decision.",
+        "Render check when Sam bounces Output/In-Key Mix V2 SW Tweaks.wav - untouched all session.",
+        "Burn list A1-A4 (sealed per-transition blind-listen tooling) is fully built and verified - the only thing left there is Sam's own listen and verdict (A5), not more code."
+      ]
     }
   ],
   "last_modified": "2026-09-16"
