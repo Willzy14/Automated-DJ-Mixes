@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "Source"))
 
 from canonicalize_pair_history import (  # noqa: E402
-    canonicalize, derive_delta_beats, load_records, load_resolutions,
+    CanonicalPair, canonicalize, derive_delta_beats, load_records,
+    load_resolutions, shadow_swap_preference,
 )
 
 REAL_PAIR_HISTORY = ROOT / "Documentation" / "Mix Patterns Library" / "pair_history.jsonl"
@@ -350,3 +351,78 @@ def test_real_corpus_reduces_to_35_unique_observations_with_4_conflicts():
         ("Black Book x Defected V2", 5),
         ("Black Book x Defected V2", 7),
     }
+
+
+# --------------------------------------------------------------------------- #
+# shadow_swap_preference (burn list C7 Step 1, report-only)                   #
+# --------------------------------------------------------------------------- #
+
+def _canonical(project="A", pair_index=1, delta=10.0, bpm=128.0,
+              out_structure=("intro_1", "drop_1"), in_structure=("drop_1",),
+              verdict="corrected"):
+    return CanonicalPair(
+        project=project, pair_index=pair_index, delta_beats=delta,
+        verdict=verdict, bpm_out=bpm, bpm_in=bpm,
+        out_structure=tuple(out_structure), in_structure=tuple(in_structure),
+        source="corpus", n_records=1,
+    )
+
+
+def test_shadow_preference_is_none_with_no_canonical_pairs():
+    assert shadow_swap_preference(128.0, ["drop_1"], ["drop_1"], []) is None
+
+
+def test_shadow_preference_weights_by_similarity_hand_verified():
+    # A: exact BPM + exact structure match -> similarity 1.0
+    a = _canonical(project="ProjA", delta=10.0, bpm=128.0)
+    # B: BPM off by exactly BPM_MATCH_TOLERANCE (2.0) -> bpm_score 0.0,
+    # same structure -> struct_score 1.0 -> similarity 0.3*0 + 0.7*1 = 0.7
+    b = _canonical(project="ProjB", delta=20.0, bpm=130.0)
+    result = shadow_swap_preference(
+        128.0, ["intro_1", "drop_1"], ["drop_1"], [a, b])
+    assert result is not None
+    # weighted avg: (1.0*10 + 0.7*20) / (1.0 + 0.7) = 24/1.7
+    assert result["suggested_delta_beats"] == pytest.approx(14.1, abs=0.05)
+    assert result["confidence"] == pytest.approx(1.0, abs=1e-6)
+    assert [b["project"] for b in result["based_on"]] == ["ProjA", "ProjB"]
+
+
+def test_shadow_preference_excludes_the_named_project():
+    a = _canonical(project="ProjA", delta=10.0, bpm=128.0)
+    b = _canonical(project="ProjB", delta=20.0, bpm=130.0)
+    result = shadow_swap_preference(
+        128.0, ["intro_1", "drop_1"], ["drop_1"], [a, b],
+        exclude_project="ProjA")
+    assert result is not None
+    assert [pr["project"] for pr in result["based_on"]] == ["ProjB"]
+    assert result["suggested_delta_beats"] == 20.0
+
+
+def test_shadow_preference_excludes_itself_out_of_existence_returns_none():
+    a = _canonical(project="OnlyProj", delta=10.0, bpm=128.0)
+    result = shadow_swap_preference(
+        128.0, ["intro_1", "drop_1"], ["drop_1"], [a],
+        exclude_project="OnlyProj")
+    assert result is None
+
+
+def test_shadow_preference_below_similarity_threshold_returns_none():
+    # A real (if modest) similarity score, but below an explicit stricter
+    # min_similarity - no fabricated low-confidence guess past the caller's
+    # own bar. (BPM 80 off -> score 0; structure -> similarity 0.56, hand-
+    # verified: out_dist 4 + in_dist 2 = 6, struct_score 1-6/30=0.8,
+    # total=0.7*0.8=0.56.)
+    a = _canonical(project="ProjA", delta=10.0, bpm=90.0,
+                   out_structure=("break_1",), in_structure=("break_2",))
+    result = shadow_swap_preference(
+        170.0, ["intro_1", "drop_1", "drop_2"], ["drop_1", "outro_1"], [a],
+        min_similarity=0.6)
+    assert result is None
+
+
+def test_shadow_preference_caps_at_max_results():
+    pairs = [_canonical(project=f"Proj{i}", delta=float(i), bpm=128.0)
+             for i in range(5)]
+    result = shadow_swap_preference(
+        128.0, ["intro_1", "drop_1"], ["drop_1"], pairs, max_results=2)
+    assert len(result["based_on"]) == 2

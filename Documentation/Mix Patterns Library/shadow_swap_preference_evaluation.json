@@ -1,0 +1,314 @@
+{
+ "summary": {
+  "total_pairs": 31,
+  "covered_pairs": 31,
+  "uncovered_pairs": 0,
+  "shadow_hit_rate_on_covered": 0.1935483870967742,
+  "baseline_hit_rate_on_covered": 0.6774193548387096,
+  "baseline_hit_rate_overall": 0.6774193548387096,
+  "shadow_beats_baseline_on_covered": -15,
+  "by_project": {
+   "Black Book x Defected V2": {
+    "total": 5,
+    "covered": 5,
+    "shadow_hits": 2
+   },
+   "02.09.26 House 10": {
+    "total": 9,
+    "covered": 9,
+    "shadow_hits": 2
+   },
+   "10.09.26 Tech House Heldout": {
+    "total": 7,
+    "covered": 7,
+    "shadow_hits": 0
+   },
+   "15.09.26 August Releases Mix": {
+    "total": 10,
+    "covered": 10,
+    "shadow_hits": 2
+   }
+  }
+ },
+ "rows": [
+  {
+   "project": "Black Book x Defected V2",
+   "pair_index": 1,
+   "true_delta": 0.0,
+   "shadow_delta": -10.7,
+   "shadow_confidence": 0.883,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "Black Book x Defected V2",
+   "pair_index": 2,
+   "true_delta": 0.0,
+   "shadow_delta": 2.2,
+   "shadow_confidence": 0.953,
+   "shadow_within_tolerance": true,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "Black Book x Defected V2",
+   "pair_index": 6,
+   "true_delta": 0.0,
+   "shadow_delta": -26.4,
+   "shadow_confidence": 0.79,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "Black Book x Defected V2",
+   "pair_index": 8,
+   "true_delta": 0.0,
+   "shadow_delta": 2.7,
+   "shadow_confidence": 0.837,
+   "shadow_within_tolerance": true,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "Black Book x Defected V2",
+   "pair_index": 9,
+   "true_delta": -32.0,
+   "shadow_delta": -19.7,
+   "shadow_confidence": 0.743,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 1,
+   "true_delta": 64.0,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.977,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 2,
+   "true_delta": -52.0,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.977,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 3,
+   "true_delta": -28.0,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.953,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 4,
+   "true_delta": 0.0,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.953,
+   "shadow_within_tolerance": true,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 5,
+   "true_delta": 32.0,
+   "shadow_delta": -9.3,
+   "shadow_confidence": 0.907,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 6,
+   "true_delta": 0.0,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.953,
+   "shadow_within_tolerance": true,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 7,
+   "true_delta": 4.0,
+   "shadow_delta": -9.6,
+   "shadow_confidence": 0.977,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 8,
+   "true_delta": -64.0,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.907,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "02.09.26 House 10",
+   "pair_index": 9,
+   "true_delta": -64.0,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.953,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "10.09.26 Tech House Heldout",
+   "pair_index": 1,
+   "true_delta": 0.0,
+   "shadow_delta": -5.2,
+   "shadow_confidence": 0.977,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "10.09.26 Tech House Heldout",
+   "pair_index": 2,
+   "true_delta": -28.0,
+   "shadow_delta": -15.5,
+   "shadow_confidence": 0.977,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "10.09.26 Tech House Heldout",
+   "pair_index": 3,
+   "true_delta": 0.0,
+   "shadow_delta": -20.8,
+   "shadow_confidence": 0.907,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "10.09.26 Tech House Heldout",
+   "pair_index": 4,
+   "true_delta": 0.0,
+   "shadow_delta": 12.2,
+   "shadow_confidence": 0.953,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "10.09.26 Tech House Heldout",
+   "pair_index": 6,
+   "true_delta": 0.0,
+   "shadow_delta": -5.2,
+   "shadow_confidence": 0.977,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "10.09.26 Tech House Heldout",
+   "pair_index": 7,
+   "true_delta": 0.0,
+   "shadow_delta": -5.2,
+   "shadow_confidence": 0.977,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "10.09.26 Tech House Heldout",
+   "pair_index": 8,
+   "true_delta": 0.0,
+   "shadow_delta": -48.0,
+   "shadow_confidence": 0.977,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 1,
+   "true_delta": 0.0,
+   "shadow_delta": 11.3,
+   "shadow_confidence": 0.63,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 2,
+   "true_delta": 4.0,
+   "shadow_delta": 22.2,
+   "shadow_confidence": 0.653,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 3,
+   "true_delta": 0.0,
+   "shadow_delta": 12.6,
+   "shadow_confidence": 0.653,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 5,
+   "true_delta": 0.0,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.653,
+   "shadow_within_tolerance": true,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 6,
+   "true_delta": -64.0,
+   "shadow_delta": -21.3,
+   "shadow_confidence": 0.677,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 7,
+   "true_delta": -0.050420152763763326,
+   "shadow_delta": 0.0,
+   "shadow_confidence": 0.653,
+   "shadow_within_tolerance": true,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 8,
+   "true_delta": 0.0,
+   "shadow_delta": -8.3,
+   "shadow_confidence": 0.677,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 9,
+   "true_delta": 56.0,
+   "shadow_delta": -31.5,
+   "shadow_confidence": 0.677,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": false
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 10,
+   "true_delta": 0.0,
+   "shadow_delta": 12.6,
+   "shadow_confidence": 0.7,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  },
+  {
+   "project": "15.09.26 August Releases Mix",
+   "pair_index": 11,
+   "true_delta": 0.0,
+   "shadow_delta": -8.4,
+   "shadow_confidence": 0.63,
+   "shadow_within_tolerance": false,
+   "baseline_within_tolerance": true
+  }
+ ]
+}

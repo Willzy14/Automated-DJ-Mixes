@@ -50,6 +50,12 @@ RESOLUTION_REQUIRED_FIELDS = (
     "resolved_verdict", "resolved_delta_beats", "resolved_by", "date", "reason",
 )
 
+# Same value as propose_arrangement.BPM_MATCH_TOLERANCE. Duplicated rather
+# than imported: propose_arrangement.py imports FROM this module (burn list
+# C7 Step 1), so importing back would cycle. Keep both in sync by hand if
+# either changes.
+BPM_MATCH_TOLERANCE = 2.0
+
 
 @dataclass(frozen=True)
 class CanonicalPair:
@@ -315,6 +321,103 @@ def canonicalize(records: list[dict],
     return CanonicalizationResult(
         canonical=tuple(canonical), conflicts=tuple(conflicts),
     )
+
+
+def _structure_signature(sections: list[str]) -> tuple[int, int, int, int]:
+    """Compact fingerprint of a section structure: (drops, breaks, fills, intros).
+
+    Deliberately identical to propose_arrangement._structure_signature -
+    duplicated, not imported, for the same reason BPM_MATCH_TOLERANCE is
+    duplicated above (this module cannot import from propose_arrangement.py
+    without cycling). Keep both in sync by hand if either changes."""
+    drops = sum(1 for s in sections if s.lower().startswith("drop"))
+    breaks = sum(1 for s in sections if s.lower().startswith(("break", "braak")))
+    fills = sum(
+        1 for s in sections
+        if s.lower().startswith(("fill", "beat_dropout"))
+    )
+    intros = sum(1 for s in sections if s.lower().startswith("intro"))
+    return (drops, breaks, fills, intros)
+
+
+def shadow_swap_preference(
+    bpm: float,
+    out_structure: list[str],
+    in_structure: list[str],
+    canonical_pairs: list[CanonicalPair],
+    *,
+    exclude_project: str | None = None,
+    max_results: int = 3,
+    min_similarity: float = 0.1,
+) -> dict | None:
+    """Burn list C7 Step 1 - REPORT ONLY. Never called by anything that
+    chooses a swap point, an overlap, or any other real arrangement
+    decision - see propose_arrangement.py's own call site, which only ever
+    assigns the result to a report field.
+
+    A similarity-weighted average of the DELTA (sam - claude, in beats) the
+    canonical corpus's real corrections applied to transitions shaped like
+    this one. This is a hypothesis to be MEASURED, not a trusted signal -
+    `evaluate_shadow_swap_preference.py` runs this function in a
+    leave-one-project-out loop against the real corpus and reports how often
+    it would actually have been right, honestly, including against a
+    trivial "predict zero" baseline. Promotion past shadow mode (an actual
+    nudge to a real decision) needs that evaluation to show real skill
+    first, per the C6/C7/C8 plan's own Codex-reviewed sequencing - this
+    function existing is not itself that promotion.
+
+    Same similarity weights as propose_arrangement.find_similar_pairs (BPM
+    0.3, section-shape 0.7) - kept identical so "similar" doesn't quietly
+    mean something different between the report's existing `similar_pairs`
+    field and this one.
+
+    `exclude_project`: pairs belonging to this project are never scored -
+    the leave-one-project-out contract (a project's own transitions are
+    correlated, not independent samples, so a project must never be allowed
+    to predict itself; Codex review, swap-first-redesign plan).
+    """
+    out_sig = _structure_signature(out_structure)
+    in_sig = _structure_signature(in_structure)
+
+    scored: list[tuple[float, CanonicalPair]] = []
+    for pair in canonical_pairs:
+        if exclude_project is not None and pair.project == exclude_project:
+            continue
+        if pair.bpm_out is None:
+            bpm_score = 0.0
+        else:
+            bpm_diff = abs(bpm - pair.bpm_out)
+            bpm_score = (0.0 if bpm_diff > BPM_MATCH_TOLERANCE
+                         else 1.0 - (bpm_diff / BPM_MATCH_TOLERANCE))
+        pair_out_sig = _structure_signature(pair.out_structure)
+        pair_in_sig = _structure_signature(pair.in_structure)
+        out_dist = sum(abs(a - b) for a, b in zip(out_sig, pair_out_sig))
+        in_dist = sum(abs(a - b) for a, b in zip(in_sig, pair_in_sig))
+        struct_score = max(0.0, 1.0 - (out_dist + in_dist) / 30.0)
+        total = 0.3 * bpm_score + 0.7 * struct_score
+        if total > min_similarity:
+            scored.append((total, pair))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: -item[0])
+    top = scored[:max_results]
+    weight_sum = sum(sim for sim, _ in top)
+    if weight_sum <= 0:
+        return None
+
+    suggested_delta = sum(sim * p.delta_beats for sim, p in top) / weight_sum
+    return {
+        "suggested_delta_beats": round(suggested_delta, 1),
+        "confidence": round(top[0][0], 3),  # best single match's similarity
+        "based_on": [
+            {"project": p.project, "pair_index": p.pair_index,
+             "delta_beats": p.delta_beats, "verdict": p.verdict,
+             "similarity": round(sim, 3)}
+            for sim, p in top
+        ],
+    }
 
 
 def main() -> None:

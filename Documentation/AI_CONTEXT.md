@@ -1354,7 +1354,81 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
-> **TOP (2026-09-16, later same day): D13 is DONE - built, scored, peer-reviewed, findings fixed.**
+> **TOP (2026-09-16, night): C10 (Teaching Mixes case-study library) is CLOSED for this
+> session - 19 of 20 real files now have extracted, three-times-reviewed automation
+> data.** Full arc: Sam clarified this isn't for the pipeline, it's a case-study library
+> for Claude's own judgement -> built the zone-bus extractor (5/20 files) -> peer review
+> found a 70%-of-cards fabrication bug and a major false "mixed live" claim, both fixed
+> -> Sam said "keep going, build the extraction now" -> built a second mechanism
+> (direct-track automation via the older ArrangerAutomation XML, 14 more files) -> a
+> final review round flagged one honesty gap (the GainLo-to-dB conversion) which a
+> Claude subagent then RESOLVED by querying Ableton's own manual directly and confirming
+> the real file's automation range matches Ableton's documented FilterEQ3 spec
+> (-infinite to +6dB) almost exactly. Full suite 875/0/6 throughout. Only 1 file (Gbox
+> Side 3) has no extracted data - honestly, because its real curves are on parameters
+> not currently classified as a mix move. **NEXT SESSION:** (1) confirm with Sam before
+> committing - nothing from C10 (any round) or C7 Step 1 is committed, only D13's Phase
+> 3 work landed earlier this session; (2) resume D9 (investigation started, not
+> finished); (3) if Sam wants full 20/20 coverage, Gbox Side 3's unclassified curves are
+> the only gap; (4) `Cutoff` is still raw units, not Hz-converted, a real smaller
+> follow-on; (5) burn list E8; (6) the Dropbox canonical `Claude Code Brain/Memory/
+> MEMORY.md` overwrite, flagged repeatedly across all five blocks of this session, still
+> completely unresolved - needs Sam's explicit decision; (7) render check when Sam
+> bounces `Output/In-Key Mix V2 SW Tweaks.wav`.
+>
+> **TOP (2026-09-16, late evening, superseded by the entry above): C10 (Teaching Mixes case-study library) round 2 -
+> peer review found real bugs AND that the library's true potential is much bigger than
+> first reported.** Sam's direct clarification after C7 Step 1: build a case-study library
+> for Claude's OWN judgement (not a formula) from `Teaching Mixes/`'s 20 real historical
+> mixes. Round 1 (MiniMax + Claude subagent) looked SOUND; round 2, the same day, found the
+> Claude subagent's review had caught three real problems MiniMax's round missed: (1)
+> `build_card`'s same-zone check fired on `None == None`, fabricating a false claim on 188
+> of 269 cards (70% of the whole library) - confirmed by exact count, fixed; (2)
+> `_track_zone` trusted a raw XML `Id` attribute as a positional index, which is false in
+> the real files - mis-resolved the first two transitions of both flagship rich files;
+> fixed; (3) the biggest one - the "12 of 20 files were mixed live, nothing captured"
+> headline was flatly wrong. Independently confirmed then extended to all 15 non-rich
+> files: every one has real, substantial automation via a DIFFERENT, older mechanism
+> (`<ArrangerAutomation>`, drawn directly on individual clips) the extractor never reads -
+> **492 real curves, 26,822 real points, confirmed to exist and quantified, a genuine
+> substantial follow-on opportunity, not built this session.** All 20 cards regenerated,
+> docs corrected to the honest numbers. Full suite 857 -> 872 across the whole C10 arc.
+> **NEXT SESSION:** (1) report this fully to Sam if not already done - both the fix and the
+> much-bigger-than-reported opportunity; (2) decide whether to build the ArrangerAutomation
+> extraction (a real, comparably-sized new task, different attribution model - per-clip/
+> per-track, not per-bus); (3) resume D9 (investigation started, not finished - the actual
+> 380-pair baseline replay under `rescue,deep,phrase` has not been run yet); (4) burn list
+> E8; (5) the Dropbox canonical `Claude Code Brain/Memory/MEMORY.md` overwrite, flagged
+> repeatedly this session, still unresolved; (6) render check when Sam bounces `Output/
+> In-Key Mix V2 SW Tweaks.wav`. Nothing from this session's C10 work is committed yet.
+>
+> **TOP (2026-09-16, evening, superseded by the entry above): C7 Step 1 (shadow-mode `pair_history.jsonl` wiring) is DONE -
+> built, evaluated, peer-reviewed - with an HONEST NEGATIVE RESULT.** Sam asked directly after
+> D13 closed: is there a place Claude's mix-learning is written down, and should the 45 real
+> corrections in `pair_history.jsonl` actually help? Investigation found this was already scoped
+> in detail by a prior Codex plan review (burn list C7, formerly C1) as report-only shadow mode,
+> leave-one-project-out evaluated BEFORE any promotion - Sam chose to build exactly that (not the
+> much bigger, also-already-planned-but-never-started "learn from historical finished mixes"
+> project sitting in `Documentation/Mix Patterns Library/README.md`). Built
+> `canonicalize_pair_history.shadow_swap_preference()` (report-only field on
+> `ARRANGEMENT_REPORT.json`, confirmed by construction AND empirically to touch nothing real -
+> three re-runs of the real 15.09.26 mix produced byte-identical decompressed ALS content) plus
+> `Source/evaluate_shadow_swap_preference.py`, the held-out evaluation the plan requires. **Result,
+> run for real against the 31-pair canonical corpus: the shadow signal LOSES to a trivial "always
+> predict zero" baseline, 19% vs 68%** - verified not a bug (most real corrections ARE zero-delta,
+> so a similarity-weighted average regresses toward small numbers and misses the real big
+> corrections). NOT promoted past shadow mode. MiniMax + a Claude subagent (Codex still capped,
+> confirmed again this session) both reviewed independently, both SOUND, both caught the same one
+> error (a test count) which is fixed. **NEXT SESSION:** (1) this work is UNCOMMITTED - confirm
+> with Sam before committing; (2) tell Sam plainly what the negative result means for next steps
+> (bigger corpus, or a better signal than BPM+structure - the D12 geometry fields are the obvious
+> next signal to try, unattempted); (3) the bigger historical-mix-extraction plan
+> (`Mix Patterns Library/README.md`) is still there, unstarted, if Sam wants to revisit it; (4) D9
+> still open; (5) burn list E8 (schema hardening); (6) the Dropbox canonical `Claude Code Brain/
+> Memory/MEMORY.md` overwrite is STILL unresolved, flagged three times this session now; (7)
+> render check when Sam bounces `Output/In-Key Mix V2 SW Tweaks.wav`.
+>
+> **TOP (2026-09-16, midday, superseded by the entry above): D13 is DONE - built, scored, peer-reviewed, findings fixed.**
 > Codex + MiniMax dispatched in parallel; Codex genuinely capped (confirmed live, resets 2026-09-19
 > 11:48 AM), re-routed to a Claude subagent per the standing capped-seat rule. Both independently
 > found the same 2 write-up errors (T5/T6/T9 sneak values reversed, T1's bar-count claim false) and

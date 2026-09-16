@@ -1097,6 +1097,202 @@ was written).
     768/0/6 -> see the session's final count in `.github/ai-activity-log.md`.**
     Files changed: `Source/canonicalize_pair_history.py` (new),
     `Tests/test_canonicalize_pair_history.py` (new).
+  - **C7 Step 1 BUILT + TESTED + EVALUATED, 2026-09-16 - honest result: DOES NOT beat baseline,
+    NOT promoted past shadow mode.** Sam's direct instruction: wire `pair_history.jsonl` up so
+    it actually helps, rather than leaving 31 real corrections unused. Built exactly as scoped
+    above and by Codex's own MAJOR findings (report-only, shadow mode, leave-one-project-out
+    evaluated, never overriding admissibility): `canonicalize_pair_history.shadow_swap_preference`
+    (new function, same file) - a similarity-weighted average of the canonical corpus's real
+    swap-beat deltas (BPM 0.3 / section-shape 0.7, identical weights to the existing
+    `find_similar_pairs`), with `exclude_project` support for leave-one-project-out. Wired into
+    `propose_arrangement.py` as a new `shadow_swap_preference` field on `OverlapAnalysis` and in
+    `ARRANGEMENT_REPORT.json`'s per-transition output - **report-only, never read by
+    `align_pair`/`_search_anchors`/any arrangement decision**, confirmed by construction (the
+    call site only assigns a report field) and confirmed empirically (re-ran the real 15.09.26
+    August Releases Mix's Phase 2 three times with the change active: the compressed `.als`
+    hash differs between runs, traced to gzip's own embedded MTIME header in `apply_loops.
+    compress_als`, unrelated to this change; the DECOMPRESSED XML content's own hash is
+    byte-identical across three separate runs, `3c92fdc3dd76e475ecfed08091d08df7`). Full suite
+    845 -> 857 (12 new tests: 6 in `Tests/test_canonicalize_pair_history.py`, 6 more in the new
+    `Tests/test_evaluate_shadow_swap_preference.py` below - MiniMax caught this count wrong first
+    at 851, re-verified directly: `pytest Tests/ -q` really does report 857).
+    **New `Source/evaluate_shadow_swap_preference.py`** (+ 6 tests,
+    `Tests/test_evaluate_shadow_swap_preference.py`): the leave-one-project-out held-out
+    evaluation the plan requires before any promotion past shadow mode - for every canonical
+    pair, predicts its delta from every OTHER project's pairs only, and compares against a
+    trivial "always predict zero" baseline (most real corrections ARE zero-delta, so this
+    baseline is the real bar to clear, not an arbitrary strawman).
+    **Run for real against the current 31-pair canonical corpus: shadow hit rate 19% (6/31,
+    within the canonicaliser's own 4-beat/1-bar tolerance) vs baseline 68% (21/31) - the
+    shadow signal LOSES to "predict nothing changes" by 15 pairs.** Inspected individual rows,
+    not just the headline number, to rule out a bug before accepting this as real: the
+    mechanism works as designed, it is genuinely not accurate enough - non-zero real
+    corrections (64, -52, -32, 32, -28 beats etc.) are systematically under-predicted because
+    most of the corpus IS zero-delta, so any similarity-weighted average regresses toward a
+    small number regardless of which project's transitions it draws from. **Not promoted -
+    Step 1's own job (get an honest read before trusting anything) is complete and the honest
+    read is negative for the current mechanism.** BPM+structure-shape similarity alone is not
+    predictive of swap-delta magnitude/direction on this corpus; a real next step (unscoped,
+    not attempted blind) would need either a materially bigger corpus or a different signal
+    (the actual geometry fields the D12 rebuild added - entry/swap bar positions, structural
+    role - rather than just section-type counts), evaluated the same honest way before being
+    trusted for anything further. Corpus itself is UNDERPOWERED for a confident verdict either
+    way (31 pairs, 4 projects) - the script says so in its own output.
+    Also surfaced in passing, not fixed (out of scope for Step 1): `canonicalize_pair_history.
+    load_records`'s "missing field(s)" error message is imprecise for the 15.09.26 mix's T4
+    record - `sam_bass_swap_beat` is PRESENT but `null` (Sam ran no bass swap at all, matching
+    burn list D13's T4/R6 no-EQ-swap-crossfade finding), not literally absent; correctly
+    excluded either way, message just says the wrong reason.
+    Evidence: `Source/canonicalize_pair_history.py` (shadow_swap_preference),
+    `Source/propose_arrangement.py` (wiring), `Source/evaluate_shadow_swap_preference.py` (new),
+    `Documentation/Mix Patterns Library/shadow_swap_preference_evaluation.json` (real run output).
+    Files changed: `Source/canonicalize_pair_history.py`, `Source/propose_arrangement.py`,
+    `Source/evaluate_shadow_swap_preference.py` (new),
+    `Tests/test_canonicalize_pair_history.py`, `Tests/test_evaluate_shadow_swap_preference.py`
+    (new), `Documentation/Mix Patterns Library/shadow_swap_preference_evaluation.json` (new).
+    **Peer-reviewed 2026-09-16 - MiniMax + a Claude subagent standing in for capped Codex, both
+    independent, both in parallel.** Both confirmed SOUND on all three questions (similarity math
+    identical to `find_similar_pairs`, `exclude_project` genuinely excludes with no leakage,
+    `shadow_swap_preference` verified report-only by a full grep of every reference in the
+    codebase, the evaluation harness's tolerance/sign/baseline-fairness all correct, several
+    individual rows hand-spot-checked against the raw JSONL and matched exactly, the subagent
+    additionally re-ran the evaluation fresh and got a byte-identical JSON). Both independently
+    found the SAME single real error, the same specific number: this entry's own "Full suite
+    845 -> 851 (6 new tests)" undercounted - `git diff` shows 12 new tests (6 in
+    `test_canonicalize_pair_history.py` + 6 in the new `test_evaluate_shadow_swap_preference.py`),
+    not 6. Re-verified directly (`pytest Tests/ -q` -> 857 passed), fixed above. No other finding
+    from either reviewer required a change - the negative result itself, and everything that
+    produced it, holds up.
+    Receipts: `Receipts/2026-09-16/minimax-review-C7Step1.md`, `Receipts/2026-09-16/claude-
+    subagent-review-C7Step1.md` (includes disposition).
+    Owner: Claude. Status: DONE - built, evaluated, documented, reviewed by 2 independent lenses,
+    the one finding fixed. NOT promoted past shadow mode (the evaluation's own honest result).
+  - **C10 - Teaching Mixes case-study library, for Claude's own judgement, explicitly NOT for
+    the pipeline** - Sam, 2026-09-16, right after C7 Step 1's negative result: "this is not
+    for the bots... this is for you as an AI looking for several different answers for the
+    same transition and distilling which one might work best." A deliberately different thing
+    from C7's formula: a library of real, distilled historical transitions Claude reads and
+    reasons over directly (the same way Claude already reads narrative correction write-ups
+    before building D13 decisions), never a scored/averaged signal.
+    **BUILT + TESTED + EVALUATED, 2026-09-16.** Source material: `Teaching Mixes/`, 20 real
+    finished mixes already in this repo (not the backup-drive archive the old, never-executed
+    "Ground-truth ALS learning plan" targeted - Sam named this folder specifically). Real
+    discovery before any extraction code was written, confirmed against actual files: these
+    are DJ-mixer-style sets where individual song tracks carry ONLY the arrangement - the
+    actual mix move (channel fader, filter/EQ sweep) lives on BUS/RETURN tracks ("A-Zone 62 DJ
+    EQ" / "B-Zone 62 DJ EQ"), fed by each track's own sends, alternating roughly A/B/A/B (real
+    exceptions confirmed, e.g. two edit layers of one song briefly sharing a zone). Sam
+    confirmed this routing model directly (voice) before extraction began.
+    New `Source/extract_teaching_mix_cards.py`: resolves each track's zone via its dominant
+    send, finds real clip-overlap transitions (excludes a stray whole-mix reference-import
+    track by span-outlier detection), reads each zone's Volume automation (converted to real
+    dB via the same curve `automated_dj_mixes.als_generator._db_to_ableton_volume` uses,
+    inverted) and filter/EQ macro automation inside the transition window, and a
+    `_summarize_curve` shape-description that catches dips/spikes a naive start-vs-end
+    comparison would miss (found and fixed during build: a filter that swept 64->32->64 read
+    as "flat" before the fix, because start equalled end). The filter parameter resolves to a
+    real, specific macro (`MacroControls.0` on the zone's own rack - confirmed by widening the
+    device-resolution search window until it stopped hitting generic XML noise tags) - honestly
+    labelled as a live-played, MIDI-CC-mapped knob whose downstream EQ target is not further
+    resolved, never overclaimed as a specific band/frequency.
+    Run across all 20 real files, zero crashes. **Honest coverage, not uniform**: only 5 of 20
+    files carry any real automation (all on the newer Ableton schema, Live 10.1.25/12.3.2) -
+    269 real transitions found total, 14,398 real automation points captured on the 5 rich
+    files. The other 15 are either genuinely zero-automation (mixed live, confirmed zero
+    `<AutomationEnvelope>` anywhere in the file) or use Ableton's Group Track routing instead
+    of Return-track sends (3 files, not parsed by this pass - confirmed these 3 specifically
+    have zero automation regardless, so the gap costs nothing today, but is a real, named
+    limitation for a future file that might have both). 12 new tests
+    (`Tests/test_extract_teaching_mix_cards.py`), including 2 pinned against real files (the
+    rich Defected Ibiza CD2 and the empty Gbox Side 1). Full suite 857 -> 869.
+    Output: `Documentation/Mix Patterns Library/Teaching Mixes Cards/` - 20 per-mix `.md` card
+    files + `INDEX.md` (honest coverage summary, reading guide, known limitations).
+    Evidence: `Source/extract_teaching_mix_cards.py`, `Tests/test_extract_teaching_mix_cards.py`,
+    `Documentation/Mix Patterns Library/Teaching Mixes Cards/INDEX.md`.
+    **PEER REVIEW ROUND 2, same day, found MiniMax's round didn't catch: two real bugs plus
+    a major false claim, all in the Claude subagent's pass.** (1) `build_card`'s
+    `if out_t.zone == in_t.zone` fired on `None == None`, fabricating a "same
+    zone... direct edit/layer" claim on **188 of 269 cards (70%)** - confirmed by exact
+    count before fixing, fixed (`out_t.zone is not None and ...`), 2 new tests both proved
+    to fail against the pre-fix code. (2) `_track_zone` trusted `TrackSendHolder`'s own
+    `Id="N"` attribute as a 0-based zone-slot index - confirmed false against the real
+    Defected files (tracks 1-2 carry Ids "2,3,4" while every later track carries "0,1,2" for
+    the identical three sends), mis-resolving the first two transitions of BOTH rich
+    Defected files (track 1 read as the reverb return, track 2 as unresolved); fixed to
+    resolve by order-of-appearance instead, re-verified against the real file (tracks 1-5
+    now show the correct A/B/A/B/A pattern). (3) **The "12 of 20 mixed live, nothing
+    captured" headline claim was flatly wrong.** Independently confirmed, then extended to
+    all 15 non-rich files: every one carries real, substantial automation via a DIFFERENT,
+    OLDER mechanism (`<ArrangerAutomation><Events><FloatEvent>`, drawn directly onto
+    individual clips, not on a bus) that this pass never reads - 492 real multi-point
+    curves, 26,822 real automation points, spread across all 15 files (8-56 curves / 72-5,693
+    points per file). The "5 of 20" ceiling is a limitation of what this specific build
+    reads (the zone-bus mechanism only), NOT of what these mixes actually contain - **a
+    real, substantial, comparably-sized follow-on opportunity**, not a dead end. Left
+    unbuilt this pass (different attribution model needed: per-clip/per-track, not per-bus;
+    needs filtering real musical parameters from incidental on/off toggles among ~2200 raw
+    blocks per file) - flagged clearly rather than attempted blind under the same push.
+    All 20 real cards regenerated with both fixes; INDEX.md and the module's own docstring
+    corrected to state the real, quantified picture instead of the false one. Full suite
+    870 -> 872 (2 new regression tests). Both round-1 reviewers' findings and this round-2
+    correction are independently re-verified by Claude against the real files before
+    accepting any of it (exact-count matches, not just trusting the report).
+    Receipts: `Receipts/2026-09-16/minimax-review-C10-TeachingMixes.md`, `Receipts/2026-09-16/
+    claude-subagent-review-C10-TeachingMixes.md` (includes disposition).
+    **ROUND 3, same day, Sam's direction ("keep going - build the extraction now"): built
+    Mechanism 2, the direct-track automation the round-2 finding identified as missing.**
+    New `TrackDirectAutomation` dataclass + `_track_direct_automation()` function reads
+    the SAME older `<ArrangerAutomation>` mechanism directly off each SONG TRACK's own
+    devices (no bus involved) - Mixer `Volume`, FilterEQ3's `GainLo` (bass-shelf gain,
+    confirmed against a real file: MidiControllerRange [0.0003162277571, 1.99526238],
+    producing plausible dB values when run through the same `_value_to_db` curve as the
+    zone-bus mechanism, e.g. 0.993->~-0.06dB, 0.129->~-17.8dB - NOT independently verified
+    against Ableton's own documented FilterEQ3 gain range, flagged for round-3 peer review
+    to check), and AutoFilter's `Cutoff` (real range [20, 135] confirmed against a real
+    file, reported as its raw unconverted value - lower = more filtered, direction
+    confirmed, no Hz curve resolved). Reuses `_nearest_real_tag`, already reviewed and
+    proven for the zone-bus mechanism. **Result: coverage rose from 5/20 to 19/20 files
+    with real extracted automation** (14 more via direct-track, zero overlap with the 5
+    zone-bus files - confirmed programmatically) - only Gbox Side 3 has real automation on
+    none of the three classified parameters (its curves are Send/DryWet/Tempo). 4 new
+    tests (2 synthetic unit tests pinning the Volume/GainLo/Cutoff classification and the
+    single-point-block exclusion, 2 real-file tests). The old "zero automation" test for
+    Gbox Side 1 was renamed and narrowed (it's no longer a zero-automation file) rather
+    than deleted, keeping its still-valid "zone side stays honestly empty" assertion. The
+    pinned corpus test extended to cover both mechanisms and their confirmed-zero overlap.
+    Full suite 872 -> 875. All 20 cards regenerated. INDEX.md and the module docstring
+    rewritten with the final numbers plus an explicit Revision history section, since the
+    coverage figure has now moved twice in one day (5 -> "5 extracted + 15 confirmed-but-
+    unextracted" -> 19) and future readers need to trust the CURRENT number, not one
+    remembered from an earlier pass.
+    **Round 3 peer review landed, SOUND, one honesty finding adopted and then RESOLVED
+    into a genuine confirmation.** MiniMax (no execution access this dispatch, said so
+    plainly) confirmed the regex/classification logic sound by static read and flagged
+    that the `GainLo` dB conversion was stated with more confidence than verified - fair
+    at the time. The Claude subagent then independently re-ran the extractor against the
+    real corpus (every coverage number matched exactly: 5/14/19/1 files, 269 transitions,
+    1,212/14,398 points), reconstructed 5 real card entries from raw XML by hand (all
+    matched), and - beyond what was asked - queried Ableton's own Live manual directly:
+    EQ Three's (FilterEQ3's) documented gain range is **-infinite dB to +6dB per band**
+    (not the +-15dB an earlier, less targeted web search had suggested, which belongs to
+    the separate Channel EQ device). The real file's own automation range converts to
+    **+6.02dB**, matching Ableton's documented spec almost exactly - genuine independent
+    confirmation, not a coincidence of plausible numbers. Docstring and INDEX.md updated
+    to state this as CONFIRMED rather than "inferred, unverified." No code changes needed
+    - round 3's build was sound as written; the finding upgraded confidence, it did not
+    require a fix.
+    Receipts: `Receipts/2026-09-16/minimax-review-C10-round3.md`, `Receipts/2026-09-16/
+    claude-subagent-review-C10-round3.md` (includes disposition).
+    Owner: Claude. Status: DONE, closed for this session. 19 of 20 real files now have
+    real, extracted, twice-reviewed automation data across two confirmed mechanisms
+    (zone-bus + direct-track). Only 1 file (Gbox Side 3) has none, and that's honest -
+    its real curves are on parameters not classified as a mix move.
+    Peer review: rounds 1-3 all SOUND after fixes. Round 1: MiniMax + Claude subagent,
+    minor polish. Round 2: Claude subagent's ground-truth spot-check found 2 real bugs
+    (70%-of-cards fabricated claim, mis-resolved zone routing) + 1 major false coverage
+    claim, all fixed and re-verified. Round 3: MiniMax + Claude subagent on the new
+    direct-track mechanism, one honesty finding adopted and then independently confirmed
+    correct against Ableton's own documentation.
   - **C8 - not yet scoped**: let a musically-better candidate win even if it needs a loop
     extension to become geometrically valid, instead of discarding it before it's ever compared.
     The deepest, highest-risk piece - deliberately left unscoped until C5/C6/C7 are proven. The T2

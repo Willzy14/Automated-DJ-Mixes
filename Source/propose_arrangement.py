@@ -137,6 +137,13 @@ class OverlapAnalysis:
     front_cut: tuple | None = None         # (track_name, clip_name, cut_beats) — decisions: cut a clip's front, pull the rest in
     shift_delta: float = 0.0
     similar_pairs: list[dict] = field(default_factory=list)
+    # Burn list C7 Step 1, report-only (never gates/rejects, same discipline
+    # as density_score below): a similarity-weighted swap-delta hypothesis
+    # from canonicalize_pair_history.shadow_swap_preference. None until
+    # evaluate_shadow_swap_preference.py's held-out evaluation shows real
+    # skill, per the C6/C7/C8 plan's own sequencing - this field existing
+    # does not itself promote it to influencing any real decision.
+    shadow_swap_preference: dict | None = None
     overlap_policy: str = "standard_48"
     loop_target_marker: str | None = None
     notes: str = ""
@@ -1531,6 +1538,30 @@ def propose_arrangement(als_path: Path, sections_path: Path,
     if history:
         print("  Loaded {} pairs from history".format(len(history)))
 
+    # Burn list C7 Step 1: a canonicalised, deduplicated view of the SAME
+    # file, for the report-only shadow_swap_preference field below.
+    # load_pair_history() auto-detects a path when `history_path` is None
+    # and doesn't report back which one it used, so this re-runs the exact
+    # same auto-detect candidates (matching load_pair_history's own list)
+    # rather than trusting a possibly-None history_path.
+    canonical_pairs: list = []
+    _resolved_history_path = history_path
+    if _resolved_history_path is None:
+        for _candidate in (
+            Path("Documentation/Mix Patterns Library/pair_history.jsonl"),
+            Path(__file__).parent.parent / "Documentation" / "Mix Patterns Library" / "pair_history.jsonl",
+        ):
+            if _candidate.exists():
+                _resolved_history_path = _candidate
+                break
+    if _resolved_history_path is not None and Path(_resolved_history_path).exists():
+        from canonicalize_pair_history import canonicalize, load_records
+        records, _malformed = load_records(Path(_resolved_history_path))
+        canonical_pairs = list(canonicalize(records).canonical)
+        if canonical_pairs:
+            print("  {} canonical pairs for shadow preference".format(
+                len(canonical_pairs)))
+
     overlaps: list[OverlapAnalysis] = []
     all_loops: list[LoopSpec] = []
     all_trims: list[tuple] = []      # (track_name, clip_name, trim_beats) front trims
@@ -1556,6 +1587,19 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             analysis.notes += "; similar pairs: {}".format(
                 ", ".join("{}:{}".format(p.get("pair_index", "?"), v)
                           for p, v in zip(similar[:3], verdicts)))
+
+        # Burn list C7 Step 1, report-only - see the OverlapAnalysis field
+        # comment and canonicalize_pair_history.shadow_swap_preference's own
+        # docstring. current_project excludes this project's OWN corpus
+        # entries from predicting itself, same leave-one-project-out
+        # discipline the held-out evaluation uses.
+        if canonical_pairs:
+            from canonicalize_pair_history import shadow_swap_preference
+            current_project = als_path.parent.parent.name
+            analysis.shadow_swap_preference = shadow_swap_preference(
+                bpm, [s.get("name", "") for s in out_t.sections],
+                [s.get("name", "") for s in in_t.sections],
+                canonical_pairs, exclude_project=current_project)
 
         overlaps.append(analysis)
 
@@ -2210,6 +2254,10 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
                 }
                 for p in ov.similar_pairs[:3]
             ]
+        if ov.shadow_swap_preference:
+            # Burn list C7 Step 1 - REPORT ONLY. Not read by anything that
+            # chooses a swap point; see the OverlapAnalysis field comment.
+            t["shadow_swap_preference"] = ov.shadow_swap_preference
         report["transitions"].append(t)
 
     if output_path.suffix == ".json":
