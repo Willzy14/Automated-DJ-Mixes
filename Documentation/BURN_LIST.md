@@ -2310,6 +2310,23 @@ was written).
   Codex SOUND-with-corrections (adopted), both independent, both converged on the same core
   findings.
 
+- [ ] **Review docs make Sam re-derive "is this outro short on purpose" by eye every time** (D14) -
+  found 2026-09-22, building "22.09.26 Tech House Core Sample": Sam flagged several outro clips
+  looking short in Ableton while bouncing, unprompted. Investigated with a one-off script
+  cross-referencing the ALS's last clip per outgoing track against that track's own detected
+  `n_bars` (`Documentation/Reviews/2026-09-22 Render Check - Tech House Core Sample.md`) - answer
+  was "not a bug, 0 unused bars on all 10 transitions, the source outros are just genuinely short
+  on some tracks" - but getting that answer needed a bespoke investigation, not something the
+  pipeline's own output already told him. This is exactly the kind of check that should be
+  automatic: a per-transition `outgoing_unused_bars` (or similarly named) field in
+  `ARRANGEMENT_REPORT.json`, surfaced in `REVIEW_V<N>.md`'s per-transition table, so "does this
+  outro run to the track's true end" is answered by reading the doc instead of writing a script
+  every time a clip looks short during a bounce.
+  Evidence: `Documentation/Reviews/2026-09-22 Render Check - Tech House Core Sample.md`.
+  Owner: Claude. Status: OPEN - not yet scoped or built.
+  Touched: 2026-09-22.
+  Peer review: NONE - not yet reviewed.
+
 ## E - Hygiene / technical debt (does not affect output quality today)
 
 - [ ] **Render-check has real blind spots on every production (tempo-arc) mix, currently
@@ -3030,8 +3047,26 @@ commit pending in this same turn. Count: unchanged (8 open, 27 done, 1 dropped) 
 verification+fix under an already-closed D5, not a new open/done flip.
 rev (this write) -> (this write).
 
-## THE COUNT: 8 open, 27 done, 1 dropped (last update 2026-09-22 15:05 [Claude]: D5 follow-up
-fix committed, pushed, and peer-reviewed SOUND by MiniMax; one real nitpick adopted (malformed-
+Last item update: 2026-09-22 15:40 [Claude] - Sam asked while bouncing "you haven't extended
+some of the outros to the next cue point... is that an oversight?" (hadn't listened yet, just
+flagging what he saw in Ableton). Investigated against the ALS + source stem-analysis data rather
+than guessing: cross-referenced every outgoing track's last clip (source bars) against that same
+track's own detected `n_bars` across all 10 transitions - 0 unused bars everywhere, confirmed not
+an oversight. Short-looking outros are genuinely short native material on some tracks (8-18 bars
+depending on the track); two (HARTY, Jones) got an algorithmic tail-loop extension on top because
+their native outro alone was short, the other eight didn't need one. Wrote up the method + full
+table in `Documentation/Reviews/2026-09-22 Render Check - Tech House Core Sample.md` (committed,
+git-tracked - `REVIEW_V3.md`/`RENDER_CHECK_V3.md` themselves are project-local and gitignored).
+Opened D14 for the process gap this surfaced: answering that question needed a bespoke script:
+should be a permanent `outgoing_unused_bars`-style field in `ARRANGEMENT_REPORT.json`/
+`REVIEW_V<N>.md` instead. Count: D14 opened (8 -> 9 open, 27 done, 1 dropped unchanged).
+rev (this write) -> (this write).
+
+## THE COUNT: 9 open, 27 done, 1 dropped (last update 2026-09-22 15:40 [Claude]: D14 opened -
+surface per-transition outro-material-usage automatically in the review doc instead of requiring
+a one-off investigation each time; found while answering Sam's real "is this outro short on
+purpose" question, confirmed not a bug on this mix). Prior update (2026-09-22 15:05 [Claude]):
+D5 follow-up fix committed, pushed, and peer-reviewed SOUND by MiniMax; one real nitpick adopted (malformed-
 cache warn print) and fixed same session; count unchanged, D5 was already closed). Prior update
 (2026-09-22 14:20 [Claude]): real production
 bug found+fixed in D5's already-shipped `--write-hints` path while building a genuine new mix;
