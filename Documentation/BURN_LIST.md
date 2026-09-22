@@ -1844,7 +1844,7 @@ was written).
   guessed at.
   Owner: Claude. Peer review: NONE - not yet reviewed (investigation only, no code written).
 
-- [ ] **The built fixes for long intros and short outros are switched off in the standard
+- [x] **The built fixes for long intros and short outros are switched off in the standard
   `/mix` run** (D9) - Sam's long-intro rule ("count back from the first cue", a swap around the
   one-minute mark; cue signals `deep` and `phrase`) and his short-outro rule ("run back 16 bars
   from the last beat"; cue signal `rescue`, the tail-anchor rescue) are built, tested and merged,
@@ -1871,8 +1871,71 @@ was written).
   (Tommy Farrow's bar-31 dropout on Pat Premier's outro start) while changing everything around
   it - `Documentation/Mix Patterns Library/15.09.26 August Releases Mix Sam Tweaks.md`.
   Evidence: `Source/align_engine.py:1084` `Source/align_engine.py:1370` `Source/propose_arrangement.py:2123`
-  Owner: Claude. Status: OPEN - evidence first, then Sam's call on the default. Touched: 2026-09-15.
-  Peer review: NONE - not yet reviewed.
+
+  **REPLAY DONE, 2026-09-22 - CLEAN.** Part 1 of the item's own two-part check. New tool
+  `Tools/d9_cue_signal_replay.py` (standalone, mirrors `Tests/test_alignment_baseline.py`'s row
+  shape so the diff is apples-to-apples) sweeps every ordered pair of the 380-pair 14.08.26
+  corpus twice: once with a fresh default `CueConfig()` - cross-checked byte-identical against
+  the frozen `baseline_alignments.json` (267 ok/113 raise), confirming corpus and baseline agree
+  before trusting the diff - then once with `CueConfig(tail_anchor_rescue=True,
+  deep_intro_anchor=True, incoming_phrase_anchors=True)`, i.e. `rescue,deep,phrase` together, the
+  exact combination the standard `/mix` Phase 2a command never passes. Diffed on the full pinned
+  field set (`handoff_bar_out`, `arr_offset_bars`, `overlap_bars`, `swap_progress`,
+  `handoff_kind`, `alignment_policy`, `paired_cues`, `notes`, `overlap_policy`, `plan`, ...).
+  Result: **0 changed** (no already-OK pair moved), **0 newly-raise** (no OK pair broken),
+  **87 of the 113 default-raise pairs newly align (77%)**, 26 still raise. This is the expected
+  clean result the item predicted: `deep`/`phrase` anchors only enter `_align_pair_landmark_aware`
+  via the `rescue_anchors` fallback, tried strictly after the normal drop-anchor search returns
+  `None`, and `tail_anchor_rescue` is the last resort after that - so the combination can only
+  turn a raise into an align, never move or break a pair the default already handles, and the
+  full corpus now confirms that empirically rather than by code-reading alone. Full row-level
+  detail (all 87 rescues with `handoff_bar_out`/`overlap_bars`/`anchor_bar_in`/`n_paired_cues`,
+  complete default + combined row sets): `Documentation/Plans/burn-list-2026-09-13/d9_replay_result.json`.
+  Command: `PYTHONPATH=Source python Tools/d9_cue_signal_replay.py --out
+  Documentation/Plans/burn-list-2026-09-13/d9_replay_result.json`.
+  **PART 2 DECIDED + SHIPPED, 2026-09-22.** Sam: "make it the default." `Source/align_engine.py`'s
+  `CueConfig` field defaults for `tail_anchor_rescue`/`deep_intro_anchor`/`incoming_phrase_anchors`
+  flipped `False` -> `True` (class + field docstrings updated to explain why, citing this item).
+  Since the standard `/mix` Phase 2a command passes no `--cue-signals`, every future mix picks
+  this up automatically - no Phase 2a wiring change needed in either brain's `mix.md`.
+  Flipping the default broke 9 tests across 5 files, each genuinely investigated and fixed (not
+  papered over): `Tests/test_alignment_baseline.py`'s frozen 380-pair baseline deliberately
+  refreshed (267 ok/113 raise -> 354 ok/26 raise, exactly matching the replay above); its
+  now-vacuous "rescue-flag plan layer" tier (`compute_rescue_rows`/
+  `test_rescue_plan_matches_baseline`, guarding a 2026-08-20 flag-leak bug) retired, since
+  "default" and "rescue-on" are now the same CUE_CONFIG state - the flag-leak class it guarded is
+  independently confirmed still covered by `Tests/test_codex_blocker_fixes.py`'s Fix 3 section
+  (verified by hand-tracing `plan_fill_or_cut`'s landmark-mode classification, which never reads
+  live `CUE_CONFIG`, only the static `alignment_policy` value). `Tests/test_intro_phrase_swaps.py`
+  had a `SimpleNamespace` test fixture missing `n_bars`/`musical_landmarks`, newly needed once
+  the default-True path unconditionally reaches `_mix_cues` - pure fixture-completeness fix, zero
+  assertion logic changed (independently re-derived and confirmed by both peer reviews below).
+  `Tests/test_alignment_feasibility.py`'s pinned real-corpus constant moved 267 -> 353 (one of the
+  87 newly-rescued pairs aligns but its `plan_fill_or_cut` still raises - named pair, traced
+  arithmetic, confirmed against `d9_replay_result.json`). `Tests/test_policy_threading.py` gained
+  an autouse fixture isolating `CUE_CONFIG` to the pre-D9 all-off state for that whole file (tests
+  an orthogonal concern - policy-cap threading - and one test broke because a rescue tier could
+  now satisfy a deliberately-tightened test policy the primary search couldn't; reproduced by hand
+  outside the isolation fixture to confirm it was necessary, not just convenient).
+  `Tests/test_tail_anchor_rescue.py` had one test renamed + reworked to state the new reality
+  honestly (D9 changed the DEFAULT, not the underlying legacy search path) rather than claim a
+  now-false "flag defaults OFF" premise. Full suite: 874 passed, 6 skipped, 0 failed.
+  Author: Claude. Owner: Claude. Status: DONE 2026-09-22.
+  Peer review: SOUND - MiniMax (`Receipts/2026-09-22/minimax-review-d9-default-flip.md` +
+  `-retry.md`; both dispatches crashed before writing their own helper completion trailer, so
+  neither is a machine-verified receipt in this skill's strict sense, but both independently
+  produced complete, well-formed, mutually-consistent reviews ending in the required terminator,
+  and the retry caught a real stale-comment nit the first pass missed - corroborating rather than
+  contradicting each other) + SOUND - Claude subagent standing in for Codex (durably capped today,
+  confirmed live via chatgpt.com/#settings/Usage: 0% weekly left, resets ~2026-09-26) -
+  independently hand-traced the code (not just read the claims), reproduced the
+  `test_policy_threading.py` failure outside the isolation fixture to confirm it was real, and
+  returned one genuine CORRECTION (this item's own text was stale - said "no production code
+  changed" and "Sam's call" pending after both had already happened; fixed by this rewrite) plus
+  two MINOR non-blocking nits (a stale `# every flag off` comment, fixed same session; a few other
+  `CueConfig(incoming_intro_loop=True)` call sites now also silently carry the 3 D9 flags True -
+  harmless today, confirmed by exhaustive grep that nothing they exercise reads those flags, left
+  as-is per Sam's "don't over-engineer" standing preference).
 
 - [x] **A6's sample-path rewrite wrote a bare & into the final ALS, so any track with & in its
   filename made the whole set unloadable** (D10) - DONE 2026-09-15, uncommitted. The rewrite now
@@ -2660,7 +2723,33 @@ documented as deliberate) so kept, the wrong specific number was not. 3 lower-pr
 (name-match prefix, pair_index collision, unrounded fractional bars) opened as E8 rather than
 fixed blind - real but unexercised by the shipped decisions file. rev 70d272d -> (this write).
 
-## THE COUNT: 10 open, 25 done, 1 dropped (last update 2026-09-16 10:50 [Claude]: D13 DONE on 2
+Last item update: 2026-09-22 10:35 [Claude] - progress: D9's part-1 check done - new
+`Tools/d9_cue_signal_replay.py` swept the full 380-pair 14.08.26 corpus under `rescue,deep,phrase`
+combined and diffed against a freshly-computed default sweep (cross-checked byte-identical
+against the frozen baseline first). Clean result: 0 changed, 0 newly-raise, 87/113 default-raise
+pairs newly align (77%). Confirms empirically what the code comment claimed - these three signals
+can only rescue a raise, never move or break a pair the default already handles. Full detail in
+`Documentation/Plans/burn-list-2026-09-13/d9_replay_result.json`. Still OPEN - part 2 (Sam's call
+on the default) is next. Count unchanged: still 10 open. rev c8ada13 -> (this write).
+
+Last item update: 2026-09-22 11:40 [Claude] - DONE: D9 - Sam said "make it the default";
+`align_engine.CueConfig`'s three field defaults flipped True, 9 tests across 5 files broke and
+were each genuinely fixed (frozen baseline refreshed, a now-vacuous test tier retired with its
+coverage confirmed to survive elsewhere, a stale fixture completed, a pinned constant moved with
+traced arithmetic, one file isolated from the new default to keep testing its own orthogonal
+concern). Full suite 874/6/0. Reviewed by MiniMax (2 runs, both crashed before their own helper
+trailer but produced consistent, well-formed, corroborating reviews - one caught a stale comment,
+fixed) and a Claude subagent standing in for durably-capped Codex (independently hand-traced the
+code and reproduced a test failure outside its isolation fixture to confirm it was real; returned
+one real CORRECTION - this item's own text was stale, now rewritten - plus two non-blocking MINOR
+nits). rev c8ada13 -> (this write).
+
+## THE COUNT: 9 open, 26 done, 1 dropped (last update 2026-09-22 11:40 [Claude]: D9 DONE - the
+long-intro/short-outro rescue signals are now the CueConfig default, MiniMax + Claude-subagent
+reviewed SOUND, 9 dependent test failures genuinely fixed, full suite 874/6/0: 10 -> 9 open,
+25 -> 26 done. Prior update (2026-09-22 10:35 [Claude]): D9 part-1 replay clean (0 changed/0
+newly-raise, 87/113 rescued) - evidence gathered, awaiting Sam's call on the default; count
+unchanged. Prior update (2026-09-16 10:50 [Claude]): D13 DONE on 2
 independent reviewers' converged findings, both fixed and re-verified; E8 opened for the 3
 lower-priority findings neither review's fix touched: 10 -> 9 -> 10 open, 24 -> 25 done. Prior
 update (2026-09-15 19:10 [Claude]): D12 DONE on

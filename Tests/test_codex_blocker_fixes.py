@@ -113,7 +113,12 @@ def _rescued_fixture():
 def test_rescued_pair_with_flags_off_gets_no_loop_or_cut():
     o, i, al = _rescued_fixture()
     saved = AE.CUE_CONFIG
-    AE.CUE_CONFIG = AE.CueConfig()  # every flag off
+    # Since D9 (2026-09-22) CueConfig() no longer means every flag off -
+    # tail_anchor_rescue/deep_intro_anchor/incoming_phrase_anchors default True.
+    # plan_fill_or_cut doesn't gate on any of those three (only on
+    # incoming_intro_loop, checked below), so this fixture is still valid: every
+    # flag plan_fill_or_cut actually reads is off.
+    AE.CUE_CONFIG = AE.CueConfig()
     try:
         specs = AE.plan_fill_or_cut(o, i, al)
     finally:

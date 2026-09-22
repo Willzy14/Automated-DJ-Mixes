@@ -25,6 +25,28 @@ import align_engine as AE  # noqa: E402
 from automated_dj_mixes.transition_policy import INTERIM_V1  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _cue_config_isolated_from_d9_defaults():
+    """This file tests policy-CAP threading (C5), a concern orthogonal to
+    which analysis signals CUE_CONFIG admits. Since D9 (2026-09-22) made
+    `tail_anchor_rescue`/`deep_intro_anchor`/`incoming_phrase_anchors` the
+    module default, the rescue tiers they unlock can find an alternative
+    anchor inside a deliberately-tightened test policy even when the
+    fixture's PRIMARY drop-anchor pairing has none — which is real D9
+    behaviour, but it would make test_a_tighter_policy_genuinely_rejects_
+    the_same_overlap unable to tell "policy cap correctly threaded" apart
+    from "a rescue tier found something else". Pin the pre-D9 all-off state
+    for the duration of this file so it keeps testing one thing.
+    """
+    saved = AE.CUE_CONFIG
+    AE.CUE_CONFIG = AE.CueConfig(tail_anchor_rescue=False, deep_intro_anchor=False,
+                                 incoming_phrase_anchors=False)
+    try:
+        yield
+    finally:
+        AE.CUE_CONFIG = saved
+
+
 def _quality_context():
     import numpy as np
     return AE.LoopQualityContext(

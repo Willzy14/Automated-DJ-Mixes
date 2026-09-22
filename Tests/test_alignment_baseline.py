@@ -35,9 +35,21 @@ Pinned surface (extended for Codex BLOCKER 2, 2026-08-20):
     had no coverage at all before this extension.
   * derived overlap_policy ("named_landmark_64" | "standard_48") per spec,
     pinned as a value (not as code-path branching).
-  * the rescue-flag plan layer (CUE_CONFIG.tail_anchor_rescue=True) for every
-    pair the default-flag align raises, so the tail-anchor-rescue flag-leak
-    (fixed 2026-08-20) cannot return silently.
+
+RETIRED 2026-09-22 (burn list D9, Sam's call): the separate "rescue-flag plan
+layer" this docstring used to describe (CUE_CONFIG.tail_anchor_rescue=True
+re-run over every pair the default-flag align raised, guarding the
+2026-08-20 tail-anchor-rescue flag-leak) is gone. `tail_anchor_rescue` (and
+`deep_intro_anchor`/`incoming_phrase_anchors`) are now themselves the
+default — see the CueConfig class docstring in align_engine.py — so "default"
+and "rescue-flag-on" are the same CUE_CONFIG state and the layer had nothing
+left to distinguish. The flag-leak class it protected (a rescued pair
+misclassified as legacy policy in plan_fill_or_cut) is still independently
+covered by Tests/test_codex_blocker_fixes.py's "Fix 3" section, which
+constructs the Alignment directly and does not depend on the corpus sweep or
+the ambient CUE_CONFIG default. A `baseline_alignments.json` produced before
+this retirement still carries a `rescue_rows` key; `test_baseline_is_self_
+consistent` tolerates its presence but no longer requires it.
 """
 import dataclasses
 import json
@@ -188,52 +200,6 @@ def compute_rows():
     return rows
 
 
-def compute_rescue_rows():
-    """Same row shape as compute_rows() but only for pairs the DEFAULT-flag
-    align raises, re-run with CUE_CONFIG.tail_anchor_rescue=True.
-
-    Re-runs the default-flag sweep INSIDE this function (does NOT couple to
-    compute_rows, per spec) so the global CUE_CONFIG can be flipped to the
-    rescue value without contaminating the default-flag outcomes used to
-    filter the pair set. Pinned the same way as compute_rows: OK rows carry
-    plan + overlap_policy; raise rows carry error + msg.
-    """
-    import align_engine as AE
-    tracks = _load_tracks()
-
-    # Step 1: identify which ordered pairs the DEFAULT-flag align raises.
-    # Run with the current (default) CUE_CONFIG and record the keys that raise.
-    default_raises = set()
-    for out_name in sorted(tracks):
-        for in_name in sorted(tracks):
-            if out_name == in_name:
-                continue
-            try:
-                AE.align_pair(tracks[out_name], tracks[in_name])
-            except Exception:
-                default_raises.add((out_name, in_name))
-
-    # Step 2: re-run the same pair set with rescue flag on; pin via the same
-    # row shape compute_rows uses.
-    saved = AE.CUE_CONFIG
-    AE.CUE_CONFIG = dataclasses.replace(saved, tail_anchor_rescue=True)
-    try:
-        rows = []
-        for out_name, in_name in sorted(default_raises):
-            rec = {"out": out_name, "in": in_name}
-            try:
-                al = AE.align_pair(tracks[out_name], tracks[in_name])
-            except Exception as exc:
-                rec.update({"status": "raise", "error": type(exc).__name__,
-                            "msg": str(exc)[:160]})
-            else:
-                _populate_ok(rec, al, tracks[out_name], tracks[in_name])
-            rows.append(rec)
-    finally:
-        AE.CUE_CONFIG = saved
-    return rows
-
-
 def _diff_rows(expected_by_key, actual_by_key, pinned):
     """Walk expected keys, diff each against the matching actual key.
 
@@ -310,32 +276,6 @@ def test_alignment_decisions_match_baseline():
         pytest.fail(report)
 
 
-def test_rescue_plan_matches_baseline():
-    payload = json.loads(BASELINE.read_text(encoding="utf-8"))
-    if "rescue_rows" not in payload:
-        pytest.skip(
-            "baseline predates the rescue-flag plan layer; refresh with "
-            "PYTHONPATH=Source python Tests/test_alignment_baseline.py --refresh "
-            "to capture it"
-        )
-
-    expected = {_key(r): r for r in payload["rescue_rows"]}
-    actual = {_key(r): r for r in _normalize(compute_rescue_rows())}
-
-    assert set(actual) == set(expected), (
-        "the default-raise pair set itself changed since the rescue baseline "
-        "was captured — re-run --refresh after the corpus has settled"
-    )
-
-    report = _failure_report(
-        "rescue-flag plan decisions moved against the frozen baseline",
-        expected, actual, PINNED,
-        "Tests/test_alignment_baseline.py --refresh",
-    )
-    if report is not None:
-        pytest.fail(report)
-
-
 def test_baseline_is_self_consistent():
     """The captured baseline must describe the corpus it claims to."""
     payload = json.loads(BASELINE.read_text(encoding="utf-8"))
@@ -347,56 +287,31 @@ def test_baseline_is_self_consistent():
         "a baseline with no successes or no failures cannot discriminate a regression"
     )
 
-    # rescue-flag plan layer invariants
-    assert "rescue_rows" in payload, (
-        "baseline is missing the rescue-flag plan layer; refresh with --refresh"
-    )
-    rescue_rows = payload["rescue_rows"]
-    assert len(rescue_rows) == payload["raised"], (
-        f"rescue_rows count ({len(rescue_rows)}) must equal raised count "
-        f"({payload['raised']}): the rescue sweep only re-runs pairs whose "
-        f"default-flag align raised"
-    )
-    raise_keys = {_key(r) for r in rows if r["status"] == "raise"}
-    rescue_keys = {_key(r) for r in rescue_rows}
-    assert rescue_keys == raise_keys, (
-        "rescue_rows key-set must equal the default-raise pair set"
-    )
-    assert payload["rescue_ok"] + payload["rescue_raised"] == len(rescue_rows)
-    assert payload["rescue_ok"] > 0 and payload["rescue_raised"] > 0, (
-        "a rescue layer with no successes or no failures cannot discriminate "
-        "the tail-anchor-rescue flag-leak regression"
-    )
+    # The rescue-flag plan layer was retired 2026-09-22 (burn list D9) — see the
+    # module docstring. A baseline captured before the retirement still carries
+    # rescue_rows/rescue_ok/rescue_raised; tolerate but do not require them, and
+    # do not validate their content (no code path re-derives it any more).
 
-    # OK rows (both layers) carry both plan and overlap_policy as first-class fields.
+    # OK rows carry both plan and overlap_policy as first-class fields.
     for r in rows:
         if r["status"] == "ok":
             assert "plan" in r, f"OK row {r.get('out')!r} -> {r.get('in')!r} missing 'plan'"
             assert "overlap_policy" in r, (
                 f"OK row {r.get('out')!r} -> {r.get('in')!r} missing 'overlap_policy'"
             )
-    for r in rescue_rows:
-        if r["status"] == "ok":
-            assert "plan" in r
-            assert "overlap_policy" in r
 
 
 if __name__ == "__main__":
     if "--refresh" in sys.argv:
         rows = compute_rows()
-        rescue_rows = compute_rescue_rows()
         ok = sum(1 for r in rows if r["status"] == "ok")
-        r_ok = sum(1 for r in rescue_rows if r["status"] == "ok")
         payload = {"corpus": "Test Project/14.08.26",
                    "n_tracks": len(_load_tracks()), "n_pairs": len(rows),
                    "ok": ok, "raised": len(rows) - ok,
-                   "rescue_ok": r_ok, "rescue_raised": len(rescue_rows) - r_ok,
-                   "rows": rows, "rescue_rows": rescue_rows}
+                   "rows": rows}
         BASELINE.write_text(json.dumps(payload, sort_keys=True, indent=1),
                             encoding="utf-8")
         print(f"baseline refreshed: {len(rows)} pairs ({ok} align, "
-              f"{len(rows) - ok} raise); "
-              f"rescue layer {len(rescue_rows)} pairs "
-              f"({r_ok} rescued, {len(rescue_rows) - r_ok} still raise)")
+              f"{len(rows) - ok} raise)")
     else:
         print(__doc__)

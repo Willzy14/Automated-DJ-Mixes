@@ -91,12 +91,22 @@ def test_feasible_false_when_alignment_succeeds_but_planning_raises(monkeypatch)
 
 def test_real_14_08_26_corpus_feasibility_unchanged_by_this_fix():
     """Real-data regression, not just mocks: on the actual 14.08.26 corpus
-    (the same one burn list D7's own citation is drawn from), this fix
-    changes ZERO of the 380 ordered pairs' feasibility verdicts - pinned so
-    a future change to plan_fill_or_cut that DOES start raising for a real
-    pair is visible as a deliberate change to this count, not a silent
-    drift. 267 is the same "align, not raise" figure
-    Tests/test_alignment_baseline.py's own captured baseline uses."""
+    (the same one burn list D7's own citation is drawn from), D7's own fix
+    (requiring BOTH align + plan_fill_or_cut to succeed) changes exactly 1 of
+    the 380 ordered pairs' feasibility verdicts relative to align-only - see
+    below - pinned so a future change to plan_fill_or_cut that DOES start
+    raising for a real pair is visible as a deliberate change to this count,
+    not a silent drift.
+
+    353 (updated 2026-09-22, burn list D9): D9 made `tail_anchor_rescue`/
+    `deep_intro_anchor`/`incoming_phrase_anchors` CUE_CONFIG defaults, which
+    rescues 87 of the 113 pairs that used to raise (267 -> 354 align, not
+    raise - Documentation/Plans/burn-list-2026-09-13/d9_replay_result.json).
+    Of those 87, exactly 1 aligns but its plan_fill_or_cut still raises
+    (confirmed directly: 'Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER' ->
+    'Christoph - The Rise 16 Bit MASTER'), so feasible() = 354 - 1 = 353. This
+    is D7's check doing its job on a larger candidate pool, not a regression
+    in D7's own fix."""
     stem_dir = ROOT / "Test Project" / "14.08.26" / "_Stem Analysis"
     if not list(stem_dir.glob("SECTIONS_STEM_*.json")):
         pytest.skip("14.08.26 stem JSONs unavailable")
@@ -109,4 +119,4 @@ def test_real_14_08_26_corpus_feasibility_unchanged_by_this_fix():
         for b, (tb, _) in enumerate(tracks)
         if a != b and AF.feasible(ta, tb, policy)
     )
-    assert n_feasible == 267
+    assert n_feasible == 353

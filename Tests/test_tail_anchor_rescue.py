@@ -4,8 +4,11 @@ The rescue is a LAST-RESORT path in `_align_pair_landmark_aware` that fires
 ONLY after both existing search passes return None. It implements Sam's
 "run back 16 bars from the last beat" rule for sustained-to-end outgoings.
 
-What this test pins:
-  * flag-OFF behaviour is byte-identical to the pre-flag code (no-regression)
+`tail_anchor_rescue` defaults ON since 2026-09-22 (burn list D9, Sam's call —
+see the CueConfig class docstring). What this test file pins:
+  * the pre-D9 all-off combination is still deterministic and still
+    reproduces the original 267 ok / 113 raise corpus split — D9 changed the
+    default, not the underlying legacy search path
   * flag-ON makes a known previously-raising pair (Revoloution -> Renegades)
     produce a placement instead of raising
   * the produced Alignment is honestly labelled: alignment_policy =
@@ -70,17 +73,23 @@ def _with_flag(tracks_out_in, *, flag_value: bool):
 # 1. flag OFF is byte-identical to pre-flag behaviour on a corpus sample
 # ---------------------------------------------------------------------------
 
-def test_flag_off_byte_identical_to_pre_flag_code():
-    """The default flag is OFF. Behaviour must be byte-identical to pre-flag code.
+def test_all_three_flags_off_reproduces_the_original_267_113_split():
+    """The rescue is no longer OFF by default (burn list D9, 2026-09-22:
+    Sam's call, `tail_anchor_rescue`/`deep_intro_anchor`/
+    `incoming_phrase_anchors` all default ON now — see the CueConfig class
+    docstring). What this test protects is narrower but still real: that the
+    underlying legacy search path is still fully reachable and unchanged
+    when someone explicitly reconstructs the pre-D9 all-off combination —
+    i.e. D9 changed the DEFAULT, not the CODE the old default exercised.
 
-    Sampled by sweeping the same 380 ordered pairs and confirming the pinned
-    fields (handoff_bar_out / arr_offset_bars / overlap_bars / swap_progress /
-    handoff_kind / alignment_policy / n_paired_cues / paired_cue_bars) match
-    the BASELINE captured before the flag was added. We compare against a
-    freshly-captured sample rather than a checked-in file because the corpus
-    may move underneath us; the byte-identity assertion is between this run's
-    OFF output and this run's `AE.align_pair` invoked a second time with the
-    same flag state.
+    Sampled by sweeping the same 380 ordered pairs with all three flags
+    forced off and confirming the pinned fields (handoff_bar_out /
+    arr_offset_bars / overlap_bars / swap_progress / handoff_kind /
+    alignment_policy / n_paired_cues / paired_cue_bars) match a second,
+    independently-run sweep at the same flag state (byte-identity /
+    determinism) AND that the ok/raise split is exactly 267/113 — the same
+    split Tests/test_alignment_baseline.py's original (pre-D9) frozen
+    baseline recorded and this project has cited ever since 2026-08-17.
     """
     tracks = _load_tracks()
     keys = sorted(tracks)
@@ -112,24 +121,26 @@ def test_flag_off_byte_identical_to_pre_flag_code():
                 rows.append(rec)
         return rows
 
-    # First run with the saved (default OFF) CUE_CONFIG.
-    before = sweep()
-    # Second run with flag explicitly set to False (the default value).
     saved = AE.CUE_CONFIG
-    AE.CUE_CONFIG = dc_replace(saved, tail_anchor_rescue=False)
+    AE.CUE_CONFIG = AE.CueConfig(tail_anchor_rescue=False, deep_intro_anchor=False,
+                                 incoming_phrase_anchors=False)
     try:
+        before = sweep()
         after = sweep()
     finally:
         AE.CUE_CONFIG = saved
 
-    # Both runs must yield the same outcome for every pair. A failure here
-    # means the flag's default is not in fact inert — i.e. the no-regression
-    # contract is broken.
     assert len(before) == len(after), "row counts diverge"
     assert before == after, (
-        "flag-OFF behaviour is not byte-identical to the pre-flag default. "
-        "Either the rescue is firing with the default, or another field on "
-        "CueConfig has drifted."
+        "all-flags-off behaviour is not deterministic across two identical "
+        "sweeps — something on CueConfig or the search path has drifted."
+    )
+    n_ok = sum(1 for r in before if r["status"] == "ok")
+    assert n_ok == 267 and len(before) - n_ok == 113, (
+        f"the pre-D9 all-off combination no longer reproduces the original "
+        f"267 ok / 113 raise split (got {n_ok} ok / {len(before) - n_ok} "
+        f"raise) — the legacy search path has changed underneath the flags, "
+        f"not just the default."
     )
 
 
@@ -140,17 +151,22 @@ def test_flag_off_byte_identical_to_pre_flag_code():
 def test_flag_on_unblocks_revoloution_to_renegades():
     """The blocker: Revoloution -> Renegades.
 
-    With the default flag (OFF) this pair RAISES because Revoloution's tail
-    carries no detected cue in the last-minute handoff window. With
-    tail_anchor_rescue=True, Sam's "run back 16 bars from the last beat" rule
-    produces a placement at bar 148 (= 164 - 16) — the same bar Q1 of the
-    Phase 1 probe predicted.
+    With tail_anchor_rescue explicitly False this pair RAISES because
+    Revoloution's tail carries no detected cue in the last-minute handoff
+    window — true even with `deep_intro_anchor`/`incoming_phrase_anchors`
+    left at their (now-default) True, since both operate on the INCOMING
+    side's candidate anchors and this pair's blocker is the OUTGOING side
+    having no cue at all for the primary/rescue_anchors search to pair
+    against. With tail_anchor_rescue=True, Sam's "run back 16 bars from the
+    last beat" rule produces a placement at bar 148 (= 164 - 16) — the same
+    bar Q1 of the Phase 1 probe predicted.
     """
     tracks = _load_tracks()
     out = tracks[NAMED_BASELINE_OUT]
     inc = tracks[NAMED_BASELINE_IN]
 
-    # OFF must RAISE — pinned by the frozen baseline.
+    # tail_anchor_rescue=False (with deep/phrase at their current default)
+    # must still RAISE for this pair — pinned by the frozen baseline.
     with pytest.raises(ValueError):
         _with_flag((out, inc), flag_value=False)
 

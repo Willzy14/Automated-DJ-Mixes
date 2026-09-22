@@ -2345,14 +2345,17 @@ def main():
                              "alignment_from_decision for the shape.")
     parser.add_argument("--cue-signals", default="",
                         help="Comma-separated analysis signals to admit as alignment "
-                             "anchors, e.g. 'fills,phrase,deep,bassout,introloop,matched,hints'. Default (empty) reproduces "
-                             "pre-2026-08-17 behaviour exactly. 'fills' emits detected "
-                             "drum fills as cues; 'phrase' accepts any marker on a "
-                             "phrase line in the incoming's head as a swap anchor, not "
-                             "only drop starts. 'hints' admits the hand-authored "
-                             "first_drop/first_break/outro_start/last_bass_drop points "
-                             "from track_hints.json as Tier-1 anchors. Each is "
-                             "separately measurable against Tests/test_alignment_baseline.py")
+                             "anchors, e.g. 'fills,phrase,deep,bassout,introloop,matched,hints'. Default (empty) "
+                             "reproduces the current CueConfig defaults, which as of "
+                             "2026-09-22 (burn list D9, Sam's call) already include "
+                             "'rescue', 'deep' and 'phrase' — naming them again here is a "
+                             "no-op. 'fills' emits detected drum fills as cues; 'phrase' "
+                             "accepts any marker on a phrase line in the incoming's head "
+                             "as a swap anchor, not only drop starts. 'hints' admits the "
+                             "hand-authored first_drop/first_break/outro_start/"
+                             "last_bass_drop points from track_hints.json as Tier-1 "
+                             "anchors. Each is separately measurable against "
+                             "Tests/test_alignment_baseline.py")
 
     args = parser.parse_args()
 

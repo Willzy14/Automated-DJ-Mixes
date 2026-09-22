@@ -166,17 +166,29 @@ HINT_CUE_WEIGHT = 7        # TIER 1 (hand-authored beat-grid hint) - same tier a
 class CueConfig:
     """Which analysis signals are allowed to become alignment anchors.
 
-    Defaults reproduce pre-2026-08-17 behaviour exactly, so importing this module
-    changes nothing until a flag is flipped.
+    Most flags default OFF (importing this module changes nothing beyond
+    the D9 defaults below until one is explicitly flipped). Three are the
+    exception — `incoming_phrase_anchors`, `deep_intro_anchor` and
+    `tail_anchor_rescue` default ON as of 2026-09-22 (Sam's call, burn list
+    D9): D9's own replay swept every ordered pair of the 380-pair 14.08.26
+    corpus under the combination and found 0 already-OK pairs moved or
+    broken and 87 of 113 default-raise pairs rescued (77%) — the expected
+    result, since all three only ever enter play through the RESCUE fallback
+    inside `_align_pair_landmark_aware`, tried strictly after the normal
+    drop-anchor search returns None, so turning them on can only turn a
+    raise into an align. Evidence:
+    `Documentation/Plans/burn-list-2026-09-13/d9_replay_result.json`.
     """
     emit_fills: bool = False
     #: Accept ANY marker sitting on a phrase line in the incoming's head as a swap
     #: anchor, not only `drop` starts. Sam's "intro anchor" (2026-08-17).
-    incoming_phrase_anchors: bool = False
+    #: Default ON since 2026-09-22 (D9) — see the class docstring.
+    incoming_phrase_anchors: bool = True
     #: For a track whose intro carries no marker at all, compute an anchor one
     #: phrase before its first real cue. Without this such a track cannot be mixed
     #: into by anything. Sam's rule (2026-08-17).
-    deep_intro_anchor: bool = False
+    #: Default ON since 2026-09-22 (D9) — see the class docstring.
+    deep_intro_anchor: bool = True
     #: Wire the outgoing's real bass-out point as a Tier-1 swap anchor. Restores
     #: Sam's core mixing model, which had zero influence on the live path before
     #: this (measured: 0/380 decisions changed by ablating bass_out). 2026-08-17.
@@ -205,9 +217,10 @@ class CueConfig:
     #: if no real detected cue coincides with the computed outgoing bar, that
     #: bar is labelled as grid-derived and paired_cues is an empty list (a
     #: legitimate, reportable outcome — not papered over with a synthetic
-    #: pair). Default OFF; with the flag OFF behaviour is byte-identical to
-    #: pre-flag code. 2026-08-19.
-    tail_anchor_rescue: bool = False
+    #: pair). 2026-08-19; default ON since 2026-09-22 (D9) — see the class
+    #: docstring. With the flag OFF, behaviour is byte-identical to the
+    #: original pre-flag code.
+    tail_anchor_rescue: bool = True
 
 
 CUE_CONFIG = CueConfig()

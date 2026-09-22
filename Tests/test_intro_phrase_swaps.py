@@ -24,11 +24,21 @@ from align_engine import (
 from automated_dj_mixes.transition_policy import INTERIM_V1, SAM_V1
 
 
-def _track(*sections):
-    return SimpleNamespace(sections=[
+def _track(*sections, n_bars=None):
+    """`n_bars`/`musical_landmarks` were never read here before D9 (2026-09-22)
+    made `incoming_phrase_anchors`/`deep_intro_anchor` CUE_CONFIG defaults —
+    `_incoming_swap_anchors` now unconditionally reaches `_mix_cues`, which
+    needs both. n_bars defaults to the last section's end_bar (a track lasts
+    at least as long as its own sections)."""
+    secs = [
         {"label": label, "start_bar": start, "end_bar": end}
         for label, start, end in sections
-    ])
+    ]
+    return SimpleNamespace(
+        sections=secs,
+        n_bars=n_bars if n_bars is not None else max(end for _, _, end in sections),
+        musical_landmarks=[],
+    )
 
 
 #: Making Shapes: 32-bar intro then a drop. Sam's swap was bar 16.
@@ -41,7 +51,14 @@ NATURAL_CHILD = _track(("intro", 0.0, 16.0), ("drop", 16.0, 56.0),
 
 
 def test_default_policy_offers_drops_only():
-    """Production behaviour must be exactly what it was."""
+    """On THIS fixture, drops-only still holds — not because CUE_CONFIG is
+    inert (since D9, 2026-09-22, `incoming_phrase_anchors`/`deep_intro_anchor`
+    default ON and CAN add anchors beyond drops) but because MAKING_SHAPES'
+    only phrase-aligned marker (bar 32) already IS the drop, and its intro is
+    exactly at DEEP_INTRO_BARS so `_deep_intro_anchor` declines to fire. This
+    pins the coincidence, not a guarantee that CUE_CONFIG can never add
+    anchors under INTERIM_V1 — see test_intro_phrase_swaps in
+    Tests/test_alignment_baseline.py's corpus sweep for that broader claim."""
     assert _incoming_swap_anchors(MAKING_SHAPES, INTERIM_V1) == \
         _incoming_drop_anchors(MAKING_SHAPES)
     assert 16 not in _incoming_swap_anchors(MAKING_SHAPES, INTERIM_V1)
