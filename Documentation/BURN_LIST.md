@@ -2312,18 +2312,91 @@ was written).
 
 - [ ] **Review docs make Sam re-derive "is this outro short on purpose" by eye every time** (D14) -
   found 2026-09-22, building "22.09.26 Tech House Core Sample": Sam flagged several outro clips
-  looking short in Ableton while bouncing, unprompted. Investigated with a one-off script
-  cross-referencing the ALS's last clip per outgoing track against that track's own detected
-  `n_bars` (`Documentation/Reviews/2026-09-22 Render Check - Tech House Core Sample.md`) - answer
-  was "not a bug, 0 unused bars on all 10 transitions, the source outros are just genuinely short
-  on some tracks" - but getting that answer needed a bespoke investigation, not something the
-  pipeline's own output already told him. This is exactly the kind of check that should be
-  automatic: a per-transition `outgoing_unused_bars` (or similarly named) field in
-  `ARRANGEMENT_REPORT.json`, surfaced in `REVIEW_V<N>.md`'s per-transition table, so "does this
-  outro run to the track's true end" is answered by reading the doc instead of writing a script
-  every time a clip looks short during a bounce.
-  Evidence: `Documentation/Reviews/2026-09-22 Render Check - Tech House Core Sample.md`.
-  Owner: Claude. Status: OPEN - not yet scoped or built.
+  looking short in Ableton while bouncing, unprompted. First-pass investigation (see below) checked
+  the WRONG invariant and gave Sam a wrong "not a bug" answer - **superseded, corrected same
+  session, see D15 for the real root cause.** This item now just covers the reporting/tooling gap
+  underneath the wrong-invariant mistake: whatever the right check turns out to be (source bars
+  used up, OR - per D15 - whether the outgoing's clip end actually reaches the incoming's next
+  named landmark), it should be a permanent field in `ARRANGEMENT_REPORT.json` / `REVIEW_V<N>.md`,
+  not a one-off script every time. Scope this AFTER D15 lands, so it surfaces the check that's
+  actually correct.
+  **First-pass (WRONG, kept for the record):** cross-referenced the ALS's last clip per outgoing
+  track against that track's own detected `n_bars` - concluded "0 unused bars on all 10
+  transitions, not a bug." That check only proves the outgoing track's own FILE was fully used up
+  - it says nothing about whether the clip's end lines up with the INCOMING track's next section
+  boundary, which is what Sam was actually looking at and what the algorithm is actually supposed
+  to target. Two of the ten transitions checked this way (T1, T3) turned out to have real gaps
+  when checked correctly (D15).
+  Evidence: `Documentation/Reviews/2026-09-22 Render Check - Tech House Core Sample.md` (contains
+  the superseded first-pass finding).
+  Owner: Claude. Status: OPEN - not yet scoped or built (blocked on D15's outcome).
+  Touched: 2026-09-22.
+  Peer review: NONE - not yet reviewed.
+
+- [ ] **Outgoing-outro loop targeting is inconsistent across transitions - confirmed two distinct
+  bugs, not one** (D15) - found 2026-09-22, Sam eyeballing "22.09.26 Tech House Core Sample" in
+  Ableton before bouncing, unprompted: "you've actually looped it but you didn't loop it so the
+  end of the track met break one... how come there's the inconsistency between doing some loops
+  for no reason and then doing some loops that actually work and then not doing loops at all on
+  the outro?" Supplied 5 annotated screenshots (his own manual corrections included) pinpointing
+  T1 (HARTY->Jones), T2 (Jones->Detlef, confirmed correct by him), and T3 (Detlef->Enzo).
+  Investigated by re-running the REAL selection code (`align_engine.plan_fill_or_cut`'s
+  `landmark_targets` loop, `Source/align_engine.py:2314-2451`) against this project's actual track
+  data with instrumentation, not by guessing - confirmed against the ALS ground truth first
+  (extracted every outgoing/incoming track's real arrangement-timeline clip list) before touching
+  code. Two separate, confirmed root causes:
+  1. **T1 - greedy earliest-candidate selection ignores section boundaries.** `landmark_targets`
+     is built from BOTH `section:*` boundaries and raw Kick-Detector-V3 `landmark:kick_gap_*`
+     blips, sorted ascending by bar and tried in order; the loop takes the FIRST candidate that
+     produces a working `pick_cue_bounded_drum_loop` result and `break`s - no preference for the
+     cleaner `section:*` candidate over a numerically-earlier raw kick-gap one. For T1, sorted
+     candidates were `[(40, landmark:kick_gap_157_160:end), (44, section:break_1), ...]` - the
+     kick-gap landmark at bar 40 succeeded first and got selected, landing HARTY's outro at
+     arrangement beat 768 while Jones's real `break_1` doesn't start until beat 784 (16 beats/4
+     bars later, confirmed directly against the ALS) - well within reach (T1's `loop_budget` had
+     room; Sam's own by-eye fix of 3 more loop reps closed most of the gap). `section:break_1` was
+     NEVER EVEN ATTEMPTED because the loop stopped at the first working candidate.
+  2. **T3 - the correct target WAS picked, but got silently abandoned on a quality-gate
+     rejection with no trace in the report.** For T3, `section:break_1` (bar 32) genuinely WAS
+     the first candidate tried (no earlier competing kick-gap landmark this time) - but
+     `pick_cue_bounded_drum_loop` rejected every loop-source window tried in Detlef's own outro
+     material (`[loop quality] no candidate survived ... rejections: insert_level_match=10,
+     period=6, self_similarity=3, silence_fraction=1`, repeated for the next candidate too) -
+     Detlef's outro is drums-only and apparently too sparse/uneven to pass the quality gate at
+     any window tried. `chunk` stayed `None`, no `outgoing_tail` spec was ever created, and this
+     produced exactly the `loop_source: none` seen in the arrangement report - with ZERO trace of
+     "a target was correctly identified but rejected on quality" anywhere in
+     `ARRANGEMENT_REPORT.json`'s `notes` field. This is indistinguishable in the report from "no
+     loop was needed", which is a real transparency gap on top of the quality-gate question
+     itself (is the gate over-strict on sparse drums-only material, or correctly protecting
+     against an audibly bad loop Sam just hasn't heard yet?).
+  T2 (confirmed correct by Sam) worked for neither principled reason above - Detlef's `break_2`
+  happened to be the first reachable candidate with no closer kick-gap landmark competing for the
+  slot, AND the quality gate happened to pass on that specific window. Not a designed behaviour,
+  a coincidence of ordering.
+  Separately noted: `ARRANGEMENT_REPORT.json`'s `musical_landmark_candidates` field (tagged
+  `"report_only_v1"`) only ever lists raw `landmark:kick_gap_*` candidates
+  (`report_landmark_candidates`, `Source/align_engine.py:787-829`, reads only
+  `track.musical_landmarks`) - it never includes the `section:*` candidates that
+  `plan_fill_or_cut` actually considers internally, so a human reviewing that field to sanity-check
+  "was a good target available" is structurally blind to half the real candidate pool. Anyone
+  reading the report-only field to debug a case like T1 would not have seen `section:break_1`
+  listed at all.
+  This is core arrangement algorithm code (`paired_landmarks_v2`, the default/production
+  alignment policy) - affects every mix built since it shipped, not just this one. Given the
+  reach, this should get scoped as a proper plan + dual review (MiniMax + Codex once uncapped)
+  before code changes, same gate as D8/C4, rather than a quick patch - open questions worth
+  settling first: should `section:*` candidates always be preferred over `landmark:*` ones at
+  comparable bar positions, or does the raw kick-gap targeting exist for a reason not yet
+  understood here; and should a quality-gate rejection on the FIRST viable target fall through
+  silently to trying the NEXT candidate (closer to Sam's intuition) or surface as a flagged
+  decision for review, rather than either fabricating a loop or dropping it with no trace.
+  Evidence: `Source/align_engine.py:2314-2451` (candidate build + selection loop),
+  `Source/align_engine.py:787-829` (`report_landmark_candidates`, the incomplete report-only
+  field). Instrumented trace + real-project ALS ground truth captured in this session's
+  transcript, not yet written to a standalone doc.
+  Owner: Claude. Status: OPEN - root-caused and confirmed against real code + real data, not yet
+  scoped into a plan or built.
   Touched: 2026-09-22.
   Peer review: NONE - not yet reviewed.
 
@@ -3062,7 +3135,35 @@ should be a permanent `outgoing_unused_bars`-style field in `ARRANGEMENT_REPORT.
 `REVIEW_V<N>.md` instead. Count: D14 opened (8 -> 9 open, 27 done, 1 dropped unchanged).
 rev (this write) -> (this write).
 
-## THE COUNT: 9 open, 27 done, 1 dropped (last update 2026-09-22 15:40 [Claude]: D14 opened -
+Last item update: 2026-09-22 16:20 [Claude] - Sam looked closer at the ALS himself before
+bouncing (no code involved, pure by-eye Ableton inspection) and came back with 5 screenshots
+including his own manual corrections: "how come there's the inconsistency between doing some
+loops for no reason and then doing some loops that actually work and then not doing loops at
+all on the outro?" - directly contradicting D14's "not a bug" conclusion from 40 minutes earlier.
+Re-investigated properly this time: extracted real arrangement-timeline clip lists from the ALS
+for T1/T2/T3 (ground truth), then re-ran the REAL selection code
+(`align_engine.plan_fill_or_cut`) against this project's actual track data with instrumentation
+rather than reasoning from the report JSON alone. Found two distinct, confirmed bugs, not one:
+T1's loop targets the first-successful candidate in ascending bar order regardless of whether a
+`section:*` boundary sits right behind it (a raw kick-gap landmark at bar 40 beat the real
+`section:break_1` at bar 44 to the punch, purely by being numerically smaller - `section:break_1`
+was never even attempted); T3's loop correctly targeted `section:break_1` first but every
+candidate loop-source window in Detlef's own outro failed the audio quality gate
+(`insert_level_match`/`period`/`self_similarity`/`silence_fraction`), so `chunk` stayed `None`
+and the attempt was abandoned with zero trace in the report - indistinguishable from "no loop
+needed". D14 corrected in place to mark its own "not a bug" conclusion superseded (checked the
+wrong invariant - source-file-exhaustion, not incoming-landmark-alignment). Opened D15 with the
+full evidence trail; this is core `paired_landmarks_v2` algorithm code (the production default),
+so scoped as a plan-first item pending dual review rather than patched inline. Count: D14 stays
+open (corrected in place, not closed); D15 opened (9 -> 10 open, 27 done, 1 dropped unchanged).
+Nothing committed yet - held for Sam's direction on how deep to take this before writing code.
+rev (this write) -> (this write).
+
+## THE COUNT: 10 open, 27 done, 1 dropped (last update 2026-09-22 16:20 [Claude]: D15 opened -
+two confirmed root causes in the core outgoing-outro-loop-targeting algorithm, found when Sam's
+own by-eye Ableton inspection contradicted this session's own earlier "not a bug" answer on D14;
+D14 corrected in place rather than left standing on a wrong conclusion). Prior update
+(2026-09-22 15:40 [Claude]): D14 opened -
 surface per-transition outro-material-usage automatically in the review doc instead of requiring
 a one-off investigation each time; found while answering Sam's real "is this outro short on
 purpose" question, confirmed not a bug on this mix). Prior update (2026-09-22 15:05 [Claude]):
