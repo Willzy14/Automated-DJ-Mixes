@@ -2483,6 +2483,32 @@ was written).
   `Receipts/2026-09-22/minimax-review-d15-code.md`) - four independent reviewer-passes total
   across two gates, zero blockers found at either gate.
 
+- [ ] **MixPlan reconciliation (Phase 3b) doesn't anticipate a swap-point clip split
+  `apply_automation.py` legitimately makes** (D16) - found 2026-09-22, rebuilding "22.09.26 Tech
+  House Core Sample" with the D15 fix to show Sam the new transitions. `validate_mix_plan_als.py`
+  hard-FAILed with "loop times mismatch" on 2 of 7 loops (Jewel Kid/T5, TCTS/T9): the frozen
+  `MIX_PLAN.json` (written at Phase 2c, before automation runs) recorded a tail loop as N clean
+  repeat boundaries, but the FINAL ALS has one extra boundary - `apply_automation.py` splits a
+  loop-repeat clip in two when the bass-swap point lands mid-repeat rather than exactly on a
+  repeat boundary (confirmed directly: Jewel Kid's split clip plays source beats 644-648 then
+  648-660 back to back, no gap - audibly identical to one unsplit 644-660 clip; the split is a
+  structural/bookkeeping artifact only, not an audio defect). Root cause: the MixPlan freeze is
+  structurally BEFORE automation runs, so it cannot know a split that only gets decided later.
+  This has presumably always been possible in principle but was never exercised before D15,
+  because the original 2-loop builds' swap points apparently always happened to land on clean
+  repeat boundaries - D15 legitimately produces more loops with more varied geometry, which
+  surfaced a pre-existing gap neither D15's own code nor its two review rounds touch (confirmed:
+  the split happens entirely inside `apply_automation.py`, unrelated to `align_engine.py`'s
+  candidate-targeting fix).
+  Evidence: `Test Project/22.09.26 Tech House Core Sample/Output/Visualisations/REVIEW_V5.md`
+  ("Known limitation" section, gitignored project-local - full repro steps there).
+  Owner: Claude. Status: OPEN - root-caused, confirmed harmless to actual audio, not yet fixed.
+  The rebuild that surfaced this was NOT blocked by it (`validate_als.py` still passes on the
+  final ALS; this is an additional, stricter production-freeze-consistency check, not the
+  baseline structural gate) - noted honestly rather than silently skipped.
+  Touched: 2026-09-22.
+  Peer review: NONE - not yet reviewed.
+
 ## E - Hygiene / technical debt (does not affect output quality today)
 
 - [ ] **Render-check has real blind spots on every production (tempo-arc) mix, currently
@@ -3297,7 +3323,29 @@ by-ear check on a real re-bounce. Count: unchanged (10 open, 27 done, 1 dropped)
 open pending the ear check, status moved to code-level-done.
 rev (this write) -> (this write).
 
-## THE COUNT: 10 open, 27 done, 1 dropped (last update 2026-09-22 18:40 [Claude]: D15's
+Last item update: 2026-09-22 19:15 [Claude] - Sam: "get the review of the code done, once it is
+redo today's mix with the new logic, i want to see the new transitions." Rebuilt "22.09.26 Tech
+House Core Sample" from the same Sections V1.als through Phase 2 (arrangement + tempo-arc +
+MixPlan) and Phase 3 (automation): 2 loops -> 7 loops across 10 transitions, T1/T3 now land
+correctly, T6/T8 now explain their no-loop verdict instead of staying silent. `validate_als.py`
+PASS on both the arranged and final automated ALS. Visually confirmed T1 and T3 directly (not
+just the JSON) - both show the outgoing track's tail now running right up to the incoming
+track's break with no gap, exactly Sam's original complaint, now fixed. Sent all 10 transition
+FULL pictures to Sam. Found a SEPARATE, real bug during this rebuild, unrelated to D15's own
+code: Phase 3b's MixPlan reconciliation gate failed on 2 of 7 loops because `apply_automation.py`
+legitimately splits a loop-repeat clip when the swap point lands mid-repeat, and the MixPlan
+freeze (which runs BEFORE automation) has no way to anticipate that split. Root-caused and
+confirmed directly against the ALS that the split is audio-inert (the two halves play identical,
+back-to-back source material) before treating this as non-blocking - opened D16 with the full
+evidence trail rather than silently skipping the failed gate or hacking it to pass. Count: D16
+opened (10 -> 11 open, 27 done, 1 dropped unchanged).
+rev (this write) -> (this write).
+
+## THE COUNT: 11 open, 27 done, 1 dropped (last update 2026-09-22 19:15 [Claude]: D16 opened -
+a real, separate MixPlan-reconciliation gap found while rebuilding the mix to show Sam D15's new
+transitions, confirmed harmless to actual audio, not blocking the rebuild; D15's own rebuild
+delivered successfully - 2 loops -> 7, T1/T3 visually confirmed fixed, all 10 transition pictures
+sent to Sam). Prior update (2026-09-22 18:40 [Claude]): D15's
 implementation independently reviewed SOUND by MiniMax + a Claude subagent, both verified against
 the real diff, three non-blocking findings surfaced and logged; D15 now DONE at the code level,
 stays open pending Sam's by-ear check on a re-bounce). Prior update (2026-09-22 18:10 [Claude]):
