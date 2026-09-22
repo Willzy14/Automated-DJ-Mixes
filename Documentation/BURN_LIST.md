@@ -1801,6 +1801,20 @@ was written).
   actually works end to end, confirmed on a real build, not just believed to.
   Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`,
   `Source/stem_detector.py`; new: `Tests/test_stem_detector_bpm_fallback.py`.
+  Committed 2026-09-22 (`4d58926`), pushed to `burn-list/a1-a4-2026-09-14`.
+  **Peer-reviewed 2026-09-22 - MiniMax, SOUND** (`Receipts/2026-09-22/minimax-review-d5-
+  followup.md`; staged with `align_engine.py` as the seam file). Independently re-verified its
+  two load-bearing claims against the real code before accepting: `align_engine.py:2654`'s
+  docstring does state the "stem bar 0 == downbeat" convention verbatim, and `load_track()`
+  reads `bpm` from the same cache independently of this fix (no seam risk), confirmed by
+  reading both lines directly. One real nitpick adopted and fixed same-day: the bare
+  `except: pass` on a malformed cache gave the exact same `[skip]` message as "no cache yet" -
+  the same look-alike-failure shape that hid the original bug for months. Added a `[warn]` print
+  naming the exception, locked in with a 6th test (`capsys` assertion). Two nice-to-haves
+  declined as unneeded scope (a provenance-tuple refactor of the `stats`/`"sections"` shape
+  check MiniMax itself called "fine to ship as-is"; a `TypeError` guard for non-numeric `bpm` in
+  the cache, defensive against a state that has never occurred). Full suite re-verified 896/6/0
+  after the warn-print fix. Second commit pending push in the same session.
   **Peer-reviewed 2026-09-15 - MiniMax** (Codex durably capped; a single thorough reviewer judged
   proportionate for a docs-only change, unlike C2/C5's dual-review bar for core algorithm code).
   No material objections - confirmed the rewritten Phase 1d/1f reads as a coherent, self-
@@ -3003,7 +3017,23 @@ arrangement, automation - `validate_als.py` x3, `validate_hints_vs_sections.py`,
 unchanged (8 open, 27 done, 1 dropped). Nothing committed yet - held for Sam's go-ahead.
 rev (this write) -> (this write).
 
-## THE COUNT: 8 open, 27 done, 1 dropped (last update 2026-09-22 14:20 [Claude]: real production
+Last item update: 2026-09-22 15:05 [Claude] - Sam: "commit and push, then get a peer review on
+the fix." Committed + pushed the D5 follow-up fix (`4d58926`, `burn-list/a1-a4-2026-09-14`).
+Dispatched MiniMax (Codex still capped from earlier today) via `room_peer_review.ps1`, staged
+with `align_engine.py` as the seam file - verdict SOUND, two load-bearing claims independently
+re-verified against the real code (not trusted blind). One real nitpick adopted: the bare
+`except: pass` on a malformed cache read gave an identical `[skip]` message to "no cache yet" -
+same look-alike-failure shape as the original bug. Fixed with a `[warn]` print, locked in with a
+6th test, full suite re-verified 896/6/0. Two nice-to-haves declined (provenance-tuple refactor,
+defensive TypeError guard - neither blocking, MiniMax itself said ship without them). Second
+commit pending in this same turn. Count: unchanged (8 open, 27 done, 1 dropped) - still
+verification+fix under an already-closed D5, not a new open/done flip.
+rev (this write) -> (this write).
+
+## THE COUNT: 8 open, 27 done, 1 dropped (last update 2026-09-22 15:05 [Claude]: D5 follow-up
+fix committed, pushed, and peer-reviewed SOUND by MiniMax; one real nitpick adopted (malformed-
+cache warn print) and fixed same session; count unchanged, D5 was already closed). Prior update
+(2026-09-22 14:20 [Claude]): real production
 bug found+fixed in D5's already-shipped `--write-hints` path while building a genuine new mix;
 tested (5 new tests, full suite 896/6/0), NOT yet peer-reviewed; count unchanged - D5 was already
 closed, this is verification+fix under it). Prior update (2026-09-22 13:10 [Claude]): E8 DONE

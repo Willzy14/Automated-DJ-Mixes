@@ -56,16 +56,19 @@ def test_no_cache_and_no_blind_folder_returns_none():
     assert stats is None
 
 
-def test_malformed_cache_falls_through_rather_than_crashing(tmp_path):
+def test_malformed_cache_falls_through_rather_than_crashing(tmp_path, capsys):
     """A SECTIONS_STEM_*.json that exists but is missing 'bpm' (or is not
     valid JSON) must not raise - it falls through to the Blind_V check (which
-    also fails here) and returns None, same as no cache at all."""
+    also fails here) and returns None, same as no cache at all. It must also
+    NOT look identical to "no cache exists" on stdout (MiniMax review,
+    2026-09-22) - a silent look-alike is what hid the original bug."""
     stem_dir = tmp_path / "_Stem Analysis"
     stem_dir.mkdir(parents=True)
     (stem_dir / "SECTIONS_STEM_Broken Track.json").write_text(
         json.dumps({"track": "Broken Track", "n_bars": 100}), encoding="utf-8")
     stats = _resolve_bpm_downbeat_stats(tmp_path, "Broken Track")
     assert stats is None
+    assert "malformed" in capsys.readouterr().out
 
 
 def test_falls_back_to_blind_v_when_no_cache_exists(tmp_path, monkeypatch):

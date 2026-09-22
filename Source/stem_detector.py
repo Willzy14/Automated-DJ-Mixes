@@ -793,8 +793,13 @@ def _resolve_bpm_downbeat_stats(project: Path, wav_stem: str) -> dict | None:
     if cached.exists():
         try:
             return {"bpm": json.loads(cached.read_text(encoding="utf-8"))["bpm"]}
-        except (KeyError, ValueError, json.JSONDecodeError):
-            pass
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            # A corrupted/unexpected cache must not look identical to "no cache
+            # yet" - that look-alike-failure shape is what hid the original
+            # bug (a retired-pipeline fallback silently always failing) for
+            # months. MiniMax review, 2026-09-22.
+            print(f"  [warn] malformed cache {cached.name}: {type(exc).__name__}: {exc}; "
+                  f"falling through to legacy source")
     review = project / "Sections Review"
     blind = next(review.glob("Blind_V*"), None) if review.exists() else None
     return _load_stats(blind, wav_stem) if blind else None
