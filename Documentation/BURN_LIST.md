@@ -2395,10 +2395,46 @@ was written).
   `Source/align_engine.py:787-829` (`report_landmark_candidates`, the incomplete report-only
   field). Instrumented trace + real-project ALS ground truth captured in this session's
   transcript, not yet written to a standalone doc.
-  Owner: Claude. Status: OPEN - root-caused and confirmed against real code + real data, not yet
-  scoped into a plan or built.
+
+  **PLAN WRITTEN + DUAL-REVIEWED + REVISED, 2026-09-22** - Sam: "scope it with a plan and peer
+  review." Wrote `Documentation/Plans/d15-outro-loop-targeting-plan.md` (3 fixes: D1 candidate
+  ordering, D2 dead last-resort fallback, D3 incomplete report field). Dispatched dual review in
+  parallel (Codex still capped) - MiniMax via `room_peer_review.ps1`
+  (`Receipts/2026-09-22/minimax-review-d15-plan.md`) and a Claude subagent standing in for the
+  capped Codex seat. Both independently verified the plan's central claims against the real code
+  (not taken on either review's word) - both confirmed correct, one claim (nxt/chunk coupling)
+  found to be stronger than originally stated. Verdicts: subagent "NOT YET SOUND - 4 concrete
+  gaps"; MiniMax "SOUND - 6 refinements needed." Same substance, different phrasing - neither
+  found the diagnosis wrong, both found the plan underspecified for an implementer. Two
+  reviewer-unique, both independently verified-correct catches: (1) the plan's own D2b design
+  would be silently dropped by `propose_arrangement.py:1155-1157`'s existing `"suppressed"`
+  substring filter on notes - real, verified by reading the cited lines directly, not a
+  hypothetical; (2) D3's "mark the selected candidate" idea cannot work where originally implied
+  because `report_landmark_candidates` runs (`align_engine.py:2725`) BEFORE `plan_fill_or_cut`
+  (`:2730`) - the real decision doesn't exist yet at that point, verified directly. Both reviewers
+  independently converged on the same additional gap without prompting each other: the fix
+  touches all three `LANDMARK_POLICIES` (`paired_landmarks_v2`, `tail_anchor_rescue_v1`,
+  `claude_decisions_v1`), and `tail_anchor_rescue_v1` pairs are exactly the population most likely
+  to exercise D2's new fallback path for the first time - the corpus replay must stratify and
+  specifically review at least one, not anonymously fold it into "the full corpus." MiniMax also
+  settled Fix D1's own stated "open question" as not actually open - the function's docstring
+  already says the loop should target "the incoming's next section marker," and raw kick-gap
+  landmarks' own `candidate_roles` field never lists an outro-loop-target role. Every fix
+  refined and folded into the plan (D1: implement as one re-sorted loop, not two, to keep the
+  existing `short_swap_candidate` safety net correctly scoped; D2: track both the target bar AND
+  name, gated correctly, with precedence vs the existing ValueError stated explicitly; D2b: use a
+  new structured field instead of the fragile substring match; D3: move "selected" tagging to
+  `propose_arrangement.py:_final_landmark_candidates`, the seam that already runs after the real
+  decision exists; validation: 2 new synthetic tests, an Ableton-level re-check on the real mix,
+  an ear-check on any newly-firing bass-carrying fallback loop, explicit policy-stratified corpus
+  coverage). Plan now matches MiniMax's own stated bar for "complete and ready to implement."
+  Owner: Claude. Status: PLAN REVIEWED + REVISED - ready for implementation pending Sam's
+  go-ahead (no code written yet).
   Touched: 2026-09-22.
-  Peer review: NONE - not yet reviewed.
+  Peer review: SOUND-with-refinements-adopted - MiniMax
+  (`Receipts/2026-09-22/minimax-review-d15-plan.md`) + Claude subagent standing in for capped
+  Codex (verdict + reasoning in this session's transcript, not yet a saved receipt file), both
+  independent, both converged on the same core gaps, all refinements folded into the plan.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
 
@@ -3159,7 +3195,30 @@ open (corrected in place, not closed); D15 opened (9 -> 10 open, 27 done, 1 drop
 Nothing committed yet - held for Sam's direction on how deep to take this before writing code.
 rev (this write) -> (this write).
 
-## THE COUNT: 10 open, 27 done, 1 dropped (last update 2026-09-22 16:20 [Claude]: D15 opened -
+Last item update: 2026-09-22 17:05 [Claude] - Sam: "scope it with a plan and peer review."
+Wrote `Documentation/Plans/d15-outro-loop-targeting-plan.md`, dispatched MiniMax +  a Claude
+subagent (standing in for capped Codex) in parallel to review it. Both independently verified
+the plan's core claims against the real code before accepting either verdict. Both returned
+substantively the same verdict in different words (subagent "NOT YET SOUND - 4 gaps"; MiniMax
+"SOUND - 6 refinements") - diagnosis confirmed correct by both, plan underspecified for an
+implementer by both. Two reviewer-unique catches, both verified true by direct code reading: the
+plan's own D2b note design would be silently dropped by an existing substring filter in
+`propose_arrangement.py`; D3's "selected" flag can't be set where originally implied because of
+real call-order in `align_engine.py`. Both reviewers also independently (without seeing each
+other's output) flagged the same coverage gap: all three `LANDMARK_POLICIES` are affected, and
+`tail_anchor_rescue_v1` needs explicit corpus representation, not just `paired_landmarks_v2`.
+Full revision folded into the plan - every refinement from both reviews addressed with precise,
+verified language. Plan now meets MiniMax's own stated bar for "complete and ready to implement."
+Count: unchanged (10 open, 27 done, 1 dropped) - D15 stays open, status moved from
+root-caused-only to plan-reviewed-and-revised. No code written yet - held for Sam's go-ahead to
+implement.
+rev (this write) -> (this write).
+
+## THE COUNT: 10 open, 27 done, 1 dropped (last update 2026-09-22 17:05 [Claude]: D15's plan
+dual-reviewed (MiniMax + Claude subagent standing in for capped Codex), both independently
+verified against real code, two reviewer-unique catches confirmed true, all refinements folded
+into the plan - ready for implementation pending Sam's go-ahead, count unchanged). Prior update
+(2026-09-22 16:20 [Claude]): D15 opened -
 two confirmed root causes in the core outgoing-outro-loop-targeting algorithm, found when Sam's
 own by-eye Ableton inspection contradicted this session's own earlier "not a bug" answer on D14;
 D14 corrected in place rather than left standing on a wrong conclusion). Prior update

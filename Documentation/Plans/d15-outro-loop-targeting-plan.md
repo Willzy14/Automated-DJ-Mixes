@@ -186,8 +186,182 @@ current limitation, not a design requirement; revise the docstring alongside the
    position: try section first, unconditionally — simpler, matches the docstring, and D2's fix
    already provides a fallback path if the section-targeted attempt itself can't find good source
    material. Flagging as the plan's own judgment call, not a settled fact.
+   **RESOLVED by MiniMax review below — this was never actually an open design question.**
 2. If D2's fallback reaches Detlef's own outro material for T3 and it STILL fails
    `_assess_loop_candidate`, is that a sign the quality gate is over-tuned for sparse/drums-only
    outros, or a correct rejection of genuinely bad-sounding material Sam hasn't heard yet? Not
    answerable from static analysis — needs the real audio judged, by ear, after this fix lands
-   and produces its actual candidate loop for T3.
+   and produces its actual candidate loop for T3. **Still genuinely open — needs real audio.**
+
+---
+
+## REVISION 2026-09-22 (dual review — MiniMax + Claude subagent standing in for capped Codex)
+
+**Verdict: root-cause diagnosis confirmed correct by both independent reviewers (Claude subagent:
+"NOT YET SOUND — solid root-cause work, four concrete gaps"; MiniMax: "SOUND, with 6 specific
+refinements needed"). Both verdicts describe the same thing in different words: the bug-finding
+stands, the plan wasn't specified precisely enough to hand to an implementer yet. Every claim
+below that cites a line number was independently re-verified against the real code before being
+accepted — not taken on either review's word alone.**
+
+### Fix D1 — the "open question" was never actually open
+
+MiniMax traced the function's own docstring (`Source/align_engine.py:2179-2180`, verbatim):
+*"OUTGOING-OUTRO loop — loop the outro forward to REACH the incoming's next section marker."*
+That is the design contract, already written down before this plan existed. `landmark:*` entries
+are auto-detected Kick-Detector-V3 events whose own `candidate_roles` field (`transition_boundary`,
+`automation_pivot`, `transition_end`, `incoming_ownership`, `bass_swap_candidate`) never lists an
+outro-loop-target role — they were swept into this candidate pool for other purposes, not
+designed to compete with section boundaries here. **Section-first is not a judgment call; it's
+what the code was already supposed to do.** The corpus replay stops being "is this safe" and
+becomes "does replaying the corpus surface any case where a landmark-win was actually load-bearing
+for correctness" — an empirical finding to report, not evidence against the design.
+
+**Implementation constraint, found by the Claude subagent, independently verified
+(`Source/align_engine.py:2358-2380`):** the existing `short_swap_candidate` tracking and its
+eventual `ValueError` are scoped across the WHOLE candidate loop — a candidate whose chunk is
+found but ends before the locked swap gets remembered and the search continues to the next
+candidate; only after every candidate is exhausted does it raise. **D1 must be implemented as a
+single loop over a re-sorted candidate list (sort key `(0 if section else 1, bar)`), not as two
+independent loops (all sections, then all landmarks) each with their own post-loop check** — two
+independent loops would let the sections-only pass raise `short_swap_candidate`'s ValueError
+before the landmarks pass (or D2's fallback) ever gets a chance, turning transitions that work
+today into new hard crashes.
+
+### Fix D2 — pin down exactly what gets tracked, when, and what gates the fallback
+
+Both reviewers independently flagged the same underspecification, converging on the same fix.
+Precise specification, replacing the vague "track the first reachable candidate's target bar":
+
+- Track **both** `candidate_nxt` (the target bar) **and** `candidate_target_name` (MiniMax,
+  verified against `Source/align_engine.py:2422/2428` — the produced `FillCutSpec` needs
+  `target_marker_name` populated too, or `loop_target_marker` in the report stays empty and half
+  the point of the fix is lost).
+- Set both **only** for the first candidate that passes BOTH the `loop_budget` filter (existing,
+  `:2344-2345`) **and** is not flagged `short_swap_candidate` (existing, `:2357-2365`) — i.e. the
+  first candidate that would be viable if a clean chunk existed for it, regardless of whether
+  `pick_cue_bounded_drum_loop` actually finds one. This resolves the plan's own internal
+  inconsistency (the Design section said "first reachable"; the original Open Question said
+  "first reachable, swap-gap-satisfying" — the swap-gap-satisfying version is correct and is now
+  the only version).
+- Gate the last-resort fallback (`:2397-2412`) on `candidate_nxt is not None`, **not** `nxt is not
+  None`. This is the one-line change that actually fixes the dead-code problem.
+- **Precedence, stated explicitly (both reviewers flagged this was silently unresolved):** the
+  existing `short_swap_candidate` `ValueError` (`:2374-2380`) still fires exactly as it does
+  today, in the same place — it only fires when `chunk is None` AND `short_swap_candidate is not
+  None` after the full candidate loop, which is a different condition than "no `candidate_nxt`
+  was ever set." The two mechanisms don't compete: a short-swap-only situation still raises as
+  today; a "candidate viable but no clean chunk anywhere" situation (T3's actual case) now falls
+  through to the last-resort fallback instead of silently producing `loop_source: none`.
+
+**Stronger version of the D2 diagnosis, found independently by the Claude subagent and verified
+directly (`Source/align_engine.py:2328, 2366-2368`):** `nxt`, `target_name`, and `chunk` are all
+three set together in the same branch, immediately before `break`. So in landmark mode `nxt is
+not None` if-and-only-if `chunk is not None`, in every case — meaning the entire fallback chain
+(not just the failure path) is currently dead code in landmark mode: on success, `chunk` is
+already set so the inner `if chunk is None` guards never fire; on failure, the outer gate never
+opens. Worth having on record precisely because it confirms D2's fix is the *only* way this branch
+ever executes in landmark mode, not merely the fix for one failure case.
+
+### Fix D2b — as originally described, this note would be silently dropped. Real bug, found and verified.
+
+The Claude subagent traced the actual consumer and found a genuine defect in the plan's own
+design: `propose_arrangement.py:1155-1157` only forwards `al.notes` entries into the
+machine-readable report **if the note contains the literal substring `"suppressed"`**:
+
+```python
+for note in getattr(al, "notes", None) or []:
+    if "suppressed" in note:
+        analysis.notes += f"; {note}"
+```
+
+D2b's own example text — `"target 'section:break_1' (bar 32) identified but no loop-source passed
+quality checks"` — contains no such substring and would be silently swallowed by this existing
+filter if implemented as originally described, reproducing exactly the "indistinguishable from
+not needed" problem D2b exists to fix. **Verified directly by reading the cited lines — this is
+real, not a hypothetical.**
+
+**Fix, settling the plan's own "new field vs broaden the filter" alternative:** use a **new
+structured field** (e.g. `outgoing_loop_abandoned: {target: str, reason: str} | None` on the
+transition record), not a broadened substring match. A substring allowlist is exactly the kind of
+fragile mechanism that just caused this problem — extending it invites a second note format that
+also fails to match cleanly, whereas a dedicated field is unambiguous and self-documenting for
+whoever reads the report next.
+
+### Fix D3 — the "selected" flag cannot be set where the plan originally implied
+
+The Claude subagent traced the actual call order and found the original design doesn't work as
+written: in `compute_aligned_positions`, `report_landmark_candidates` runs at
+`align_engine.py:2725`, **before** `plan_fill_or_cut` runs at `:2730` — verified directly. At the
+point the candidate report is built, the real decision hasn't been made yet, so
+`report_landmark_candidates` structurally cannot know which candidate to mark `"selected": True`.
+
+**Fix:** the candidate-list-construction half of D3 (adding `section:*` entries) stays in
+`report_landmark_candidates` / a shared helper — its inputs (`al.arr_offset_bars` etc.) are
+already available at that point. The **"selected" tagging** half moves to
+`propose_arrangement.py:_final_landmark_candidates` (verified: this function already runs after
+the full plan exists — it takes `plan: ArrangementPlan` including the already-decided
+`plan.loops` — and already correlates loop specs against `alignment.landmark_candidates` by track
+name and insert position; it is the natural existing seam for this, not a new mechanism).
+
+**Also (MiniMax, verified against `propose_arrangement.py`'s existing candidate consumer):** a
+new `section:*` entry type needs its own field shape stated explicitly, since anything reading
+`musical_landmark_candidates` today assumes every entry has `landmark_id`/`type`/`duration_beats`
+in the raw-landmark shape. Name the section-entry shape explicitly when this is built (e.g.
+`landmark_id` repurposed as the section name, `type` omitted or set to `"section"`), rather than
+leaving it to be discovered by a downstream consumer.
+
+**Sequencing (MiniMax):** stage this as two commits, not one — (1) extract the shared
+candidate-building helper with ZERO behaviour change, prove the corpus output is byte-identical
+before/after the extraction alone; (2) apply D1's section-first preference and D3's new
+`section:*` entries as a separate, second commit. If both land in one commit and the corpus diff
+shows unexpected changes, there's no way to tell whether a mechanical refactor slip or the real
+logic change caused it.
+
+### Validation plan — additions from both reviews
+
+1. **This fix touches all three landmark-mode policies, not just the production default**
+   (verified: `Source/align_engine.py:238`, `LANDMARK_POLICIES = ("paired_landmarks_v2",
+   "tail_anchor_rescue_v1", DECISIONS_POLICY)` where `DECISIONS_POLICY = "claude_decisions_v1"`).
+   Both reviewers independently flagged the same specific concern: `tail_anchor_rescue_v1` exists
+   specifically for short/problem outros, which is exactly the population most likely to exhaust
+   every named candidate's clean-drum search and exercise D2's new fallback path for the first
+   time. The corpus replay must be stratified by `alignment_policy` with at least one
+   `tail_anchor_rescue_v1` (or `claude_decisions_v1`) pair specifically reviewed, not anonymously
+   folded into "the full corpus."
+2. **Two new synthetic tests** (MiniMax): (a) every named candidate fails quality AND the
+   outro-itself last-resort also fails — confirms `loop_source: none` is preserved post-fix, with
+   the new D2b note recording that a target was sought; without this, a regression in the gate
+   condition could silently turn a correct "no loop" into an incorrect "loop anyway" and no
+   existing test would catch it. (b) the incoming track has empty `sections` — confirms
+   byte-identical output to pre-fix (a real, if rare, data shape not currently covered).
+3. **Not just report-field checks — an Ableton-level re-verification** (Claude subagent): the bug
+   was originally found by looking at the arrangement in Ableton, not by reading a report field. A
+   JSON field saying "reached bar 784" can still be wrong in a way invisible in JSON (e.g. via a
+   musically bad loop). The exact mix that surfaced this (22.09.26 Tech House Core Sample) should
+   get re-opened/re-bounced and checked by eye/ear after the fix, not just re-checked in the
+   report.
+4. **Ear-check specifically for any newly-firing bass-carrying last-resort loop** (Claude
+   subagent): the last-resort fallback's own comment (`:2398`) flags it may carry bass. If D2
+   makes it reachable for the first time in production, any transition where it newly fires is
+   introducing audible bass content adjacent to a swap point this codebase otherwise treats as
+   locked everywhere else. Listen to every transition where it newly fires, don't just confirm a
+   loop got inserted.
+5. **Reference the corpus-replay mechanism by name/path** (MiniMax) — whichever script/process
+   the 380-pair-style replay actually runs through (matching D9's `Tools/d9_cue_signal_replay.py`
+   precedent), so this is executable by whoever picks the item up, not just described in prose.
+
+### Risk statement (MiniMax, recommended addition for Sam)
+
+Upside if the fix works as scoped: T1 and T3 land on their correct targets on the real mix, the
+corpus replay is byte-identical for the large majority of transitions, and every transition whose
+verdict changes gets a human-read diff. Downside if it doesn't: some transition that worked today
+gets a worse target or a new hard failure, requiring a revert — which restores today's known-buggy
+state (a confirmed silent-abandonment class), not a worse one. Net: any fix that passes the
+stratified corpus replay without an unreviewed regression is an improvement over the status quo.
+
+### Not yet resolved — needs real audio, not more code review
+
+Open question 2 above (is Detlef's outro genuinely too sparse to loop cleanly, or is the quality
+gate over-tuned) stays open. Settle it after D2 ships and actually produces T3's real candidate
+loop, by listening to it — not before.
