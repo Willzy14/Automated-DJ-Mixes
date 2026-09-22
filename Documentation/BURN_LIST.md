@@ -2428,13 +2428,37 @@ was written).
   decision exists; validation: 2 new synthetic tests, an Ableton-level re-check on the real mix,
   an ear-check on any newly-firing bass-carrying fallback loop, explicit policy-stratified corpus
   coverage). Plan now matches MiniMax's own stated bar for "complete and ready to implement."
-  Owner: Claude. Status: PLAN REVIEWED + REVISED - ready for implementation pending Sam's
-  go-ahead (no code written yet).
+
+  **IMPLEMENTED, 2026-09-22 - Sam: "go ahead and implement it."** Built exactly as revised
+  (`Source/align_engine.py`: D1 two-tier re-sorted loop, D2 `candidate_nxt`/`candidate_target_
+  name` tracking + `via_d2_fallback`-guarded safety checks, D2b's dedicated `outgoing_loop_
+  abandoned` field, D3's section-entry candidates; `Source/propose_arrangement.py`: D3's
+  `_final_landmark_candidates` selected-tagging + threading `outgoing_loop_abandoned` into the
+  report). One real implementation-time finding neither review anticipated: the last-resort
+  fallback's own chunk was never vetted against `policy.max_loop_repeats` the way the primary
+  search always is - crashed 7 previously-silent-but-working transitions the moment the fallback
+  activated but couldn't cleanly divide the gap. Fixed with a `via_d2_fallback` guard (fall
+  through to no-loop instead of raising when only the NEW fallback path can't reach cleanly; the
+  primary path's raise is untouched). Full validation: 380-pair corpus replay with every changed
+  verdict categorized and read (0 status/crash changes, 0 loop->none regressions, 82 none->loop
+  rescues including 3 real `tail_anchor_rescue_v1` pairs, 122 pure landmark->section renames
+  zero audio change, 11 genuinely-different targets all individually confirmed correct - see
+  `Documentation/Plans/d15-outro-loop-targeting-plan.md`'s IMPLEMENTED section for the full
+  writeup); frozen baseline refreshed; 6 new synthetic tests
+  (`Tests/test_outro_loop_targeting.py`); real end-to-end re-run on "22.09.26 Tech House Core
+  Sample" (2 loops -> 7 loops across 10 transitions, T1 now correctly targets `section:break_1`,
+  T2 unchanged/still correct, T3 gets a real loop where it previously got nothing, T6/T8's
+  previously-silent `loop_source: none` now carry an explicit `outgoing_loop_abandoned` reason -
+  `validate_als.py` PASS); full suite 902/6/0.
+  Owner: Claude. Status: IMPLEMENTED + validated automatically - NOT yet DONE. Still needed: a
+  second, code-level peer review (the prior review covered the design, not the actual diff), and
+  Sam's own Ableton/by-ear check on a real re-bounce (nobody has listened to any of this yet,
+  including the newly-rescued loops).
   Touched: 2026-09-22.
-  Peer review: SOUND-with-refinements-adopted - MiniMax
+  Peer review: plan SOUND-with-refinements-adopted - MiniMax
   (`Receipts/2026-09-22/minimax-review-d15-plan.md`) + Claude subagent standing in for capped
-  Codex (verdict + reasoning in this session's transcript, not yet a saved receipt file), both
-  independent, both converged on the same core gaps, all refinements folded into the plan.
+  Codex, both independent, both converged, all refinements folded in. The IMPLEMENTATION itself
+  (this fold) has NOT yet been independently reviewed - code-level review still open.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
 
@@ -3214,10 +3238,31 @@ root-caused-only to plan-reviewed-and-revised. No code written yet - held for Sa
 implement.
 rev (this write) -> (this write).
 
-## THE COUNT: 10 open, 27 done, 1 dropped (last update 2026-09-22 17:05 [Claude]: D15's plan
-dual-reviewed (MiniMax + Claude subagent standing in for capped Codex), both independently
-verified against real code, two reviewer-unique catches confirmed true, all refinements folded
-into the plan - ready for implementation pending Sam's go-ahead, count unchanged). Prior update
+Last item update: 2026-09-22 18:10 [Claude] - Sam: "go ahead and implement it." Built D1/D2/D2b/
+D3 exactly as the reviewed plan specified. One real bug found only during implementation (not by
+either review): the D2 fallback's own chunk was never vetted against `policy.max_loop_repeats`
+the way the primary search always is, so the fix initially crashed 7 previously-silent-but-
+working transitions - traced directly (not guessed) and fixed with a `via_d2_fallback` guard.
+Validated thoroughly: full 380-pair corpus replay with every one of 215 changed pairs read and
+categorized (0 regressions of any kind, 82 legitimate rescues including real
+`tail_anchor_rescue_v1` coverage, 122 pure renames, 11 genuinely-different targets all
+individually confirmed correct); frozen baseline refreshed; 6 new synthetic tests; a real
+end-to-end re-run on "22.09.26 Tech House Core Sample" going from 2 loops to 7 across 10
+transitions with T1/T3 now landing correctly and T6/T8's previously-silent no-loop cases now
+carrying an explicit reason; full suite 902/6/0. NOT calling this DONE yet - the plan got dual
+review, the actual code has not, and nobody has listened to any of this yet (Sam's own Ableton/
+by-ear check is still outstanding, same as every other pipeline change this session). Count:
+unchanged (10 open, 27 done, 1 dropped) - D15 stays open, status moved from
+plan-reviewed-and-revised to implemented-and-automatically-validated, pending code review + ear
+check before DONE.
+rev (this write) -> (this write).
+
+## THE COUNT: 10 open, 27 done, 1 dropped (last update 2026-09-22 18:10 [Claude]: D15
+implemented per its reviewed plan; one real bug found and fixed during implementation itself
+(a safety-cap gap in the new fallback path, invisible to both plan reviews since it only shows
+up against real corpus data); fully validated automatically (380-pair corpus replay read in
+full, 6 new tests, real mix re-run 2->7 loops, full suite green) but NOT yet DONE - the code
+itself needs its own peer review and Sam needs to actually hear it; count unchanged). Prior update
 (2026-09-22 16:20 [Claude]): D15 opened -
 two confirmed root causes in the core outgoing-outro-loop-targeting algorithm, found when Sam's
 own by-eye Ableton inspection contradicted this session's own earlier "not a bug" answer on D14;

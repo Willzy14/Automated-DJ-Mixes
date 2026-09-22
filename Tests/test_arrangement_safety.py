@@ -530,10 +530,31 @@ def test_overlap_landmarks_are_reported_without_changing_alignment():
     )
 
     assert alignment.swap_beats == 448.0
-    assert len(candidates) == 1
-    assert candidates[0]["suggested_transition_finish_beat"] == 448.0
-    assert candidates[0]["distance_from_current_swap_beats"] == 0.0
-    assert candidates[0]["selected"] is False
+    # Burn list D15/D3 (2026-09-22): report_landmark_candidates now also
+    # emits the incoming's named section boundaries (the PREFERRED outgoing-
+    # outro-loop candidates - see plan_fill_or_cut's own docstring) alongside
+    # raw musical landmarks, so 1 landmark + `incoming`'s 2 default sections
+    # (drop_1, outro_1 from the `_track` fixture) = 3 total.
+    assert len(candidates) == 3
+    landmark = next(c for c in candidates if c["type"] != "section")
+    assert landmark["landmark_id"] == "kick_gap_92_96"
+    assert landmark["suggested_transition_finish_beat"] == 448.0
+    assert landmark["distance_from_current_swap_beats"] == 0.0
+    assert landmark["selected"] is False
+
+    sections = sorted(
+        (c for c in candidates if c["type"] == "section"),
+        key=lambda c: c["arrangement_start_beat"],
+    )
+    assert [s["landmark_id"] for s in sections] == ["section:drop_1", "section:outro_1"]
+    # drop_1 is incoming's own bars 0-96; incoming starts at arrangement beat
+    # 352.0, so 96 bars * 4 beats/bar = 384 beats later.
+    assert sections[0]["arrangement_start_beat"] == 352.0
+    assert sections[0]["arrangement_end_beat"] == 736.0
+    assert sections[0]["selected"] is False
+    assert sections[1]["arrangement_start_beat"] == 736.0
+    assert sections[1]["arrangement_end_beat"] == 864.0
+    assert sections[1]["selected"] is False
 
 
 def test_report_landmark_geometry_moves_with_inserted_tail_loop():

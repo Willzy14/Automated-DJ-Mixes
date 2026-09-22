@@ -2038,7 +2038,27 @@ def _landmark_policy_label(alignment_policy: str) -> str:
             else "report_only_v1")
 
 
-def _final_landmark_candidates(plan: ArrangementPlan, alignment) -> list[dict]:
+def _candidate_matches_target(candidate: dict, target_marker: str | None) -> bool:
+    """Does this report candidate correspond to the outgoing-outro-loop
+    target that was actually selected (`ov.loop_target_marker`)?
+
+    Burn list D15/D3 (2026-09-22): deliberately scoped to the outgoing-outro-
+    loop mechanism ONLY - the one this fix is about. The incoming-intro-loop
+    and entry-extension mechanisms use different target-naming conventions
+    (outgoing-track section labels, not `section:{name}` / `landmark:{id}:
+    end`) that this does not attempt to match, so their candidates are never
+    marked selected here - stated explicitly rather than silently wrong."""
+    if not target_marker or candidate.get("track_role") != "incoming":
+        return False
+    landmark_id = candidate.get("landmark_id", "")
+    if candidate.get("type") == "section":
+        return landmark_id == target_marker
+    return f"landmark:{landmark_id}:end" == target_marker
+
+
+def _final_landmark_candidates(
+    plan: ArrangementPlan, alignment, target_marker: str | None = None
+) -> list[dict]:
     """Map pre-loop landmark evidence onto final arrangement geometry."""
     final: list[dict] = []
     loops_by_track: dict[str, list[LoopSpec]] = {}
@@ -2095,6 +2115,12 @@ def _final_landmark_candidates(plan: ArrangementPlan, alignment) -> list[dict]:
                 candidate["landmark_occurrence"] = "original_after_loop"
             elif candidate["arrangement_end_beat"] > spec.insert_at_beat:
                 candidate["loop_geometry_warning"] = "landmark_crosses_loop_insert"
+        # Burn list D15/D3 (2026-09-22): mark whichever candidate the real
+        # decision actually picked - see _candidate_matches_target's own
+        # docstring for the deliberate scoping (outgoing-outro-loop only).
+        candidate["selected"] = _candidate_matches_target(candidate, target_marker)
+        for item in repeated:
+            item["selected"] = _candidate_matches_target(item, target_marker)
         final.extend(repeated)
         final.append(candidate)
 
@@ -2236,6 +2262,12 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
             t["paired_cues"] = al.paired_cues
             t["swap_progress"] = al.swap_progress
             t["outgoing_has_post_swap_content"] = al.outgoing_has_post_swap_content
+            # Burn list D15/D2b (2026-09-22): a named outgoing-outro-loop
+            # target was identified but no loop-source ever passed the
+            # quality checks - distinguishes this from `loop_source: none`
+            # meaning "no loop was needed" (see Alignment.outgoing_loop_
+            # abandoned's own docstring for why this is a dedicated field).
+            t["outgoing_loop_abandoned"] = al.outgoing_loop_abandoned
             t["landmark_policy"] = _landmark_policy_label(al.alignment_policy)
             # Burn list C9 (2026-09-15): this report used to compute
             # selected_style from overlap length alone, a second, unpatched
@@ -2257,7 +2289,8 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
             else:
                 t["selected_style"] = "standard"
             t["musical_landmark_candidates"] = [
-                candidate for candidate in _final_landmark_candidates(plan, al)
+                candidate for candidate in _final_landmark_candidates(
+                    plan, al, target_marker=ov.loop_target_marker)
                 if (candidate["arrangement_end_beat"] >= ov.overlap_start
                     and candidate["arrangement_start_beat"] <= ov.overlap_end)
             ]

@@ -782,6 +782,17 @@ class Alignment:
     # Report-only - never gates or rejects anything.
     vocal_regions_arrangement: dict = field(
         default_factory=lambda: {"outgoing": [], "incoming": []})
+    # Burn list D15/D2b (2026-09-22): set by plan_fill_or_cut when a named
+    # outgoing-outro-loop target WAS correctly identified (within loop_budget,
+    # reaches the locked swap) but no candidate's own audio ever passed the
+    # loop-quality gate, so no `outgoing_tail` FillCutSpec was produced. Without
+    # this, `loop_source: none` in the report is indistinguishable from "no
+    # loop was needed" - the exact ambiguity that let the original bug read as
+    # correct for months. {"target": str, "reason": str} | None. Deliberately
+    # NOT routed through `al.notes` - propose_arrangement.py's existing
+    # note-forwarding only matches notes containing "suppressed", which this
+    # is not (found in D15's plan review; a dedicated field is unambiguous).
+    outgoing_loop_abandoned: dict | None = None
 
 
 def report_landmark_candidates(
@@ -826,6 +837,42 @@ def report_landmark_candidates(
                 "candidate_roles": landmark.get("candidate_roles", []),
                 "selected": False,
             })
+    # Burn list D15/D3 (2026-09-22): named section boundaries on the INCOMING
+    # track are also real candidates for the outgoing-outro-loop target - in
+    # fact the PREFERRED ones (`plan_fill_or_cut`'s own docstring: "loop the
+    # outro forward to REACH the incoming's next section marker"). Before
+    # this fix, this report only ever listed raw musical_landmarks - a human
+    # debugging a case like T1 (where the real decision picked a landmark
+    # 4 bars before a reachable, cleaner section boundary) would never see
+    # the section candidate that should have won at all. `landmark_id` here
+    # is deliberately the FULL `section:{name}` string (matching
+    # `_outro_section_target_candidates`'s naming exactly) so
+    # `_final_landmark_candidates` in propose_arrangement.py can mark the
+    # real winner by a direct string match against `target_marker_name`.
+    for section in incoming.sections:
+        absolute_start = incoming_start_beat + float(section["start_bar"]) * 4
+        absolute_end = incoming_start_beat + float(section["end_bar"]) * 4
+        candidates.append({
+            "policy": "report_only_v1",
+            "track_role": "incoming",
+            "track_name": incoming.name,
+            "landmark_id": f"section:{section['name']}",
+            "type": "section",
+            "section_name": section.get("label"),
+            "confidence": None,
+            "duration_beats": round(absolute_end - absolute_start, 3),
+            "source_start_beat": round(float(section["start_bar"]) * 4, 3),
+            "source_end_beat": round(float(section["end_bar"]) * 4, 3),
+            "arrangement_start_beat": round(absolute_start, 3),
+            "arrangement_end_beat": round(absolute_end, 3),
+            "suggested_transition_finish_beat": round(absolute_start, 3),
+            "distance_from_current_swap_beats": (
+                round(absolute_start - alignment.swap_beats, 3)
+                if alignment.swap_beats is not None else None
+            ),
+            "candidate_roles": ["outro_loop_target"],
+            "selected": False,
+        })
     return sorted(
         candidates,
         key=lambda item: (
@@ -2167,6 +2214,41 @@ def _plan_incoming_entry_extension(o, i, al, intro_end, loop_budget, policy):
     return None, 0.0
 
 
+def _outro_section_target_candidates(i, min_bar: float) -> list[tuple[int, str]]:
+    """Named-section-boundary candidates for the outgoing-outro loop target -
+    what `plan_fill_or_cut`'s own docstring means by "the incoming's next
+    section marker". Filtered to >= 2 bars past `min_bar` (the outgoing's own
+    end, in the incoming's bar-space) - same filter `_outro_landmark_target_
+    candidates` uses, so the two tiers stay comparable.
+
+    Burn list D15 (2026-09-22): extracted so this exact candidate-naming
+    convention (`section:{name}`) is generated in exactly one place and can be
+    correlated by string match against whatever `plan_fill_or_cut` actually
+    picks (`target_marker_name`) - `report_landmark_candidates` needs the same
+    names to mark its own `"selected"` entries correctly."""
+    out = []
+    for section in i.sections:
+        source_bar = int(round(float(section["start_bar"])))
+        if source_bar >= min_bar + 2:
+            out.append((source_bar, f"section:{section['name']}"))
+    return out
+
+
+def _outro_landmark_target_candidates(i, min_bar: float) -> list[tuple[int, str]]:
+    """Raw Kick-Detector-V3 landmark candidates for the outgoing-outro loop
+    target - the FALLBACK tier, tried only when no section-boundary candidate
+    produces a usable loop (burn list D15: these were never meant to compete
+    with a clean section boundary in the first place - their own
+    `candidate_roles` field never lists an outro-loop-target role). Same
+    +2-bar filter as `_outro_section_target_candidates`."""
+    out = []
+    for landmark in i.musical_landmarks:
+        source_bar = int(math.ceil(float(landmark["end_bar"])))
+        if source_bar >= min_bar + 2:
+            out.append((source_bar, f"landmark:{landmark['landmark_id']}:end"))
+    return out
+
+
 def plan_fill_or_cut(o, i, al, policy=None):
     """Decide loops / cuts / break-skips around the LOCKED swap (Sam's CONFIRMED
     model, 2026-06-09 — derived from his hand-edited 'Intro Loops' ALS). NEVER alters
@@ -2311,26 +2393,41 @@ def plan_fill_or_cut(o, i, al, policy=None):
     # outro DRUMS (the bass-out-is-end guard was wrong — bass is irrelevant here).
     # reps REACH the marker (round, not floor — floor undershot the break); a small
     # gap uses a 2-bar chunk ("a little").
+    #
+    # Burn list D15 (2026-09-22): candidates are tried in two ORDERED tiers, not
+    # one bar-ascending merge - named section boundaries first (what this
+    # function's own docstring promises), raw Kick-Detector-V3 landmarks only as
+    # a fallback if no section candidate produces a usable loop. Before this fix
+    # a raw kick blip a few bars before a real section boundary would win purely
+    # by being numerically smaller, and the section boundary would never even be
+    # attempted - confirmed live on a real mix
+    # (Documentation/Plans/d15-outro-loop-targeting-plan.md).
     target_name = ""
+    section_targets = []
     landmark_targets = []
     if landmark_mode:
         current_incoming_bar = o.n_bars - arr
-        for section in i.sections:
-            source_bar = int(round(float(section["start_bar"])))
-            if source_bar >= current_incoming_bar + 2:
-                landmark_targets.append((source_bar, f"section:{section['name']}"))
-        for landmark in i.musical_landmarks:
-            source_bar = int(math.ceil(float(landmark["end_bar"])))
-            if source_bar >= current_incoming_bar + 2:
-                landmark_targets.append(
-                    (source_bar, f"landmark:{landmark['landmark_id']}:end")
-                )
+        section_targets = _outro_section_target_candidates(i, current_incoming_bar)
+        landmark_targets = _outro_landmark_target_candidates(i, current_incoming_bar)
         nxt = None
     else:
         nxt = next((arr + s["start_bar"] for s in i.sections
                     if (arr + s["start_bar"]) > o.n_bars + 1), None)
     outro = next((s for s in o.sections if s["label"] == "outro"), None)
     chunk = None
+    # Burn list D15/D2 (2026-09-22): the first candidate that would be VIABLE
+    # (within loop_budget, reaches the locked swap) even if no clean loop-source
+    # chunk is ever found for it - tracked separately from `nxt`/`chunk`, which
+    # still mean "a clean-drum-window chunk was actually found". Before this
+    # fix, `nxt`/`target_name`/`chunk` were only ever set together (see the
+    # single `break` below), so the "loop the outro section itself, may carry
+    # bass" last-resort fallback a few lines down - gated on `nxt is not None` -
+    # was structurally dead code in landmark mode whenever every named
+    # candidate's clean-drum search failed. Confirmed by direct code reading,
+    # not inferred from behaviour.
+    candidate_nxt = None
+    candidate_target_name = ""
+    via_d2_fallback = False
     if landmark_mode and outro is not None:
         locked_swap_gap = max(
             0.0,
@@ -2338,34 +2435,46 @@ def plan_fill_or_cut(o, i, al, policy=None):
         )
         required_boundary_bars = int(round(locked_swap_gap))
         short_swap_candidate = None
-        for target_source_bar, candidate_name in sorted(set(landmark_targets)):
-            candidate_nxt = arr + target_source_bar
-            candidate_gap = candidate_nxt - o.n_bars
-            if candidate_gap > loop_budget + 1e-6:
-                continue
-            candidate_chunk = pick_cue_bounded_drum_loop(
-                o,
-                int(candidate_gap),
-                required_boundary_bars=required_boundary_bars or None,
-                insert_bar=float(outro["start_bar"]),
-                policy=policy,
-            )
-            if candidate_chunk is not None:
-                chunk_length = candidate_chunk[1] - candidate_chunk[0]
-                # Dividing the handoff offset is not enough: the inserted loop
-                # interval must be long enough to reach that locked handoff.
-                if candidate_gap + 1e-6 < locked_swap_gap:
-                    short_swap_candidate = (
-                        candidate_name,
-                        locked_swap_gap - candidate_gap,
-                        int(candidate_gap // chunk_length),
-                        chunk_length,
-                        int(math.ceil(locked_swap_gap / chunk_length)),
-                    )
+        # `short_swap_candidate` and the eventual ValueError below stay scoped
+        # across BOTH tiers (one shared `for` body, entered from two sorted
+        # iterables) - splitting this into two independent loops each with
+        # their own post-loop check would let a sections-only pass raise the
+        # ValueError before the landmarks tier (or the D2 fallback) ever gets a
+        # chance, turning transitions that work today into new hard failures.
+        for tier in (sorted(set(section_targets)), sorted(set(landmark_targets))):
+            for target_source_bar, candidate_name in tier:
+                candidate_nxt_here = arr + target_source_bar
+                candidate_gap = candidate_nxt_here - o.n_bars
+                if candidate_gap > loop_budget + 1e-6:
                     continue
-                nxt = candidate_nxt
-                target_name = candidate_name
-                chunk = candidate_chunk
+                if candidate_nxt is None and candidate_gap + 1e-6 >= locked_swap_gap:
+                    candidate_nxt = candidate_nxt_here
+                    candidate_target_name = candidate_name
+                candidate_chunk = pick_cue_bounded_drum_loop(
+                    o,
+                    int(candidate_gap),
+                    required_boundary_bars=required_boundary_bars or None,
+                    insert_bar=float(outro["start_bar"]),
+                    policy=policy,
+                )
+                if candidate_chunk is not None:
+                    chunk_length = candidate_chunk[1] - candidate_chunk[0]
+                    # Dividing the handoff offset is not enough: the inserted loop
+                    # interval must be long enough to reach that locked handoff.
+                    if candidate_gap + 1e-6 < locked_swap_gap:
+                        short_swap_candidate = (
+                            candidate_name,
+                            locked_swap_gap - candidate_gap,
+                            int(candidate_gap // chunk_length),
+                            chunk_length,
+                            int(math.ceil(locked_swap_gap / chunk_length)),
+                        )
+                        continue
+                    nxt = candidate_nxt_here
+                    target_name = candidate_name
+                    chunk = candidate_chunk
+                    break
+            if chunk is not None:
                 break
         if chunk is None and short_swap_candidate is not None:
             candidate_name, shortfall, repeats, chunk_length, required_repeats = (
@@ -2378,6 +2487,30 @@ def plan_fill_or_cut(o, i, al, policy=None):
                 f"{required_repeats} required), and no later named cue fits the "
                 f"{policy.max_loop_repeats}-repeat/{loop_budget:g}-bar safety limits"
             )
+    if nxt is None and outro is not None and candidate_nxt is not None:
+        # D15/D2: a target WAS correctly identified but no candidate's clean-
+        # drum-window search succeeded anywhere - fall through to the SAME
+        # last-resort mechanism below instead of silently producing
+        # `loop_source: none`. Reuses `nxt`/`target_name` so every downstream
+        # line (gap math, the FillCutSpec) is unchanged code, just newly
+        # reachable - EXCEPT the two safety-limit ValueErrors just below,
+        # which stay guarded by `via_d2_fallback` (see their own comment):
+        # `pick_cue_bounded_drum_loop` (the PRIMARY search) only ever returns
+        # a chunk whose length already divides the gap within
+        # `policy.max_loop_repeats` - so those ValueErrors were effectively
+        # unreachable for it. `pick_clean_drum_loop` / the last-resort "loop
+        # the outro section itself" mechanism below carry no such guarantee
+        # (they were only ever exercised in legacy, non-landmark mode before
+        # this fix, where the "round up, a bar or two past the marker is
+        # fine" leniency a few lines down applies instead). Without this
+        # guard, a target this fallback correctly IDENTIFIED but genuinely
+        # can't reach with a whole number of safety-capped repeats would hard
+        # -crash the whole pipeline instead of falling through to
+        # `loop_source: none` with a D2b note - found live via the corpus
+        # replay, not anticipated by either plan review.
+        nxt = candidate_nxt
+        target_name = candidate_target_name
+        via_d2_fallback = True
     if nxt is not None and outro is not None:
         gap = nxt - o.n_bars                                   # exact bars to the marker
         if gap >= 2:
@@ -2428,18 +2561,33 @@ def plan_fill_or_cut(o, i, al, policy=None):
                 remaining = max(0.0, loop_budget - used)
                 partial = min(requested_partial, remaining)
                 if landmark_mode and abs(used + partial - gap) > 1e-6:
-                    raise ValueError(
-                        f"Cannot reach named cue '{target_name}' for '{o.name}' -> "
-                        f"'{i.name}' inside loop safety limits"
-                    )
-                if (landmark_mode
+                    if not via_d2_fallback:
+                        raise ValueError(
+                            f"Cannot reach named cue '{target_name}' for '{o.name}' -> "
+                            f"'{i.name}' inside loop safety limits"
+                        )
+                    # D15/D2: the fallback found SOME material, but not enough
+                    # whole+partial repeats to exactly reach the target within
+                    # the safety caps. `pick_cue_bounded_drum_loop` (the
+                    # PRIMARY search) already guarantees exact reach for any
+                    # chunk it returns, so this branch is effectively
+                    # unreachable for it - but the fallback's `pick_clean_
+                    # drum_loop` / "loop the outro section itself" mechanism
+                    # below carry no such guarantee (only ever exercised in
+                    # legacy, non-landmark mode before this fix). Fall through
+                    # to no-loop (D2b's abandonment note covers this) instead
+                    # of a hard crash - found live via the corpus replay.
+                    chunk = None
+                elif (landmark_mode
                         and float(outro["start_bar"]) + used + partial
                         < float(al.handoff_bar_out) - 1e-6):
-                    raise ValueError(
-                        f"Outgoing tail loop for '{o.name}' -> '{i.name}' would end "
-                        f"before locked swap at outgoing bar {al.handoff_bar_out:g}"
-                    )
-                if reps >= 1 or partial > 0:
+                    if not via_d2_fallback:
+                        raise ValueError(
+                            f"Outgoing tail loop for '{o.name}' -> '{i.name}' would end "
+                            f"before locked swap at outgoing bar {al.handoff_bar_out:g}"
+                        )
+                    chunk = None
+                if chunk and (reps >= 1 or partial > 0):
                     loop_budget -= used + partial
                     specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
                         source_start_bar=chunk[0], source_end_bar=chunk[1],
@@ -2449,6 +2597,19 @@ def plan_fill_or_cut(o, i, al, policy=None):
                              f"{target_name or 'marker'} {nxt:.0f}"
                              + (" [safety-capped]" if (reps < requested_reps or
                                   partial < requested_partial) else "")))
+
+    # Burn list D15/D2b (2026-09-22): a target WAS identified (candidate_nxt)
+    # but no `outgoing_tail` spec ever got produced for it - the last-resort
+    # fallback above either never found usable audio, or `gap < 2` skipped it
+    # entirely. Record WHY on the Alignment itself (see its own docstring for
+    # why this is a dedicated field and not routed through `al.notes`), so
+    # `loop_source: none` in the report stops being indistinguishable from
+    # "no loop was needed" - the exact ambiguity that hid the original D15 bug.
+    if candidate_nxt is not None and not any(s.kind == "outgoing_tail" for s in specs):
+        al.outgoing_loop_abandoned = {
+            "target": candidate_target_name,
+            "reason": "target identified but no loop-source passed the quality checks",
+        }
 
     # (4) NO BREAK-TO-BREAK (mix choice, soft / swappable).
     bspec = _resolve_break_to_break(o, i, al)

@@ -365,3 +365,81 @@ stratified corpus replay without an unreviewed regression is an improvement over
 Open question 2 above (is Detlef's outro genuinely too sparse to loop cleanly, or is the quality
 gate over-tuned) stays open. Settle it after D2 ships and actually produces T3's real candidate
 loop, by listening to it — not before.
+
+---
+
+## IMPLEMENTED, 2026-09-22 — Sam: "go ahead and implement it"
+
+Built exactly as revised above (D1 single re-sorted two-tier loop, D2's `candidate_nxt`/
+`candidate_target_name` tracking + `via_d2_fallback`-guarded safety checks, D2b's dedicated
+`outgoing_loop_abandoned` field, D3's section entries + `_final_landmark_candidates` selected-
+tagging). One real implementation-time finding neither review anticipated, found via the corpus
+replay, not guessed: **the last-resort fallback's own chunk was never vetted against
+`policy.max_loop_repeats`** the way the primary `pick_cue_bounded_drum_loop` search always is —
+making the fix crash 7 previously-silent-but-working transitions (`Tests/test_incoming_entry_
+extension.py`) with "Cannot reach named cue... inside loop safety limits" the moment the fallback
+activated but couldn't cleanly divide the gap. Fixed with a `via_d2_fallback` flag: when the
+fallback's own math can't exactly reach within safety caps, fall through to no-loop (D2b's note
+covers it) instead of raising — the primary path's raise stays completely unchanged (it was
+already unreachable there by construction).
+
+### Real-code validation
+
+- **Full 380-pair corpus replay, every changed verdict categorized and read** (new tool:
+  `Tools/d15_outro_loop_replay.py`; raw before/after captures:
+  `Documentation/Plans/d15-outro-loop-targeting/d15_baseline_pre_fix.json` /
+  `d15_after_fix.json`):
+  - **0 status/crash changes** (0 newly-raise, 0 newly-align) — no transition that worked before
+    broke, none that failed before started working by accident.
+  - **0 `loop -> none` regressions** — nothing that had a loop before lost it.
+  - **82 `none -> loop` rescues** (133 -> 215 looped pairs), including **3 real
+    `tail_anchor_rescue_v1` pairs** exercising the D2 fallback path for the first time — the
+    exact policy-stratified coverage both reviewers asked for.
+  - **122 pairs**: identical loop geometry, target renamed from a `landmark:*` to the
+    `section:*` boundary it always coincided with — a pure transparency win, zero audio change.
+  - **11 pairs**: genuinely different, farther target — every one read individually; all 11 are
+    a raw landmark replaced by a real, later section boundary using more repeats of essentially
+    the same source material (T1's own pattern, at corpus scale). No red flags.
+- **Frozen baseline refreshed** (`Tests/test_alignment_baseline.py --refresh`) after the above
+  read-through — this is a deliberate rewiring step, not drift.
+- **6 new synthetic tests** (`Tests/test_outro_loop_targeting.py`): D1 preference (and that the
+  landmark tier still works when no section is reachable), D2 fallback firing (and staying
+  silent-but-explained when even the fallback fails), the empty-`i.sections` edge case, and D3's
+  report-completeness. One existing test's incidental candidate-count assumption
+  (`test_overlap_landmarks_are_reported_without_changing_alignment`) updated to reflect the new,
+  intentional shape rather than loosened.
+- **Real mix re-run end to end**, not just isolated pair calls: re-ran Phase 2a
+  (`propose_arrangement.py`) against "22.09.26 Tech House Core Sample"'s actual `Sections V1.als`.
+  Went from 2 loops (T1, T2) to **7 loops across 10 transitions, 0 short, 0 unexplained none**:
+  - T1 now targets `section:break_1` (8bx5, was a wrong kick-gap landmark at 8bx3).
+  - T2 unchanged (32bx3 to `section:break_2`, exactly as before — proves the fix doesn't touch
+    an already-correct case).
+  - T3 now gets a real loop (16bx1+4b) reaching `section:break_1`, where before it silently got
+    nothing.
+  - T6 and T8 — previously silent `loop_source: none` with zero explanation — now carry
+    `outgoing_loop_abandoned` recording the exact target sought and that it failed quality,
+    still correctly producing no loop. This is D2b's transparency win working on real, previously
+    -opaque data, not just the synthetic test.
+  - `validate_als.py --expected-tracks 11` PASS on the regenerated ALS.
+- **Full suite: 902 passed, 6 skipped, 0 failed** (896 + 6 new tests).
+
+### Deviation from the plan's staging instruction, stated honestly
+
+The plan asked for two separate commits (helper extraction proven byte-identical, then the logic
+change). Implemented as one continuous pass instead — the corpus-level differentiation the
+staging was FOR (telling a mechanical refactor slip apart from a real logic change) was achieved
+directly via the categorization above (every one of the 215 changed pairs read and bucketed) rather
+than via git history. Noting the deviation rather than silently taking credit for the letter of
+the instruction.
+
+### Still pending before this is DONE
+
+- **A second, code-level peer review** (this plan review covered the design; the actual diff
+  hasn't been reviewed yet) — per this project's own DONE criteria (independent SOUND verdict
+  from a differing brain, bound to the real code, not just the plan).
+- **Sam's own Ableton/by-ear check** on a real re-bounce — everything above is automated
+  validation; nobody has listened to what any of this actually sounds like yet, including the
+  newly-rescued loops and the two newly-explained abandonments.
+- **Open question 2** (is the quality gate over-tuned for sparse outros, or correctly protecting
+  against real bad material) is now concretely answerable on T3's real candidate loop once
+  someone listens to it.
