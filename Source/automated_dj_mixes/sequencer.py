@@ -104,11 +104,22 @@ def is_compatible(camelot_a: str, camelot_b: str) -> tuple[bool, str]:
 
 
 def _count_clashes(track_dicts: list[dict]) -> int:
-    """Number of adjacent Camelot clashes (compatibility_score == 0) in an order."""
+    """Number of adjacent Camelot clashes (compatibility_score == 0) in an order.
+
+    A pair where either side's key is unknown is excluded from the count
+    entirely (burn list D4, 2026-09-22) - it is genuinely neither known to
+    clash nor known to be safe, so it must not silently masquerade as either.
+    Both the pre- and post-reorder counts exclude the same pairs the same
+    way, so apply_energy_arc's "did this ADD a clash" comparison stays
+    self-consistent even with unknown keys in the mix.
+    """
     c = 0
     for i in range(len(track_dicts) - 1):
-        score, _ = compatibility_score(
-            track_dicts[i].get("camelot", "1A"), track_dicts[i + 1].get("camelot", "1A"))
+        cam_a = track_dicts[i].get("camelot")
+        cam_b = track_dicts[i + 1].get("camelot")
+        if not cam_a or not cam_b:
+            continue
+        score, _ = compatibility_score(cam_a, cam_b)
         if score == 0:
             c += 1
     return c
@@ -187,14 +198,41 @@ _W_CLASH = 1_000_000.0
 _W_SMOOTH = 1_000.0
 _W_BPM_DESCENT = 1.0
 _W_BPM_DIST = 0.01
+#: Harmonic-term cost when either side's key is unknown (burn list D4,
+#: 2026-09-22). Previously a missing camelot silently defaulted to "1A",
+#: which either fabricated a CLASH against an unrelated track (unfairly
+#: punished) or fabricated an "identical" match between two tracks that both
+#: happen to be missing key data (unfairly, and actively, preferred - the
+#: real "silently mis-sequence" risk Astra flagged).
+#:
+#: First attempt at this constant used `_W_SMOOTH * 2` (the "power_mix"
+#: midpoint), reasoning "no information -> no preference either way". A
+#: Claude-subagent review caught that this was still wrong in the OTHER
+#: direction: `_W_SMOOTH * 2` (2000) is cheaper than a real, CONFIRMED
+#: "diagonal" compatibility (score=1, cost `_W_SMOOTH*(4-1)`=3000) - so the
+#: optimizer preferred pairing with total uncertainty over a real, if weak,
+#: known relationship. Reproduced concretely: `build_harmonic_path([{camelot:
+#: "1A"}, {camelot: "2B"}, {camelot: None}])` spliced the unknown-key track
+#: between the two known ones, discarding their real diagonal compatibility.
+#: An unknown key must never be preferred over ANY confirmed non-clash
+#: relationship - only over a confirmed CLASH. Set strictly above the worst
+#: non-clash score's cost (diagonal, score=1, `_W_SMOOTH*3`=3000) so a real
+#: diagonal match always wins over an unknown pairing, while staying a small
+#: fraction of the clash cost so a clash is still always worse.
+_W_UNKNOWN_KEY = _W_SMOOTH * 4
 
 
 def _edge_cost(a: dict, b: dict) -> float:
     """Transition cost a->b. Lower is better. Clash dominates; then transition
     smoothness (identical < smooth < power_mix); then BPM descent (mixes should
-    get faster); then raw BPM distance."""
-    score, _ = compatibility_score(a.get("camelot", "1A"), b.get("camelot", "1A"))
-    cost = (_W_CLASH if score == 0 else 0.0) + _W_SMOOTH * (4 - score)
+    get faster); then raw BPM distance. A missing key on either side never
+    fabricates a score - see _W_UNKNOWN_KEY."""
+    cam_a, cam_b = a.get("camelot"), b.get("camelot")
+    if cam_a and cam_b:
+        score, _ = compatibility_score(cam_a, cam_b)
+        cost = (_W_CLASH if score == 0 else 0.0) + _W_SMOOTH * (4 - score)
+    else:
+        cost = _W_UNKNOWN_KEY
     bpm_a, bpm_b = a.get("bpm"), b.get("bpm")
     if bpm_a and bpm_b:
         if bpm_b < bpm_a:

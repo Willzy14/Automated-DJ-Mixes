@@ -1597,6 +1597,33 @@ was written).
   Owner: Claude. Author: Claude (docs only this round). Peer review: NONE - not yet reviewed (docs
   fix only; the actual wiring is unbuilt, real follow-up work).
 
+  **PLAN WRITTEN, 2026-09-22 - NOT BUILT.** Sam said "go ahead" on this item too, but its own
+  2026-09-15 investigation already sized the actual wiring as "genuine align_engine design work
+  at the same risk tier as C6... needing the same baseline-verification + Codex-review rigor" -
+  `plan_fill_or_cut` runs on every transition of every mix, and this session already shipped
+  three other real fixes (D4, D9, E8) with that same rigor, so rushing a fourth into the core
+  alignment path without proper review was judged the wrong call, not a refusal to act. Full
+  design at `Documentation/Plans/c4-hint-wiring-plan.md`: bridges both hints onto `align_engine.
+  Track` the same way the existing `first_drop_sec`/etc. hints already do, reuses the existing
+  `CueConfig.emit_hint_fields` gate and the existing `intro_loop` mutual-exclusion mechanism
+  rather than inventing new machinery, and proposes the same 380-pair baseline-sweep discipline
+  D9 used (expected: 0 changed pairs, since 0 real projects set either hint today - this is the
+  regression proof). Dispatched for design review (MiniMax) alongside D8's plan - pending.
+  Owner: Claude. Status: OPEN - plan reviewed, verdict PARK (see below). Touched: 2026-09-22.
+
+  **REVIEWED, 2026-09-22 - MiniMax: DROP (park it), independently agreeing with the plan's own
+  leaning.** Zero real usage, zero live defect, optional polish on a path that runs on every
+  transition of every mix; the existing runtime WARNING already covers the one real
+  silent-failure risk. Two independent judgments landing on the same call - recorded as the
+  decision, not left open. Real design gaps found for whenever this IS eventually built (folded
+  into the plan doc): the plan's claimed "cut-construction helper" doesn't exist (would need
+  extracting); the `intro_loop` mutual-exclusion flag is verified correct but misleadingly named
+  for a cut; needs to name which of the three `pick_clean_drum_loop` call sites the
+  `loop_source_sec` hint reaches; needs to explicitly include the vocal/fill `_blocked` check,
+  not just the numeric quality metrics. Full detail: `Documentation/Plans/c4-hint-wiring-plan.md`.
+  Peer review: SOUND (as a decision to park) - MiniMax
+  `Receipts/2026-09-22/minimax-review-d8-c4-plans.md`.
+
 ## D - Real, buildable polish reductions (smaller, each affects every mix)
 
 - [ ] **Transition loudness compensation - Sam's own hand technique, documented, never
@@ -1675,7 +1702,57 @@ was written).
   fallback estimate would close this without adding back a Rekordbox-style dependency.
   Evidence: held-out `Output/Visualisations/REVIEW_A.md` "Known limitations" (both);
   `Source/automated_dj_mixes/orchestrator.py:638` (Astra).
-  Owner: Claude. Peer review: NONE - not yet reviewed.
+
+  **HALF BUILT, 2026-09-22 - the fabrication bug is fixed; the chroma/Essentia fallback
+  estimator is NOT (that's a separate, larger feature this item's own title also names, not
+  attempted this round).** `orchestrator.py:638`'s `a.camelot or "1A"` silently substituted a
+  real, named Camelot code for missing key data whenever a track had none - the exact
+  "silently mis-sequence" risk Astra flagged, confirmed directly by hand-tracing
+  `sequencer._edge_cost`/`_count_clashes`: the fabricated "1A" could either manufacture a CLASH
+  against an unrelated track, or - the worse case - manufacture a perfect "identical" (the best
+  possible score) match between two tracks that both merely lack key data, actively pulling
+  them together as if confirmed compatible. Fixed: `a.camelot` now passes through `None`
+  honestly; `_edge_cost` gives an unknown-key pair a fixed neutral cost
+  (`_W_UNKNOWN_KEY = _W_SMOOTH * 2`, the "power_mix" midpoint - no fabricated preference either
+  way, BPM terms decide among ties, matching `_bpm_proximity`'s own existing "unknown -> 0.5
+  neutral" philosophy) instead of computing a real compatibility score on a fake code;
+  `_count_clashes` excludes an unknown-key pair from the tally entirely (neither confirmed
+  clash nor confirmed safe), on both sides of `apply_energy_arc`'s reorder comparison
+  consistently. 6 new tests in `Tests/test_sequencer.py`, all confirmed to fail against the
+  pre-fix code (`git stash`, 5 crashed outright with `TypeError: 'NoneType' object is not
+  subscriptable` - the old code couldn't even survive being handed an honest `None`, proving
+  both halves of the fix - the honest-None passthrough and the None-safe cost function - are
+  each necessary). Full suite 889/6/0. **Still open:** the chroma/Essentia fallback estimator
+  (an actual best-guess key for a track with zero key data at all, vs. today's honest
+  "unknown") is unbuilt - a real audio-analysis feature, not a bug fix, and out of scope for
+  this round.
+  Files changed: `Source/automated_dj_mixes/orchestrator.py`,
+  `Source/automated_dj_mixes/sequencer.py`, `Tests/test_sequencer.py`.
+
+  **REVIEWED, 2026-09-22 - MiniMax SOUND; a Claude subagent found and fixed one real bug the
+  MiniMax pass missed.** MiniMax confirmed the None-passthrough, the neutral-cost mechanism, and
+  the `_count_clashes`/`apply_energy_arc` self-consistency by direct code trace - SOUND, no
+  correction. The independent Claude subagent (standing in for durably-capped Codex) went
+  further: it didn't just read the fix, it CONSTRUCTED an adversarial fixture and ran it -
+  `build_harmonic_path([{camelot:"1A"}, {camelot:"2B"}, {camelot:None}])` - and found the first
+  `_W_UNKNOWN_KEY` value (`_W_SMOOTH*2`=2000, reasoned as a "neutral midpoint") was actually
+  CHEAPER than a real, CONFIRMED "diagonal" compatibility (score=1, cost `_W_SMOOTH*3`=3000) -
+  so the optimizer preferred splicing a total unknown between two tracks over honouring their
+  real, if weak, harmonic relationship. Reproduced directly (not taken on the subagent's word):
+  `['B','U','A']` - the known diagonal pair A/B were split apart by the unrelated unknown track.
+  Fixed: `_W_UNKNOWN_KEY` raised to `_W_SMOOTH*4`=4000, strictly above the worst real non-clash
+  score, so unknown can only ever be preferred over a CONFIRMED CLASH, never over any real
+  relationship. Re-verified: same fixture now returns `['U','B','A']` - A/B stay adjacent. New
+  permanent regression test `test_unknown_key_never_preferred_over_a_confirmed_weak_match`
+  pins this exact falsifier. Full suite 890/6/0 after the fix. (Out-of-scope finding also
+  surfaced by the subagent - 8 stale `.tmp.<pid>.<hash>` leftover files scattered across
+  `Source/automated_dj_mixes/`, unrelated to this change, spun off as a separate background
+  task rather than touched here.)
+  Author: Claude. Owner: Claude. Status: fabrication bug DONE 2026-09-22 (reviewed SOUND after
+  one real correction, applied same session), chroma/Essentia estimator still OPEN.
+  Peer review: SOUND - MiniMax `Receipts/2026-09-22/minimax-review-d4-e8.md`; CORRECTION
+  (adopted) - Claude subagent (verdict + reasoning in this session's transcript, not yet a
+  saved receipt file).
 
 - [x] **Wire the already-built `hints_from_stem_result` into `/mix`'s manual hint-authoring
   step** (D5) - the derivation exists and has a `--write-hints` flag, but Phase 1f still has Sam
@@ -1809,6 +1886,22 @@ was written).
   planning failing for feasible-alignment pairs) remains genuinely unaddressed since it doesn't
   reproduce as originally cited - a SOUND review of a partial, honestly-scoped improvement is
   not the same as the item being solved.
+
+  **NEW EVIDENCE, 2026-09-22 (found while working D9, folded in per Sam's "yes, fold it into
+  D7").** D9's 380-pair replay under the new `rescue,deep,phrase` default corpus surfaced a REAL
+  instance of this item's exact phenomenon: `Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER` ->
+  `Christoph - The Rise 16 Bit MASTER` aligns successfully (`alignment_policy:
+  tail_anchor_rescue_v1`) but its `plan_fill_or_cut` stage raises (`"Cannot plan outgoing tail
+  loop ... cue 'section:break_1' would end 2..."`), confirmed directly against
+  `Documentation/Plans/burn-list-2026-09-13/d9_replay_result.json` and by `feasible()` itself
+  returning `False` for the pair (see `Tests/test_alignment_feasibility.py`'s 353 constant,
+  which already counts this exact pair as the one exclusion). This is a DIFFERENT pair from the
+  item's original citation (Doorly -> Christoph - The Rise), but the SAME target track
+  (Christoph - The Rise) and the SAME failure shape (outgoing tail loop can't reach its target
+  cue before the locked swap) - so the phenomenon this item describes is confirmed real in the
+  current corpus, just previously mis-cited. Whether the sequencer/proposer should now actively
+  consult `feasible()` (which already detects this) before committing to a pairing, rather than
+  only reporting it, is the remaining open question - not yet built.
   Owner: Claude. Author: Claude. Peer review: SOUND - MiniMax (reviewing the code change as
   built; the item's own underlying problem stays open).
 
@@ -1843,6 +1936,49 @@ was written).
   durably capped, MiniMax mid-review on E3) - queued for next peer availability rather than
   guessed at.
   Owner: Claude. Peer review: NONE - not yet reviewed (investigation only, no code written).
+
+  **PLAN WRITTEN, 2026-09-22 - NOT BUILT.** Sam said "go ahead"; per this item's own explicit
+  gate (a peer-reviewed plan before code, not solo blind building, on a safety-relevant gate
+  with a documented past incident), the correct way to "go ahead" is to write and get that plan
+  reviewed, not to skip the gate. Full design at
+  `Documentation/Plans/d8-auto-refit-plan.md`: extracts `refit_grid_from_stem.py`'s core into an
+  importable, testable function; wires ONE bounded auto-attempt into
+  `enforce_beatgrid_quality`, skipping any track already stem-kick-fitted (structurally
+  prevents a retry loop); critically, does NOT trust the refit tool's own internal
+  inliers/iqr/med thresholds alone - re-runs the SAME full `check_grid` verification that
+  caught the original failure before accepting the refit, so a same-algorithm retry that
+  reproduces the original failure on structurally-mismatched material (the Afro/Latin concern
+  the 2026-09-15 investigation flagged) still hard-stops exactly as today, just with a genuine
+  attempt on the record. Proposes settling the 2026-09-15 investigation's own open question
+  (does auto-refit actually help the real cited example) with a real-data test against the
+  actual held-out project, not just mocks. Dispatched for design review (MiniMax) alongside
+  C4's plan - pending.
+  Owner: Claude. Status: OPEN - plan revised after a real BLOCKER was found and fixed (see
+  below); needs a re-review of the revised plan before any code lands. The gate's existing
+  behaviour (`--allow-bad-grids` as the human override) is completely unchanged in the meantime.
+  Touched: 2026-09-22.
+
+  **REVIEWED, 2026-09-22 - MiniMax found a real BLOCKER, independently confirmed and FIXED in
+  the plan (not yet re-reviewed).** The plan's central safety claim ("re-run the full gate
+  before accepting a refit") was theater as drafted: `check_grid`'s `stem_fitted=True` branch
+  (`validate_beatgrid.py:309-321`) only FAILs when `stem_kf_ms is not None and stem_kf_ms >
+  15.0` - when `stem_kf_ms` is `None` (which it always would be, since
+  `refit_grid_from_stem.py`'s override dict has never included a `grid_vs_kick_ms` key), the
+  re-run would unconditionally PASS regardless of the refit's actual quality. Verified directly
+  against the real code myself, not taken on the review's word. **This is a pre-existing gap in
+  the already-shipped `refit_grid_from_stem.py`, not something this plan introduced** - every
+  manually-run refit in this project's history has had the same unconditional-PASS exposure.
+  Fix folded into the plan: `attempt_stem_refit` now also writes `grid_vs_kick_ms` (from the fit's
+  own already-computed median residual - no new computation) into the override, closing the gap
+  for both the new auto-attempt path AND retroactively for the existing manual CLI path. Three
+  further MINOR notes folded in: the never-retry guard is defensive-only, not load-bearing (a
+  track with an existing override never reaches `fails` to begin with); exception propagation
+  from a raised `attempt_stem_refit` needs stating explicitly; the "0 changed pairs" corpus claim
+  needs to be an explicit assertion, not prose. Full detail:
+  `Documentation/Plans/d8-auto-refit-plan.md`'s "REVISION 2026-09-22" section.
+  Peer review: CORRECTION (adopted, plan revised) - MiniMax
+  `Receipts/2026-09-22/minimax-review-d8-c4-plans.md`. The REVISED plan has not yet had its own
+  review pass - do that before writing code.
 
 - [x] **The built fixes for long intros and short outros are switched off in the standard
   `/mix` run** (D9) - Sam's long-intro rule ("count back from the first cue", a swap around the
@@ -2382,10 +2518,42 @@ was written).
   was >= 0.8 as the edge. Pin both falsifiers as tests.
   Evidence: `Receipts/2026-09-15/minimax-review-D12-confirm.md` (Q2 and FOUND UNASKED)
   `Source/learn_from_correction.py:728`
-  Owner: Claude. Status: OPEN. Touched: 2026-09-15.
-  Peer review: NONE - not yet reviewed.
 
-- [ ] **Claude-arranged mode's decision schema (D13) has three unhardened edges, none exercised
+  **INVESTIGATED, 2026-09-22 - NOT BUILT, a candidate fix has a real correctness risk this
+  item's own prior summary didn't surface.** Re-read the ORIGINAL MiniMax review this item was
+  carded from (`Receipts/2026-09-15/minimax-review-D12-confirm.md`, not just this item's own
+  compressed paraphrase) to get the true window bounds: falsifier 1 is `out_bass=[(80, 0.18)]`
+  in window **[70, 110]** (the item text above says "[80, 110]" - the window actually starts
+  BEFORE the single point, not at it). Both MiniMax notes are the same root cause described
+  twice: `prev` has no reliable in-window history the moment the loop reaches the window's own
+  first point, whether because no point exists before it at all (falsifier 1) or because the
+  nearest point before it is stale/already-low (falsifier 2, `[(50, 0.5), (90, 0.18)]`, window
+  [80, 110]). A unifying candidate fix - track `prev` ONLY from points that are themselves
+  inside the window (never seed or contaminate it from outside), and treat the window's own
+  first point as a detected kill if it arrives already below 0.8 - resolves BOTH falsifiers
+  identically (verified by hand-tracing against MiniMax's own confirmed-working case too,
+  `(t, 1.0), (t, 0.18)`, unaffected). **But this candidate fix reintroduces the exact false-
+  positive class this function's own docstring says a prior review (2026-09-15) deliberately
+  ruled out: "a ramp point on the way UP is not a swap."** A track whose bass genuinely ramps
+  UP starting inside the window (first in-window sample legitimately low, rising afterward -
+  the docstring's own named "short outgoing still carries its own earlier bass-in ramp" case)
+  would now be misread as a KILL at its very first low sample, trading a safe false-negative
+  (today: a withheld label, independently confirmed by MiniMax to never be wrong) for a false
+  positive (a WRONG label published with confidence). Distinguishing "genuinely killed on
+  entry" from "ramping up on entry" from a single first-in-window point alone is not possible
+  without either more context (a look-ahead at what follows, or the source-space corroboration
+  `_pinned_swap_event` already does independently) or a design decision beyond what a solo
+  session should make blind on a gate with a documented past false-positive concern - same
+  standing bar as D8. Not fixed this session; the burn list's own prior "fix when touched"
+  prescription should be read as unverified, not as settled guidance, until this ramp-vs-fall
+  risk is resolved.
+  Owner: Claude. Status: OPEN - real correctness risk found in the obvious fix; needs a
+  peer-reviewed plan or Sam's call on whether look-ahead/source-space corroboration is worth
+  building, not a blind patch. Touched: 2026-09-22.
+  Peer review: NONE - not yet reviewed (investigation only, no code written; the risk itself
+  was found by re-deriving from the original review source, not by a peer this session).
+
+- [x] **Claude-arranged mode's decision schema (D13) has three unhardened edges, none exercised
   by a real decisions file yet** (E8) - found by MiniMax and a Claude subagent during D13's peer
   review, 2026-09-16, alongside the two real bugs already fixed there (swap_in_bar / tail_loop
   bounds, see D13's own entry). Lower confidence / lower priority, left open rather than fixed
@@ -2402,9 +2570,43 @@ was written).
   becomes a wider-used mode.
   Evidence: `Receipts/2026-09-16/minimax-review-D13.md`, `Receipts/2026-09-16/claude-subagent-
   review-D13.md`, `Source/align_engine.py:2467`, `Source/propose_arrangement.py:1492`.
-  Owner: Claude. Status: OPEN. Touched: 2026-09-16.
-  Peer review: found BY peer review (MiniMax + Claude subagent, D13's round) - the finding
-  itself is peer-sourced; no separate review of a fix, since nothing has been fixed yet.
+
+  **BUILT, 2026-09-22 - all three edges hardened.** (1) `_decision_names_match` unchanged (still
+  allows the 30-char prefix tolerance for minor cosmetic differences), but `alignment_from_decision`
+  now also checks, for each of `out_track`/`in_track`, whether a non-exact match's `wanted` string
+  would ALSO loosely match the OTHER track in the SAME pair (new `_decision_names_match_exactly`
+  helper) - if so, raises "ambiguous" rather than silently picking one. Known, stated scope limit:
+  this function only ever sees the two tracks already resolved for this pair, so it cannot detect
+  ambiguity against a similarly-named track elsewhere in the project - a structural limit of its
+  signature, not an oversight. (2) new `_validate_decision_pair_indices()` in
+  `propose_arrangement.py` rejects a duplicate `pair_index` or one outside the real
+  `1..len(tracks)-1` transition range, called before the (unchanged) dict comprehension that used
+  to silently swallow both. (3) new `_decision_bar(value, field, pair)` helper in `align_engine.py`
+  snaps a bar value within `1e-6` of a whole bar (genuine float/JSON round-trip noise) and rejects
+  anything more fractional than that - applied at every bar-valued read site in both
+  `alignment_from_decision` and `fills_from_decision` (entry_out_bar, intro_trim_bars,
+  swap_in_bar, and the tail_loop/outgoing_cut/outro_skip sub-fields). 9 new tests in
+  `Tests/test_arrangement_decisions.py`, all confirmed to fail against the pre-fix code
+  (`git stash`) - including the two sanity checks (an unambiguous loose match still works, valid
+  pair_indices still pass) confirmed to NOT fail pre-fix, proving they're not just tautologically
+  strict. Full suite 889/6/0 (890/6/0 after an unrelated D4 fix landed the same session).
+  Files changed: `Source/align_engine.py`, `Source/propose_arrangement.py`,
+  `Tests/test_arrangement_decisions.py`.
+
+  **REVIEWED, 2026-09-22 - SOUND from both.** MiniMax: SOUND on all three edges, one MINOR
+  readability note (the duplicate-detection idiom in `_validate_decision_pair_indices` relied on
+  `set.add()`'s falsy `None` return inside a comprehension - correct but a maintenance trap;
+  rewritten as an explicit loop, same behaviour, confirmed by re-running the full test file).
+  The independent Claude subagent traced the ambiguity check's scope directly against
+  `compute_aligned_positions`'s real resolution order (`stems[resolved[k-1]], stems[resolved[k]]`,
+  purely positional, never by name) and confirmed the in-pair check is exactly where the real
+  risk lives - cross-mix ambiguity outside the current pair is a structural non-issue, not a gap
+  this fix should have covered. Grepped for stray un-hardened bar reads in `fills_from_decision`
+  itself (found none) and verified `range(1, n_tracks)` against `compute_aligned_positions`'s own
+  loop with no off-by-one. No corrections from either reviewer.
+  Author: Claude. Owner: Claude. Status: DONE 2026-09-22, reviewed SOUND.
+  Peer review: SOUND - MiniMax `Receipts/2026-09-22/minimax-review-d4-e8.md`; SOUND - Claude
+  subagent (verdict + reasoning in this session's transcript, not yet a saved receipt file).
 
 ## F - Carried, deferred on purpose (not open work - listed so they are not silently rediscovered)
 
@@ -2744,7 +2946,31 @@ code and reproduced a test failure outside its isolation fixture to confirm it w
 one real CORRECTION - this item's own text was stale, now rewritten - plus two non-blocking MINOR
 nits). rev c8ada13 -> (this write).
 
-## THE COUNT: 9 open, 26 done, 1 dropped (last update 2026-09-22 11:40 [Claude]: D9 DONE - the
+Last item update: 2026-09-22 13:10 [Claude] - Sam: "yes, fold it into D7. go ahead with C4, D4,
+D7, D8, E7, E8" (following the session-start report above). Worked all six: D7 - new evidence
+from D9's replay folded in (a different pair than originally cited fails the same way, still
+open). D4 - the "1A" key-fabrication bug fixed and tested; MiniMax SOUND, a Claude subagent
+found and fixed a real follow-on bug (the neutral-cost constant was actually cheaper than a
+confirmed weak match, reproduced and corrected); the item's own broader chroma/Essentia
+estimator scope stays open. D8 - per its own explicit gate, wrote a plan not code; MiniMax found
+a real BLOCKER (the plan's central safety re-verification would have been a structural no-op,
+traced to a pre-existing gap in the already-shipped refit tool) and it's fixed in the plan;
+needs one more review round before code. E7 - investigated, found the candidate fix would
+reintroduce a false-positive class this exact function was already corrected to avoid once
+before; documented honestly, not built. E8 - all three schema edges hardened and tested,
+reviewed SOUND by both MiniMax and a Claude subagent. C4 - wrote a plan not code (same rigor
+tier as C6, zero real-world urgency); MiniMax independently agreed with the plan's own leaning:
+park it, recorded as a decision. Full suite 890/6/0 throughout. Count: E8 DONE (9 -> 8 open,
+26 -> 27 done); D4 stays open (half-built, real fix landed but the item's full scope isn't);
+D7/D8/C4/E7 all stay open (evidence/plans/investigation, no items closed). Nothing committed yet.
+rev 53c25fb -> (this write).
+
+## THE COUNT: 8 open, 27 done, 1 dropped (last update 2026-09-22 13:10 [Claude]: E8 DONE
+(schema hardening, reviewed SOUND by both MiniMax and a Claude subagent); D4's fabrication bug
+fixed and reviewed (item stays open, broader scope unbuilt); D8 and C4 got reviewed design plans
+instead of code (D8: a real BLOCKER found and fixed in the plan; C4: independently recommended
+to park); D7 and E7 got real investigation, no code: 9 -> 8 open, 26 -> 27 done. Prior update
+(2026-09-22 11:40 [Claude]): D9 DONE - the
 long-intro/short-outro rescue signals are now the CueConfig default, MiniMax + Claude-subagent
 reviewed SOUND, 9 dependent test failures genuinely fixed, full suite 874/6/0: 10 -> 9 open,
 25 -> 26 done. Prior update (2026-09-22 10:35 [Claude]): D9 part-1 replay clean (0 changed/0

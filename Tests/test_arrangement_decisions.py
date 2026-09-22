@@ -286,3 +286,103 @@ def test_als_front_cut_refuses_the_whole_clip_or_a_missing_clip():
     assert not cut_named_clip_front_and_pull(lines, start, end, "drop_5", 80.0)
     assert not cut_named_clip_front_and_pull(lines, start, end, "drop_9", 4.0)
     assert _fields(lines, "drop_5") == (496.0, 496.0, 576.0, 496.0, 576.0, 496.0)
+
+
+# --------------------------------------------------------------------------- #
+# Burn list E8 (2026-09-16): three unhardened schema edges, hardened          #
+# 2026-09-22. Each test below is a falsifier for the pre-fix behaviour        #
+# (proved: reverted against `git stash`, all three failed to raise).         #
+# --------------------------------------------------------------------------- #
+
+def test_ambiguous_prefix_match_is_refused_not_silently_accepted():
+    """Two tracks in the SAME pair sharing a long common prefix (a radio
+    edit vs. an extended mix, back to back - exactly the real DJ-naming
+    pattern the item names) must not let a loose, truncated `in_track` name
+    silently resolve when it could equally describe either side. Built so
+    the shared prefix is verifiably >=30 chars (the pre-fix rule's fixed
+    b[:30]/a[:30] prefix test could not tell the two apart)."""
+    shared = "Some Artist Feat Other - A Really Long Track Title "
+    assert len(shared) >= 30
+    out_side = _track(shared + "(Radio Edit)", 96, [
+        {"name": "drop_1", "label": "drop", "start_bar": 16.0, "end_bar": 96.0}])
+    in_side = _track(shared + "(Extended Mix)", 128, [
+        {"name": "drop_1", "label": "drop", "start_bar": 16.0, "end_bar": 128.0}])
+    # out_track is named exactly (unambiguous); in_track is truncated to
+    # just the shared prefix - it loosely matches BOTH tracks in this pair,
+    # so it cannot safely resolve to either. entry/swap bars kept inside
+    # both tracks' short lengths (96/128 bars) so the ambiguity check is
+    # what actually fires, not an unrelated bounds check.
+    with pytest.raises(ValueError, match="ambiguous"):
+        AE.alignment_from_decision(out_side, in_side, _decision(
+            out_track=out_side.name, in_track=shared.strip(),
+            entry_out_bar=60, swap_in_bar=16))
+    # Sanity: the SAME wanted string against the track it genuinely names
+    # (exactly, not just by prefix) must still work - this is not a
+    # blanket ban on the pair, only on the ambiguous case.
+    al = AE.alignment_from_decision(out_side, in_side, _decision(
+        out_track=out_side.name, in_track=in_side.name,
+        entry_out_bar=60, swap_in_bar=16))
+    assert al.in_name == in_side.name
+
+
+def test_unambiguous_loose_prefix_still_matches():
+    """The original tolerance (whitespace/punctuation noise, a slightly
+    abbreviated name) must still work when only ONE track in the pair could
+    plausibly satisfy it."""
+    al = AE.alignment_from_decision(OUT, IN, _decision(
+        in_track=IN.name[:20]))   # a genuine truncation of the real name
+    assert al.in_name == IN.name
+
+
+@pytest.mark.parametrize("field, value", [
+    ("entry_out_bar", 180.5),
+    ("swap_in_bar", 16.3),
+])
+def test_fractional_bar_values_are_refused(field, value):
+    """A decision names whole musical bars. A meaningfully fractional value
+    is far more likely an authoring mistake than an intentional sub-bar
+    position, and must be rejected, not silently propagated into downstream
+    bar/beat arithmetic."""
+    with pytest.raises(ValueError, match="not a whole bar"):
+        AE.alignment_from_decision(OUT, IN, _decision(**{field: value}))
+
+
+def test_fractional_bar_within_floating_point_noise_is_tolerated():
+    """179.9999999999 (real float noise from JSON round-tripping) must snap
+    to 180, not be rejected as if it were a genuine authoring mistake."""
+    al = AE.alignment_from_decision(OUT, IN, _decision(entry_out_bar=179.9999999999))
+    assert al.arr_offset_bars == 180
+
+
+def test_fractional_tail_loop_bar_is_also_refused():
+    """The same rounding discipline applies inside fills_from_decision's
+    tail_loop fields, not just alignment_from_decision's top-level ones."""
+    d = _decision(entry_out_bar=136, intro_trim_bars=4, swap_in_bar=36,
+                  tail_loop={"source_start_bar": 0.0, "source_end_bar": 8.5,
+                            "reps": 2, "target": "outro"})
+    with pytest.raises(ValueError, match="not a whole bar"):
+        AE.fills_from_decision(OUT, IN, d)
+
+
+# --------------------------------------------------------------------------- #
+# pair_index duplicate / out-of-range validation (propose_arrangement.py)     #
+# --------------------------------------------------------------------------- #
+
+def test_duplicate_pair_index_is_refused():
+    from propose_arrangement import _validate_decision_pair_indices
+    with pytest.raises(ValueError, match="duplicate pair_index"):
+        _validate_decision_pair_indices([1, 2, 2, 3], n_tracks=5, filename="test.json")
+
+
+def test_out_of_range_pair_index_is_refused():
+    from propose_arrangement import _validate_decision_pair_indices
+    # 5 tracks -> 4 transitions -> valid pair_index is 1..4.
+    with pytest.raises(ValueError, match="out of range"):
+        _validate_decision_pair_indices([1, 2, 5], n_tracks=5, filename="test.json")
+    with pytest.raises(ValueError, match="out of range"):
+        _validate_decision_pair_indices([0, 1, 2], n_tracks=5, filename="test.json")
+
+
+def test_valid_pair_indices_pass_silently():
+    from propose_arrangement import _validate_decision_pair_indices
+    _validate_decision_pair_indices([1, 2, 3, 4], n_tracks=5, filename="test.json")  # no raise

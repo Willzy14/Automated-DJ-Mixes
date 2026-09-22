@@ -2484,6 +2484,34 @@ def _decision_names_match(track: "Track", wanted: str) -> bool:
     return a == b or a.startswith(b[:30]) or b.startswith(a[:30])
 
 
+def _decision_names_match_exactly(track: "Track", wanted: str) -> bool:
+    """The `a == b` half of _decision_names_match, exposed on its own so an
+    ambiguity check can tell "genuinely identical" apart from "merely shares
+    a 30-char prefix" (burn list E8, 2026-09-16)."""
+    import html
+    a = html.unescape(str(wanted)).strip().lower()
+    b = html.unescape(track.name).strip().lower()
+    return a == b
+
+
+def _decision_bar(value, field_name: str, pair) -> float:
+    """A decision-authored bar value, snapped to the nearest whole bar if it
+    is within floating-point noise of one, else rejected outright (burn list
+    E8, 2026-09-16). A decisions file names whole musical bars; a
+    meaningfully fractional value is far more likely an authoring mistake
+    (wrong units, a copy-paste from a beat count) than an intentional
+    sub-bar position, and this codebase's own phrase-grid rule elsewhere
+    hard-fails off-bar rather than silently reinterpreting it - decisions
+    get the same discipline, not a quieter path around it."""
+    v = float(value)
+    rounded = round(v)
+    if abs(v - rounded) > 1e-6:
+        raise ValueError(
+            f"decision for pair {pair}: {field_name} {v:g} is not a whole "
+            f"bar - decisions name whole musical bars, not fractional positions")
+    return float(rounded)
+
+
 def alignment_from_decision(o: "Track", i: "Track", decision: dict,
                             policy=None) -> Alignment:
     """An Alignment built from a decision instead of the anchor search.
@@ -2492,15 +2520,30 @@ def alignment_from_decision(o: "Track", i: "Track", decision: dict,
     the outgoing's own bar, pre-loop). Only the decision's own arithmetic is
     checked here; the final overlap caps are the plan validator's job, after
     loops and cuts have settled the geometry."""
-    for key, track in (("out_track", o), ("in_track", i)):
+    pair = decision.get("pair_index")
+    for key, track, other in (("out_track", o, i), ("in_track", i, o)):
         wanted = decision.get(key)
-        if wanted and not _decision_names_match(track, wanted):
+        if not wanted:
+            continue
+        if not _decision_names_match(track, wanted):
             raise ValueError(
-                f"decision for pair {decision.get('pair_index')} names {key} "
+                f"decision for pair {pair} names {key} "
                 f"'{wanted}' but the pipeline has '{track.name}'")
-    entry_out = float(decision["entry_out_bar"])
-    trim = float(decision.get("intro_trim_bars") or 0.0)
-    swap_in = float(decision["swap_in_bar"])
+        # Burn list E8 (2026-09-16): a loose (non-exact) prefix match is only
+        # safe when it is UNAMBIGUOUS. Two tracks that share a long common
+        # prefix (a radio edit vs. an extended mix, a remix vs. its original)
+        # could both loosely satisfy the same `wanted` string; if the OTHER
+        # track in this pair would ALSO loosely match, the prefix rule
+        # cannot tell them apart and must refuse rather than guess.
+        if (not _decision_names_match_exactly(track, wanted)
+                and _decision_names_match(other, wanted)):
+            raise ValueError(
+                f"decision for pair {pair} names {key} '{wanted}', which "
+                f"matches both '{track.name}' and '{other.name}' by their "
+                f"shared prefix - ambiguous, name it exactly")
+    entry_out = _decision_bar(decision["entry_out_bar"], "entry_out_bar", pair)
+    trim = _decision_bar(decision.get("intro_trim_bars") or 0.0, "intro_trim_bars", pair)
+    swap_in = _decision_bar(decision["swap_in_bar"], "swap_in_bar", pair)
     if trim < 0 or swap_in <= trim:
         raise ValueError(
             f"decision for pair {decision.get('pair_index')}: swap_in_bar {swap_in:g} "
@@ -2554,23 +2597,27 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
     pair = decision.get("pair_index")
     cut = decision.get("outgoing_cut")
     if cut:
-        if float(cut["cut_bars"]) <= 0:
+        cut_bars = _decision_bar(cut["cut_bars"], "outgoing_cut.cut_bars", pair)
+        if cut_bars <= 0:
             raise ValueError(f"decision for pair {pair}: outgoing_cut needs cut_bars > 0")
         specs.append(FillCutSpec(kind="outgoing_cut", clip_name=str(cut["clip"]),
-                                 skip_bars=float(cut["cut_bars"]), note="decision"))
+                                 skip_bars=cut_bars, note="decision"))
     skip = decision.get("outro_skip")
     if skip:
-        if float(skip["skip_bars"]) <= 0 or float(skip["keep_end_bars"]) <= 0:
+        skip_bars = _decision_bar(skip["skip_bars"], "outro_skip.skip_bars", pair)
+        keep_end_bars = _decision_bar(skip["keep_end_bars"], "outro_skip.keep_end_bars", pair)
+        if skip_bars <= 0 or keep_end_bars <= 0:
             raise ValueError(f"decision for pair {pair}: outro_skip needs skip_bars "
                              "and keep_end_bars > 0")
         specs.append(FillCutSpec(kind="outro_skip", clip_name=str(skip["clip"]),
-                                 skip_bars=float(skip["skip_bars"]),
-                                 keep_end_bars=float(skip["keep_end_bars"]), note="decision"))
+                                 skip_bars=skip_bars,
+                                 keep_end_bars=keep_end_bars, note="decision"))
     loop = decision.get("tail_loop")
     if loop:
-        s0, s1 = float(loop["source_start_bar"]), float(loop["source_end_bar"])
+        s0 = _decision_bar(loop["source_start_bar"], "tail_loop.source_start_bar", pair)
+        s1 = _decision_bar(loop["source_end_bar"], "tail_loop.source_end_bar", pair)
         reps = int(loop["reps"])
-        partial = float(loop.get("partial_bars") or 0.0)
+        partial = _decision_bar(loop.get("partial_bars") or 0.0, "tail_loop.partial_bars", pair)
         if s1 <= s0 or reps < 0 or (reps == 0 and partial <= 0):
             raise ValueError(f"decision for pair {pair}: tail_loop geometry is empty")
         if s1 > o.n_bars + 1e-6:
@@ -2582,10 +2629,11 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
             kind="outgoing_tail", reps=reps, source_start_bar=s0, source_end_bar=s1,
             partial_bars=partial, target_marker_bar=float(o.n_bars) + ext,
             target_marker_name=f"decision:{loop.get('target') or 'tail'}", note="decision"))
-    trim = float(decision.get("intro_trim_bars") or 0.0)
+    trim = _decision_bar(decision.get("intro_trim_bars") or 0.0, "intro_trim_bars", pair)
     if trim > 0:
         specs.append(FillCutSpec(kind="intro_cut", cut_to_bar=trim,
-                                 target_marker_bar=float(decision["swap_in_bar"]),
+                                 target_marker_bar=_decision_bar(
+                                     decision["swap_in_bar"], "swap_in_bar", pair),
                                  note="decision"))
     return specs
 

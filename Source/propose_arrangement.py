@@ -1255,6 +1255,35 @@ def _hint_for(hints: dict, raw_name: str) -> dict:
             or hints.get(raw_name) or hints.get(raw_name + ".wav") or {})
 
 
+def _validate_decision_pair_indices(raw_indices: list[int], n_tracks: int, filename: str) -> None:
+    """Burn list E8 (2026-09-16): the caller used to build `decisions` with a
+    dict comprehension keyed on pair_index - a duplicate silently overwrote
+    an earlier decision, and an out-of-range index was simply never looked
+    up later by compute_aligned_positions's `for k in range(1, len(tracks))`
+    loop. Neither was flagged, so an authoring mistake in the file could
+    ship unnoticed. Valid pair_index values are exactly the transition
+    numbers that loop indexes: 1..n_tracks-1 (T1..T{n-1}, one per adjacent
+    pair)."""
+    seen: set[int] = set()
+    duplicate_set: set[int] = set()
+    for idx in raw_indices:
+        if idx in seen:
+            duplicate_set.add(idx)
+        seen.add(idx)
+    duplicates = sorted(duplicate_set)
+    if duplicates:
+        raise ValueError(
+            f"{filename}: duplicate pair_index {duplicates} - "
+            f"each transition may have only one decision")
+    valid_range = range(1, n_tracks)
+    out_of_range = sorted(idx for idx in raw_indices if idx not in valid_range)
+    if out_of_range:
+        raise ValueError(
+            f"{filename}: pair_index {out_of_range} out of range - this mix has "
+            f"{n_tracks} tracks, so valid pair_index values are "
+            f"{valid_range.start}..{valid_range.stop - 1}")
+
+
 def _resolve_inherited_tempo_and_warp_modes(
     input_root, tracks: list,
 ) -> tuple[float | None, dict[str, int]]:
@@ -1496,6 +1525,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         if decisions_path is not None:
             raw = json.loads(Path(decisions_path).read_text(encoding="utf-8"))
             items = raw["transitions"] if isinstance(raw, dict) else raw
+            _validate_decision_pair_indices(
+                [int(d["pair_index"]) for d in items], len(tracks), Path(decisions_path).name)
             decisions = {int(d["pair_index"]): d for d in items}
             print(f"\n--- Claude-arranged: {len(decisions)} decision(s) from "
                   f"{Path(decisions_path).name} ---")

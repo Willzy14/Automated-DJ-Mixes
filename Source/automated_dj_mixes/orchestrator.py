@@ -635,7 +635,13 @@ def run_pipeline(
         print(f"Project BPM (median, no mode): {project_bpm}")
 
     print("Sequencing by Camelot wheel + BPM proximity...")
-    track_dicts = [{"camelot": a.camelot or "1A", "bpm": a.bpm, "analysis": a} for a in analyses]
+    # Burn list D4 (2026-09-22): `a.camelot or "1A"` silently substituted a real,
+    # named Camelot code for missing key data, which sequencer.py's cost function
+    # then treated as CONFIRMED - either fabricating a clash against an unrelated
+    # track, or fabricating an "identical" match against another track that also
+    # happened to be missing key data. Pass None through honestly; sequencer.py's
+    # _edge_cost/_count_clashes now handle it as genuinely unknown.
+    track_dicts = [{"camelot": a.camelot, "bpm": a.bpm, "analysis": a} for a in analyses]
     sequenced = build_harmonic_path(track_dicts)
 
     # Energy arc post-pass: reorder within build/peak/cooldown thirds
