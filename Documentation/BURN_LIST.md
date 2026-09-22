@@ -1782,7 +1782,25 @@ was written).
   already-analysed track's cache) - reproducing that context was out of proportion for a docs-only
   change to code that already ships and already runs inside the real `/mix` pipeline today. Stated
   plainly rather than silently assumed.
-  Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`.
+
+  **GAP CONFIRMED AND FIXED, 2026-09-22 - exercised live for real, building a genuine new mix
+  ("22.09.26 Tech House Core Sample").** The unverified risk above was real: `--write-hints`
+  printed `[skip] no stats (bpm/downbeat)` for all 11 tracks and wrote an empty `track_hints.json`,
+  even immediately after a full Phase 1a stem-grid/stem-sections/kick-model run on the same
+  project. Root cause confirmed by reading the code: `detect()`'s only fallback for a missing
+  bpm/downbeat was a `Sections Review/Blind_V*` folder from the amplitude blind-viz pipeline,
+  RETIRED 2026-06-10 - nothing writes that folder any more, so the fallback always failed. Fixed:
+  extracted the resolution logic into `_resolve_bpm_downbeat_stats()`, which now reads bpm from
+  the track's own already-written `_Stem Analysis/SECTIONS_STEM_*.json` first (downbeat is always
+  0.0 by this pipeline's own convention - stem bar 0 is the downbeat), falling back to the retired
+  Blind_V mechanism only for an old project that genuinely still has one. Re-ran `--write-hints`
+  live on the real project: 11/11 hints written. 5 new tests in
+  `Tests/test_stem_detector_bpm_fallback.py`, proved to fail against pre-fix code (the function
+  didn't exist at all before this fix - import error). Full suite 896/6/0. This closes D5's own
+  stated caveat completely - the fully-autonomous hint path this item was built to deliver now
+  actually works end to end, confirmed on a real build, not just believed to.
+  Files changed: `Claude Code Brain/commands/mix.md`, `Codex Brain/commands/mix.md`,
+  `Source/stem_detector.py`; new: `Tests/test_stem_detector_bpm_fallback.py`.
   **Peer-reviewed 2026-09-15 - MiniMax** (Codex durably capped; a single thorough reviewer judged
   proportionate for a docs-only change, unlike C2/C5's dual-review bar for core algorithm code).
   No material objections - confirmed the rewritten Phase 1d/1f reads as a coherent, self-
@@ -2965,7 +2983,30 @@ park it, recorded as a decision. Full suite 890/6/0 throughout. Count: E8 DONE (
 D7/D8/C4/E7 all stay open (evidence/plans/investigation, no items closed). Nothing committed yet.
 rev 53c25fb -> (this write).
 
-## THE COUNT: 8 open, 27 done, 1 dropped (last update 2026-09-22 13:10 [Claude]: E8 DONE
+Last item update: 2026-09-22 14:20 [Claude] - building a real new mix ("22.09.26 Tech House
+Core Sample", Sam: "go with 2 core sample") through the full three-phase pipeline hit a genuine,
+previously-unverified bug in D5's own already-shipped code: `stem_detector.py --write-hints` run
+standalone printed `[skip] no stats` for all 11 tracks and wrote an empty hints file, even right
+after a full Phase 1a stem-grid/stem-sections/kick-model run on the same project - exactly the
+gap D5's 2026-09-15 note flagged as unverified. Root-caused (the only bpm/downbeat fallback read
+a `Blind_V*` folder from the amplitude-viz pipeline retired 2026-06-10 - nothing writes it any
+more) and fixed (`_resolve_bpm_downbeat_stats()` now reads the track's own already-written
+`SECTIONS_STEM_*.json` first). Verified live: 11/11 hints written. 5 new tests in
+`Tests/test_stem_detector_bpm_fallback.py`, proved to fail pre-fix (ImportError - the function
+didn't exist). Full suite 896/6/0. **Not yet peer-reviewed** - unlike D9/D4/E8 this session, this
+fix has had no MiniMax/Codex/subagent pass yet; flagging rather than silently calling it DONE.
+D5's checkbox was already `[x]` before this session (closed 2026-09-15) - this fold adds
+verification evidence + a real fix under an already-closed item, it does not flip any open/done
+count. Mix build itself passed every mandatory gate through Phase 4 (sections, hints,
+arrangement, automation - `validate_als.py` x3, `validate_hints_vs_sections.py`,
+`validate_mix_plan_als.py` 78/78); not yet rendered (Phase 5 needs a hand bounce). Count:
+unchanged (8 open, 27 done, 1 dropped). Nothing committed yet - held for Sam's go-ahead.
+rev (this write) -> (this write).
+
+## THE COUNT: 8 open, 27 done, 1 dropped (last update 2026-09-22 14:20 [Claude]: real production
+bug found+fixed in D5's already-shipped `--write-hints` path while building a genuine new mix;
+tested (5 new tests, full suite 896/6/0), NOT yet peer-reviewed; count unchanged - D5 was already
+closed, this is verification+fix under it). Prior update (2026-09-22 13:10 [Claude]): E8 DONE
 (schema hardening, reviewed SOUND by both MiniMax and a Claude subagent); D4's fabrication bug
 fixed and reviewed (item stays open, broader scope unbuilt); D8 and C4 got reviewed design plans
 instead of code (D8: a real BLOCKER found and fixed in the plan; C4: independently recommended

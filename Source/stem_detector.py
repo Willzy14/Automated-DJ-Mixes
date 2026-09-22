@@ -764,6 +764,42 @@ def _merge_same_label(sections, protected_bars=frozenset()):
     return merged
 
 
+def _resolve_bpm_downbeat_stats(project: Path, wav_stem: str) -> dict | None:
+    """bpm/downbeat for a standalone detect() call that received neither.
+
+    Burn list D5 follow-up (2026-09-22, found running --write-hints live for
+    real, on a genuine new mix build): the "Blind_V stats JSON" fallback this
+    replaces is from the amplitude blind-viz pipeline, RETIRED 2026-06-10 -
+    nothing writes that folder any more, so this branch always fell through
+    to "[skip] no stats" for every track whenever detect() was called
+    standalone (e.g. --write-hints) without the orchestrator's own
+    bpm/downbeat already in hand - exactly what D5's own 2026-09-15 note
+    flagged as unverified ("exercising --write-hints live needs the full
+    pipeline's own bpm/downbeat resolution context") and left unconfirmed.
+
+    The current owned-stem-grid architecture's real source of truth for bpm
+    is this track's own already-written SECTIONS_STEM_*.json
+    (align_engine.load_track's source, written by this same detect() a phase
+    earlier); downbeat is always 0.0 by this pipeline's own convention -
+    "stem bar 0 == the track's downbeat == the sections-JSON zero point"
+    (mix.md Phase 2 preamble) - never a per-track value to extract. Falls
+    back to the retired Blind_V mechanism only if a project genuinely still
+    has one (an old project, never re-run since the stem pipeline landed).
+
+    Returns a dict (bpm always present; may also carry the retired format's
+    "sections"/"first_downbeat_sec" keys when that's the source) or None.
+    """
+    cached = project / "_Stem Analysis" / f"SECTIONS_STEM_{wav_stem}.json"
+    if cached.exists():
+        try:
+            return {"bpm": json.loads(cached.read_text(encoding="utf-8"))["bpm"]}
+        except (KeyError, ValueError, json.JSONDecodeError):
+            pass
+    review = project / "Sections Review"
+    blind = next(review.glob("Blind_V*"), None) if review.exists() else None
+    return _load_stats(blind, wav_stem) if blind else None
+
+
 def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True,
            kick_model=False, kick_model_path=None, kick_model_device="auto",
            kick_provider=None, soft_intro_outro=True, tier_a=False, width_cues=True):
@@ -808,16 +844,15 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     boundary at 152 and the protection at 153 and the cue folded away)
     with "detected_bar" exposing the unsnapped bar for the sweep report.
     """
-    stats = None
     if bpm is None or downbeat is None:
-        review = project / "Sections Review"
-        blind = next(review.glob("Blind_V*"), None) if review.exists() else None
-        stats = _load_stats(blind, wav.stem) if blind else None
+        stats = _resolve_bpm_downbeat_stats(project, wav.stem)
         if not stats:
             print(f"  [skip] no stats (bpm/downbeat) for {wav.stem}")
             return None
         bpm = stats["bpm"]
         downbeat = stats.get("first_downbeat_sec", 0.0)
+    else:
+        stats = None
     sec_per_bar = 4 * 60.0 / bpm
 
     model_drums = None
@@ -1208,7 +1243,11 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
                    tier_a_data=tier_a_data)
 
     n_drop = sum(1 for c in kick_cues if c["type"] == "kick_dropout")
-    old_n = f"old {len(stats['sections']):2d} -> " if stats else ""
+    # `stats` may now come from the SECTIONS_STEM_*.json bpm-only fallback
+    # above (burn list D5 follow-up, 2026-09-22), which has no "sections" key
+    # to diff against - only show the old/new comparison when it's actually
+    # the retired Blind_V shape that carries one.
+    old_n = f"old {len(stats['sections']):2d} -> " if stats and "sections" in stats else ""
     print(f"  {wav.stem[:46]:46}  {old_n}stem {len(sections):2d} secs | "
           f"kick-drops {n_drop} landmarks {len(musical_landmarks)} "
           f"loops {len(signals['loop_windows'])} vocals {len(signals['vocal_regions'])}")
