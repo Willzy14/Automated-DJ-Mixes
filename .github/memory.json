@@ -802,7 +802,12 @@
         "Render check when Sam bounces Output/In-Key Mix V2 SW Tweaks.wav - untouched all session.",
         "Burn list A1-A4 (sealed per-transition blind-listen tooling) is fully built and verified - the only thing left there is Sam's own listen and verdict (A5), not more code."
       ]
+    },
+    {
+      "date": "2026-09-22",
+      "brain": "Claude (Sonnet 5)",
+      "summary": "Seventh block: built a real 11-track mix ('22.09.26 Tech House Core Sample') from Sam's actual credits/website data through all 5 pipeline phases, which surfaced two real bugs. D5 follow-up: stem_detector.py --write-hints always failed standalone (dead fallback to a retired pipeline's folder); fixed and MiniMax-reviewed SOUND. D15 (the bigger find): Sam eyeballed the ALS before bouncing and found the outgoing-outro-loop mechanism landing on wrong or missing targets; re-ran the real align_engine.plan_fill_or_cut selection code with instrumentation and confirmed two distinct defects (candidate selection had no preference for a section boundary over a numerically-smaller raw landmark; a last-resort fallback was structurally dead code in landmark mode). Full discipline: plan written, dual-reviewed (MiniMax + a Claude subagent standing in for capped Codex) - both found real, code-verified defects in the plan prose before any code existed - revised, implemented, a THIRD bug found only during implementation (a safety-cap gap that crashed 7 previously-fine transitions, fixed with a scoped guard), validated against the full 380-pair corpus with every one of 215 changed pairs individually read (0 regressions), frozen baseline refreshed, 6 new tests, code-level dual-reviewed again (SOUND both times), then the mix rebuilt with the fix and all 10 new transitions visually confirmed and sent to Sam. D16 opened along the way: a separate MixPlan-reconciliation gap, confirmed audio-inert, logged not hacked around. 8 commits, all pushed. Full suite 902/6/0 by end of session. Sam is listening tonight, verdict due tomorrow."
     }
   ],
-  "last_modified": "2026-09-16"
+  "last_modified": "2026-09-22"
 }
