@@ -2523,6 +2523,9 @@ def plan_fill_or_cut(o, i, al, policy=None):
             if chunk is None and o.loop_windows:
                 # bassy / vocal outro has no clean-drum window — use the outgoing's
                 # LATEST clean-drum window (a late break's drums) as the tail source.
+                # Not gated on landmark_mode, so D2's fallback (2026-09-22) makes
+                # THIS tier reachable too, not just the absolute last resort below -
+                # both are covered by the same via_d2_fallback safety guard.
                 ws, we = max(o.loop_windows, key=lambda w: w[1])
                 chunk = pick_clean_drum_loop(
                     o, ws, we, pref, insert_bar=float(outro["start_bar"])

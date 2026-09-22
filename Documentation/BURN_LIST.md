@@ -2450,15 +2450,38 @@ was written).
   T2 unchanged/still correct, T3 gets a real loop where it previously got nothing, T6/T8's
   previously-silent `loop_source: none` now carry an explicit `outgoing_loop_abandoned` reason -
   `validate_als.py` PASS); full suite 902/6/0.
-  Owner: Claude. Status: IMPLEMENTED + validated automatically - NOT yet DONE. Still needed: a
-  second, code-level peer review (the prior review covered the design, not the actual diff), and
-  Sam's own Ableton/by-ear check on a real re-bounce (nobody has listened to any of this yet,
-  including the newly-rescued loops).
+  **CODE-LEVEL REVIEW SOUND, 2026-09-22.** Dispatched a second review round against the actual
+  diff (not the plan prose) - MiniMax (`Receipts/2026-09-22/minimax-review-d15-code.md`) + a
+  Claude subagent standing in for capped Codex, both independent. Both verdicts: SOUND. The
+  subagent went further than asked: checked out the pre-fix commit into a throwaway worktree and
+  empirically ran the 6 new tests against it (4/6 genuinely fail pre-fix - real bug regressions;
+  2/6 correctly pass both sides - legitimate non-regression guards, not padding). Both
+  independently traced the `via_d2_fallback` guard's two `ValueError` sites against
+  `pick_cue_bounded_drum_loop`'s own internal length-filtering and proved the primary path's raise
+  is unreachable by construction, not just claimed. Three non-blocking findings, all independently
+  verified true (one folded in immediately, two logged as known/low-priority rather than spawning
+  new items): (a) the fix also revives a SECOND previously-dead fallback tier (`pick_clean_drum_
+  loop` over `o.loop_windows`, "bassy/vocal outro" case, `align_engine.py` ~2523) that wasn't
+  gated on landmark_mode either - correctly covered by the same `via_d2_fallback` guard, just
+  undocumented; fixed with a one-line comment, no logic change. (b) `_candidate_matches_target`
+  correlates by name-string equality only, no positional tiebreak - a data-quality edge case (two
+  incoming sections sharing a name) could double-tag `"selected": True`; traced as very unlikely
+  for this specific mechanism, not defended against. (c) `outgoing_loop_abandoned` only fires when
+  at least one candidate satisfies BOTH budget and swap-gap; a target region with zero candidates
+  satisfying that at all stays silently `loop_source: none` - narrower than the original ambiguity
+  D15 set out to close, not eliminated for every case. Neither (b) nor (c) corrupts output or
+  crashes anything today - real robustness/transparency gaps at the edges, revisit only if they
+  ever bite on real data.
+  Owner: Claude. Status: DONE at the code level (both plan AND implementation independently
+  reviewed SOUND by two brains each). Still open before this is fully closed: Sam's own by-ear
+  check on a real re-bounce - nobody has listened to any of this yet, including the newly-rescued
+  loops and the transitions where the now-reachable fallback fires (it "may carry bass" per its
+  own comment).
   Touched: 2026-09-22.
-  Peer review: plan SOUND-with-refinements-adopted - MiniMax
-  (`Receipts/2026-09-22/minimax-review-d15-plan.md`) + Claude subagent standing in for capped
-  Codex, both independent, both converged, all refinements folded in. The IMPLEMENTATION itself
-  (this fold) has NOT yet been independently reviewed - code-level review still open.
+  Peer review: plan SOUND-with-refinements-adopted (MiniMax +Claude subagent,
+  `Receipts/2026-09-22/minimax-review-d15-plan.md`) AND code SOUND (MiniMax + Claude subagent,
+  `Receipts/2026-09-22/minimax-review-d15-code.md`) - four independent reviewer-passes total
+  across two gates, zero blockers found at either gate.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
 
@@ -3257,7 +3280,28 @@ plan-reviewed-and-revised to implemented-and-automatically-validated, pending co
 check before DONE.
 rev (this write) -> (this write).
 
-## THE COUNT: 10 open, 27 done, 1 dropped (last update 2026-09-22 18:10 [Claude]: D15
+Last item update: 2026-09-22 18:40 [Claude] - dispatched the code-level review Sam asked for
+("get the review of the code done") - MiniMax + a Claude subagent standing in for capped Codex,
+both independent, both against the real diff this time (not the plan). Both verdicts: SOUND. The
+subagent empirically checked out pre-fix code into a throwaway worktree and ran the 6 new tests
+against it to confirm 4/6 genuinely exercise the real bugs. Both independently proved (not just
+asserted) the `via_d2_fallback` guard's two ValueError sites are correctly scoped - the primary
+path's raise stays unreachable by construction, only the new fallback path's raise gets softened.
+Three non-blocking findings surfaced, all independently verified true: a second previously-dead
+fallback tier also got revived (documented with a one-line comment, no logic change); the
+selected-tagging correlation has no positional tiebreak (low-probability data-quality edge case,
+logged not fixed); the abandonment note has a narrower residual silent case than originally
+intended (real but rare, logged not fixed). D15 now DONE at the code level - both the plan and
+the implementation have each independently cleared two-reviewer review. Still open: Sam's own
+by-ear check on a real re-bounce. Count: unchanged (10 open, 27 done, 1 dropped) - D15 stays
+open pending the ear check, status moved to code-level-done.
+rev (this write) -> (this write).
+
+## THE COUNT: 10 open, 27 done, 1 dropped (last update 2026-09-22 18:40 [Claude]: D15's
+implementation independently reviewed SOUND by MiniMax + a Claude subagent, both verified against
+the real diff, three non-blocking findings surfaced and logged; D15 now DONE at the code level,
+stays open pending Sam's by-ear check on a re-bounce). Prior update (2026-09-22 18:10 [Claude]):
+D15
 implemented per its reviewed plan; one real bug found and fixed during implementation itself
 (a safety-cap gap in the new fallback path, invisible to both plan reviews since it only shows
 up against real corpus data); fully validated automatically (380-pair corpus replay read in
