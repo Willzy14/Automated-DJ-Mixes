@@ -69,6 +69,9 @@ def test_r3_caps_optional_15_bars_but_keeps_10(monkeypatch):
         outgoing, incoming, alignment = _pair((section_bar,))
         tail = _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment))
         assert (tail.target_marker_name if tail else None) == expected
+        if expected is None:
+            assert alignment.outgoing_loop_not_needed == {
+                "reason": "outgoing reach exceeds cap", "max_reach_bars": 12.0}
 
 
 def test_r3_cap_cannot_create_short_swap_value_error(monkeypatch):
@@ -96,4 +99,51 @@ def test_flags_off_preserve_old_decision(monkeypatch):
         source_end_bar=105.0, target_marker_bar=125.0,
         target_marker_name="section:break_2",
         note="loop outro 5bx3+0b to section:break_2 125"))
+    assert alignment.outgoing_loop_not_needed is None
+
+
+def test_cap_suppresses_short_swap_error_that_old_policy_raises(monkeypatch):
+    import pytest
+    # A (5 bars out) yields a chunk but falls short of the swap; B (15 bars
+    # out) is past the cap and has no usable chunk.
+    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+                        lambda o, gap, **kw: (100.0, 105.0) if gap <= 5 else None)
+    old_policy = replace(INTERIM_V1, max_outgoing_reach_bars=None,
+                         skip_outgoing_loop_when_on_section_line=False)
+    outgoing, incoming, alignment = _pair((25.0, 35.0), swap=110.0)
+    with pytest.raises(ValueError, match="Cannot plan outgoing tail loop"):
+        ae.plan_fill_or_cut(outgoing, incoming, alignment, policy=old_policy)
+    outgoing, incoming, alignment = _pair((25.0, 35.0), swap=110.0)
+    assert _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment)) is None
+    assert alignment.outgoing_loop_not_needed["reason"].startswith(
+        "no loop within the reach cap")
+
+
+def test_r1_prefers_section_at_or_after_natural_end(monkeypatch):
+    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+                        lambda *args, **kwargs: (100.0, 105.0))
+    outgoing, incoming, alignment = _pair((18.0, 22.0))   # E = 20: tie
+    ae.plan_fill_or_cut(outgoing, incoming, alignment)
+    assert alignment.outgoing_loop_not_needed["section"] == "break_2"
+
+
+def test_not_needed_resets_between_calls(monkeypatch):
+    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+                        lambda *args, **kwargs: (100.0, 105.0))
+    outgoing, incoming, alignment = _pair((20.0, 35.0))
+    ae.plan_fill_or_cut(outgoing, incoming, alignment)
+    assert alignment.outgoing_loop_not_needed is not None
+    old_policy = replace(INTERIM_V1,
+                         skip_outgoing_loop_when_on_section_line=False,
+                         max_outgoing_reach_bars=None)
+    ae.plan_fill_or_cut(outgoing, incoming, alignment, policy=old_policy)
+    assert alignment.outgoing_loop_not_needed is None
+
+
+def test_no_outro_sets_nothing(monkeypatch):
+    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+                        lambda *args, **kwargs: (100.0, 105.0))
+    outgoing, incoming, alignment = _pair((20.0, 35.0))
+    outgoing.sections = [s for s in outgoing.sections if s["label"] != "outro"]
+    assert _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment)) is None
     assert alignment.outgoing_loop_not_needed is None

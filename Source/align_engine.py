@@ -793,6 +793,15 @@ class Alignment:
     # note-forwarding only matches notes containing "suppressed", which this
     # is not (found in D15's plan review; a dedicated field is unambiguous).
     outgoing_loop_abandoned: dict | None = None
+    # 2026-10-05 R1/R3: set when policy DECLINES to plan an outgoing tail loop
+    # (Sam's hand corrections removed most of them - see
+    # Documentation/Plans/v5-sam-tweaks-analysis.md). {"reason": str, ...} |
+    # None. reason is "natural end on section line" (R1), "outgoing reach
+    # exceeds cap" or "no loop within the reach cap reaches the swap; tail plays
+    # its natural end" (R3). Mutually exclusive with outgoing_loop_abandoned,
+    # which means "wanted a loop, none passed the gate": not_needed set =
+    # policy declined; abandoned set = tried and failed; neither = loop planned
+    # (or no candidate existed).
     outgoing_loop_not_needed: dict | None = None
 
 
@@ -2413,8 +2422,13 @@ def plan_fill_or_cut(o, i, al, policy=None):
         current_incoming_bar = o.n_bars - arr
         if (policy.skip_outgoing_loop_when_on_section_line
                 and outro is not None and al.handoff_bar_out <= o.n_bars):
-            near_section = next((s for s in i.sections
-                                 if abs(float(s["start_bar"]) - current_incoming_bar) <= 2), None)
+            # nearest start wins; on a tie prefer the later one (at or after E)
+            near_section = min(
+                (s for s in i.sections
+                 if abs(float(s["start_bar"]) - current_incoming_bar) <= 2),
+                key=lambda s: (abs(float(s["start_bar"]) - current_incoming_bar),
+                               -float(s["start_bar"])),
+                default=None)
             if near_section is not None:
                 skip_outgoing_loop = True
                 al.outgoing_loop_not_needed = {
