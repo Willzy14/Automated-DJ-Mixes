@@ -793,6 +793,7 @@ class Alignment:
     # note-forwarding only matches notes containing "suppressed", which this
     # is not (found in D15's plan review; a dedicated field is unambiguous).
     outgoing_loop_abandoned: dict | None = None
+    outgoing_loop_not_needed: dict | None = None
 
 
 def report_landmark_candidates(
@@ -2272,6 +2273,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
     # currently share max_overlap_beats/max_landmark_overlap_beats/
     # max_loop_extension_beats/max_loop_repeats).
     policy = policy or _DEFAULT_POLICY
+    al.outgoing_loop_not_needed = None
     arr = al.arr_offset_bars
     specs = []
     landmark_mode = al.alignment_policy in LANDMARK_POLICIES
@@ -2405,15 +2407,27 @@ def plan_fill_or_cut(o, i, al, policy=None):
     target_name = ""
     section_targets = []
     landmark_targets = []
+    skip_outgoing_loop = False
+    outro = next((s for s in o.sections if s["label"] == "outro"), None)
     if landmark_mode:
         current_incoming_bar = o.n_bars - arr
-        section_targets = _outro_section_target_candidates(i, current_incoming_bar)
-        landmark_targets = _outro_landmark_target_candidates(i, current_incoming_bar)
+        if (policy.skip_outgoing_loop_when_on_section_line
+                and outro is not None and al.handoff_bar_out <= o.n_bars):
+            near_section = next((s for s in i.sections
+                                 if abs(float(s["start_bar"]) - current_incoming_bar) <= 2), None)
+            if near_section is not None:
+                skip_outgoing_loop = True
+                al.outgoing_loop_not_needed = {
+                    "reason": "natural end on section line",
+                    "section": near_section["name"],
+                }
+        if not skip_outgoing_loop:
+            section_targets = _outro_section_target_candidates(i, current_incoming_bar)
+            landmark_targets = _outro_landmark_target_candidates(i, current_incoming_bar)
         nxt = None
     else:
         nxt = next((arr + s["start_bar"] for s in i.sections
                     if (arr + s["start_bar"]) > o.n_bars + 1), None)
-    outro = next((s for s in o.sections if s["label"] == "outro"), None)
     chunk = None
     # Burn list D15/D2 (2026-09-22): the first candidate that would be VIABLE
     # (within loop_budget, reaches the locked swap) even if no clean loop-source
@@ -2428,13 +2442,18 @@ def plan_fill_or_cut(o, i, al, policy=None):
     candidate_nxt = None
     candidate_target_name = ""
     via_d2_fallback = False
-    if landmark_mode and outro is not None:
+    if landmark_mode and outro is not None and not skip_outgoing_loop:
         locked_swap_gap = max(
             0.0,
             float(al.handoff_bar_out) - float(outro["start_bar"]),
         )
         required_boundary_bars = int(round(locked_swap_gap))
         short_swap_candidate = None
+        capped_candidate = False
+        optional_reach = al.handoff_bar_out <= o.n_bars
+        reach_limit = (min(loop_budget, policy.max_outgoing_reach_bars)
+                       if optional_reach and policy.max_outgoing_reach_bars is not None
+                       else loop_budget)
         # `short_swap_candidate` and the eventual ValueError below stay scoped
         # across BOTH tiers (one shared `for` body, entered from two sorted
         # iterables) - splitting this into two independent loops each with
@@ -2445,7 +2464,9 @@ def plan_fill_or_cut(o, i, al, policy=None):
             for target_source_bar, candidate_name in tier:
                 candidate_nxt_here = arr + target_source_bar
                 candidate_gap = candidate_nxt_here - o.n_bars
-                if candidate_gap > loop_budget + 1e-6:
+                if candidate_gap > reach_limit + 1e-6:
+                    if candidate_gap <= loop_budget + 1e-6:
+                        capped_candidate = True
                     continue
                 if candidate_nxt is None and candidate_gap + 1e-6 >= locked_swap_gap:
                     candidate_nxt = candidate_nxt_here
@@ -2476,7 +2497,8 @@ def plan_fill_or_cut(o, i, al, policy=None):
                     break
             if chunk is not None:
                 break
-        if chunk is None and short_swap_candidate is not None:
+        if (chunk is None and short_swap_candidate is not None
+                and not (optional_reach and capped_candidate)):
             candidate_name, shortfall, repeats, chunk_length, required_repeats = (
                 short_swap_candidate
             )
@@ -2487,6 +2509,11 @@ def plan_fill_or_cut(o, i, al, policy=None):
                 f"{required_repeats} required), and no later named cue fits the "
                 f"{policy.max_loop_repeats}-repeat/{loop_budget:g}-bar safety limits"
             )
+        if capped_candidate and candidate_nxt is None and chunk is None:
+            al.outgoing_loop_not_needed = {
+                "reason": "outgoing reach exceeds cap",
+                "max_reach_bars": policy.max_outgoing_reach_bars,
+            }
     if nxt is None and outro is not None and candidate_nxt is not None:
         # D15/D2: a target WAS correctly identified but no candidate's clean-
         # drum-window search succeeded anywhere - fall through to the SAME

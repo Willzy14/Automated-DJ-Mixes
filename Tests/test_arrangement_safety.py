@@ -97,6 +97,16 @@ def test_landmark_alignment_preserves_odd_bar_section_pairing():
     assert alignment.swap_progress == pytest.approx(8 / 27)
 
 
+def _pre_simplify_policy():
+    """INTERIM_V1 with the 2026-10-05 R1/R3 loop simplification off, so tests
+    that pin the older D15 loop-targeting geometry keep testing exactly that."""
+    import dataclasses
+    from automated_dj_mixes.transition_policy import INTERIM_V1
+    return dataclasses.replace(
+        INTERIM_V1, skip_outgoing_loop_when_on_section_line=False,
+        max_outgoing_reach_bars=None)
+
+
 def test_landmark_loop_reaches_named_cue_without_random_intro_loop():
     from align_engine import Alignment, plan_fill_or_cut
 
@@ -129,7 +139,7 @@ def test_landmark_loop_reaches_named_cue_without_random_intro_loop():
         176.0, 37.0, 3, alignment_policy="paired_landmarks_v2",
     )
 
-    specs = plan_fill_or_cut(outgoing, incoming, alignment)
+    specs = plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
 
     assert not any(spec.kind == "incoming_intro" for spec in specs)
     tail = next(spec for spec in specs if spec.kind == "outgoing_tail")
@@ -170,7 +180,7 @@ def test_landmark_tail_loop_fails_when_repeat_cap_stops_before_swap():
     )
 
     with pytest.raises(ValueError, match=r"6 bars before locked swap.*11 required"):
-        plan_fill_or_cut(outgoing, incoming, alignment)
+        plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
 
 
 def test_landmark_tail_loop_skips_near_cue_that_ends_before_swap():
@@ -200,7 +210,7 @@ def test_landmark_tail_loop_skips_near_cue_that_ends_before_swap():
     )
 
     tail = next(
-        spec for spec in plan_fill_or_cut(outgoing, incoming, alignment)
+        spec for spec in plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
         if spec.kind == "outgoing_tail"
     )
     extension = (

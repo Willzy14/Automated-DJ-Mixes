@@ -50,6 +50,8 @@ def _outro_loop_record(AE, o, i, al):
     tail = next((s for s in specs if s.kind == "outgoing_tail"), None)
     if tail is None:
         rec.update({"status": "ok", "loop_source": "none"})
+        if al.outgoing_loop_not_needed is not None:
+            rec["outgoing_loop_not_needed"] = al.outgoing_loop_not_needed
         return rec
     rec.update({
         "status": "ok",
@@ -99,7 +101,7 @@ def diff(before_path: Path, after_path: Path) -> int:
     for key, b in before.items():
         a = after[key]
         fields = ("status", "loop_source", "target_marker_name", "reps",
-                   "partial_bars", "error")
+                   "partial_bars", "error", "outgoing_loop_not_needed")
         if any(b.get(f) != a.get(f) for f in fields):
             changed.append((key, b, a))
 
@@ -119,7 +121,8 @@ def diff(before_path: Path, after_path: Path) -> int:
                   f"status={b.get('status')}")
             print(f"    after:  loop_source={a.get('loop_source')} "
                   f"target={a.get('target_marker_name')} reps={a.get('reps')} "
-                  f"status={a.get('status')}")
+                  f"status={a.get('status')} "
+                  f"reason={a.get('outgoing_loop_not_needed')}")
         print()
     return 0
 
