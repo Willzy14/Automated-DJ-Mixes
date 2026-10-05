@@ -70,6 +70,36 @@ def _matches_clip_boundary(clips: list[ET.Element], beat: float) -> bool:
     return any(math.isclose(beat, boundary, abs_tol=1e-6) for boundary in boundaries)
 
 
+def _coalesce_automation_splits(
+    loop_clips: list[tuple[float, float | None]],
+    expected_times: list[float],
+    windows: list[tuple[float, float]],
+) -> list[float]:
+    """Loop-clip start times, minus bookkeeping splits made after the freeze.
+
+    apply_automation splits a loop-repeat clip in two when the bass-swap point
+    lands mid-repeat. The two halves play back to back, so the audio equals one
+    clip, but the frozen MixPlan (written earlier) cannot list the extra start.
+    A start is such a split only if it is NOT a planned boundary, sits strictly
+    inside a planned loop window, and touches the previous loop clip's end -
+    anything else (a gap, a stray clip, a start outside the loop) stays in the
+    list and fails the comparison exactly as before.
+    """
+    ordered = sorted(loop_clips, key=lambda clip: clip[0])
+    kept: list[float] = []
+    prev_end: float | None = None
+    for start, end in ordered:
+        planned = any(math.isclose(start, t, abs_tol=1e-6) for t in expected_times)
+        inside = any(lo + 1e-6 < start < hi - 1e-6 for lo, hi in windows)
+        contiguous = prev_end is not None and math.isclose(start, prev_end, abs_tol=1e-6)
+        if not planned and inside and contiguous:
+            prev_end = end
+            continue
+        kept.append(start)
+        prev_end = end
+    return kept
+
+
 def _main_tempo_state(root: ET.Element) -> tuple[float | None, list[tuple[float, float]]]:
     """(static tempo, [(beat, bpm), ...]) for the MainTrack.
 
@@ -232,8 +262,14 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
 
     expected_loop_times: dict[str, list[float]] = {}
     loop_ids_by_track: dict[str, list[str]] = {}
+    loop_windows_by_track: dict[str, list[tuple[float, float]]] = {}
     for loop in plan["loops"]:
         loop_len = loop["source_beat_end"] - loop["source_beat_start"]
+        loop_windows_by_track.setdefault(loop["track_instance_id"], []).append((
+            loop["insert_at_beat"],
+            loop["insert_at_beat"] + loop["repeat_count"] * loop_len
+            + loop["partial_beats"],
+        ))
         expected_loop_times.setdefault(loop["track_instance_id"], []).extend(
             loop["insert_at_beat"] + index * loop_len
             for index in range(loop["repeat_count"])
@@ -249,12 +285,17 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
         )
         name = html.unescape(track_contract["display_name"])
         clips = track_by_name.get(name, (None, []))[1]
-        actual_times = sorted(
-            float(clip.get("Time")) for clip in clips
-            if _clip_name(clip).endswith("_tail_loop")
-            or _clip_name(clip).endswith("_intro_loop")
-        )
         expected_times = sorted(expected_times)
+        actual_times = _coalesce_automation_splits(
+            [
+                (float(clip.get("Time")), _float(clip.find("CurrentEnd")))
+                for clip in clips
+                if _clip_name(clip).endswith("_tail_loop")
+                or _clip_name(clip).endswith("_intro_loop")
+            ],
+            expected_times,
+            loop_windows_by_track[track_id],
+        )
         if actual_times != expected_times:
             errors.append(f"{name}: loop times mismatch: {actual_times} != {expected_times}")
         else:
