@@ -2532,9 +2532,10 @@ was written).
 
 - [ ] **Intro-cut float edge case produces a zero-length clip** (D19) - found 2026-10-05 building 05.10.26 Tech House Selection: `align_engine.plan_fill_or_cut` branch (2) guards `0 < cut_to < intro_end`, but a track whose intro ends at bar 8.0018 (Dombresky - Dirty Secret) lets `cut_to=8.0` pass, trimming the WHOLE 8-bar intro. The ALS validator caught it ("zero/negative arrangement length") so nothing shipped; worked around with a written decision for that pair. Fix: compare with a tolerance (`cut_to < intro_end - 0.25`) plus a regression test. Related: stem-JSON sections and ALS chops disagreed on intro length for Volkoder - Act Up (32 vs 8 bars), which is how a hand decision of mine hit the same wall.
   Evidence: `Test Project/05.10.26 Tech House Selection/Output/phase2.log`; `Source/align_engine.py` ~line 2394.
-  Owner: Claude. Status: OPEN - root-caused, not fixed.
+  UPDATE 2026-10-05 later [Claude]: FIXED in the planner path (`ae3cc35`: an intro cut must leave >= 0.25 bar; `Tests/test_d19_d22_guards.py`, proven to fail without it). Two independent reviews (Opus + Sonnet) - applied: margin 0.25 not 1 bar, second ALS writer covered. REMAINING (latent/unguarded, validator still catches them so nothing invalid ships): (a) the guard compares `cut_to` with the intro's END position, not its length - differs only if an intro starts after bar 0 (not seen); (b) the `--decisions` path (`alignment_from_decision` / `fills_from_decision`, align_engine ~2758-2849) has NO check of `intro_trim_bars` against the intro length - a trim of the whole intro is accepted and only the ALS validator refuses it; (c) `apply_loops.trim_named_clip_front` with trim == clip length yields CurrentStart == CurrentEnd.
+  Owner: Claude. Status: PARTIAL - planner path fixed, decision path still open.
   Touched: 2026-10-05.
-  Peer review: NONE.
+  Peer review: planner fix - Opus CORRECTIONS (applied) + Sonnet CORRECTIONS (findings logged above; MiniMax capped, Codex 503).
 
 - [ ] **`track_hints.json` auto-derivation picks early drum-only moments, tripping the hints hard gate on 7 of 27 tracks** (D20) - found 2026-10-05: `stem_detector.hints_from_stem_result` set first_drop/first_break on a drum-only or pre-drop move (Call 911 hint bar 24/32 vs real drop 48 / break 104; Elevate, Act Up, Dirty Secret, You're My Life, Deeper; I Want You's outro was the one case where the SECTION was the weaker side - detector labels the last 11 bars 'break' + a 2-bar 'outro'). All were checked against DETECT pictures where noted and hand-corrected in `track_hints.json` (notes field records each). Fix candidates: derive hints from the section list (first drop section, first break after it, outro section) with the same rule the gate uses, flag disagreement instead of picking one silently; separately, relabel a long closing 'break' as outro when drums+bass fade.
   Evidence: `Test Project/05.10.26 Tech House Selection/Output/hints_gate.log`, same for Defected.
@@ -2550,7 +2551,8 @@ was written).
 
 - [ ] **A failed phase 2 leaves an invalid `Sections V<N+1>.als` on disk, which a resumed run then picks up as the latest** (D22) - found 2026-10-05: `propose_arrangement` writes the output before the ALS validator rejects it; my resume script took the stale invalid V3 as V and failed at the wrong gate. Worked around by deleting my own invalid file. Fix: write to a temp name and rename only after validation passes (also stops a half-built file being opened in Ableton).
   Evidence: `Source/apply_loops.py` compress_als (line ~63); `Test Project/05.10.26 Tech House Selection/Output/runmix.log`.
-  Owner: Claude. Status: OPEN - not fixed.
+  UPDATE 2026-10-05 later [Claude]: FIXED for the two Phase 2/3 writers (`ae3cc35`: write `<name>.partial`, validate, rename only if valid, always clean the partial; `apply_automation.compress_als` now delegates). Both reviews: sound. NOT covered: `automated_dj_mixes/als_generator.py:65` (older single-command path) still writes first; `Path.replace` can raise PermissionError (read-only/locked output) instead of the ValueError callers expect after a validation failure (output left intact, partial removed).
+  Owner: Claude. Status: PARTIAL - main writers fixed.
   Touched: 2026-10-05.
   Peer review: NONE.
 
