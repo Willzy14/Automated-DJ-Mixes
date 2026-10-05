@@ -239,7 +239,7 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - Run the FULL suite after the learner appends to `pair_history.jsonl` (a pinned corpus test went red and I missed it for hours).
 - Same file, different stem-grid result when the folder's other tracks changed (D21, undiagnosed).
 
-**Pending:** Sam's listen feedback on both mixes; D17 (R2/R4/R5), D18 build (needs C1/C2/C4/C8 corrections), D20, D21; branch `burn-list/a1-a4-2026-09-14` is pushed but not merged to main; Git cleanup card on the Master Board.
+**Pending:** Sam's listen feedback on both mixes; D17 (R2/R4/R5), D18 build (needs C1/C2/C4/C8 corrections), D20, D21; branch `burn-list/a1-a4-2026-09-14` was merged to main on 2026-10-05 (fast-forward, `ab6f631`); Git cleanup card on the Master Board.
 
 ### 2026-09-22 - built a real mix, found and fixed two real pipeline bugs (D5 follow-up, D15), D15 dual-reviewed twice end to end, rebuilt and shown to Sam
 **Brain:** Claude (Sonnet 5); reviews by MiniMax and a Claude subagent standing in for capped Codex (Codex durably capped all session)

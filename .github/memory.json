@@ -818,7 +818,7 @@
         "D18 short-loop vocabulary build after plan corrections C1/C2/C4/C8",
         "D20 hints auto-derivation",
         "D21 stem-grid non-determinism",
-        "merge burn-list branch to main + clean Git (card on Master Board)"
+        "clean Git (card on Master Board); burn-list branch already merged to main ab6f631"
       ]
     }
   ],
