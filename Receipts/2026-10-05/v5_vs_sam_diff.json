@@ -1,0 +1,1044 @@
+{
+  "schema_version": "correction_diff_v1",
+  "baseline_als": "Test Project\\22.09.26 Tech House Core Sample\\Output\\Sections V5.als",
+  "corrected_als": "Test Project\\22.09.26 Tech House Core Sample\\Output\\Sections V5 Sams Tweaks Project\\Sections V5 Sams Tweaks.als",
+  "track_count": 11,
+  "transition_count": 10,
+  "all_warp_grids_preserved": true,
+  "tracks": [
+    {
+      "name": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+      "start_delta_beats": 0.0,
+      "end_delta_beats": 8.0,
+      "baseline_clip_count": 16,
+      "corrected_clip_count": 17,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 672.0,
+          "arrangement_end": 712.0,
+          "source_start": 0.0,
+          "source_end": 8.0,
+          "phrase_beats": 8.0,
+          "repeat_count": 5,
+          "baseline_section": "intro_1"
+        }
+      ],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 672.0,
+          "arrangement_end": 720.0,
+          "source_start": 0.0,
+          "source_end": 8.0,
+          "phrase_beats": 8.0,
+          "repeat_count": 6,
+          "baseline_section": "intro_1"
+        }
+      ]
+    },
+    {
+      "name": "Jones - Shuffle (Extended Mix) SW V5",
+      "start_delta_beats": 0.0,
+      "end_delta_beats": -127.74798951048956,
+      "baseline_clip_count": 9,
+      "corrected_clip_count": 5,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 1184.0,
+          "arrangement_end": 1280.0,
+          "source_start": 608.0,
+          "source_end": 640.0,
+          "phrase_beats": 32.0,
+          "repeat_count": 3,
+          "baseline_section": "outro_1"
+        }
+      ],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Detlef - HighRoller SW V1",
+      "start_delta_beats": -32.0,
+      "end_delta_beats": -51.74238990176491,
+      "baseline_clip_count": 18,
+      "corrected_clip_count": 15,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Enzo Is Burning - All The Ladies (Extended Mix) SW V1",
+      "start_delta_beats": -52.0,
+      "end_delta_beats": -22.5,
+      "baseline_clip_count": 8,
+      "corrected_clip_count": 10,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Jewel Kid - Talking to You 24 Bit MASTER",
+      "start_delta_beats": -84.0,
+      "end_delta_beats": -83.06427921037312,
+      "baseline_clip_count": 14,
+      "corrected_clip_count": 11,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 2032.0,
+          "arrangement_end": 2096.0,
+          "source_start": 0.0,
+          "source_end": 32.0,
+          "phrase_beats": 32.0,
+          "repeat_count": 2,
+          "baseline_section": "intro_1"
+        }
+      ]
+    },
+    {
+      "name": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+      "start_delta_beats": -24.0,
+      "end_delta_beats": -42.0,
+      "baseline_clip_count": 5,
+      "corrected_clip_count": 5,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Freejak - Know You Better  (Extended Mix) 24 Bit MASTER AMENDED",
+      "start_delta_beats": -106.0,
+      "end_delta_beats": -133.87852277930415,
+      "baseline_clip_count": 12,
+      "corrected_clip_count": 9,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 3560.0,
+          "arrangement_end": 3608.0,
+          "source_start": 608.0,
+          "source_end": 624.0,
+          "phrase_beats": 16.0,
+          "repeat_count": 3,
+          "baseline_section": "outro_1"
+        }
+      ],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 2862.0,
+          "arrangement_end": 2990.0,
+          "source_start": 0.0,
+          "source_end": 64.0,
+          "phrase_beats": 64.0,
+          "repeat_count": 2,
+          "baseline_section": "intro_1"
+        }
+      ]
+    },
+    {
+      "name": "RSquared - Ooo La La SW V1",
+      "start_delta_beats": -70.0,
+      "end_delta_beats": -69.61563904845116,
+      "baseline_clip_count": 13,
+      "corrected_clip_count": 14,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "TCTS ft. SOMA - Slippin SW V5",
+      "start_delta_beats": -38.052060699717,
+      "end_delta_beats": -66.37010047244439,
+      "baseline_clip_count": 15,
+      "corrected_clip_count": 9,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 4684.0,
+          "arrangement_end": 4708.0,
+          "source_start": 596.0,
+          "source_end": 604.0,
+          "phrase_beats": 8.0,
+          "repeat_count": 3,
+          "baseline_section": "outro_1"
+        }
+      ],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Shilla - Rewind (Extended Mix) 24 Bit MASTER",
+      "start_delta_beats": -38.0,
+      "end_delta_beats": -37.92405823343324,
+      "baseline_clip_count": 11,
+      "corrected_clip_count": 11,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 5288.0,
+          "arrangement_end": 5320.0,
+          "source_start": 676.0,
+          "source_end": 692.0,
+          "phrase_beats": 16.0,
+          "repeat_count": 2,
+          "baseline_section": "outro_1"
+        }
+      ],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 5250.0,
+          "arrangement_end": 5282.0,
+          "source_start": 676.0,
+          "source_end": 692.0,
+          "phrase_beats": 16.0,
+          "repeat_count": 2,
+          "baseline_section": "outro_1"
+        }
+      ]
+    },
+    {
+      "name": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+      "start_delta_beats": -38.0,
+      "end_delta_beats": -38.0,
+      "baseline_clip_count": 7,
+      "corrected_clip_count": 7,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    }
+  ],
+  "transitions": [
+    {
+      "index": 1,
+      "outgoing": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+      "incoming": "Jones - Shuffle (Extended Mix) SW V5",
+      "overlap_delta_beats": 8.0,
+      "swap_delta_beats": 0.0,
+      "baseline": {
+        "index": 1,
+        "outgoing": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+        "incoming": "Jones - Shuffle (Extended Mix) SW V5",
+        "overlap_start": 608.0,
+        "overlap_end": 784.0,
+        "overlap_beats": 176.0,
+        "overlap_bars": 44.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 8.92857143774961e-09,
+        "swap": {
+          "beat": 672.0,
+          "incoming_rise_beat": 672.0,
+          "outgoing_kill_beat": 672.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 608.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 783.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 672.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 672.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 1,
+        "outgoing": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+        "incoming": "Jones - Shuffle (Extended Mix) SW V5",
+        "overlap_start": 608.0,
+        "overlap_end": 792.0,
+        "overlap_beats": 184.0,
+        "overlap_bars": 46.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 3.2935694171953855e-09,
+        "swap": {
+          "beat": 672.0,
+          "incoming_rise_beat": 672.0,
+          "outgoing_kill_beat": 672.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 608.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 791.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 672.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 672.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 2,
+      "outgoing": "Jones - Shuffle (Extended Mix) SW V5",
+      "incoming": "Detlef - HighRoller SW V1",
+      "overlap_delta_beats": -95.74798951048956,
+      "swap_delta_beats": 0.0,
+      "baseline": {
+        "index": 2,
+        "outgoing": "Jones - Shuffle (Extended Mix) SW V5",
+        "incoming": "Detlef - HighRoller SW V1",
+        "overlap_start": 1120.0,
+        "overlap_end": 1344.0,
+        "overlap_beats": 224.0,
+        "overlap_bars": 56.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 5.208333875295068e-09,
+        "swap": {
+          "beat": 1152.0,
+          "incoming_rise_beat": 1152.0,
+          "outgoing_kill_beat": 1152.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1120.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1343.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1152.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1152.0,
+          "source_beat": 544.0,
+          "section": "drop_2"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 2,
+        "outgoing": "Jones - Shuffle (Extended Mix) SW V5",
+        "incoming": "Detlef - HighRoller SW V1",
+        "overlap_start": 1088.0,
+        "overlap_end": 1216.2520104895104,
+        "overlap_beats": 128.25201048951044,
+        "overlap_bars": 32.06300262237761,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 0.0,
+        "swap": {
+          "beat": 1152.0,
+          "incoming_rise_beat": 1152.0,
+          "outgoing_kill_beat": 1152.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1088.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1216.2520094895103,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1152.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1152.0,
+          "source_beat": 544.0,
+          "section": "drop_2"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 3,
+      "outgoing": "Detlef - HighRoller SW V1",
+      "incoming": "Enzo Is Burning - All The Ladies (Extended Mix) SW V1",
+      "overlap_delta_beats": 0.25761009823509085,
+      "swap_delta_beats": -52.0,
+      "baseline": {
+        "index": 3,
+        "outgoing": "Detlef - HighRoller SW V1",
+        "incoming": "Enzo Is Burning - All The Ladies (Extended Mix) SW V1",
+        "overlap_start": 1668.0,
+        "overlap_end": 1796.0,
+        "overlap_beats": 128.0,
+        "overlap_bars": 32.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.5625001736907507e-08,
+        "swap": {
+          "beat": 1732.0,
+          "incoming_rise_beat": 1732.0,
+          "outgoing_kill_beat": 1732.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1668.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1795.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1732.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1732.0,
+          "source_beat": 624.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 3,
+        "outgoing": "Detlef - HighRoller SW V1",
+        "incoming": "Enzo Is Burning - All The Ladies (Extended Mix) SW V1",
+        "overlap_start": 1616.0,
+        "overlap_end": 1744.257610098235,
+        "overlap_beats": 128.2576100982351,
+        "overlap_bars": 32.06440252455877,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 0.23502846311625025,
+        "swap": {
+          "beat": 1680.0,
+          "incoming_rise_beat": 1680.0,
+          "outgoing_kill_beat": 1680.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1616.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1744.257609098235,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1680.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1680.0,
+          "source_beat": 592.0,
+          "section": "drop_8"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 4,
+      "outgoing": "Enzo Is Burning - All The Ladies (Extended Mix) SW V1",
+      "incoming": "Jewel Kid - Talking to You 24 Bit MASTER",
+      "overlap_delta_beats": 61.5,
+      "swap_delta_beats": -52.0,
+      "baseline": {
+        "index": 4,
+        "outgoing": "Enzo Is Burning - All The Ladies (Extended Mix) SW V1",
+        "incoming": "Jewel Kid - Talking to You 24 Bit MASTER",
+        "overlap_start": 2116.0,
+        "overlap_end": 2212.0,
+        "overlap_beats": 96.0,
+        "overlap_bars": 24.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.5624998184193828e-08,
+        "swap": {
+          "beat": 2148.0,
+          "incoming_rise_beat": 2148.0,
+          "outgoing_kill_beat": 2148.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2116.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2211.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2148.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2148.0,
+          "source_beat": 480.0,
+          "section": "drop_4"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 4,
+        "outgoing": "Enzo Is Burning - All The Ladies (Extended Mix) SW V1",
+        "incoming": "Jewel Kid - Talking to You 24 Bit MASTER",
+        "overlap_start": 2032.0,
+        "overlap_end": 2189.5,
+        "overlap_beats": 157.5,
+        "overlap_bars": 39.375,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 0.02604167708333216,
+        "swap": {
+          "beat": 2096.0,
+          "incoming_rise_beat": 2096.0,
+          "outgoing_kill_beat": 2096.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2032.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2189.499999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2096.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2096.0,
+          "source_beat": 480.0,
+          "section": "drop_4"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 5,
+      "outgoing": "Jewel Kid - Talking to You 24 Bit MASTER",
+      "incoming": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+      "overlap_delta_beats": -59.064279210373115,
+      "swap_delta_beats": -42.0,
+      "baseline": {
+        "index": 5,
+        "outgoing": "Jewel Kid - Talking to You 24 Bit MASTER",
+        "incoming": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+        "overlap_start": 2632.0,
+        "overlap_end": 2840.0,
+        "overlap_beats": 208.0,
+        "overlap_bars": 52.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 1.5624998184193828e-08,
+        "swap": {
+          "beat": 2776.0,
+          "incoming_rise_beat": 2776.0,
+          "outgoing_kill_beat": 2776.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2632.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2839.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2776.0,
+          "source_beat": 144.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2776.0,
+          "source_beat": 648.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 5,
+        "outgoing": "Jewel Kid - Talking to You 24 Bit MASTER",
+        "incoming": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+        "overlap_start": 2608.0,
+        "overlap_end": 2756.935720789627,
+        "overlap_beats": 148.93572078962688,
+        "overlap_bars": 37.23393019740672,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 0.9926816465253264,
+        "swap": {
+          "beat": 2734.0,
+          "incoming_rise_beat": 2734.0,
+          "outgoing_kill_beat": 2734.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2608.0,
+          "source_beat": 18.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2756.935719789627,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2734.0,
+          "source_beat": 144.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2734.0,
+          "source_beat": 670.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 6,
+      "outgoing": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+      "incoming": "Freejak - Know You Better  (Extended Mix) 24 Bit MASTER AMENDED",
+      "overlap_delta_beats": 64.0,
+      "swap_delta_beats": -42.0,
+      "baseline": {
+        "index": 6,
+        "outgoing": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+        "incoming": "Freejak - Know You Better  (Extended Mix) 24 Bit MASTER AMENDED",
+        "overlap_start": 2968.0,
+        "overlap_end": 3160.0,
+        "overlap_beats": 192.0,
+        "overlap_bars": 48.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 7.812499092096914e-09,
+        "swap": {
+          "beat": 3032.0,
+          "incoming_rise_beat": 3032.0,
+          "outgoing_kill_beat": 3032.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2968.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3159.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3032.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3032.0,
+          "source_beat": 400.0,
+          "section": "drop_2"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 6,
+        "outgoing": "Zaro - Pach (Radio Edit) 24 Bit MASTER",
+        "incoming": "Freejak - Know You Better  (Extended Mix) 24 Bit MASTER AMENDED",
+        "overlap_start": 2862.0,
+        "overlap_end": 3118.0,
+        "overlap_beats": 256.0,
+        "overlap_bars": 64.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 7.812499092096914e-09,
+        "swap": {
+          "beat": 2990.0,
+          "incoming_rise_beat": 2990.0,
+          "outgoing_kill_beat": 2990.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2862.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3117.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2990.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2990.0,
+          "source_beat": 400.0,
+          "section": "drop_2"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 7,
+      "outgoing": "Freejak - Know You Better  (Extended Mix) 24 Bit MASTER AMENDED",
+      "incoming": "RSquared - Ooo La La SW V1",
+      "overlap_delta_beats": -63.87852277930415,
+      "swap_delta_beats": -70.0,
+      "baseline": {
+        "index": 7,
+        "outgoing": "Freejak - Know You Better  (Extended Mix) 24 Bit MASTER AMENDED",
+        "incoming": "RSquared - Ooo La La SW V1",
+        "overlap_start": 3496.0,
+        "overlap_end": 3688.0,
+        "overlap_beats": 192.0,
+        "overlap_bars": 48.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 7.812499092096914e-09,
+        "swap": {
+          "beat": 3560.0,
+          "incoming_rise_beat": 3560.0,
+          "outgoing_kill_beat": 3560.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3496.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3687.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3560.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3560.0,
+          "source_beat": 608.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 7,
+        "outgoing": "Freejak - Know You Better  (Extended Mix) 24 Bit MASTER AMENDED",
+        "incoming": "RSquared - Ooo La La SW V1",
+        "overlap_start": 3426.0,
+        "overlap_end": 3554.121477220696,
+        "overlap_beats": 128.12147722069585,
+        "overlap_bars": 32.03036930517396,
+        "incoming_entry_level": 0.0,
+        "outgoing_exit_level": 0.11661500399438604,
+        "swap": {
+          "beat": 3490.0,
+          "incoming_rise_beat": 3490.0,
+          "outgoing_kill_beat": 3518.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3426.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3554.121476220696,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3490.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3490.0,
+          "source_beat": 564.0,
+          "section": "drop_4"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 8,
+      "outgoing": "RSquared - Ooo La La SW V1",
+      "incoming": "TCTS ft. SOMA - Slippin SW V5",
+      "overlap_delta_beats": -31.563578348734154,
+      "swap_delta_beats": -38.0,
+      "baseline": {
+        "index": 8,
+        "outgoing": "RSquared - Ooo La La SW V1",
+        "incoming": "TCTS ft. SOMA - Slippin SW V5",
+        "overlap_start": 4136.0,
+        "overlap_end": 4296.0,
+        "overlap_beats": 160.0,
+        "overlap_bars": 40.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 1.041667019308079e-08,
+        "swap": {
+          "beat": 4200.0,
+          "incoming_rise_beat": 4200.0,
+          "outgoing_kill_beat": 4200.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4136.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4295.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4200.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4200.0,
+          "source_beat": 704.0,
+          "section": "drop_5"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 8,
+        "outgoing": "RSquared - Ooo La La SW V1",
+        "incoming": "TCTS ft. SOMA - Slippin SW V5",
+        "overlap_start": 4097.947939300283,
+        "overlap_end": 4226.384360951549,
+        "overlap_beats": 128.43642165126585,
+        "overlap_bars": 32.10910541281646,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 0.0,
+        "swap": {
+          "beat": 4162.0,
+          "incoming_rise_beat": 4162.0,
+          "outgoing_kill_beat": 4162.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4097.947939300283,
+          "source_beat": -0.052060699717003445,
+          "section": null
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4226.3843599515485,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4162.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4162.0,
+          "source_beat": 736.0,
+          "section": "drop_5"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 9,
+      "outgoing": "TCTS ft. SOMA - Slippin SW V5",
+      "incoming": "Shilla - Rewind (Extended Mix) 24 Bit MASTER",
+      "overlap_delta_beats": -28.370100472444392,
+      "swap_delta_beats": -38.0,
+      "baseline": {
+        "index": 9,
+        "outgoing": "TCTS ft. SOMA - Slippin SW V5",
+        "incoming": "Shilla - Rewind (Extended Mix) 24 Bit MASTER",
+        "overlap_start": 4616.0,
+        "overlap_end": 4776.0,
+        "overlap_beats": 160.0,
+        "overlap_bars": 40.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 1.041667019308079e-08,
+        "swap": {
+          "beat": 4680.0,
+          "incoming_rise_beat": 4680.0,
+          "outgoing_kill_beat": 4680.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4616.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4775.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4680.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4680.0,
+          "source_beat": 600.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 9,
+        "outgoing": "TCTS ft. SOMA - Slippin SW V5",
+        "incoming": "Shilla - Rewind (Extended Mix) 24 Bit MASTER",
+        "overlap_start": 4578.0,
+        "overlap_end": 4709.629899527556,
+        "overlap_beats": 131.6298995275556,
+        "overlap_bars": 32.9074748818889,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 0.0,
+        "swap": {
+          "beat": 4642.0,
+          "incoming_rise_beat": 4642.0,
+          "outgoing_kill_beat": 4642.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4578.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4709.629898527555,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4642.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4642.0,
+          "source_beat": 544.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 10,
+      "outgoing": "Shilla - Rewind (Extended Mix) 24 Bit MASTER",
+      "incoming": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+      "overlap_delta_beats": 0.075941766566757,
+      "swap_delta_beats": -38.0,
+      "baseline": {
+        "index": 10,
+        "outgoing": "Shilla - Rewind (Extended Mix) 24 Bit MASTER",
+        "incoming": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+        "overlap_start": 5224.0,
+        "overlap_end": 5352.0,
+        "overlap_beats": 128.0,
+        "overlap_bars": 32.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.5625005289621186e-08,
+        "swap": {
+          "beat": 5288.0,
+          "incoming_rise_beat": 5288.0,
+          "outgoing_kill_beat": 5288.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 5224.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 5351.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 5288.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 5288.0,
+          "source_beat": 676.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 10,
+        "outgoing": "Shilla - Rewind (Extended Mix) 24 Bit MASTER",
+        "incoming": "Yellody feat Lovelee - No Time To Stop (Extended Mix) SW V5",
+        "overlap_start": 5186.0,
+        "overlap_end": 5314.075941766567,
+        "overlap_beats": 128.07594176656676,
+        "overlap_bars": 32.01898544164169,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 0.0,
+        "swap": {
+          "beat": 5250.0,
+          "incoming_rise_beat": 5250.0,
+          "outgoing_kill_beat": 5250.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 5186.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 5314.075940766566,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 5250.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 5250.0,
+          "source_beat": 676.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    }
+  ]
+}
