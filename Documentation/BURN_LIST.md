@@ -2520,6 +2520,7 @@ was written).
 - [ ] **Sam's V5 hand-corrections not yet fully built in: R2 re-anchor, R4 no-outro own-ending tail, R5 incoming-intro loop** (D17) - found 2026-10-05: Sam's tweaks of the 22.09.26 Core Sample (analysis `Documentation/Plans/v5-sam-tweaks-analysis.md`) show he removes most outgoing loops and keeps overlaps near 32 bars. R1 (skip loop when outgoing ends within 2 bars of an incoming section start) and R3 (12-bar reach cap) are BUILT, merged (`e1c0452`, INTERIM_V1 on; corpus loops 215 -> 94, 0 new raises) and reproduce 7/10 of his loop decisions. STILL OPEN: R2 (T3/T8: slide the incoming onto a neighbouring outgoing section start instead of looping - aligner change, highest risk, will diff the alignment baseline), R4 (T4: loop the outgoing's own last 4 bars when it has no outro section), R5 (T6/T4: incoming intro loop; do NOT just flip `CUE_CONFIG.incoming_intro_loop`), T5 unexplained, test gap: no full propose_arrangement+apply_automation build of a changed pair verified by listening yet.
   Evidence: v5-sam-tweaks-analysis.md sections 4-5; `Receipts/2026-10-05/` (replay JSONs, reviews).
   Owner: Claude. Status: PARTIAL - R1/R3 merged.
+  2026-10-05 later [Claude]: second mix, 05.10.26 September Mix (n=7 transitions): Sam again pulled overlaps to ~32 bars, removed the pipeline's own BUTCH tail loop, added incoming intro loops on Youngr (T1) and BUTCH (T6), and added 1-bar x15 loops (radio-edit tracks) both sides of Youngr. Of three outgoing loops the D15 gate ABANDONED (T2/T4/T5), Sam hand-added loops on T2 and T4 - so a failed gate was twice exactly where a loop was wanted. New sub-item: a short-loop vocabulary (1-bar x N) for radio-edit/pop tracks with no intro/outro. Evidence: `Documentation/Mix Patterns Library/05.10.26 September Mix Sam Tweaks.md`.
   Touched: 2026-10-05.
   Peer review: R1/R3 - MiniMax SOUND-with-corrections (applied) + independent Opus CORRECTIONS (applied); Codex capped (HTTP 503), not reviewed.
 
@@ -3355,7 +3356,7 @@ evidence trail rather than silently skipping the failed gate or hacking it to pa
 opened (10 -> 11 open, 27 done, 1 dropped unchanged).
 rev (this write) -> (this write).
 
-## THE COUNT: 11 open, 27 done, 1 dropped (last update 2026-09-22 19:15 [Claude]: D16 opened -
+## THE COUNT: 12 open, 27 done, 1 dropped (last update 2026-10-05 [Claude]: D16 half-fixed, D17 opened; before that 2026-09-22 19:15 [Claude]: D16 opened -
 a real, separate MixPlan-reconciliation gap found while rebuilding the mix to show Sam D15's new
 transitions, confirmed harmless to actual audio, not blocking the rebuild; D15's own rebuild
 delivered successfully - 2 loops -> 7, T1/T3 visually confirmed fixed, all 10 transition pictures

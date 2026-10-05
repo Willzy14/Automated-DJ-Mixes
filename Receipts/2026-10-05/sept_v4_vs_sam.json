@@ -1,0 +1,714 @@
+{
+  "schema_version": "correction_diff_v1",
+  "baseline_als": "Test Project\\05.10.26 September Mix\\Output\\Sections V4.als",
+  "corrected_als": "Test Project\\05.10.26 September Mix\\Output\\Sections V4 Sams Tweaks Project\\Sections V4 Sams Tweaks.als",
+  "track_count": 8,
+  "transition_count": 7,
+  "all_warp_grids_preserved": true,
+  "tracks": [
+    {
+      "name": "Scuba Steve - Round The World Girl (Extended Mix) SW V3",
+      "start_delta_beats": 0.0,
+      "end_delta_beats": -31.60868792665667,
+      "baseline_clip_count": 6,
+      "corrected_clip_count": 6,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Youngr - Let Me Go SW V1",
+      "start_delta_beats": -24.0,
+      "end_delta_beats": 100.0,
+      "baseline_clip_count": 12,
+      "corrected_clip_count": 43,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 344.0,
+          "arrangement_end": 404.0,
+          "source_start": 6.0,
+          "source_end": 10.0,
+          "phrase_beats": 4.0,
+          "repeat_count": 15,
+          "baseline_section": "intro_1"
+        },
+        {
+          "arrangement_start": 916.0,
+          "arrangement_end": 976.0,
+          "source_start": 6.0,
+          "source_end": 10.0,
+          "phrase_beats": 4.0,
+          "repeat_count": 15,
+          "baseline_section": "intro_1"
+        }
+      ]
+    },
+    {
+      "name": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+      "start_delta_beats": 102.0,
+      "end_delta_beats": 104.0,
+      "baseline_clip_count": 11,
+      "corrected_clip_count": 13,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "Sorley x Mike Dunn - Phreaky 24 Bit MASTER",
+      "start_delta_beats": 88.0,
+      "end_delta_beats": 120.0,
+      "baseline_clip_count": 15,
+      "corrected_clip_count": 17,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "RSquared - Ooo La La SW V1",
+      "start_delta_beats": 152.0,
+      "end_delta_beats": 120.0,
+      "baseline_clip_count": 12,
+      "corrected_clip_count": 12,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "N.W.N - No More Games (Original Mix) 24 Bit MASTER AMENDED",
+      "start_delta_beats": 152.0,
+      "end_delta_beats": 152.37137549950057,
+      "baseline_clip_count": 12,
+      "corrected_clip_count": 10,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    },
+    {
+      "name": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
+      "start_delta_beats": 120.0,
+      "end_delta_beats": 105.42068738553098,
+      "baseline_clip_count": 13,
+      "corrected_clip_count": 12,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [
+        {
+          "arrangement_start": 4284.0,
+          "arrangement_end": 4332.0,
+          "source_start": 16.0,
+          "source_end": 32.0,
+          "phrase_beats": 16.0,
+          "repeat_count": 3,
+          "baseline_section": "intro_1"
+        }
+      ],
+      "corrected_repeat_groups": [
+        {
+          "arrangement_start": 3472.0,
+          "arrangement_end": 3536.0,
+          "source_start": 0.0,
+          "source_end": 32.0,
+          "phrase_beats": 32.0,
+          "repeat_count": 2,
+          "baseline_section": "intro_1"
+        }
+      ]
+    },
+    {
+      "name": "All Is Fine, Vinil - The Mood (Extended Mix) 24 Bit MASTER",
+      "start_delta_beats": 164.0,
+      "end_delta_beats": 164.0,
+      "baseline_clip_count": 7,
+      "corrected_clip_count": 7,
+      "warp_mode_preserved": true,
+      "warp_marker_count_preserved": true,
+      "warp_grid_preserved": true,
+      "baseline_repeat_groups": [],
+      "corrected_repeat_groups": []
+    }
+  ],
+  "transitions": [
+    {
+      "index": 1,
+      "outgoing": "Scuba Steve - Round The World Girl (Extended Mix) SW V3",
+      "incoming": "Youngr - Let Me Go SW V1",
+      "overlap_delta_beats": -7.608687926656671,
+      "swap_delta_beats": -56.0,
+      "baseline": {
+        "index": 1,
+        "outgoing": "Scuba Steve - Round The World Girl (Extended Mix) SW V3",
+        "incoming": "Youngr - Let Me Go SW V1",
+        "overlap_start": 360.0,
+        "overlap_end": 448.0,
+        "overlap_beats": 88.0,
+        "overlap_bars": 22.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.2499999968440534e-07,
+        "swap": {
+          "beat": 440.0,
+          "incoming_rise_beat": 440.0,
+          "outgoing_kill_beat": 440.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 360.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 447.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 440.0,
+          "source_beat": 80.0,
+          "section": "drop_2"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 440.0,
+          "source_beat": 440.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 1,
+        "outgoing": "Scuba Steve - Round The World Girl (Extended Mix) SW V3",
+        "incoming": "Youngr - Let Me Go SW V1",
+        "overlap_start": 336.0,
+        "overlap_end": 416.39131207334333,
+        "overlap_beats": 80.39131207334333,
+        "overlap_bars": 20.097828018335832,
+        "incoming_entry_level": 0.244569,
+        "outgoing_exit_level": 0.0,
+        "swap": {
+          "beat": 384.0,
+          "incoming_rise_beat": 384.0,
+          "outgoing_kill_beat": 384.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 336.0,
+          "source_beat": 2.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 416.39131107334333,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 384.0,
+          "source_beat": 6.0,
+          "section": "intro_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 384.0,
+          "source_beat": 384.0,
+          "section": "drop_3"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 2,
+      "outgoing": "Youngr - Let Me Go SW V1",
+      "incoming": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+      "overlap_delta_beats": -2.0,
+      "swap_delta_beats": 88.0,
+      "baseline": {
+        "index": 2,
+        "outgoing": "Youngr - Let Me Go SW V1",
+        "incoming": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+        "overlap_start": 760.0,
+        "overlap_end": 876.0,
+        "overlap_beats": 116.0,
+        "overlap_bars": 29.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.923076919929656e-08,
+        "swap": {
+          "beat": 824.0,
+          "incoming_rise_beat": 824.0,
+          "outgoing_kill_beat": 824.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 760.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 875.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 824.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 824.0,
+          "source_beat": 464.0,
+          "section": "build_2"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 2,
+        "outgoing": "Youngr - Let Me Go SW V1",
+        "incoming": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+        "overlap_start": 862.0,
+        "overlap_end": 976.0,
+        "overlap_beats": 114.0,
+        "overlap_bars": 28.5,
+        "incoming_entry_level": 0.21875,
+        "outgoing_exit_level": 5.689838711298023e-09,
+        "swap": {
+          "beat": 912.0,
+          "incoming_rise_beat": 912.0,
+          "outgoing_kill_beat": 914.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 862.0,
+          "source_beat": 14.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 975.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 912.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 912.0,
+          "source_beat": 514.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 3,
+      "outgoing": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+      "incoming": "Sorley x Mike Dunn - Phreaky 24 Bit MASTER",
+      "overlap_delta_beats": 16.0,
+      "swap_delta_beats": 88.0,
+      "baseline": {
+        "index": 3,
+        "outgoing": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+        "incoming": "Sorley x Mike Dunn - Phreaky 24 Bit MASTER",
+        "overlap_start": 1400.0,
+        "overlap_end": 1504.0,
+        "overlap_beats": 104.0,
+        "overlap_bars": 26.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.3888890482149918e-08,
+        "swap": {
+          "beat": 1432.0,
+          "incoming_rise_beat": 1432.0,
+          "outgoing_kill_beat": 1432.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1400.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1503.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1432.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1432.0,
+          "source_beat": 672.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 3,
+        "outgoing": "HARTY - There's A Party Going On (Extended Mix) SW V1",
+        "incoming": "Sorley x Mike Dunn - Phreaky 24 Bit MASTER",
+        "overlap_start": 1488.0,
+        "overlap_end": 1608.0,
+        "overlap_beats": 120.0,
+        "overlap_bars": 30.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 8.051250898616358e-10,
+        "swap": {
+          "beat": 1520.0,
+          "incoming_rise_beat": 1520.0,
+          "outgoing_kill_beat": 1520.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1488.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 1607.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 1520.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 1520.0,
+          "source_beat": 672.01171875,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 4,
+      "outgoing": "Sorley x Mike Dunn - Phreaky 24 Bit MASTER",
+      "incoming": "RSquared - Ooo La La SW V1",
+      "overlap_delta_beats": -32.0,
+      "swap_delta_beats": 152.0,
+      "baseline": {
+        "index": 4,
+        "outgoing": "Sorley x Mike Dunn - Phreaky 24 Bit MASTER",
+        "incoming": "RSquared - Ooo La La SW V1",
+        "overlap_start": 1976.0,
+        "overlap_end": 2136.0,
+        "overlap_beats": 160.0,
+        "overlap_bars": 40.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 1.0416665419121784e-08,
+        "swap": {
+          "beat": 2040.0,
+          "incoming_rise_beat": 2040.0,
+          "outgoing_kill_beat": 2040.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 1976.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2135.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2040.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2040.0,
+          "source_beat": 640.0,
+          "section": "drop_7"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 4,
+        "outgoing": "Sorley x Mike Dunn - Phreaky 24 Bit MASTER",
+        "incoming": "RSquared - Ooo La La SW V1",
+        "overlap_start": 2128.0,
+        "overlap_end": 2256.0,
+        "overlap_beats": 128.0,
+        "overlap_bars": 32.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 1.5624998184193828e-08,
+        "swap": {
+          "beat": 2192.0,
+          "incoming_rise_beat": 2192.0,
+          "outgoing_kill_beat": 2192.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2128.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2255.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2192.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2192.0,
+          "source_beat": 704.0,
+          "section": "drop_8"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 5,
+      "outgoing": "RSquared - Ooo La La SW V1",
+      "incoming": "N.W.N - No More Games (Original Mix) 24 Bit MASTER AMENDED",
+      "overlap_delta_beats": -32.0,
+      "swap_delta_beats": 152.0,
+      "baseline": {
+        "index": 5,
+        "outgoing": "RSquared - Ooo La La SW V1",
+        "incoming": "N.W.N - No More Games (Original Mix) 24 Bit MASTER AMENDED",
+        "overlap_start": 2616.0,
+        "overlap_end": 2776.0,
+        "overlap_beats": 160.0,
+        "overlap_bars": 40.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 1.0416665419121784e-08,
+        "swap": {
+          "beat": 2680.0,
+          "incoming_rise_beat": 2680.0,
+          "outgoing_kill_beat": 2680.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2616.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2775.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2680.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2680.0,
+          "source_beat": 704.0,
+          "section": "drop_5"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 5,
+        "outgoing": "RSquared - Ooo La La SW V1",
+        "incoming": "N.W.N - No More Games (Original Mix) 24 Bit MASTER AMENDED",
+        "overlap_start": 2768.0,
+        "overlap_end": 2896.0,
+        "overlap_beats": 128.0,
+        "overlap_bars": 32.0,
+        "incoming_entry_level": 0.15,
+        "outgoing_exit_level": 1.5624998184193828e-08,
+        "swap": {
+          "beat": 2832.0,
+          "incoming_rise_beat": 2832.0,
+          "outgoing_kill_beat": 2832.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 2768.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 2895.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 2832.0,
+          "source_beat": 64.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 2832.0,
+          "source_beat": 704.0,
+          "section": "drop_5"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 6,
+      "outgoing": "N.W.N - No More Games (Original Mix) 24 Bit MASTER AMENDED",
+      "incoming": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
+      "overlap_delta_beats": 32.37137549950057,
+      "swap_delta_beats": 152.0,
+      "baseline": {
+        "index": 6,
+        "outgoing": "N.W.N - No More Games (Original Mix) 24 Bit MASTER AMENDED",
+        "incoming": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
+        "overlap_start": 3352.0,
+        "overlap_end": 3448.0,
+        "overlap_beats": 96.0,
+        "overlap_bars": 24.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.5624998184193828e-08,
+        "swap": {
+          "beat": 3384.0,
+          "incoming_rise_beat": 3384.0,
+          "outgoing_kill_beat": 3384.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3352.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3447.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3384.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3384.0,
+          "source_beat": 768.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 6,
+        "outgoing": "N.W.N - No More Games (Original Mix) 24 Bit MASTER AMENDED",
+        "incoming": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
+        "overlap_start": 3472.0,
+        "overlap_end": 3600.3713754995006,
+        "overlap_beats": 128.37137549950057,
+        "overlap_bars": 32.09284387487514,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 0.0,
+        "swap": {
+          "beat": 3536.0,
+          "incoming_rise_beat": 3536.0,
+          "outgoing_kill_beat": 3536.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 3472.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 3600.3713744995007,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 3536.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 3536.0,
+          "source_beat": 768.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    },
+    {
+      "index": 7,
+      "outgoing": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
+      "incoming": "All Is Fine, Vinil - The Mood (Extended Mix) 24 Bit MASTER",
+      "overlap_delta_beats": -58.57931261446902,
+      "swap_delta_beats": 164.0,
+      "baseline": {
+        "index": 7,
+        "outgoing": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
+        "incoming": "All Is Fine, Vinil - The Mood (Extended Mix) 24 Bit MASTER",
+        "overlap_start": 4252.0,
+        "overlap_end": 4380.0,
+        "overlap_beats": 128.0,
+        "overlap_bars": 32.0,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 1.041667019308079e-08,
+        "swap": {
+          "beat": 4284.0,
+          "incoming_rise_beat": 4284.0,
+          "outgoing_kill_beat": 4284.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4252.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4379.999999,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4284.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4284.0,
+          "source_beat": 16.0,
+          "section": "intro_1"
+        },
+        "incoming_zero_gates": []
+      },
+      "corrected": {
+        "index": 7,
+        "outgoing": "BUTCH & Santos -  Come Get Up 24 Bit MASTER",
+        "incoming": "All Is Fine, Vinil - The Mood (Extended Mix) 24 Bit MASTER",
+        "overlap_start": 4416.0,
+        "overlap_end": 4485.420687385531,
+        "overlap_beats": 69.42068738553098,
+        "overlap_bars": 17.355171846382746,
+        "incoming_entry_level": 0.2,
+        "outgoing_exit_level": 0.5545156382674923,
+        "swap": {
+          "beat": 4448.0,
+          "incoming_rise_beat": 4448.0,
+          "outgoing_kill_beat": 4448.0
+        },
+        "incoming_entry_cue": {
+          "arrangement_beat": 4416.0,
+          "source_beat": 0.0,
+          "section": "intro_1"
+        },
+        "outgoing_exit_cue": {
+          "arrangement_beat": 4485.420686385531,
+          "source_beat": null,
+          "section": null
+        },
+        "incoming_swap_cue": {
+          "arrangement_beat": 4448.0,
+          "source_beat": 32.0,
+          "section": "drop_1"
+        },
+        "outgoing_swap_cue": {
+          "arrangement_beat": 4448.0,
+          "source_beat": 944.0,
+          "section": "outro_1"
+        },
+        "incoming_zero_gates": []
+      }
+    }
+  ]
+}
