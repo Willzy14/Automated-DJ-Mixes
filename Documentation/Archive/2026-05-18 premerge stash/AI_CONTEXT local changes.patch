@@ -1,0 +1,34 @@
+diff --git a/Documentation/AI_CONTEXT.md b/Documentation/AI_CONTEXT.md
+index 7e92d4a..145e63f 100644
+--- a/Documentation/AI_CONTEXT.md
++++ b/Documentation/AI_CONTEXT.md
+@@ -1,5 +1,29 @@
+ # Automated DJ Mixes
+ 
++## REQUIRED — Visual review after every pipeline run
++
++Numerical validation (the `validate_mix` checks) is necessary but NOT
++sufficient. After any `run_pipeline` call, before reporting results to Sam:
++
++1. **Read every per-track PNG** in `Output/Visualisations/Mix V<NN>/Track_*.png`.
++   Look at: is the picked `bass_entry` on the visible drop? Is the loop region
++   (green hatched) in stripped percussion, not in a silent gap or melodic
++   section? Is `outro_start` at the actual outro transition?
++2. **Read every per-transition PNG** in
++   `Output/Visualisations/Mix V<NN>/Transition_*.png`. Look at: does the
++   outgoing loop visually start at the same beat as the incoming bass swap
++   (no gap)? Are the kicks aligned vertically (not off by 1 beat)?
++3. **Fill in the verdict file** at `Output/Visualisations/REVIEW_V<NN>.md`
++   (auto-generated as a template by the pipeline).
++4. **State "Visual review complete: <summary>"** in your response, with the
++   per-image issues spelled out.
++
++The pipeline prints a `VISUAL REVIEW REQUIRED` block at the end of every
++run with the exact paths. If you skip the review, the mix has not been
++validated — only the code. This is the single most important rule in this
++project: the entire pipeline architecture assumes a visual pass between
++iterations.
++
+ ## What This Is
+ 
+ Automated DJ mix pipeline for Wired Masters showreels. Takes a folder of pre-tagged dance tracks and produces a sequenced, warped, gain-leveled Ableton Live 12 session (ALS file) from a known-good template. Sam drops tracks in, says "mix these," and gets a ready-to-review session back — harmonic sequencing, beat-matched, transitions automated, levels balanced. He loads it in Ableton, listens through, tweaks, and it's done.
