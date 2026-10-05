@@ -221,7 +221,27 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-09-22 (Latest Session) - built a real mix, found and fixed two real pipeline bugs (D5 follow-up, D15), D15 dual-reviewed twice end to end, rebuilt and shown to Sam
+### 2026-10-05 (Latest Session) - loop simplification merged, four mixes built, hand corrections learned, D16-D22 worked and logged
+**Brain:** Claude (Sonnet 5.5 orchestrating; Opus subagents for analysis/review; Codex built R1+R3 and exited early on a 503; MiniMax reviewed three items then hit its token plan; one Sonnet reviewer)
+**Focus:** Sam's feedback that loops were over-used where a section line already exists, then a run of real mixes.
+
+**Completed:**
+- D16 validator half fixed (`validate_mix_plan_als._coalesce_automation_splits`); the swap-inside-loop half is a real defect, resolved by R1/R3.
+- Diffed Sam's hand-tweaked V5 of the 22.09.26 Core Sample -> `Documentation/Plans/v5-sam-tweaks-analysis.md` (rules R1-R6) -> R1+R3 built in a worktree (Codex), finished and reviewed (MiniMax + Opus, all corrections applied), merged `e1c0452`: corpus loops 215 -> 94, 0 new raises; `INTERIM_V1` has `skip_outgoing_loop_when_on_section_line` and `max_outgoing_reach_bars=12`.
+- Built 05.10.26 September Mix (8 tracks, Sam's order), Sam tweaked + bounced it; render check WARN; learner appended 7 `pair_history` entries (note in `Documentation/Mix Patterns Library/05.10.26 September Mix Sam Tweaks.md`).
+- Mixcloud/SoundCloud: `Documentation/Mix Ideas 2026-10-05.md`, `Mix Shortlists 2026-10-05.md`; built Tech House (14) and Defected (13) selections to `Sections V4.als` (all gates pass; not yet listened to).
+- D19 (intro cut float edge) and D22 (validate-then-publish ALS writes, both writers) fixed with tests that fail without them; pinned corpus test re-pinned by hand; suite 929/6/0. Short-loop vocabulary plan written (D18).
+- New tools in `Tools/`: `run_mix_pipeline.sh`, `resolve_masters.py`, `build_folder_index.py`, `scan_pair_alignment.py`, `fix_hints_from_gate.py`, `show_sections.py`.
+
+**Key Learnings:**
+- Stream counts belong to the song, not to the version Sam worked on - match each pick to his project folder first.
+- Each real mix exposed a new failure class (grid gate, hints gate, intro-cut float, invalid leftover ALS); the hints auto-derivation was wrong on 7 of 27 tracks while the section chops were right.
+- Run the FULL suite after the learner appends to `pair_history.jsonl` (a pinned corpus test went red and I missed it for hours).
+- Same file, different stem-grid result when the folder's other tracks changed (D21, undiagnosed).
+
+**Pending:** Sam's listen feedback on both mixes; D17 (R2/R4/R5), D18 build (needs C1/C2/C4/C8 corrections), D20, D21; branch `burn-list/a1-a4-2026-09-14` is pushed but not merged to main; Git cleanup card on the Master Board.
+
+### 2026-09-22 - built a real mix, found and fixed two real pipeline bugs (D5 follow-up, D15), D15 dual-reviewed twice end to end, rebuilt and shown to Sam
 **Brain:** Claude (Sonnet 5); reviews by MiniMax and a Claude subagent standing in for capped Codex (Codex durably capped all session)
 **Focus:** Build a real, evidence-based mix from Sam's actual credits/website data to stress-test the pipeline; investigate and fix whatever real bugs it surfaces along the way, holding every fix to the project's own plan-then-review-then-implement-then-review discipline.
 

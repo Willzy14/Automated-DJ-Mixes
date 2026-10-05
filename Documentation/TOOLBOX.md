@@ -4,6 +4,13 @@ Module reference for all pipeline components.
 
 ## Modules
 
+### Mix prep tools (2026-10-05, Claude)
+- `Tools/build_folder_index.py` -> `Tools/folder_index.json` (gitignored): every project folder under the work folders + STUDIO-2 backup drives G:/F:.
+- `Tools/resolve_masters.py`: best master WAV for an artist/title (prefers Extended/Original, newest SW V/AMENDED, never acapella/instrumental/dub). Copy with `shutil.copyfile`.
+- `Tools/run_mix_pipeline.sh "<project>" "<order csv>" <n>`: re-lay in Sam's order -> hints gate -> phase 2 -> phase 3 -> all validators; stops at the first failed gate; `RESUME=1` skips the re-lay, `DEC=<decisions.json>` adds `--decisions`.
+- `Tools/scan_pair_alignment.py "<project>"`: runs `align_pair` on every adjacent pair so all unplaceable pairs are found in one go. `Tools/show_sections.py`, `Tools/fix_hints_from_gate.py`: section tables; correct flagged hints to the section boundaries.
+- `Source/apply_loops.compress_als` / `apply_automation.compress_als`: now write `<name>.partial`, validate, then rename (D22).
+
 ### `Source/validate_beatgrid.py` (2026-06-11, v2 same day; RB-library CLI removed 2026-08-20)
 Hard-stop gate: does each track's beat grid sit ON its audio? Whole-track kick onsets (150Hz lowpass — not mel fmax, which produces empty filters), half-beat-circle phase concentration (R) folds house offbeat-bass stabs so locked grids read high regardless of bassline; mean full-circle phase catches grids whose tempo is right but markers sit between the kicks (the Todd case). Per-track +1% detuned twin acts as a known-bad control. Calibrated on 22 tracks (08.06.26 + 09.06.26) + 12 more (11.06.26). Wired into `--sections-layout`; `--allow-bad-grids` to override.
 
