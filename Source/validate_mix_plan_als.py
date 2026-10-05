@@ -82,17 +82,24 @@ def _coalesce_automation_splits(
     clip, but the frozen MixPlan (written earlier) cannot list the extra start.
     A start is such a split only if it is NOT a planned boundary, sits strictly
     inside a planned loop window, and touches the previous loop clip's end -
-    anything else (a gap, a stray clip, a start outside the loop) stays in the
-    list and fails the comparison exactly as before.
+    and at most ONE such split is absorbed between two planned starts (the
+    swap is a single point, so it splits a repeat once). Anything else (a gap,
+    a stray clip, a start outside the loop, a chain of extra starts) stays in
+    the list and fails the comparison exactly as before.
     """
     ordered = sorted(loop_clips, key=lambda clip: clip[0])
     kept: list[float] = []
     prev_end: float | None = None
+    absorbed_since_planned = False
     for start, end in ordered:
         planned = any(math.isclose(start, t, abs_tol=1e-6) for t in expected_times)
         inside = any(lo + 1e-6 < start < hi - 1e-6 for lo, hi in windows)
         contiguous = prev_end is not None and math.isclose(start, prev_end, abs_tol=1e-6)
-        if not planned and inside and contiguous:
+        if planned:
+            absorbed_since_planned = False
+        if (not planned and inside and contiguous
+                and not absorbed_since_planned):
+            absorbed_since_planned = True
             prev_end = end
             continue
         kept.append(start)
