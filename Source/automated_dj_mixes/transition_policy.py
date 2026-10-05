@@ -48,6 +48,9 @@ class TransitionPolicy:
     max_loop_extension_beats: float
     max_loop_repeats: int
 
+    skip_outgoing_loop_when_on_section_line: bool = False
+    max_outgoing_reach_bars: float | None = None
+
     # Extended lane. None disables it outright; a value is only an upper bound -
     # authorisation still requires the evidence contract to be satisfied and
     # independently revalidated. A policy string alone must never unlock it.
@@ -132,6 +135,8 @@ INTERIM_V1 = TransitionPolicy(
     max_landmark_overlap_beats=256.0,  # 64 bars, only with a named-cue extension
     max_loop_extension_beats=128.0,  # 32 bars
     max_loop_repeats=8,
+    skip_outgoing_loop_when_on_section_line=True,
+    max_outgoing_reach_bars=12.0,
     max_extended_overlap_beats=None,  # extended lane unavailable
 )
 

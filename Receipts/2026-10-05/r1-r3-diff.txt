@@ -1,0 +1,495 @@
+TOTAL pairs: 380  CHANGED: 163  UNCHANGED: 217
+
+=== alignment_policy=paired_landmarks_v2  (143 changed) ===
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_252_256:end reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:drop_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_252_256:end reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:fill_1 reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Christoph - Reachin 16 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Christoph - The Rise 16 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'fill_1'}
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Harry Romero - Renegades SW V1
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:fill_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Christoph - Reachin 16 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Harry Romero - Renegades SW V1
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=outro target=landmark:kick_gap_174_176:end reps=2 status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Cevin Fisher - Emotions 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  BUTCH & Santos -  Come Get Up 24 Bit MASTER -> A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  BUTCH & Santos -  Come Get Up 24 Bit MASTER -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:fill_1 reps=2 status=ok
+    after:  loop_source=outro target=landmark:kick_gap_185_192:end reps=1 status=ok reason=None
+  BUTCH & Santos -  Come Get Up 24 Bit MASTER -> Christoph - Reachin 16 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  BUTCH & Santos -  Come Get Up 24 Bit MASTER -> Christoph - The Rise 16 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  BUTCH & Santos -  Come Get Up 24 Bit MASTER -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Cevin Fisher - Emotions 24 Bit MASTER -> Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Cevin Fisher - Emotions 24 Bit MASTER -> Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Cevin Fisher - Emotions 24 Bit MASTER -> Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Christoph - Reachin 16 Bit MASTER -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - Reachin 16 Bit MASTER -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:fill_1 reps=6 status=ok
+    after:  loop_source=outro target=landmark:kick_gap_185_192:end reps=3 status=ok reason=None
+  Christoph - Reachin 16 Bit MASTER -> Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=section:break_1 reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Christoph - Reachin 16 Bit MASTER -> Harry Romero - Renegades SW V1
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=outro target=landmark:kick_gap_174_176:end reps=2 status=ok reason=None
+  Christoph - Reachin 16 Bit MASTER -> Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Christoph - Reachin 16 Bit MASTER -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - Reachin 16 Bit MASTER -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:fill_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Christoph - Reachin 16 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Harry Romero - Renegades SW V1
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=outro target=landmark:kick_gap_174_176:end reps=2 status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Christoph - The Rise 16 Bit MASTER -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:drop_2 reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_252_256:end reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:fill_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Christoph - Reachin 16 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=outro target=section:drop_2 reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=outro target=section:drop_2 reps=4 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_252_256:end reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Harry Romero - Renegades SW V1 -> Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Harry Romero - Renegades SW V1 -> Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Harry Romero - Renegades SW V1 -> Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_156_160:end reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_185_192:end reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Cevin Fisher - Emotions 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Christoph - Reachin 16 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Christoph - The Rise 16 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:drop_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=section:drop_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:drop_2 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_252_256:end reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=section:break_1 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=landmark:kick_gap_190_192:end reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER -> Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=landmark:kick_gap_190_192:end reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Sam Leagas - Bad Behaviours (Extended Mix) SW V2 -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Sam Leagas - Bad Behaviours (Extended Mix) SW V2 -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=outro target=section:break_1 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_1'}
+  Sam Leagas - Bad Behaviours (Extended Mix) SW V2 -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Sam Leagas - Bad Behaviours (Extended Mix) SW V2 -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Sam Leagas - Bad Behaviours (Extended Mix) SW V2 -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Sam Leagas - Bad Behaviours (Extended Mix) SW V2 -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_220_224:end reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:drop_2 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:fill_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Christoph - Reachin 16 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Christoph - The Rise 16 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Harry Romero - Renegades SW V1
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=outro target=section:drop_2 reps=3 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Soulsearcher ? Feelin Love (Ruze & Chesster Extended Remix UPDATE 12.02.26) 24 Bit MASTER AMENDED -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> A Studio - SOS (Skylark Remix Nic Fanciulli 2022 Edit) 24 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Cevin Fisher & Harry Romero - That Sound (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:fill_1 reps=5 status=ok
+    after:  loop_source=outro target=landmark:kick_gap_185_192:end reps=4 status=ok reason=None
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Christoph - Reachin 16 Bit MASTER
+    before: loop_source=outro target=section:build_1 reps=5 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Christoph - The Rise 16 Bit MASTER
+    before: loop_source=outro target=section:drop_2 reps=2 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'fill_1'}
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Fish Go Deep - The Cure & The Cause (Idris Elba Remix) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=section:drop_2 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Harry Romero - Renegades SW V1
+    before: loop_source=outro target=section:break_1 reps=8 status=ok
+    after:  loop_source=outro target=landmark:kick_gap_174_176:end reps=2 status=ok reason=None
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=section:break_1 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_2 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER -> Sam Leagas - Double Dutch (Extended Mix) SW V1
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+
+=== alignment_policy=tail_anchor_rescue_v1  (20 changed) ===
+  Andrea Oliva & Bensy - Nappp 24 BIt MASTER -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Andrea Oliva feat. Morchebba - Dancing (Original New Mix) 24 Bit MASTER -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Cevin Fisher - Emotions 24 Bit MASTER -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Christoph - The Rise 16 Bit MASTER -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Harry Romero - Renegades SW V1 -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Nic Fanciulli - Revoloution (Extended Mix) 24 Bit MASTER -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER -> Alaia & Gallo - Pushin' From The Walls 16 Bit MASTER
+    before: loop_source=outro target=landmark:kick_gap_248_256:end reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=outro target=section:drop_2 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER -> BUTCH & Santos -  Come Get Up 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=7 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER -> Harry Romero - Renegades SW V1
+    before: loop_source=outro target=section:drop_2 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER -> Nic Fanciulli & Butch - I Want You (Extended Mix) 24 Bit MASTER AMENDED
+    before: loop_source=outro target=section:drop_2 reps=8 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason=None
+  Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=outro target=section:break_1 reps=6 status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Sam Leagas - Double Dutch (Extended Mix) SW V1 -> Andrea Oliva & Bensy - Nappp 24 BIt MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Sam Leagas - Double Dutch (Extended Mix) SW V1 -> Doorly & Harry Choo Choo Romero - The Truth 16 Bit MASTER AMENDED
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Sam Leagas - Double Dutch (Extended Mix) SW V1 -> Nic Fanciulli - Vente (Extended Mix) 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'drop_2'}
+  Sam Leagas - Double Dutch (Extended Mix) SW V1 -> Ritmo Da Rua - Harry Romero Remix 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'build_1'}
+  Sam Leagas - Double Dutch (Extended Mix) SW V1 -> Sam Leagas - Bad Behaviours (Extended Mix) SW V2
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+  Sam Leagas - Double Dutch (Extended Mix) SW V1 -> Switch Disco - You Are All I Need (Extended Mix) SW V2 24 Bit MASTER
+    before: loop_source=none target=None reps=None status=ok
+    after:  loop_source=none target=None reps=None status=ok reason={'reason': 'natural end on section line', 'section': 'break_1'}
+

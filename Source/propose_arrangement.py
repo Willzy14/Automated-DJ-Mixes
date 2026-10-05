@@ -2268,6 +2268,8 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
             # meaning "no loop was needed" (see Alignment.outgoing_loop_
             # abandoned's own docstring for why this is a dedicated field).
             t["outgoing_loop_abandoned"] = al.outgoing_loop_abandoned
+            if al.outgoing_loop_not_needed is not None:
+                t["outgoing_loop_not_needed"] = al.outgoing_loop_not_needed
             t["landmark_policy"] = _landmark_policy_label(al.alignment_policy)
             # Burn list C9 (2026-09-15): this report used to compute
             # selected_style from overlap length alone, a second, unpatched
