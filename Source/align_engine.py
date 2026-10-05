@@ -2393,7 +2393,12 @@ def plan_fill_or_cut(o, i, al, policy=None):
         host = next((s for s in o.sections if s["start_bar"] <= arr < s["end_bar"]), None)
         if host and host["label"] in ("break", "fill"):
             cut_to = min(round((host["end_bar"] - arr) / SNAP_BARS) * SNAP_BARS, first_drop_in)
-            if 0 < cut_to < intro_end:
+            # Leave at least one beat (0.25 bar) of intro: a cut that equals the
+            # intro (8.0 vs an intro ending at 8.0018) used to pass
+            # `cut_to < intro_end` and left a zero-length clip the ALS validator
+            # refused (D19). A bar-sized margin also blocked legitimate cuts on
+            # intros ending 8.5-8.9 bars in (review 2026-10-05).
+            if 0 < cut_to and intro_end - cut_to >= 0.25:
                 al.intro_cut_bars = float(cut_to)
                 specs.append(FillCutSpec(kind="intro_cut", cut_to_bar=float(cut_to),
                     target_marker_bar=float(host["end_bar"]),

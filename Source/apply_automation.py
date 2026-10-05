@@ -111,17 +111,10 @@ def decompress_als(als_path: Path) -> list[str]:
 
 
 def compress_als(lines: list[str], output_path: Path) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    content = "".join(lines)
-    with gzip.open(output_path, "wb") as f:
-        f.write(content.encode("utf-8"))
-    from validate_als import report_als
-    errors = report_als(output_path)
-    if errors:
-        raise ValueError(
-            f"ALS validation failed for {output_path.name}: {errors[0]}"
-        )
-    return output_path
+    """Write, validate, then publish (see apply_loops.compress_als - burn list
+    D22): a rejected build never leaves an invalid output file behind."""
+    from apply_loops import compress_als as _write_validated
+    return _write_validated(lines, output_path)
 
 
 # ── Track range finding ──────────────────────────────────────────────────────

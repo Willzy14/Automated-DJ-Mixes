@@ -53,16 +53,30 @@ def decompress_als(als_path: Path) -> list[str]:
 
 
 def compress_als(lines: list[str], output_path: Path) -> Path:
+    """Write, validate, THEN publish. The ALS is written to a sibling
+    `.partial` file and renamed onto `output_path` only if it validates, so a
+    rejected build never leaves an invalid Sections V<N>.als behind for a
+    resumed run (or Ableton) to pick up (burn list D22)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     content = "".join(lines)
-    with gzip.open(output_path, "wb") as f:
+    partial = output_path.with_name(output_path.name + ".partial")
+    with gzip.open(partial, "wb") as f:
         f.write(content.encode("utf-8"))
     from validate_als import report_als
-    errors = report_als(output_path)
+    try:
+        errors = report_als(partial)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
     if errors:
+        partial.unlink(missing_ok=True)
         raise ValueError(
             f"ALS validation failed for {output_path.name}: {errors[0]}"
         )
+    try:
+        partial.replace(output_path)
+    finally:
+        partial.unlink(missing_ok=True)
     return output_path
 
 
