@@ -2524,6 +2524,36 @@ was written).
   Touched: 2026-10-05.
   Peer review: R1/R3 - MiniMax SOUND-with-corrections (applied) + independent Opus CORRECTIONS (applied); Codex capped (HTTP 503), not reviewed.
 
+- [ ] **Short-loop vocabulary for radio-edit / pop tracks (`intro_hold` / `tail_hold`) - plan written, review CORRECTIONS, NOT built** (D18) - found 2026-10-05 on the 05.10.26 September Mix: Sam hand-added 1-bar x15 loops both sides of Youngr, a 4-bar tail on Sorley, an 8-bar x2 intro loop on BUTCH. Verified by running the unchanged gate: all four of his windows PASS it - the planner simply never offered them (it only searches drums-without-bass windows and the outro section; the incoming intro loop is off in production); real blockers are `max_loop_repeats=8` and the 5% `silence_fraction` limit on sparse drum intros. Also: the report's abandonment reason ("no loop-source passed the quality checks") is factually wrong for Youngr T2 - no candidate was ever measured. Plan: `Documentation/Plans/short-loop-vocabulary-plan.md` (Opus analyst). MiniMax review `Receipts/2026-10-05/minimax-review-slv-plan.md` = CORRECTIONS: must fix C1 (intro_hold strict path needs drums-and-no-vocals or it stutters pop intros), C2 (tail_hold source must contain drums - bass kill does not rescue a hats-only loop), C4 (no held-out gate on the INTERIM_V1 flip - require >=75% on a held-out mix first), C8 (read the mix_plan / paired_boundary / validator interaction before merging); should-fix C3 (0.08 silence waiver is n=1), C5, C6, C7, C9, C10. Second reviewer (Codex) not available today (HTTP 503).
+  Evidence: the plan + review above; `Documentation/Mix Patterns Library/05.10.26 September Mix Sam Tweaks.md`.
+  Owner: Claude. Status: OPEN - plan needs a revision round, then build behind a flag.
+  Touched: 2026-10-05.
+  Peer review: plan - MiniMax CORRECTIONS (not yet applied).
+
+- [ ] **Intro-cut float edge case produces a zero-length clip** (D19) - found 2026-10-05 building 05.10.26 Tech House Selection: `align_engine.plan_fill_or_cut` branch (2) guards `0 < cut_to < intro_end`, but a track whose intro ends at bar 8.0018 (Dombresky - Dirty Secret) lets `cut_to=8.0` pass, trimming the WHOLE 8-bar intro. The ALS validator caught it ("zero/negative arrangement length") so nothing shipped; worked around with a written decision for that pair. Fix: compare with a tolerance (`cut_to < intro_end - 0.25`) plus a regression test. Related: stem-JSON sections and ALS chops disagreed on intro length for Volkoder - Act Up (32 vs 8 bars), which is how a hand decision of mine hit the same wall.
+  Evidence: `Test Project/05.10.26 Tech House Selection/Output/phase2.log`; `Source/align_engine.py` ~line 2394.
+  Owner: Claude. Status: OPEN - root-caused, not fixed.
+  Touched: 2026-10-05.
+  Peer review: NONE.
+
+- [ ] **`track_hints.json` auto-derivation picks early drum-only moments, tripping the hints hard gate on 7 of 27 tracks** (D20) - found 2026-10-05: `stem_detector.hints_from_stem_result` set first_drop/first_break on a drum-only or pre-drop move (Call 911 hint bar 24/32 vs real drop 48 / break 104; Elevate, Act Up, Dirty Secret, You're My Life, Deeper; I Want You's outro was the one case where the SECTION was the weaker side - detector labels the last 11 bars 'break' + a 2-bar 'outro'). All were checked against DETECT pictures where noted and hand-corrected in `track_hints.json` (notes field records each). Fix candidates: derive hints from the section list (first drop section, first break after it, outro section) with the same rule the gate uses, flag disagreement instead of picking one silently; separately, relabel a long closing 'break' as outro when drums+bass fade.
+  Evidence: `Test Project/05.10.26 Tech House Selection/Output/hints_gate.log`, same for Defected.
+  Owner: Claude. Status: OPEN - worked around per track.
+  Touched: 2026-10-05.
+  Peer review: NONE.
+
+- [ ] **Stem-grid result for the SAME file changed between runs when the other tracks in the folder changed** (D21) - found 2026-10-05: Defected Selection run 1 gridded MEDUZA I Got Nothing at 4.79 ms and Spiller Groovejet at 2.93 ms on their own kicks; after two other tracks were swapped out of the folder both read ~105-109 ms off and failed the beatgrid gate (stable across two re-runs). Unproven cause - project-BPM mode or a half-beat anchor choice are the suspects; the grid is meant to depend only on the track. Until understood, a track's grid pass/fail cannot be trusted across different folders. Also logged: 4 of 13 Defected and 2 of 14 Tech House picks failed the gate (Arielle Free 90 ms, Robosonic 111 ms, Kyle Watson 18 ms, Mahalo 38 ms); `refit_grid_from_stem.py` overrides are IGNORED under the mandatory `--stem-grid` (only the non-stem-grid path reads them) - Pat Premier could not be rescued that way.
+  Evidence: `Test Project/05.10.26 Defected Selection/Output/phase1a*.log` (runs 1 vs 2/3), `05.10.26 September Mix/Output/phase1a*.log`.
+  Owner: Claude. Status: OPEN - observed, not diagnosed.
+  Touched: 2026-10-05.
+  Peer review: NONE.
+
+- [ ] **A failed phase 2 leaves an invalid `Sections V<N+1>.als` on disk, which a resumed run then picks up as the latest** (D22) - found 2026-10-05: `propose_arrangement` writes the output before the ALS validator rejects it; my resume script took the stale invalid V3 as V and failed at the wrong gate. Worked around by deleting my own invalid file. Fix: write to a temp name and rename only after validation passes (also stops a half-built file being opened in Ableton).
+  Evidence: `Source/apply_loops.py` compress_als (line ~63); `Test Project/05.10.26 Tech House Selection/Output/runmix.log`.
+  Owner: Claude. Status: OPEN - not fixed.
+  Touched: 2026-10-05.
+  Peer review: NONE.
+
 ## E - Hygiene / technical debt (does not affect output quality today)
 
 - [ ] **Render-check has real blind spots on every production (tempo-arc) mix, currently
@@ -3356,7 +3386,7 @@ evidence trail rather than silently skipping the failed gate or hacking it to pa
 opened (10 -> 11 open, 27 done, 1 dropped unchanged).
 rev (this write) -> (this write).
 
-## THE COUNT: 12 open, 27 done, 1 dropped (last update 2026-10-05 [Claude]: D16 half-fixed, D17 opened; before that 2026-09-22 19:15 [Claude]: D16 opened -
+## THE COUNT: 17 open, 27 done, 1 dropped (last update 2026-10-05 [Claude]: D16 half-fixed, D17-D22 opened (D17 R2/R4/R5, D18 short-loop vocabulary, D19 intro-cut float bug, D20 hints derivation, D21 grid non-determinism, D22 invalid output on failed phase 2); before that 2026-09-22 19:15 [Claude]: D16 opened -
 a real, separate MixPlan-reconciliation gap found while rebuilding the mix to show Sam D15's new
 transitions, confirmed harmless to actual audio, not blocking the rebuild; D15's own rebuild
 delivered successfully - 2 loops -> 7, T1/T3 visually confirmed fixed, all 10 transition pictures
