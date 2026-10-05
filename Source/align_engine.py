@@ -2450,9 +2450,11 @@ def plan_fill_or_cut(o, i, al, policy=None):
         required_boundary_bars = int(round(locked_swap_gap))
         short_swap_candidate = None
         capped_candidate = False
-        optional_reach = al.handoff_bar_out <= o.n_bars
+        # The loop is never needed to cover the swap: the swap always sits on
+        # a bar the outgoing itself still plays (handoff_bar_out <= n_bars held
+        # for 354/354 aligned corpus pairs), so the cap may always apply.
         reach_limit = (min(loop_budget, policy.max_outgoing_reach_bars)
-                       if optional_reach and policy.max_outgoing_reach_bars is not None
+                       if policy.max_outgoing_reach_bars is not None
                        else loop_budget)
         # `short_swap_candidate` and the eventual ValueError below stay scoped
         # across BOTH tiers (one shared `for` body, entered from two sorted
@@ -2498,7 +2500,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
             if chunk is not None:
                 break
         if (chunk is None and short_swap_candidate is not None
-                and not (optional_reach and capped_candidate)):
+                and not capped_candidate):
             candidate_name, shortfall, repeats, chunk_length, required_repeats = (
                 short_swap_candidate
             )
@@ -2511,7 +2513,10 @@ def plan_fill_or_cut(o, i, al, policy=None):
             )
         if capped_candidate and candidate_nxt is None and chunk is None:
             al.outgoing_loop_not_needed = {
-                "reason": "outgoing reach exceeds cap",
+                "reason": ("no loop within the reach cap reaches the swap; "
+                           "tail plays its natural end"
+                           if short_swap_candidate is not None
+                           else "outgoing reach exceeds cap"),
                 "max_reach_bars": policy.max_outgoing_reach_bars,
             }
     if nxt is None and outro is not None and candidate_nxt is not None:

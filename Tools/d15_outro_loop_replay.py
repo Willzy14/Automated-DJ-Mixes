@@ -52,6 +52,8 @@ def _outro_loop_record(AE, o, i, al):
         rec.update({"status": "ok", "loop_source": "none"})
         if al.outgoing_loop_not_needed is not None:
             rec["outgoing_loop_not_needed"] = al.outgoing_loop_not_needed
+        if al.outgoing_loop_abandoned is not None:
+            rec["outgoing_loop_abandoned"] = al.outgoing_loop_abandoned
         return rec
     rec.update({
         "status": "ok",
