@@ -1,0 +1,5 @@
+REFUSED at 2026-10-05T11:46:55.1013707+01:00
+PEER   : minimax
+REASON : the brief has no 'CONSUMED-BY:' line. Name the step that will consume this output. Two large artefacts commissioned on 2026-08-11 were never used - they failed at commissioning, because no named step was ever going to read them. Override with -AllowNoConsumer (its use is recorded in the output).
+
+No peer was launched. This is a REFUSAL, not a slow or dead peer.

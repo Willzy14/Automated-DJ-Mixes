@@ -1,0 +1,15 @@
+RUN         : minimax-20260922-162325-95e5b3  phase 0
+LAUNCHED    : 2026-09-22T16:23:25.3243393+01:00
+PEER        : minimax
+HELPER      : C:\Users\Carillon\Wired Masters Dropbox\Sam Wills\Claude Code Brain\Automation\minimax-ask.ps1
+COMMAND     : powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Carillon\Wired Masters Dropbox\Sam Wills\Claude Code Brain\Automation\minimax-ask.ps1" -PromptFile "C:\Users\Carillon\AppData\Local\Temp\room\minimax-20260922-162325-95e5b3\brief.sent.txt" -Out "C:\Users\Carillon\Wired Masters Dropbox\Sam Wills\0.1---GIT HUB---\Automated DJ Mixes\Receipts\2026-09-22\minimax-review-d15-code.md" -ReadProject -ProjectDirectory "C:\Users\Carillon\AppData\Local\Temp\room\minimax-20260922-162325-95e5b3\files" -TimeoutSec 2100
+BRIEF       : C:\Users\Carillon\AppData\Local\Temp\room\minimax-20260922-162325-95e5b3\brief.sent.txt
+EXPECT OUT  : C:\Users\Carillon\Wired Masters Dropbox\Sam Wills\0.1---GIT HUB---\Automated DJ Mixes\Receipts\2026-09-22\minimax-review-d15-code.md
+TIMEOUT     : 2100 s
+STAGED      : 5 file(s) -> C:\Users\Carillon\AppData\Local\Temp\room\minimax-20260922-162325-95e5b3\files
+CONSUMED-BY: Claude, this session (Automated DJ Mixes) - this is a review of the actual
+ASSUMPTIONS : n/a (no -ChangeSet)
+PEERARGS    : (none - helper/config defaults apply)
+
+If this file exists, the deadline has passed and EXPECT OUT does not: the launch or the peer
+failed. That is a real failure, not a slow peer. Re-run with stderr captured.

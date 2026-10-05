@@ -1,0 +1,5 @@
+REFUSED at 2026-10-05T11:58:05.9300381+01:00
+PEER   : minimax
+REASON : staged file not found:  C:\Users\Carillon\AppData\Local\Temp\wt\r1r3_change.patch
+
+No peer was launched. This is a REFUSAL, not a slow or dead peer.

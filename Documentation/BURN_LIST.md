@@ -2502,12 +2502,26 @@ was written).
   candidate-targeting fix).
   Evidence: `Test Project/22.09.26 Tech House Core Sample/Output/Visualisations/REVIEW_V5.md`
   ("Known limitation" section, gitignored project-local - full repro steps there).
-  Owner: Claude. Status: OPEN - root-caused, confirmed harmless to actual audio, not yet fixed.
+  UPDATE 2026-10-05 [Claude]: the "loop times mismatch" half is FIXED (`_coalesce_automation_splits`
+  in `validate_mix_plan_als.py`: absorbs at most one contiguous mid-repeat split per repeat, inside a
+  planned loop window; 9 tests; MiniMax reviewed CORRECTIONS -> chain-of-splits guard applied). The
+  D16 text above MISSED a second, real error on the same ALS: "Transition 5/9 swap does not match
+  the frozen outgoing loop boundary" - the bass swap lands MID-repeat of an outgoing loop (JK 4 of 16
+  beats in, TCTS 4 of 8). That check is deliberate and stays (MiniMax's suggestion to invert it was
+  rejected: swap-after-loop is the legal case, swap-inside-loop is the defect). Sam hand-removed both
+  of those loops. Resolved by the R1/R3 loop-simplification work, not by loosening the validator.
+  Owner: Claude. Status: HALF FIXED - validator split bookkeeping done; swap-inside-loop pending R1/R3.
   The rebuild that surfaced this was NOT blocked by it (`validate_als.py` still passes on the
   final ALS; this is an additional, stricter production-freeze-consistency check, not the
   baseline structural gate) - noted honestly rather than silently skipped.
   Touched: 2026-09-22.
   Peer review: NONE - not yet reviewed.
+
+- [ ] **Sam's V5 hand-corrections not yet fully built in: R2 re-anchor, R4 no-outro own-ending tail, R5 incoming-intro loop** (D17) - found 2026-10-05: Sam's tweaks of the 22.09.26 Core Sample (analysis `Documentation/Plans/v5-sam-tweaks-analysis.md`) show he removes most outgoing loops and keeps overlaps near 32 bars. R1 (skip loop when outgoing ends within 2 bars of an incoming section start) and R3 (12-bar reach cap) are BUILT, merged (`e1c0452`, INTERIM_V1 on; corpus loops 215 -> 94, 0 new raises) and reproduce 7/10 of his loop decisions. STILL OPEN: R2 (T3/T8: slide the incoming onto a neighbouring outgoing section start instead of looping - aligner change, highest risk, will diff the alignment baseline), R4 (T4: loop the outgoing's own last 4 bars when it has no outro section), R5 (T6/T4: incoming intro loop; do NOT just flip `CUE_CONFIG.incoming_intro_loop`), T5 unexplained, test gap: no full propose_arrangement+apply_automation build of a changed pair verified by listening yet.
+  Evidence: v5-sam-tweaks-analysis.md sections 4-5; `Receipts/2026-10-05/` (replay JSONs, reviews).
+  Owner: Claude. Status: PARTIAL - R1/R3 merged.
+  Touched: 2026-10-05.
+  Peer review: R1/R3 - MiniMax SOUND-with-corrections (applied) + independent Opus CORRECTIONS (applied); Codex capped (HTTP 503), not reviewed.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
 

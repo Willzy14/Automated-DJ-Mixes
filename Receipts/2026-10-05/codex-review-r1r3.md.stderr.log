@@ -1,0 +1,2432 @@
+OpenAI Codex v0.159.2
+--------
+workdir: C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+model: gpt-6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 01a10bb7-36d5-7b30-b867-c5da2ebd7dcb
+--------
+user
+REVIEW (read-only). Verdict SOUND or CORRECTIONS with line-cited specifics. Attempt to BREAK the change; do not rubber-stamp.
+
+Change (patch file r1r3_change.patch): plan_fill_or_cut in Source/align_engine.py plus two new TransitionPolicy fields set ON for INTERIM_V1 (the production default policy):
+- R1: skip the outgoing tail loop when the outgoing already ends (natural end E = o.n_bars - arr, incoming bars) within +-2 bars of an incoming section start, only when an outgoing 'outro' section exists and al.handoff_bar_out <= o.n_bars.
+- R3: for optional reach, cap the loop target distance at policy.max_outgoing_reach_bars=12 instead of loop_budget; suppress the 'Cannot plan outgoing tail loop' ValueError when the cap (not a real shortfall) is why no candidate survived.
+Why: Sam's hand-corrected mix removed most outgoing outro loops (evidence in Documentation/Plans/v5-sam-tweaks-analysis.md, sections 3-4). Corpus replay (380 pairs): outgoing loops 215 -> 94 (58 removed by R1, 63 by cap), zero status changes, 26 align_raise + 1 raise unchanged, 7 retargeted. Baseline alignments file refreshed (plan layer only).
+
+Questions:
+1. Is `al.handoff_bar_out <= o.n_bars` a meaningful condition, or vacuously true (swap is always inside the outgoing)? If vacuous, is the "optional_reach" protection actually protecting anything? Is removing the loop ever UNSAFE (swap not reachable without it)?
+2. R1 +-2 window: if E is up to 2 bars BEFORE the incoming section start, the outgoing ends before the incoming section starts - can that leave dead air / an unsupported gap in the mix? Check how the overlap/exit handled when outgoing ends early.
+3. Can the new ValueError suppression hide a REAL safety-limit failure (loop needed to reach the swap but cap+repeat limits make it impossible)? Construct a concrete case.
+4. Any state leakage: al.outgoing_loop_not_needed reset, non-landmark mode path, DECISIONS_POLICY / claude_decisions_v1 / tail_anchor_rescue_v1 paths - does the change alter them unintentionally?
+5. Tests: what is missing?
+Cite file:line from the patch.
+
+CONSUMED-BY: Claude, this session (Automated DJ Mixes) - gates the merge of branch build/r1-r3-loop-simplify
+
+
+2026-10-05T10:58:39.869848Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://ai.metricool.com/.well-known/oauth-protected-resource\"" })
+codex
+I’ll read the patch and the surrounding alignment code, then check the failure paths with concrete bar counts. I’ll report only findings I can tie to patch lines.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git status --short; git log -3 --oneline' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$env:COMPUTERNAME; Get-Content -Raw "$env:LOCALAPPDATA'"\\Dropbox\\info.json\" | ConvertFrom-Json | Select-Object -ExpandProperty business | Select-Object -ExpandProperty path" in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+ exited 1 in 272ms:
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+ exited 1 in 716ms:
+STUDIO-2
+Get-Content : Access to the path 'C:\Users\Carillon\AppData\Local\Dropbox\info.json' is denied.
+At line:2 char:20
++ ... MPUTERNAME; Get-Content -Raw "$env:LOCALAPPDATA\Dropbox\info.json" |  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : PermissionDenied: (C:\Users\Carill...opbox\info.json:String) [Get-Content], Unauthorized 
+   AccessException
+    + FullyQualifiedErrorId : GetContentReaderUnauthorizedAccessError,Microsoft.PowerShell.Commands.GetContentCommand
+ 
+
+ succeeded in 432ms:
+Users\Carillon\AppData\Local\Temp\wt\r1r3_change.patch
+Users\Carillon\AppData\Local\Temp\wt\r1r3\Source\align_engine.py
+Users\Carillon\AppData\Local\Temp\wt\r1r3\Documentation\Plans\v5-sam-tweaks-analysis.md
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"plan_fill_or_cut|outgoing_loop_not_needed|max_outgoing_reach_bars|optional_reach|Cannot plan outgoing tail loop|INTERIM_V1|DECISIONS_POLICY|claude_decisions_v1|tail_anchor_rescue_v1|handoff_bar_out\" 'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py'" in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Documentation\\Plans\\v5-sam-tweaks-analysis.md' -Raw" in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3_change.patch' -Raw" in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+ succeeded in 93ms:
+40:from automated_dj_mixes.transition_policy import INTERIM_V1, beats_to_bars
+111:_DEFAULT_POLICY = INTERIM_V1
+228:#: Alignment policies produced by the landmark-aware aligner. plan_fill_or_cut
+230:#: (tail_anchor_rescue_v1) classified as legacy would re-enable intro
+233:#: claude_decisions_v1 (2026-09-15): the arrangement came from a per-transition
+237:DECISIONS_POLICY = "claude_decisions_v1"
+238:LANDMARK_POLICIES = ("paired_landmarks_v2", "tail_anchor_rescue_v1", DECISIONS_POLICY)
+751:    handoff_bar_out: float       # mix point in the OUTGOING's bars
+785:    # Burn list D15/D2b (2026-09-22): set by plan_fill_or_cut when a named
+796:    outgoing_loop_not_needed: dict | None = None
+843:    # fact the PREFERRED ones (`plan_fill_or_cut`'s own docstring: "loop the
+940:    call site, which does this AFTER plan_fill_or_cut runs) - a loop only
+1295:            handoff_bar_out=float(outgoing_anchor),
+1323:        handoff_bar_out=float(outgoing_anchor),
+1329:        alignment_policy="tail_anchor_rescue_v1",
+1370:    # MODULE-LEVEL constant frozen from INTERIM_V1 at import time,
+1375:    # (INTERIM_V1 and SAM_V1 currently share the same max_overlap_beats).
+1688:                    handoff_bar_out=bar, handoff_kind=kind,
+1711:    if o.bass_out_bar is not None and not o.bass_out_is_end and best.handoff_bar_out < o.bass_out_bar - 2:
+1712:        best.notes.append(f"faked bass drop ({o.bass_out_bar - best.handoff_bar_out:.0f}b early)")
+1767:    mix_x = al.handoff_bar_out
+2033:    `policy` defaults to INTERIM_V1 (burn list C5, 2026-09-14) - previously
+2220:    what `plan_fill_or_cut`'s own docstring means by "the incoming's next
+2227:    correlated by string match against whatever `plan_fill_or_cut` actually
+2253:def plan_fill_or_cut(o, i, al, policy=None):
+2267:    # computed from MODULE-LEVEL constants frozen from INTERIM_V1 at import
+2272:    # unchanged for every policy that exists today (INTERIM_V1 and SAM_V1
+2276:    al.outgoing_loop_not_needed = None
+2415:                and outro is not None and al.handoff_bar_out <= o.n_bars):
+2420:                al.outgoing_loop_not_needed = {
+2448:            float(al.handoff_bar_out) - float(outro["start_bar"]),
+2453:        optional_reach = al.handoff_bar_out <= o.n_bars
+2454:        reach_limit = (min(loop_budget, policy.max_outgoing_reach_bars)
+2455:                       if optional_reach and policy.max_outgoing_reach_bars is not None
+2501:                and not (optional_reach and capped_candidate)):
+2506:                f"Cannot plan outgoing tail loop for '{o.name}' -> '{i.name}': "
+2513:            al.outgoing_loop_not_needed = {
+2515:                "max_reach_bars": policy.max_outgoing_reach_bars,
+2613:                        < float(al.handoff_bar_out) - 1e-6):
+2617:                            f"before locked swap at outgoing bar {al.handoff_bar_out:g}"
+2710:    The swap is locked exactly like any other alignment (handoff_bar_out is
+2764:        handoff_bar_out=handoff_out,
+2770:        alignment_policy=DECISIONS_POLICY,
+2839:    of align_pair / plan_fill_or_cut; every other pair, and everything after
+2853:                   swap (outgoing's final position + handoff_bar_out*4) for apply_automation.
+2915:        al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
+2921:            al.fills_cuts = plan_fill_or_cut(o, i, al, policy)   # loops/cuts around the swap
+2922:        # Computed AFTER plan_fill_or_cut, not right after align_pair (Codex
+2939:            o, al.handoff_bar_out, effective_end=effective_end
+2994:        al.fills_cuts = plan_fill_or_cut(o, i, al)
+2998:        print(f"  T{idx}: {o.name[:26]:26} -> {i.name[:26]:26}  swap@{al.handoff_bar_out:5.0f} "
+
+ succeeded in 253ms:
+# V5 vs Sam's Tweaks: outgoing-loop simplification analysis (2026-10-05)
+
+**Brain:** Claude (read-only analyst). Inputs: `Output/Sections V5.als` (baseline, post-D15),
+`Output/Sections V5 Sams Tweaks Project/Sections V5 Sams Tweaks.als` (Sam), both parsed directly;
+`Receipts/2026-10-05/v5_vs_sam_diff.json`; `Output/ARRANGEMENT_REPORT.json`; the pipeline's own
+`_Stem Analysis/SECTIONS_STEM_*.json` (what `align_engine` reads). Bars below are **source bars of
+the named track** unless marked "IN" (incoming's bars). "Natural end E" = where the outgoing would
+end, in IN bars, with no tail loop (`o.n_bars - arr_offset_bars`).
+
+**Everything here is n=10 transitions from one mix.** Rules below are fitted to these 10 and are
+in-sample until replayed on a held-out correction (section 5 gives the held-out result we could
+already compute: it's weak).
+
+## 1. One-screen summary
+
+| T | Pair | V5 -> Sam overlap | Sam's move | Class | Rule that reproduces it |
+|---|---|---|---|---|---|
+| 1 | HARTY -> Jones | 44 -> 46 | Kept HARTY tail loop (2-bar chunk), +1 rep (10 -> 12 bars) | c | R3 (reach 10 <= 12); +2 bars needs R6 |
+| 2 | Jones -> Detlef | 56 -> 32 | Removed 24-bar Jones loop; Detlef enters 8 bars earlier; Jones outro trimmed 8 bars | a | R1 (E=32 is already Detlef drop_2) |
+| 3 | Detlef -> Enzo | 32 -> 32 | Removed 5-bar loop; moved Enzo 5 bars earlier so swap = Detlef drop_8 start (148, not the off-grid outro at 153) | d (re-anchor) | R2 |
+| 4 | Enzo -> Jewel Kid | 24 -> 39 | ADDED Jewel Kid intro loop (8 bars x2, enters at Enzo's last-drop start 104) AND ADDED an Enzo own-last-4-bars tail (~7.4 bars, fade ends at JK bar 32) | b + d | R4 (no-outro tail) + R5 (16-bar pre-swap) |
+| 5 | Jewel Kid -> Zaro | 52 -> 37 | Removed 8-bar JK loop; Zaro trimmed 4.5 bars; swap ~2.5 bars later; JK runs only 5.7 bars past swap | a | none (R3 predicts a 4-bar loop) |
+| 6 | Zaro -> Freejak | 48 -> 64 | ADDED Freejak intro loop (16 bars x2); entry moved to Zaro bar 68 = start of Zaro's 32-bar kick dropout | b | R5b (entry not inside an outgoing kick dropout) |
+| 7 | Freejak -> RSquared | 48 -> 32 | Removed 15-bar loop; cut Freejak at bar 156.5 (its last kick, dropout 157-165); staggered swap (RSq rise at Freejak 141, kill at 148) | a | R3 cap (15 > 12) |
+| 8 | RSquared -> TCTS | 40 -> 32 | No loop either side; moved TCTS 8 bars LATER so swap = RSq outro start 184 and RSq's natural end = TCTS break_1 | d (re-anchor) | R2 |
+| 9 | TCTS -> Shilla | 40 -> 33 | Removed 8-bar TCTS loop; TCTS plays to its natural end = Shilla break_1 | a | R1 (E=32 is already Shilla break_1) |
+| 10 | Shilla -> Yellody | 32 -> 32 | Kept Shilla 4-bar x2 tail loop to Yellody break_1 | c | R3 (reach 8) |
+
+Classes: (a) removed an unneeded outgoing loop and accepted a shorter overlap; (b) loop on the
+incoming intro instead; (c) kept; (d) other. None of the 10 is a literal "swap the loop from
+outgoing to incoming" on the same transition; the incoming-intro loops (T4, T6) were added where
+V5 had **no** outgoing loop.
+
+**Top findings**
+1. **D15's candidate filter forces a loop even when the outgoing already ends on a section line.**
+   `_outro_section_target_candidates` keeps only boundaries `>= natural_end + 2`
+   (`align_engine.py:2232`), so when E sits exactly on a boundary the loop runs on to the *next*
+   one. That is T2 (E=32 = Detlef drop_2, looped 24 bars to break_2) and T9 (E=32 = Shilla break_1,
+   looped 8 bars to drop_2); Sam deleted both. A read-only replay of the 14.08.26 corpus shows this
+   case is **58 of D15's 215 loops (27%)**.
+2. **Sam's blend shape is "16 in, 16 out".** Pre-swap (entry to swap) in Sam's file:
+   16,16,16,16,31.5,32,16,16,16,16. Post-swap (swap to outgoing end): 30,16,16,23.4,5.7,32,16,16,17,16.
+   Overlap 32-33 bars on 6/10. The August correction agrees on post-swap (median 16; both 48-bar
+   runways cut to 15-18).
+3. **Where the gap was small, Sam moved the incoming rather than loop (T3, T8)**: he slid the
+   incoming by 5 / 8 bars onto a neighbouring outgoing section start so the outgoing's own ending
+   landed on the incoming's next section. `plan_fill_or_cut` cannot do this by contract (never alters
+   `arr_offset_bars`/`swap_beats`); it has to live in the aligner.
+
+Corrections to the brief: (i) the "HARTY intro loop" is an **outgoing tail loop whose source is
+HARTY's intro** (clips named `outro_1_tail_loop` play source beats 0-8 = bars 1-2; the
+`pick_cue_bounded_drum_loop` fallback-to-intro case its own comment at `:2057-2062` warns about).
+(ii) V5 had 7 outgoing loops, not 5: the diff JSON's repeat-group detector misses partial repeats
+(Detlef 4+1 bars, Jewel Kid 4+1+3 bars) and missed Sam's added Enzo tail in T4. (iii) The ALS clip
+names do not match `SECTIONS_STEM` boundaries for several tracks (e.g. RSquared outro 191 in clip
+names vs 184 in SECTIONS_STEM, Zaro's whole layout); all rule work below uses SECTIONS_STEM.
+
+## 2. Per-transition detail (outgoing-source bars; IN = incoming bars)
+
+| T | V5: entry / swap / out end | Sam: entry / swap / out end | Out loops V5 -> Sam | In loops V5 -> Sam |
+|---|---|---|---|---|
+| 1 | HARTY 152 (drop_5) / 168 (outro, kickless 168-186) / IN 44 = break_1 | same / same / IN 46 | intro-drums 2b x5 -> x6 | none |
+| 2 | Jones 128 / 136 = Detlef drop_1 (IN 8) / IN 56 = break_2 | Jones 120 / 136 = IN 16 (drop_1+8) / IN 32 = drop_2 | 8b x3 (src 152-160) -> none; Sam also skips Jones 144-152 | none |
+| 3 | Detlef 137 / 153 (outro start, off 8-bar grid) / IN 32 | Detlef 132 (drop_7) / 148 (drop_8, end of 140.75-148 kick dropout) / IN 32 | 4b+1b (src 156-160) -> none | none |
+| 4 | Enzo 112 / 120 = JK drop_1 / IN 24 (natural) | Enzo 104 (last drop start) / 120 / ~IN 31.4, vol 0 at IN 32 (fill_1) | none -> own last 4 bars x~1.9 | none -> JK intro 8b x2 |
+| 5 | JK 129 / 165 (inside loop) / IN 52 | JK 136 / 167.5 / IN ~41.7 | 4b x2 (src 161-165) -> none | none (Zaro head trimmed 4.5 bars) |
+| 6 | Zaro 84 (mid kick dropout 68-100) / 100 = Freejak drop_1 / IN 48 = drop_2 | Zaro 68 / 100 / IN 48 | none (D15 target abandoned: quality gate) | none -> Freejak intro 16b x2 |
+| 7 | Freejak 132 / 148 (in loop) / IN 48 = break_1 | Freejak 125 / rise 141, kill 148 / IN ~32 | 4b x3+3b -> none; Freejak cut at its last kick (156.5) | none |
+| 8 | RSq 160 / 176 / IN 40 (natural) | RSq 168 / 184 (outro start, kickless 184-200) / IN 32 = break_1 | none (abandoned) -> none | none |
+| 9 | TCTS 120 / 136 (in loop) / IN 40 = drop_2 | TCTS 120 / 136 / IN 32.9 = break_1 | 2b x4 (src 149-151) -> none | none |
+| 10 | Shilla 152 / 168 / IN 32 = break_1 | same / same / same | 4b x2 (src 169-173) kept | none |
+
+Automation: Sam moved envelopes with clips; swap kept at the same outgoing-source bar on T1, T2,
+T4, T6, T9, T10; moved on T3 (153 -> 148), T5 (165 -> 167.5), T7 (rise 148 -> 141, kill kept at
+148), T8 (176 -> 184). T5's 167.5 and Zaro's 4.5-bar trim are both half a bar off our JK grid
+(JK `n_bars` 173.23 is non-integer) - possibly a JK grid-phase issue; not investigated.
+
+## 3. How the pipeline decides today (production = landmark mode)
+
+- `plan_fill_or_cut` (`align_engine.py:2252`) never moves entry/swap. Branch (1) last-drop incoming
+  intro loop is gated by `CUE_CONFIG.incoming_intro_loop` (default **False**, `:199`, `:2318`);
+  branch (1a) entry extension needs `policy.extend_incoming_entry` (only `SAM_V1`,
+  `transition_policy.py:155`). In production neither fires, so incoming loops never happen.
+- Branch (3) outgoing tail: fires whenever the outgoing has an `outro` section (`:2416`, `:2431`).
+  Targets = incoming section starts `>= E+2` (`:2232`), then Kick-Detector landmarks (`:2247`), tried
+  in that order (D15/D1, `:2444`). Reach limited only by `loop_budget` = min(32 bars,
+  64 - overlap) (`:2282`). The first candidate whose `pick_cue_bounded_drum_loop` succeeds wins.
+  There is no "already ends on a line" stop and no "is a loop needed at all" test.
+- An outgoing with **no outro section** (Enzo, T4) skips branch (3) entirely, so it can never get
+  the own-ending loop Sam added (here T4; August T4 Zaro, "+7 bars, it had no outro").
+- D15 raised looping pairs on the 380-pair corpus from 133 to 215
+  (`Documentation/Plans/d15-outro-loop-targeting/*.json`); this mix went 2 -> 7.
+- Replay check: re-running `align_pair` + `plan_fill_or_cut` on this mix's SECTIONS_STEM
+  reproduces all 7 V5 loops with the same lengths (10, 24, 5, 8, 15, 8, 8 bars). The harness is
+  valid for re-scoring.
+
+**Agreement with earlier corrections**
+- "Sam loops the incoming's intro; the pipeline extends the outgoing tail" (Fresh Mix V2 T2/T3/T6):
+  **partly confirmed**. Sam removed 5 of 7 outgoing loops, and the 2 loops he added on the incoming
+  side (T4, T6) are where V5 had none. But he kept 2 outgoing loops and added 1 (Enzo).
+- August (15.09.26) "entries move later, never earlier": **contradicted here** - entries moved
+  earlier on T2, T3, T4, T6, T7 and later only on T5, T8. What both mixes share is the result:
+  ~16 bars after the swap, overlap around 32.
+- August "keep loops of the outgoing's own last 1-2 bars, remove loops built from other material":
+  **contradicted here** - Sam kept HARTY's intro-sourced loop and removed own-outro loops on Jones,
+  Detlef, JK, Freejak, TCTS. Loop source does not explain this mix's decisions.
+- August "swap snaps to the outgoing's 8-bar grid when the boundary is odd" (135 -> 136): **confirmed**
+  (T3 153 -> 148; T9 swap at 136 vs detected outro at 135).
+
+## 4. Proposed simplification policy (derived; each rule falsifiable)
+
+Order matters: R1 -> R2 -> R3/R4 -> otherwise no loop. R5 is independent (incoming side).
+
+**R1 - Stop when the outgoing already lands on a line.** If an incoming section start lies within
++-2 bars of E, plan no outgoing tail loop.
+- Change: `plan_fill_or_cut` branch (3), `align_engine.py:2408-2411` (compute E =
+  `current_incoming_bar`; check all `i.sections` starts, not only `>= E+2` from `:2232`). Record
+  "not needed: natural end on <section>" in a new field (not `outgoing_loop_abandoned`, which means
+  "wanted but failed" - D2b's transparency must stay unambiguous).
+- Evidence: T2, T9 (Sam removed both); August T6 (E=32 on a line, Sam removed the loop).
+  Counter: August T1 (near=2.0, Sam kept) - the +-2 edge is untested.
+- Falsified if: on a future correction Sam re-adds a loop where E was within +-2 of an incoming
+  section start.
+
+**R2 - Re-anchor before looping (aligner, not loop planner).** If E is off a line by d <= 8 bars,
+and shifting the incoming by d puts the swap on another outgoing section start that passes the
+existing 16-48 bar / swap-progress checks, take that alignment and plan no loop.
+- Change: `_align_pair_landmark_aware` (`align_engine.py:1217`), as a tie-break between valid
+  outgoing-cue candidates for the chosen incoming drop anchor. Must not go into `plan_fill_or_cut`
+  (its contract) and must leave `matched_tail_head_swap`/rescue ordering alone.
+- Evidence: T3 (shift -5, swap 153 -> 148), T8 (shift +8, swap 176 -> 184) - both reproduced to the
+  bar. It correctly declines T1 (shift to HARTY 158 is not a section start) and T10 (Shilla 160 is
+  mid drop_5), where Sam kept the loop.
+- Risk: changes the alignment itself, so `Tests/test_alignment_baseline.py` will diff; every changed
+  pair must be read, not counted. Highest-risk rule; build last.
+- Falsified if: Sam moves the incoming back to the V5 position and loops instead.
+
+**R3 - Loop only a short reach.** If the next incoming section start is <= 12 bars past E, loop the
+outgoing to it (existing D15 tiers and quality gate unchanged); otherwise no loop.
+- Change: `:2448` - replace `candidate_gap > loop_budget` with
+  `candidate_gap > min(loop_budget, policy.max_outgoing_reach_bars)`; new `TransitionPolicy` field
+  (`transition_policy.py:44-102`). Keep INTERIM_V1 unchanged for A/B; set 12 in an experimental policy.
+- Evidence: kept T1 (10), T10 (8); removed T7 (15), T2 (24). The 10/15 boundary is **one pair on
+  each side** - the 12 is a guess inside that gap. August T1 (18-bar loop, kept) is a counterexample.
+- Falsified if: Sam keeps a >12-bar outgoing loop again, or deletes a <=12-bar one that R1/R2 didn't
+  already remove (T5 already is one: a 4-bar reach R3 would loop and Sam would not).
+
+**R4 - Own-ending loop when the outgoing has no outro section.** Same reach test as R3, source = the
+outgoing's last 4 bars (2 if 4 fails the gate), inserted at track end.
+- Change: `:2416`/`:2431` gate on `outro is not None`; synthetic window in
+  `pick_cue_bounded_drum_loop` (`:2064-2076`, only built from an outro section today); consumer in
+  `propose_arrangement.py:907-919` inserts "BEFORE the outro" and needs an end-of-track insert point.
+- Evidence: T4 (Enzo, +7.4 bars to JK fill_1 at 32); August T4 (Zaro, +7 bars). 2/2 across mixes.
+
+**R5 - Incoming side (experimental, SAM_V1 lane only).** (a) If pre-swap incoming material < 16 bars,
+loop the incoming intro back to 16 bars (T4 exact; T2 entry exact, though Sam swapped mid-drop_1
+instead of looping). (b) Never start the incoming inside an outgoing kick dropout; extend the intro
+loop back to the dropout start (T6 exact: Zaro 68). Change: `_plan_incoming_entry_extension`
+(`:2153`) targets. Do **not** turn on `CUE_CONFIG.incoming_intro_loop` as-is: replayed here it fills
+T4 correctly but also fires on T2 (48 bars, budget-capped), T7 (16) and T10 (8), where Sam added
+nothing. August contradicts R5 (entries moved later), so this needs its own held-out test.
+
+**R6 (low confidence) - round loop totals up to a 4-bar multiple.** T1 10 -> 12 (HARTY's outro then
+re-enters on Jones bar 28 instead of 26); August T1 and T8 also grew by 2 bars. Change: `:2557`
+(round-up is disabled in landmark mode) and the `(8,4,7,6,5,3,2,1)` length list at `:2046`.
+
+**Would any rule reintroduce a D15 defect?** D1 (landmark beating a section): no, tier order kept.
+D2/D2b (silent abandonment): no, but R1 needs its own "not needed" reason or D2b's field becomes
+ambiguous again. D15's motivating cases: T1 (undershoot) still loops to break_1 (R3). T3 ("should
+have fired") becomes a re-anchor (R2) - matches V5 Sam, not the V3 by-eye intent. **T2 was "confirmed
+correct by Sam" on V3** (the 56-bar loop to break_2); R1 removes it, as Sam did in V5. That is a
+direct conflict between his by-eye V3 call and his by-ear V5 edit (question 1).
+
+## 5. Testing
+
+**A. Re-score against Sam's 10 (in-sample).** Build a small replay (pattern: `Tools/d15_outro_loop_replay.py`):
+load `22.09.26 .../_Stem Analysis`, run `align_pair` + `plan_fill_or_cut` in mix order, compare to a
+frozen truth table built from section 2 (loop Y/N + bars, E, overlap, entry and swap in
+outgoing-source bars, +-1 bar). Baseline must first reproduce V5 exactly (verified today).
+
+| T | Sam (out loop / overlap) | V5 current | R1-R4 | R1-R5 |
+|---|---|---|---|---|
+| 1 | Y 12b / 46 | Y 10 / 44 ok | Y 10 / 44 ok | ok (exact with R6) |
+| 2 | N / 32 | Y 24 / 56 x | N / 32 ok | N / 32, entry ok |
+| 3 | N / 32 (swap 148) | Y 5 / 32 x | N / 32 swap 148 ok | ok |
+| 4 | Y ~7b / 39 | N / 24 x | Y 8 / 32 (loop ok, overlap x) | Y 8 / 40 ok |
+| 5 | N / 37 | Y 8 / 52 x | Y 4 / 48 x | x |
+| 6 | N / 64 | N / 48 (loop ok, overlap x) | N / 48 (loop ok, overlap x) | N / 64 ok |
+| 7 | N / 32 | Y 15 / 48 x | N / 33 ok (entry/swap x) | same |
+| 8 | N / 32 (swap 184) | N / 40 (loop ok, overlap x) | N / 32 swap 184 ok | ok |
+| 9 | N / 33 | Y 8 / 40 x | N / 32 ok | ok |
+| 10 | Y 8 / 32 | Y 8 / 32 ok | Y 8 / 32 ok | ok |
+| **Loop decision** | | **4/10** | **9/10** | **9/10** |
+| **Overlap within 2 bars** | | **3/10** | **7/10** | **9/10** |
+
+This is fitted on the same data - expect it to look good. It shows only that the rules are
+consistent with these 10, not that they generalise.
+
+**B. Held-out (already computable, weak).** August 15.09.26, current code, loop Y/N vs Sam's final
+file: D15 4-5/11, R1+R3 5-6/11. Weak because Sam moved entries on 6 of 11 there, so current-code E
+is not the geometry he judged. Framed per pipeline-proposed loop instead (12 loops across both mixes:
+Sam kept 5, removed 7), R1+R2+R3 reproduce 10/12 (misses: T5 here, August T1) vs D15 5/12.
+Next real test: a fresh corrected mix built with the new policy, judged blind against D15.
+
+**C. Corpus replay (magnitude, no ground truth).** `PYTHONPATH=Source python Tools/d15_outro_loop_replay.py
+--out before.json`, apply one rule, `--out after.json`, `--diff before.json after.json`; read every
+changed row (D9/D15 discipline). Expected from today's read-only replay of the 353 aligned pairs:
+R1 removes 58 of 215 loops; a 12-bar reach cap removes up to 119 (overlap with R1 still to measure);
+the 26 `align_raise` and 1 `raise` rows must not change, and no new raise may appear. R1, R3, R4 must
+leave `Tests/test_alignment_baseline.py` byte-identical (alignment untouched); R2 will not, by design.
+Ship one rule per commit so each diff is attributable.
+
+## 6. Risks and questions only Sam can answer
+
+1. **T2:** on V3 you okayed the long Jones loop to Detlef's break_2; on V5 you cut it to 32 bars.
+   When the outgoing already finishes on one of the incoming's section lines, is "don't loop" the rule?
+2. **HARTY:** its tail loop is built from HARTY's intro drums (bars 1-2) and you kept and lengthened it;
+   in August you removed Tommy Farrow's intro-drum tail loop. Is intro-sourced looping fine when it
+   sounds right, or should it be banned?
+3. **T5 Jewel Kid -> Zaro:** you left Jewel Kid only ~6 bars after the swap, with Zaro's drop half a
+   bar off our grid. Deliberate short exit, or is our Jewel Kid grid out by two beats?
+4. **T3/T8:** you slid the incoming onto a neighbouring section line instead of looping. Should that
+   always be tried before any loop, and how far is too far to slide (we saw 5 and 8 bars)?
+5. **Openers:** T1 here and T1 in August both kept 30-34 bars after the swap; everything else went to
+   ~16. Is the first transition meant to run longer, or was that track-specific?
+
+
+ succeeded in 249ms:
+diff --git a/Source/align_engine.py b/Source/align_engine.py
+index 47d5dee..7711d6d 100644
+--- a/Source/align_engine.py
++++ b/Source/align_engine.py
+@@ -793,6 +793,7 @@ class Alignment:
+     # note-forwarding only matches notes containing "suppressed", which this
+     # is not (found in D15's plan review; a dedicated field is unambiguous).
+     outgoing_loop_abandoned: dict | None = None
++    outgoing_loop_not_needed: dict | None = None
+ 
+ 
+ def report_landmark_candidates(
+@@ -2272,6 +2273,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
+     # currently share max_overlap_beats/max_landmark_overlap_beats/
+     # max_loop_extension_beats/max_loop_repeats).
+     policy = policy or _DEFAULT_POLICY
++    al.outgoing_loop_not_needed = None
+     arr = al.arr_offset_bars
+     specs = []
+     landmark_mode = al.alignment_policy in LANDMARK_POLICIES
+@@ -2405,15 +2407,27 @@ def plan_fill_or_cut(o, i, al, policy=None):
+     target_name = ""
+     section_targets = []
+     landmark_targets = []
++    skip_outgoing_loop = False
++    outro = next((s for s in o.sections if s["label"] == "outro"), None)
+     if landmark_mode:
+         current_incoming_bar = o.n_bars - arr
+-        section_targets = _outro_section_target_candidates(i, current_incoming_bar)
+-        landmark_targets = _outro_landmark_target_candidates(i, current_incoming_bar)
++        if (policy.skip_outgoing_loop_when_on_section_line
++                and outro is not None and al.handoff_bar_out <= o.n_bars):
++            near_section = next((s for s in i.sections
++                                 if abs(float(s["start_bar"]) - current_incoming_bar) <= 2), None)
++            if near_section is not None:
++                skip_outgoing_loop = True
++                al.outgoing_loop_not_needed = {
++                    "reason": "natural end on section line",
++                    "section": near_section["name"],
++                }
++        if not skip_outgoing_loop:
++            section_targets = _outro_section_target_candidates(i, current_incoming_bar)
++            landmark_targets = _outro_landmark_target_candidates(i, current_incoming_bar)
+         nxt = None
+     else:
+         nxt = next((arr + s["start_bar"] for s in i.sections
+                     if (arr + s["start_bar"]) > o.n_bars + 1), None)
+-    outro = next((s for s in o.sections if s["label"] == "outro"), None)
+     chunk = None
+     # Burn list D15/D2 (2026-09-22): the first candidate that would be VIABLE
+     # (within loop_budget, reaches the locked swap) even if no clean loop-source
+@@ -2428,13 +2442,18 @@ def plan_fill_or_cut(o, i, al, policy=None):
+     candidate_nxt = None
+     candidate_target_name = ""
+     via_d2_fallback = False
+-    if landmark_mode and outro is not None:
++    if landmark_mode and outro is not None and not skip_outgoing_loop:
+         locked_swap_gap = max(
+             0.0,
+             float(al.handoff_bar_out) - float(outro["start_bar"]),
+         )
+         required_boundary_bars = int(round(locked_swap_gap))
+         short_swap_candidate = None
++        capped_candidate = False
++        optional_reach = al.handoff_bar_out <= o.n_bars
++        reach_limit = (min(loop_budget, policy.max_outgoing_reach_bars)
++                       if optional_reach and policy.max_outgoing_reach_bars is not None
++                       else loop_budget)
+         # `short_swap_candidate` and the eventual ValueError below stay scoped
+         # across BOTH tiers (one shared `for` body, entered from two sorted
+         # iterables) - splitting this into two independent loops each with
+@@ -2445,7 +2464,9 @@ def plan_fill_or_cut(o, i, al, policy=None):
+             for target_source_bar, candidate_name in tier:
+                 candidate_nxt_here = arr + target_source_bar
+                 candidate_gap = candidate_nxt_here - o.n_bars
+-                if candidate_gap > loop_budget + 1e-6:
++                if candidate_gap > reach_limit + 1e-6:
++                    if candidate_gap <= loop_budget + 1e-6:
++                        capped_candidate = True
+                     continue
+                 if candidate_nxt is None and candidate_gap + 1e-6 >= locked_swap_gap:
+                     candidate_nxt = candidate_nxt_here
+@@ -2476,7 +2497,8 @@ def plan_fill_or_cut(o, i, al, policy=None):
+                     break
+             if chunk is not None:
+                 break
+-        if chunk is None and short_swap_candidate is not None:
++        if (chunk is None and short_swap_candidate is not None
++                and not (optional_reach and capped_candidate)):
+             candidate_name, shortfall, repeats, chunk_length, required_repeats = (
+                 short_swap_candidate
+             )
+@@ -2487,6 +2509,11 @@ def plan_fill_or_cut(o, i, al, policy=None):
+                 f"{required_repeats} required), and no later named cue fits the "
+                 f"{policy.max_loop_repeats}-repeat/{loop_budget:g}-bar safety limits"
+             )
++        if capped_candidate and candidate_nxt is None and chunk is None:
++            al.outgoing_loop_not_needed = {
++                "reason": "outgoing reach exceeds cap",
++                "max_reach_bars": policy.max_outgoing_reach_bars,
++            }
+     if nxt is None and outro is not None and candidate_nxt is not None:
+         # D15/D2: a target WAS correctly identified but no candidate's clean-
+         # drum-window search succeeded anywhere - fall through to the SAME
+diff --git a/Source/automated_dj_mixes/transition_policy.py b/Source/automated_dj_mixes/transition_policy.py
+index 584b354..0a3fb80 100644
+--- a/Source/automated_dj_mixes/transition_policy.py
++++ b/Source/automated_dj_mixes/transition_policy.py
+@@ -48,6 +48,9 @@ class TransitionPolicy:
+     max_loop_extension_beats: float
+     max_loop_repeats: int
+ 
++    skip_outgoing_loop_when_on_section_line: bool = False
++    max_outgoing_reach_bars: float | None = None
++
+     # Extended lane. None disables it outright; a value is only an upper bound -
+     # authorisation still requires the evidence contract to be satisfied and
+     # independently revalidated. A policy string alone must never unlock it.
+@@ -132,6 +135,8 @@ INTERIM_V1 = TransitionPolicy(
+     max_landmark_overlap_beats=256.0,  # 64 bars, only with a named-cue extension
+     max_loop_extension_beats=128.0,  # 32 bars
+     max_loop_repeats=8,
++    skip_outgoing_loop_when_on_section_line=True,
++    max_outgoing_reach_bars=12.0,
+     max_extended_overlap_beats=None,  # extended lane unavailable
+ )
+ 
+diff --git a/Source/propose_arrangement.py b/Source/propose_arrangement.py
+index 7510663..d91b68c 100644
+--- a/Source/propose_arrangement.py
++++ b/Source/propose_arrangement.py
+@@ -2268,6 +2268,8 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
+             # meaning "no loop was needed" (see Alignment.outgoing_loop_
+             # abandoned's own docstring for why this is a dedicated field).
+             t["outgoing_loop_abandoned"] = al.outgoing_loop_abandoned
++            if al.outgoing_loop_not_needed is not None:
++                t["outgoing_loop_not_needed"] = al.outgoing_loop_not_needed
+             t["landmark_policy"] = _landmark_policy_label(al.alignment_policy)
+             # Burn list C9 (2026-09-15): this report used to compute
+             # selected_style from overlap length alone, a second, unpatched
+diff --git a/Tests/test_arrangement_safety.py b/Tests/test_arrangement_safety.py
+index 65c159e..5ad65d2 100644
+--- a/Tests/test_arrangement_safety.py
++++ b/Tests/test_arrangement_safety.py
+@@ -97,6 +97,16 @@ def test_landmark_alignment_preserves_odd_bar_section_pairing():
+     assert alignment.swap_progress == pytest.approx(8 / 27)
+ 
+ 
++def _pre_simplify_policy():
++    """INTERIM_V1 with the 2026-10-05 R1/R3 loop simplification off, so tests
++    that pin the older D15 loop-targeting geometry keep testing exactly that."""
++    import dataclasses
++    from automated_dj_mixes.transition_policy import INTERIM_V1
++    return dataclasses.replace(
++        INTERIM_V1, skip_outgoing_loop_when_on_section_line=False,
++        max_outgoing_reach_bars=None)
++
++
+ def test_landmark_loop_reaches_named_cue_without_random_intro_loop():
+     from align_engine import Alignment, plan_fill_or_cut
+ 
+@@ -129,7 +139,7 @@ def test_landmark_loop_reaches_named_cue_without_random_intro_loop():
+         176.0, 37.0, 3, alignment_policy="paired_landmarks_v2",
+     )
+ 
+-    specs = plan_fill_or_cut(outgoing, incoming, alignment)
++    specs = plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
+ 
+     assert not any(spec.kind == "incoming_intro" for spec in specs)
+     tail = next(spec for spec in specs if spec.kind == "outgoing_tail")
+@@ -170,7 +180,7 @@ def test_landmark_tail_loop_fails_when_repeat_cap_stops_before_swap():
+     )
+ 
+     with pytest.raises(ValueError, match=r"6 bars before locked swap.*11 required"):
+-        plan_fill_or_cut(outgoing, incoming, alignment)
++        plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
+ 
+ 
+ def test_landmark_tail_loop_skips_near_cue_that_ends_before_swap():
+@@ -200,7 +210,7 @@ def test_landmark_tail_loop_skips_near_cue_that_ends_before_swap():
+     )
+ 
+     tail = next(
+-        spec for spec in plan_fill_or_cut(outgoing, incoming, alignment)
++        spec for spec in plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
+         if spec.kind == "outgoing_tail"
+     )
+     extension = (
+diff --git a/Tests/test_outro_loop_simplify.py b/Tests/test_outro_loop_simplify.py
+new file mode 100644
+index 0000000..a3685f6
+--- /dev/null
++++ b/Tests/test_outro_loop_simplify.py
+@@ -0,0 +1,99 @@
++"""R1/R3 outgoing-tail policy checks around a locked swap."""
++
++import sys
++from dataclasses import asdict, replace
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT / "Source"))
++
++import align_engine as ae
++from automated_dj_mixes.transition_policy import INTERIM_V1
++
++
++def _pair(section_bars, *, swap=100.0):
++    outgoing = ae.Track(
++        name="out", bpm=128.0, spb=4 * 60.0 / 128.0, downbeat=0.0,
++        n_bars=110.0,
++        sections=[
++            {"name": "drop_1", "label": "drop", "start_bar": 0.0, "end_bar": 100.0},
++            {"name": "outro_1", "label": "outro", "start_bar": 100.0, "end_bar": 110.0},
++        ],
++        bass_in_bar=0.0, bass_out_bar=100.0, last_min_bars=64,
++        loop_windows=[(100.0, 110.0)],
++    )
++    incoming = ae.Track(
++        name="in", bpm=128.0, spb=4 * 60.0 / 128.0, downbeat=0.0,
++        n_bars=80.0,
++        sections=[{"name": f"break_{n}", "label": "break",
++                   "start_bar": float(bar), "end_bar": float(bar) + 4.0}
++                  for n, bar in enumerate(section_bars, 1)],
++        bass_in_bar=0.0, bass_out_bar=72.0, last_min_bars=64,
++    )
++    alignment = ae.Alignment(
++        "out", "in", swap, "outro_start", 0.0, 90.0, 40.0, 0,
++        swap_beats=swap * 4, alignment_policy="paired_landmarks_v2",
++    )
++    return outgoing, incoming, alignment
++
++
++def _tail(specs):
++    return next((s for s in specs if s.kind == "outgoing_tail"), None)
++
++
++def test_r1_skips_natural_end_on_section_line(monkeypatch):
++    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
++                        lambda *args, **kwargs: (100.0, 105.0))
++    for section_bar in (18.0, 20.0, 22.0):
++        outgoing, incoming, alignment = _pair((section_bar, 35.0))
++        assert _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment)) is None
++        assert alignment.outgoing_loop_not_needed == {
++            "reason": "natural end on section line", "section": "break_1"}
++        assert alignment.outgoing_loop_abandoned is None
++
++
++def test_r1_does_not_skip_when_swap_needs_loop(monkeypatch):
++    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
++                        lambda *args, **kwargs: (100.0, 104.0))
++    outgoing, incoming, alignment = _pair((20.0, 32.0), swap=111.0)
++    tail = _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment))
++    assert tail is not None
++    assert tail.target_marker_name == "section:break_2"
++    assert alignment.outgoing_loop_not_needed is None
++
++
++def test_r3_caps_optional_15_bars_but_keeps_10(monkeypatch):
++    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
++                        lambda *args, **kwargs: (100.0, 105.0))
++    for section_bar, expected in ((35.0, None), (30.0, "section:break_1")):
++        outgoing, incoming, alignment = _pair((section_bar,))
++        tail = _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment))
++        assert (tail.target_marker_name if tail else None) == expected
++
++
++def test_r3_cap_cannot_create_short_swap_value_error(monkeypatch):
++    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
++                        lambda *args, **kwargs: (100.0, 105.0))
++    outgoing, incoming, alignment = _pair((25.0, 35.0), swap=110.0)
++    old_policy = replace(INTERIM_V1, max_outgoing_reach_bars=None)
++    assert _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment,
++                                     policy=old_policy)) is not None
++    outgoing, incoming, alignment = _pair((25.0, 35.0), swap=110.0)
++    assert _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment)) is None
++
++
++def test_flags_off_preserve_old_decision(monkeypatch):
++    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
++                        lambda *args, **kwargs: (100.0, 105.0))
++    old_policy = replace(INTERIM_V1,
++                         skip_outgoing_loop_when_on_section_line=False,
++                         max_outgoing_reach_bars=None)
++    outgoing, incoming, alignment = _pair((20.0, 35.0))
++    tail = _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment,
++                                     policy=old_policy))
++    assert asdict(tail) == asdict(ae.FillCutSpec(
++        kind="outgoing_tail", reps=3, source_start_bar=100.0,
++        source_end_bar=105.0, target_marker_bar=125.0,
++        target_marker_name="section:break_2",
++        note="loop outro 5bx3+0b to section:break_2 125"))
++    assert alignment.outgoing_loop_not_needed is None
+diff --git a/Tools/d15_outro_loop_replay.py b/Tools/d15_outro_loop_replay.py
+index 3648e66..dcdd10a 100644
+--- a/Tools/d15_outro_loop_replay.py
++++ b/Tools/d15_outro_loop_replay.py
+@@ -50,6 +50,8 @@ def _outro_loop_record(AE, o, i, al):
+     tail = next((s for s in specs if s.kind == "outgoing_tail"), None)
+     if tail is None:
+         rec.update({"status": "ok", "loop_source": "none"})
++        if al.outgoing_loop_not_needed is not None:
++            rec["outgoing_loop_not_needed"] = al.outgoing_loop_not_needed
+         return rec
+     rec.update({
+         "status": "ok",
+@@ -99,7 +101,7 @@ def diff(before_path: Path, after_path: Path) -> int:
+     for key, b in before.items():
+         a = after[key]
+         fields = ("status", "loop_source", "target_marker_name", "reps",
+-                   "partial_bars", "error")
++                   "partial_bars", "error", "outgoing_loop_not_needed")
+         if any(b.get(f) != a.get(f) for f in fields):
+             changed.append((key, b, a))
+ 
+@@ -119,7 +121,8 @@ def diff(before_path: Path, after_path: Path) -> int:
+                   f"status={b.get('status')}")
+             print(f"    after:  loop_source={a.get('loop_source')} "
+                   f"target={a.get('target_marker_name')} reps={a.get('reps')} "
+-                  f"status={a.get('status')}")
++                  f"status={a.get('status')} "
++                  f"reason={a.get('outgoing_loop_not_needed')}")
+         print()
+     return 0
+ 
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py'; "'$s=Get-Content -LiteralPath $p; for($n=2185;$n -le 2252;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }; for($n=2860;$n -le 2970;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py'; "'$s=Get-Content -LiteralPath $p; for($n=1200;$n -le 1340;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }; for($n=1650;$n -le 1795;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py'; "'$s=Get-Content -LiteralPath $p; for($n=2253;$n -le 2635;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+ succeeded in 323ms:
+2185:             reps = int(gap // phrase)
+2186:             if not 1 <= reps <= policy.max_loop_repeats:
+2187:                 continue
+2188:             chunk = pick_clean_drum_loop(
+2189:                 i, 0, intro_end, pref=phrase, insert_bar=0
+2190:             )
+2191:             if chunk is None:
+2192:                 continue
+2193:             if round(chunk[1] - chunk[0]) != phrase:
+2194:                 continue
+2195:             labels = outgoing_cues[target]["labels"]
+2196:             # Shadow instrumentation only - see _measure_outgoing_density's
+2197:             # docstring. Measures the OUTGOING window the quiet incoming loop
+2198:             # would actually sit under: [target, target+gap) in the
+2199:             # outgoing's own bars.
+2200:             density_score, density_status = _measure_outgoing_density(
+2201:                 o, target, target + gap)
+2202:             return FillCutSpec(
+2203:                 kind="incoming_intro",
+2204:                 reps=reps,
+2205:                 source_start_bar=chunk[0],
+2206:                 source_end_bar=chunk[1],
+2207:                 target_marker_bar=float(target),
+2208:                 target_marker_name=labels[0] if labels else "",
+2209:                 note=(f"entry extension {phrase}bx{reps} ({gap:.0f}b) back to "
+2210:                       f"outgoing {labels[0] if labels else 'cue'} - low level, "
+2211:                       f"bass killed until the swap"),
+2212:                 density_score=density_score,
+2213:                 density_status=density_status,
+2214:             ), float(gap)
+2215:     return None, 0.0
+2216: 
+2217: 
+2218: def _outro_section_target_candidates(i, min_bar: float) -> list[tuple[int, str]]:
+2219:     """Named-section-boundary candidates for the outgoing-outro loop target -
+2220:     what `plan_fill_or_cut`'s own docstring means by "the incoming's next
+2221:     section marker". Filtered to >= 2 bars past `min_bar` (the outgoing's own
+2222:     end, in the incoming's bar-space) - same filter `_outro_landmark_target_
+2223:     candidates` uses, so the two tiers stay comparable.
+2224: 
+2225:     Burn list D15 (2026-09-22): extracted so this exact candidate-naming
+2226:     convention (`section:{name}`) is generated in exactly one place and can be
+2227:     correlated by string match against whatever `plan_fill_or_cut` actually
+2228:     picks (`target_marker_name`) - `report_landmark_candidates` needs the same
+2229:     names to mark its own `"selected"` entries correctly."""
+2230:     out = []
+2231:     for section in i.sections:
+2232:         source_bar = int(round(float(section["start_bar"])))
+2233:         if source_bar >= min_bar + 2:
+2234:             out.append((source_bar, f"section:{section['name']}"))
+2235:     return out
+2236: 
+2237: 
+2238: def _outro_landmark_target_candidates(i, min_bar: float) -> list[tuple[int, str]]:
+2239:     """Raw Kick-Detector-V3 landmark candidates for the outgoing-outro loop
+2240:     target - the FALLBACK tier, tried only when no section-boundary candidate
+2241:     produces a usable loop (burn list D15: these were never meant to compete
+2242:     with a clean section boundary in the first place - their own
+2243:     `candidate_roles` field never lists an outro-loop-target role). Same
+2244:     +2-bar filter as `_outro_section_target_candidates`."""
+2245:     out = []
+2246:     for landmark in i.musical_landmarks:
+2247:         source_bar = int(math.ceil(float(landmark["end_bar"])))
+2248:         if source_bar >= min_bar + 2:
+2249:             out.append((source_bar, f"landmark:{landmark['landmark_id']}:end"))
+2250:     return out
+2251: 
+2252: 
+2860: 
+2861:     names = order or [t.name for t in tracks]
+2862:     resolved = []
+2863:     for nm in names:
+2864:         key = _resolve_stem_key(nm, stems)
+2865:         if key is None:
+2866:             raise ValueError(
+2867:                 f"align_engine.compute_aligned_positions: no stem JSON for track '{nm}' "
+2868:                 f"in {stem_dir}. Run the stem detector (--stem-sections) first.")
+2869:         resolved.append(key)
+2870: 
+2871:     # Bridge TrackInfo hint fields (sec, set by propose_arrangement from
+2872:     # track_hints.json) â†’ Track hint fields (bar, via _sec_to_bar). Populated
+2873:     # unconditionally: absence of hint data is encoded as None (Track defaults)
+2874:     # and naturally no-ops in the emit-gated block above. Mirrors the bass_out
+2875:     # pattern â€” Track.bass_out_bar is always set from the stem JSON when known,
+2876:     # but only the CueConfig flag decides whether _mix_cues sees it.
+2877:     for t in tracks:
+2878:         key = _resolve_stem_key(t.name, stems)
+2879:         if key is None:
+2880:             continue
+2881:         matched = stems[key]
+2882:         matched.first_drop_bar = _sec_to_bar(
+2883:             getattr(t, "first_drop_sec", None), matched.downbeat, matched.spb)
+2884:         matched.first_break_bar = _sec_to_bar(
+2885:             getattr(t, "first_break_sec", None), matched.downbeat, matched.spb)
+2886:         matched.outro_start_bar = _sec_to_bar(
+2887:             getattr(t, "outro_start_sec", None), matched.downbeat, matched.spb)
+2888:         matched.last_bass_drop_bar = _sec_to_bar(
+2889:             getattr(t, "last_bass_drop_sec", None), matched.downbeat, matched.spb)
+2890: 
+2891:     # The mix ALWAYS starts at the timeline origin. Seeding from tracks[0].arr_start
+2892:     # would let the orchestrator's baked (old natural-fill) position leak in as the
+2893:     # baseline â€” hardcode 0.0 so align_engine is the SOLE position authority and the
+2894:     # orchestrator's layout can never contaminate the mix. (Audit 2026-06-09.)
+2895:     arr_pos = {0: 0.0}                                       # keyed by INDEX (names may repeat)
+2896:     alignments = []
+2897:     contraction = 0.0       # left-shift owed to a break-skip at the PREVIOUS pair (beats)
+2898:     decisions = decisions or {}
+2899:     for k in range(1, len(tracks)):
+2900:         o, i = stems[resolved[k - 1]], stems[resolved[k]]
+2901:         decision = decisions.get(k)
+2902:         if decision is not None:
+2903:             al = alignment_from_decision(o, i, decision, policy)
+2904:         else:
+2905:             al = align_pair(o, i, policy)
+2906:         prev = arr_pos[k - 1]
+2907:         # A break-skip at an earlier pair tightened the timeline (its incoming lost a
+2908:         # break), so THIS track + the swap into it move left by `contraction`. The
+2909:         # break-skip pair's OWN incoming does NOT move (its drop lands on the existing
+2910:         # swap); only tracks AFTER it contract. So apply `contraction` here, then let a
+2911:         # break-skip detected at THIS pair set it for the next iteration. prev is already
+2912:         # contracted for later pairs, so the shift propagates once via the prefix sum.
+2913:         new = max(prev + al.arr_offset_bars * 4.0 - contraction, prev)   # anti-rewind clamp
+2914:         arr_pos[k] = new
+2915:         al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
+2916:         al.landmark_candidates = report_landmark_candidates(o, i, al, prev, new)
+2917:         al.vocal_regions_arrangement = report_vocal_regions(o, i, prev, new)
+2918:         if decision is not None:
+2919:             al.fills_cuts = fills_from_decision(o, i, decision)
+2920:         else:
+2921:             al.fills_cuts = plan_fill_or_cut(o, i, al, policy)   # loops/cuts around the swap
+2922:         # Computed AFTER plan_fill_or_cut, not right after align_pair (Codex
+2923:         # review, 2026-09-13): an outgoing-tail loop genuinely extends the
+2924:         # outgoing past its native n_bars (Christoph -> A Studio: flag would
+2925:         # read False at the native end, bar 253, but the planned tail loop
+2926:         # extends the outgoing to bar 261 - 8 real bars of content past the
+2927:         # swap the pre-loop read would have missed). A loop only ever ADDS
+2928:         # content, so this can only make a False read become True, never
+2929:         # the reverse - the dangerous direction (a stale False making the
+2930:         # margin check wrongly lenient) is exactly what this closes.
+2931:         outgoing_tail = next(
+2932:             (f for f in al.fills_cuts if f.kind == "outgoing_tail"), None
+2933:         )
+2934:         effective_end = (
+2935:             max(o.n_bars, float(outgoing_tail.target_marker_bar))
+2936:             if outgoing_tail else None
+2937:         )
+2938:         al.outgoing_has_post_swap_content = _outgoing_has_post_swap_content(
+2939:             o, al.handoff_bar_out, effective_end=effective_end
+2940:         )
+2941:         bskip = next((f for f in al.fills_cuts if f.kind == "break_skip"), None)
+2942:         contraction = bskip.skip_bars * 4.0 if bskip else 0.0
+2943:         alignments.append(al)
+2944: 
+2945:     positions = [(t.name, t.arr_start, arr_pos[idx], arr_pos[idx] - t.arr_start)
+2946:                  for idx, t in enumerate(tracks)]
+2947:     return positions, alignments
+2948: 
+2949: 
+2950: def _mix_order(project: Path, stems: dict) -> list[str]:
+2951:     """Track order from the latest ARRANGEMENT_REPORT.json if present, else sorted."""
+2952:     reports = sorted((project / "Output").glob("*ARRANGEMENT_REPORT.json"),
+2953:                      key=lambda p: p.stat().st_mtime, reverse=True)
+2954:     if reports:
+2955:         try:
+2956:             rep = json.loads(reports[0].read_text(encoding="utf-8"))
+2957:             trans = rep.get("transitions", [])
+2958:             if trans:
+2959:                 import html  # report names come from the ALS -> XML-escaped (&apos; etc.)
+2960:                 order = [html.unescape(trans[0]["out_track"])] + [html.unescape(t["in_track"]) for t in trans]
+2961:                 # map report names to stem keys (exact, else startswith)
+2962:                 resolved = []
+2963:                 for nm in order:
+2964:                     if nm in stems:
+2965:                         resolved.append(nm)
+2966:                     else:
+2967:                         hit = next((k for k in stems if k.startswith(nm[:30]) or nm.startswith(k[:30])), None)
+2968:                         if hit:
+2969:                             resolved.append(hit)
+2970:                 if len(resolved) == len(order):
+
+ succeeded in 344ms:
+1200:     Under the production default this is drop starts only - exactly the previous
+1201:     behaviour. `allow_intro_phrase_swaps` additionally offers interior intro
+1202:     phrase points, which is what makes the measured T4/T5 corrections
+1203:     proposable at all.
+1204:     """
+1205:     policy = policy or _DEFAULT_POLICY
+1206:     anchors = set(_incoming_drop_anchors(track))
+1207:     if CUE_CONFIG.incoming_phrase_anchors:
+1208:         anchors.update(_incoming_phrase_anchors(track))
+1209:     if CUE_CONFIG.deep_intro_anchor:
+1210:         deep = _deep_intro_anchor(track)
+1211:         if deep is not None:
+1212:             anchors.add(deep)
+1213:     if policy.allow_intro_phrase_swaps:
+1214:         anchors.update(_incoming_intro_phrase_anchors(track))
+1215:     return sorted(anchors)
+1216: 
+1217: 
+1218: def _align_pair_landmark_aware(o: Track, i: Track, policy=None) -> Alignment:
+1219:     """Pair a named incoming ownership point with outgoing section/dropout cuts.
+1220: 
+1221:     Default policy: the earliest incoming DROP that yields a valid 16-48 bar
+1222:     blend wins. This prevents a later drop from gaming the score while still
+1223:     allowing a second drop when the first would force an immediate bass swap
+1224:     (Fresh Mix T1).
+1225: 
+1226:     `allow_intro_phrase_swaps` adds interior intro phrase points as a RESCUE
+1227:     pass, tried only when no drop anchor yields a valid blend. That ordering is
+1228:     deliberate. Pooling intro and drop anchors together and ranking them was
+1229:     measured against the correction mix and moved T3 from bar 24 - which the
+1230:     default already gets right, matching Sam - to bar 16. Reproducing Sam's
+1231:     earlier T4/T5 swaps needs a selection rule that distinguishes "wait for the
+1232:     drop after a 24-bar intro" from "take the midpoint of a 32-bar intro", and
+1233:     two examples are not enough to fit one. Until then these anchors may only
+1234:     rescue a transition that would otherwise fail outright; they may never
+1235:     re-decide one the default already handles.
+1236:     """
+1237:     policy = policy or _DEFAULT_POLICY
+1238:     outgoing = _mix_cues(o)
+1239:     incoming = _mix_cues(i)
+1240:     window_start = o.n_bars - o.last_min_bars - HANDOFF_WINDOW_BARS
+1241:     drop_anchors = _incoming_drop_anchors(i)
+1242:     first_drop_bar = float(drop_anchors[0]) if drop_anchors else None
+1243:     chosen = None
+1244: 
+1245:     rescue_anchors = [
+1246:         bar for bar in _incoming_swap_anchors(i, policy)
+1247:         if bar not in set(drop_anchors)
+1248:     ]
+1249:     if CUE_CONFIG.matched_tail_head_swap:
+1250:         chosen = _search_matched_tail_head(
+1251:             o, i, outgoing, incoming, window_start, first_drop_bar, policy)
+1252:     if chosen is None:
+1253:         chosen = _search_anchors(
+1254:             drop_anchors, o, i, outgoing, incoming, window_start,
+1255:             first_drop_bar, policy, rank_all=False,
+1256:         )
+1257:     if chosen is None and rescue_anchors:
+1258:         chosen = _search_anchors(
+1259:             rescue_anchors, o, i, outgoing, incoming, window_start,
+1260:             first_drop_bar, policy, rank_all=True,
+1261:         )
+1262: 
+1263:     if chosen is None and CUE_CONFIG.tail_anchor_rescue:
+1264:         chosen = _search_tail_anchor_rescue(
+1265:             o, i, outgoing, incoming, window_start, first_drop_bar, policy)
+1266: 
+1267:     if chosen is None:
+1268:         raise ValueError(
+1269:             f"No paired section/dropout alignment for '{o.name}' -> '{i.name}' "
+1270:             f"inside the {PHRASE_GRID}-{beats_to_bars(policy.max_overlap_beats)} bar window"
+1271:         )
+1272: 
+1273:     # Two return shapes arrive here:
+1274:     #   (a) _search_anchors / _search_matched_tail_head:
+1275:     #         (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1276:     #          progress, pairs, weighted_score)
+1277:     #       â€” outgoing_cue is the existing cue dict (possibly synthesised
+1278:     #         by matched_tail_head into a local COPY, never the caller's).
+1279:     #   (b) _search_tail_anchor_rescue:
+1280:     #         (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1281:     #          progress, pairs, weighted_score, out_is_real_cue, in_is_real_cue)
+1282:     #       â€” the extra flags tell the caller the anchor provenance so the
+1283:     #         Alignment can be labelled honestly.
+1284:     # Unpack the common prefix; the rescue's extra trailing fields are read
+1285:     # back out of `chosen` below (length-checked) before being discarded.
+1286:     # _search_anchors and _search_matched_tail_head return 8-tuples; the rescue
+1287:     # returns a 10-tuple (8 common + 2 provenance booleans).
+1288:     rescue_tail = chosen[8:] if len(chosen) > 8 else None
+1289:     (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1290:      progress, pairs, weighted_score) = chosen[:8]
+1291:     if rescue_tail is None:
+1292:         return Alignment(
+1293:             out_name=o.name,
+1294:             in_name=i.name,
+1295:             handoff_bar_out=float(outgoing_anchor),
+1296:             handoff_kind=f"paired/{outgoing_cue['labels'][0]}->drop",
+1297:             anchor_bar_in=float(outgoing_anchor - arr_offset),
+1298:             arr_offset_bars=float(arr_offset),
+1299:             overlap_bars=float(overlap),
+1300:             score=len(pairs),
+1301:             alignment_policy="paired_landmarks_v2",
+1302:             paired_cues=pairs,
+1303:             swap_progress=progress,
+1304:             notes=[f"paired cue score {weighted_score}; swap {progress:.0%} through overlap"],
+1305:         )
+1306: 
+1307:     # Rescue path â€” build the honestly-labelled Alignment.
+1308:     out_is_real_cue, in_is_real_cue = rescue_tail
+1309:     out_label = (outgoing_cue["labels"][0]
+1310:                  if out_is_real_cue and outgoing_cue is not None
+1311:                  else "grid_tail")
+1312:     in_label = "drop" if in_is_real_cue else "grid_head"
+1313:     n_real_pairs = sum(
+1314:         1 for p in pairs
+1315:         if "outgoing_labels" in p and "incoming_labels" in p
+1316:     )
+1317:     out_kind = "detected cue" if out_is_real_cue else "grid-derived position (n_bars - 16)"
+1318:     in_kind = "detected cue (first_drop_bar)" if in_is_real_cue \
+1319:         else "grid-derived position (PHRASE_BACKSTEP_BARS fallback)"
+1320:     return Alignment(
+1321:         out_name=o.name,
+1322:         in_name=i.name,
+1323:         handoff_bar_out=float(outgoing_anchor),
+1324:         handoff_kind=f"rescue/{out_label}->{in_label}",
+1325:         anchor_bar_in=float(outgoing_anchor - arr_offset),
+1326:         arr_offset_bars=float(arr_offset),
+1327:         overlap_bars=float(overlap),
+1328:         score=len(pairs),
+1329:         alignment_policy="tail_anchor_rescue_v1",
+1330:         paired_cues=pairs,
+1331:         swap_progress=progress,
+1332:         notes=[
+1333:             f"tail-anchor rescue (Sam: run-back 16 from end, first drop in): "
+1334:             f"outgoing anchor is a {out_kind}, incoming anchor is a {in_kind}; "
+1335:             f"{n_real_pairs} REAL paired cue(s) coincided with the swap point "
+1336:             f"(the rescue fires regardless, since {len(pairs) - n_real_pairs} "
+1337:             f"pair(s) were not detected)."
+1338:         ],
+1339:     )
+1340: 
+1650:         return _align_pair_landmark_aware(o, i, policy)
+1651: 
+1652:     bass_in = i.bass_in_bar if i.bass_in_bar is not None else 0.0
+1653:     # Anchor on the bass-in OR the intro-end (start of the first NON-intro
+1654:     # section). Bass-in alone fails when the bass enters mid-intro (My Own Thang:
+1655:     # bass-in bar 8, but the structural entry is break_1 at 32) â€” the intro then
+1656:     # lands off every outgoing marker (lineup 0). The intro-end anchor lets the
+1657:     # SECTION markers coincide (Sam aligned My Own's break_1 to Sinners' fill-end).
+1658:     # Only these two EARLY anchors are tried, so a late section can't be pinned to
+1659:     # a late handoff to game a huge overlap. Lineup picks; bass-to-bass tiebreaks,
+1660:     # so genuine bass-to-bass winners are preserved.
+1661:     intro_end = next((float(s["start_bar"]) for s in i.sections
+1662:                       if s["label"] != "intro"), bass_in)
+1663:     anchors = {bass_in, intro_end}
+1664:     best: Alignment | None = None
+1665:     best_rank = None
+1666:     for bar, before, after in _handoff_candidates(o):
+1667:         natural = before in ("drop", "build")      # high->low = a natural bass-drop point
+1668:         is_bassout = (o.bass_out_bar is not None and abs(bar - o.bass_out_bar) <= 2
+1669:                       and not o.bass_out_is_end)
+1670:         for anchor in anchors:
+1671:             arr_offset = round((bar - anchor) / SNAP_BARS) * SNAP_BARS
+1672:             overlap = o.n_bars - arr_offset
+1673:             if overlap < PHRASE_GRID:              # need at least a phrase of blend
+1674:                 continue
+1675:             if overlap > MAX_OVERLAP_BARS:
+1676:                 continue
+1677:             score = _score_lineup(o, i, arr_offset)
+1678:             # bass-to-bass bonus: the incoming's real bass-in lands on the swap.
+1679:             # TIEBREAK only â€” lineup dominates, so this preserves bass-in winners
+1680:             # and only rescues lineup-0 (mid-intro-bass) pairs like My Own.
+1681:             bass_to_bass = abs(arr_offset + bass_in - bar) <= COINCIDE_TOL_BARS
+1682:             rank = (score, int(bass_to_bass) + int(natural) + int(is_bassout), -overlap)
+1683:             if best_rank is None or rank > best_rank:
+1684:                 best_rank = rank
+1685:                 kind = f"{before}->{after}" + ("/bass_out" if is_bassout else "")
+1686:                 best = Alignment(
+1687:                     out_name=o.name, in_name=i.name,
+1688:                     handoff_bar_out=bar, handoff_kind=kind,
+1689:                     anchor_bar_in=bass_in, arr_offset_bars=arr_offset,
+1690:                     overlap_bars=overlap, score=score,
+1691:                 )
+1692:     if best is None:                               # clamp the fallback into the safe window
+1693:         bar = float(o.sections[-1]["start_bar"])
+1694:         min_offset = math.ceil(max(0.0, o.n_bars - MAX_OVERLAP_BARS) / SNAP_BARS) * SNAP_BARS
+1695:         max_offset = math.floor((o.n_bars - PHRASE_GRID) / SNAP_BARS) * SNAP_BARS
+1696:         if min_offset > max_offset:
+1697:             raise ValueError(
+1698:                 f"No feasible {PHRASE_GRID}-{MAX_OVERLAP_BARS} bar overlap for "
+1699:                 f"'{o.name}' -> '{i.name}'"
+1700:             )
+1701:         raw_offset = round((bar - bass_in) / SNAP_BARS) * SNAP_BARS
+1702:         arr_offset = min(max(raw_offset, min_offset), max_offset)
+1703:         overlap = o.n_bars - arr_offset
+1704:         best = Alignment(o.name, i.name, bar, "fallback", bass_in, arr_offset,
+1705:                          overlap, 0)
+1706:         if arr_offset != raw_offset:
+1707:             best.notes.append(
+1708:                 f"fallback clamped to {overlap:.0f}-bar overlap safety window"
+1709:             )
+1710:     # Notes
+1711:     if o.bass_out_bar is not None and not o.bass_out_is_end and best.handoff_bar_out < o.bass_out_bar - 2:
+1712:         best.notes.append(f"faked bass drop ({o.bass_out_bar - best.handoff_bar_out:.0f}b early)")
+1713:     if o.bass_out_is_end:
+1714:         best.notes.append("outgoing bass runs to end")
+1715:     if bass_in > i.last_min_bars:
+1716:         best.notes.append("WARN: incoming bass-in past its 1st minute")
+1717:     return best
+1718: 
+1719: 
+1720: def visualize_transition(o: Track, i: Track, al: Alignment, out_png: Path, idx: int):
+1721:     """Draw both tracks' sections on one arrangement-bar axis, with the bass
+1722:     markers, the bass-swap mix point, and the overlap zone."""
+1723:     fig, ax = plt.subplots(figsize=(18, 3.6))
+1724:     off = al.arr_offset_bars
+1725:     x_end = max(o.n_bars, off + i.n_bars)
+1726: 
+1727:     def draw_lane(track: Track, y: float, shift: float, tag: str):
+1728:         for s in track.sections:
+1729:             x0, x1 = s["start_bar"] + shift, s["end_bar"] + shift
+1730:             ax.add_patch(Rectangle((x0, y), x1 - x0, 0.8, facecolor=_seccol(s["label"]),
+1731:                                     edgecolor="k", lw=0.6, alpha=0.55))
+1732:             nb = s["end_bar"] - s["start_bar"]
+1733:             ax.text((x0 + x1) / 2, y + 0.4, f"{s['label']}\n{nb}b", ha="center", va="center",
+1734:                     fontsize=6.5, fontweight="bold", zorder=6)
+1735:         ax.text(shift, y + 0.9, tag, fontsize=8, fontweight="bold", va="bottom")
+1736:         # bass in/out markers for this lane
+1737:         for bar, lab, col in ((track.bass_in_bar, "b.in", "#1f4e9e"),
+1738:                               (track.bass_out_bar, "b.out", "#1f4e9e")):
+1739:             if bar is not None:
+1740:                 ax.plot([bar + shift, bar + shift], [y - 0.05, y + 0.85], color=col, lw=2.2, zorder=7)
+1741:         # clean-drum windows (loop sources) as a green strip under the lane
+1742:         for ws, we in track.loop_windows:
+1743:             ax.add_patch(Rectangle((ws + shift, y - 0.11), we - ws, 0.08,
+1744:                          facecolor="#2e9e5b", edgecolor="none", alpha=0.85, zorder=5))
+1745: 
+1746:     draw_lane(o, 1.1, 0.0, f"OUT: {o.name[:46]}")
+1747:     draw_lane(i, 0.05, off, f"IN:  {i.name[:46]}")
+1748: 
+1749:     # loops/cuts decisions (FillCutSpec): red hatch = intro cut, green hatch = outro loop
+1750:     for fc in getattr(al, "fills_cuts", None) or []:
+1751:         if fc.kind == "intro_cut":
+1752:             ax.axvspan(off, off + fc.cut_to_bar, ymin=0.02, ymax=0.42,
+1753:                        color="#d11", alpha=0.18, zorder=3, hatch="//")
+1754:             ax.text(off + fc.cut_to_bar / 2, 0.92, f"CUT {fc.cut_to_bar:.0f}b",
+1755:                     ha="center", fontsize=7, color="#900", fontweight="bold", zorder=8)
+1756:         elif fc.kind == "outgoing_tail":
+1757:             outro = next((s for s in o.sections if s["label"] == "outro"), None)
+1758:             clen = fc.source_end_bar - fc.source_start_bar
+1759:             ext = fc.reps * clen
+1760:             x0 = outro["start_bar"] if outro else o.n_bars
+1761:             ax.axvspan(x0, x0 + ext, ymin=0.55, ymax=0.97,
+1762:                        color="#2e9e5b", alpha=0.22, zorder=3, hatch="//")
+1763:             ax.text(x0 + ext / 2, 1.96, f"LOOP {clen:.0f}b x{fc.reps}",
+1764:                     ha="center", fontsize=7, color="#176", fontweight="bold", zorder=8)
+1765: 
+1766:     # The bass-swap mix point (outgoing bar = handoff)
+1767:     mix_x = al.handoff_bar_out
+1768:     ax.axvline(mix_x, color="#c0007a", lw=2.4, ls="--", zorder=8)
+1769:     ax.text(mix_x, 2.05, f"BASS SWAP\n({al.handoff_kind})", ha="center", va="bottom",
+1770:             fontsize=8, fontweight="bold", color="#c0007a")
+1771:     # Overlap zone
+1772:     ax.axvspan(off, o.n_bars, color="#999", alpha=0.10, zorder=0)
+1773:     # Outgoing last-minute guide
+1774:     ax.axvline(o.n_bars - o.last_min_bars, color="#d6006d", lw=1.0, ls=":", alpha=0.7)
+1775: 
+1776:     for bar in range(0, int(x_end) + 1, PHRASE_GRID):
+1777:         ax.axvline(bar, color="#dddddd", lw=0.3, zorder=0)
+1778: 
+1779:     ax.set_xlim(-4, x_end + 4)
+1780:     ax.set_ylim(-0.2, 2.4)
+1781:     ax.set_yticks([])
+1782:     ax.set_xlabel("arrangement bars")
+1783:     title = (f"T{idx}: {o.name[:30]} -> {i.name[:30]}   |   swap@out-bar {mix_x:.0f} "
+1784:              f"({al.handoff_kind})  overlap {al.overlap_bars:.0f}b  lineup {al.score}")
+1785:     if al.notes:
+1786:         title += "   |   " + " ; ".join(al.notes)
+1787:     ax.set_title(title, fontsize=9)
+1788:     fig.tight_layout()
+1789:     out_png.parent.mkdir(parents=True, exist_ok=True)
+1790:     fig.savefig(out_png, dpi=95)
+1791:     plt.close(fig)
+1792: 
+1793: 
+1794: def _resolve_stem_key(name: str, stems: dict) -> str | None:
+1795:     """Match a propose_arrangement track name (possibly XML-escaped from the ALS,
+
+ succeeded in 328ms:
+2253: def plan_fill_or_cut(o, i, al, policy=None):
+2254:     """Decide loops / cuts / break-skips around the LOCKED swap (Sam's CONFIRMED
+2255:     model, 2026-06-09 â€” derived from his hand-edited 'Intro Loops' ALS). NEVER alters
+2256:     al.arr_offset_bars / al.swap_beats. Returns a LIST of FillCutSpec (a transition can
+2257:     carry several):
+2258:       1. INCOMING-INTRO loop â€” bring the incoming in at the OUTGOING's last drop and
+2259:          loop its clean drums backward to fill, keeping the drop on the swap. Source =
+2260:          the incoming's intro drums if clean; its outro drums if the intro has vocals.
+2261:       2. INTRO CUT â€” only if NO intro loop AND the intro starts in a low-energy break.
+2262:       3. OUTGOING-OUTRO loop â€” loop the outgoing outro forward to the incoming's next
+2263:          section marker after the outgoing ends.
+2264:       4. BREAK-SKIP â€” mix choice: drop the incoming's pre-drop break if it would mix
+2265:          break-into-break (soft; see _resolve_break_to_break)."""
+2266:     # Burn list c1 (2026-09-14): overlap_ceiling/loop_budget used to be
+2267:     # computed from MODULE-LEVEL constants frozen from INTERIM_V1 at import
+2268:     # time, regardless of which `policy` was actually passed in here - a
+2269:     # policy with different overlap/loop-extension caps would silently have
+2270:     # this function ignore them. `policy` is defaulted FIRST now (moved up
+2271:     # from below) so both values genuinely read the live policy. Numerically
+2272:     # unchanged for every policy that exists today (INTERIM_V1 and SAM_V1
+2273:     # currently share max_overlap_beats/max_landmark_overlap_beats/
+2274:     # max_loop_extension_beats/max_loop_repeats).
+2275:     policy = policy or _DEFAULT_POLICY
+2276:     al.outgoing_loop_not_needed = None
+2277:     arr = al.arr_offset_bars
+2278:     specs = []
+2279:     landmark_mode = al.alignment_policy in LANDMARK_POLICIES
+2280:     overlap_ceiling = beats_to_bars(
+2281:         policy.max_landmark_overlap_beats if landmark_mode
+2282:         else policy.max_overlap_beats
+2283:     )
+2284:     loop_budget = min(
+2285:         beats_to_bars(policy.max_loop_extension_beats),
+2286:         max(0.0, overlap_ceiling - max(0.0, al.overlap_bars)),
+2287:     )
+2288:     first_drop_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
+2289:     intro_end = (i.sections[0]["end_bar"]
+2290:                  if i.sections and i.sections[0]["label"] == "intro" else 0.0)
+2291:     intro_loop = False
+2292: 
+2293:     # (1) INCOMING-INTRO LOOP â€” enter at the outgoing's last drop; loop clean drums back.
+2294:     # Tried FIRST (reordered 2026-09-10, see below) â€” this and (1a) both produce a
+2295:     # kind="incoming_intro" FillCutSpec, and propose_arrangement stores only ONE
+2296:     # such spec per transition (analysis.in_intro_loop); if both fired, the second
+2297:     # would silently OVERWRITE the first (and worse, both would physically prepend
+2298:     # loop clips, since the consumer dispatches on kind for EVERY spec in the
+2299:     # list). Mutual exclusion via the `intro_loop` flag below is required, not
+2300:     # cosmetic. Order matters: last-drop intro-loop has the stronger evidence
+2301:     # (matches 5/6 of Fresh Mix V2's reworked transitions on this exact target,
+2302:     # independently corroborated by House 10's T9) versus entry-extension's own
+2303:     # held-out replay, which found the technique "valid, not superior" and
+2304:     # identified a still-unbuilt density gate as the open question (Heldout
+2305:     # Replay Result 01, 2026-08-12) â€” so it goes second, as the fallback.
+2306:     #
+2307:     # 2026-08-17: this block was gated `not landmark_mode`, and landmark mode IS the
+2308:     # production path â€” so despite being written, commented and correct, it had never
+2309:     # run in a real mix. Sam's hand-correction of V3 (`SW Tweaks`) reworked six
+2310:     # transitions and five of them land the incoming on EXACTLY this target, the start
+2311:     # of the outgoing's last drop:
+2312:     #     T1 entry 480  = Nappp drop_3 start      T2 entry 1300 = Christoph drop_7 start
+2313:     #     T3 entry 1896 = Revoloution drop_4      T4 entry 2380 = Harry Romero drop_4
+2314:     #     T6 entry 3792 = Ritmo drop_3 start
+2315:     # (T5 is the reasoned exception: BUTCH's last drop is 81 bars, so its start is far
+2316:     # outside the overlap cap and he entered partway in instead â€” the existing
+2317:     # loop_budget/overlap ceiling already expresses that constraint.)
+2318:     # The flag lets landmark mode use it while keeping the default byte-identical.
+2319:     last_drop_o = _last_drop_start(o)
+2320:     if ((not landmark_mode or CUE_CONFIG.incoming_intro_loop)
+2321:             and last_drop_o is not None and intro_end > 0):
+2322:         fill_bars = round((arr - last_drop_o) / SNAP_BARS) * SNAP_BARS
+2323:         if fill_bars >= SNAP_BARS:
+2324:             chunk = pick_clean_drum_loop(
+2325:                 i, 0, intro_end, insert_bar=0
+2326:             )                                                        # intro drums (vocal-free)
+2327:             src = "intro"
+2328:             if chunk is None:                                         # vocal intro -> outro drums
+2329:                 i_out = next((s for s in i.sections if s["label"] == "outro"), None)
+2330:                 if i_out:
+2331:                     chunk = pick_clean_drum_loop(
+2332:                         i, i_out["start_bar"], i.n_bars, insert_bar=0
+2333:                     )
+2334:                     src = "outro"
+2335:             if chunk:
+2336:                 clen = chunk[1] - chunk[0]
+2337:                 requested_reps = int(fill_bars // clen)
+2338:                 # Whole repeats alone can't span a gap that isn't a multiple of the
+2339:                 # chunk, so the incoming entered LATE by the remainder (Nappp ->
+2340:                 # Christoph: 13 bars needed, 4-bar chunk, 3 reps = 12b, 1 bar late).
+2341:                 # Sam filled that same transition EXACTLY by hand, so carry the
+2342:                 # remainder as a shorter final chunk â€” the sibling outgoing-tail loop
+2343:                 # below already does this via the same `partial_bars` field.
+2344:                 requested_partial = (fill_bars - requested_reps * clen
+2345:                                      if CUE_CONFIG.incoming_intro_loop else 0.0)
+2346:                 reps = min(
+2347:                     requested_reps,
+2348:                     policy.max_loop_repeats,
+2349:                     int(loop_budget // clen),
+2350:                 )
+2351:                 used = reps * clen
+2352:                 partial = min(requested_partial, max(0.0, loop_budget - used))
+2353:                 if reps >= 1:
+2354:                     loop_budget -= used + partial
+2355:                     intro_loop = True
+2356:                     specs.append(FillCutSpec(kind="incoming_intro", reps=reps,
+2357:                         source_start_bar=chunk[0], source_end_bar=chunk[1],
+2358:                         partial_bars=float(partial),
+2359:                         target_marker_bar=float(last_drop_o),
+2360:                         note=f"intro {src}-loop {clen:.0f}bx{reps}"
+2361:                              + (f"+{partial:.0f}b" if partial else "")
+2362:                              + f" ({used + partial:.0f}b) back to outgoing last drop"
+2363:                              + (" [safety-capped]" if (reps < requested_reps
+2364:                                 or partial < requested_partial) else "")))
+2365: 
+2366:     # (1a) ENTRY EXTENSION (policy-gated), FALLBACK â€” only when (1) above did not
+2367:     # fire. Mutually exclusive with (1) by construction (`not intro_loop`); see
+2368:     # the ordering note above for why. This is the mechanism for Sam's T2/T3/T6.
+2369:     if landmark_mode and policy.extend_incoming_entry:
+2370:         if intro_loop:
+2371:             al.notes.append(
+2372:                 "entry-extension suppressed: last-drop incoming_intro_loop "
+2373:                 "already filled this transition (mutually exclusive)")
+2374:         else:
+2375:             entry_spec, entry_bars = _plan_incoming_entry_extension(
+2376:                 o, i, al, intro_end, loop_budget, policy)
+2377:             if entry_spec is not None:
+2378:                 specs.append(entry_spec)
+2379:                 loop_budget -= entry_bars
+2380:                 intro_loop = True
+2381: 
+2382:     # (2) INTRO CUT â€” only if no intro loop and the intro lands in a low-energy break.
+2383:     if not intro_loop and first_drop_in and first_drop_in > 0 and intro_end > 0:
+2384:         host = next((s for s in o.sections if s["start_bar"] <= arr < s["end_bar"]), None)
+2385:         if host and host["label"] in ("break", "fill"):
+2386:             cut_to = min(round((host["end_bar"] - arr) / SNAP_BARS) * SNAP_BARS, first_drop_in)
+2387:             if 0 < cut_to < intro_end:
+2388:                 al.intro_cut_bars = float(cut_to)
+2389:                 specs.append(FillCutSpec(kind="intro_cut", cut_to_bar=float(cut_to),
+2390:                     target_marker_bar=float(host["end_bar"]),
+2391:                     note=f"trim intro front {cut_to:.0f}b (started in {host['label']})"))
+2392: 
+2393:     # (3) OUTGOING-OUTRO LOOP â€” loop the outro forward to REACH the incoming's next
+2394:     # marker. Fires whenever the outgoing has an outro section + a gap; we loop the
+2395:     # outro DRUMS (the bass-out-is-end guard was wrong â€” bass is irrelevant here).
+2396:     # reps REACH the marker (round, not floor â€” floor undershot the break); a small
+2397:     # gap uses a 2-bar chunk ("a little").
+2398:     #
+2399:     # Burn list D15 (2026-09-22): candidates are tried in two ORDERED tiers, not
+2400:     # one bar-ascending merge - named section boundaries first (what this
+2401:     # function's own docstring promises), raw Kick-Detector-V3 landmarks only as
+2402:     # a fallback if no section candidate produces a usable loop. Before this fix
+2403:     # a raw kick blip a few bars before a real section boundary would win purely
+2404:     # by being numerically smaller, and the section boundary would never even be
+2405:     # attempted - confirmed live on a real mix
+2406:     # (Documentation/Plans/d15-outro-loop-targeting-plan.md).
+2407:     target_name = ""
+2408:     section_targets = []
+2409:     landmark_targets = []
+2410:     skip_outgoing_loop = False
+2411:     outro = next((s for s in o.sections if s["label"] == "outro"), None)
+2412:     if landmark_mode:
+2413:         current_incoming_bar = o.n_bars - arr
+2414:         if (policy.skip_outgoing_loop_when_on_section_line
+2415:                 and outro is not None and al.handoff_bar_out <= o.n_bars):
+2416:             near_section = next((s for s in i.sections
+2417:                                  if abs(float(s["start_bar"]) - current_incoming_bar) <= 2), None)
+2418:             if near_section is not None:
+2419:                 skip_outgoing_loop = True
+2420:                 al.outgoing_loop_not_needed = {
+2421:                     "reason": "natural end on section line",
+2422:                     "section": near_section["name"],
+2423:                 }
+2424:         if not skip_outgoing_loop:
+2425:             section_targets = _outro_section_target_candidates(i, current_incoming_bar)
+2426:             landmark_targets = _outro_landmark_target_candidates(i, current_incoming_bar)
+2427:         nxt = None
+2428:     else:
+2429:         nxt = next((arr + s["start_bar"] for s in i.sections
+2430:                     if (arr + s["start_bar"]) > o.n_bars + 1), None)
+2431:     chunk = None
+2432:     # Burn list D15/D2 (2026-09-22): the first candidate that would be VIABLE
+2433:     # (within loop_budget, reaches the locked swap) even if no clean loop-source
+2434:     # chunk is ever found for it - tracked separately from `nxt`/`chunk`, which
+2435:     # still mean "a clean-drum-window chunk was actually found". Before this
+2436:     # fix, `nxt`/`target_name`/`chunk` were only ever set together (see the
+2437:     # single `break` below), so the "loop the outro section itself, may carry
+2438:     # bass" last-resort fallback a few lines down - gated on `nxt is not None` -
+2439:     # was structurally dead code in landmark mode whenever every named
+2440:     # candidate's clean-drum search failed. Confirmed by direct code reading,
+2441:     # not inferred from behaviour.
+2442:     candidate_nxt = None
+2443:     candidate_target_name = ""
+2444:     via_d2_fallback = False
+2445:     if landmark_mode and outro is not None and not skip_outgoing_loop:
+2446:         locked_swap_gap = max(
+2447:             0.0,
+2448:             float(al.handoff_bar_out) - float(outro["start_bar"]),
+2449:         )
+2450:         required_boundary_bars = int(round(locked_swap_gap))
+2451:         short_swap_candidate = None
+2452:         capped_candidate = False
+2453:         optional_reach = al.handoff_bar_out <= o.n_bars
+2454:         reach_limit = (min(loop_budget, policy.max_outgoing_reach_bars)
+2455:                        if optional_reach and policy.max_outgoing_reach_bars is not None
+2456:                        else loop_budget)
+2457:         # `short_swap_candidate` and the eventual ValueError below stay scoped
+2458:         # across BOTH tiers (one shared `for` body, entered from two sorted
+2459:         # iterables) - splitting this into two independent loops each with
+2460:         # their own post-loop check would let a sections-only pass raise the
+2461:         # ValueError before the landmarks tier (or the D2 fallback) ever gets a
+2462:         # chance, turning transitions that work today into new hard failures.
+2463:         for tier in (sorted(set(section_targets)), sorted(set(landmark_targets))):
+2464:             for target_source_bar, candidate_name in tier:
+2465:                 candidate_nxt_here = arr + target_source_bar
+2466:                 candidate_gap = candidate_nxt_here - o.n_bars
+2467:                 if candidate_gap > reach_limit + 1e-6:
+2468:                     if candidate_gap <= loop_budget + 1e-6:
+2469:                         capped_candidate = True
+2470:                     continue
+2471:                 if candidate_nxt is None and candidate_gap + 1e-6 >= locked_swap_gap:
+2472:                     candidate_nxt = candidate_nxt_here
+2473:                     candidate_target_name = candidate_name
+2474:                 candidate_chunk = pick_cue_bounded_drum_loop(
+2475:                     o,
+2476:                     int(candidate_gap),
+2477:                     required_boundary_bars=required_boundary_bars or None,
+2478:                     insert_bar=float(outro["start_bar"]),
+2479:                     policy=policy,
+2480:                 )
+2481:                 if candidate_chunk is not None:
+2482:                     chunk_length = candidate_chunk[1] - candidate_chunk[0]
+2483:                     # Dividing the handoff offset is not enough: the inserted loop
+2484:                     # interval must be long enough to reach that locked handoff.
+2485:                     if candidate_gap + 1e-6 < locked_swap_gap:
+2486:                         short_swap_candidate = (
+2487:                             candidate_name,
+2488:                             locked_swap_gap - candidate_gap,
+2489:                             int(candidate_gap // chunk_length),
+2490:                             chunk_length,
+2491:                             int(math.ceil(locked_swap_gap / chunk_length)),
+2492:                         )
+2493:                         continue
+2494:                     nxt = candidate_nxt_here
+2495:                     target_name = candidate_name
+2496:                     chunk = candidate_chunk
+2497:                     break
+2498:             if chunk is not None:
+2499:                 break
+2500:         if (chunk is None and short_swap_candidate is not None
+2501:                 and not (optional_reach and capped_candidate)):
+2502:             candidate_name, shortfall, repeats, chunk_length, required_repeats = (
+2503:                 short_swap_candidate
+2504:             )
+2505:             raise ValueError(
+2506:                 f"Cannot plan outgoing tail loop for '{o.name}' -> '{i.name}': "
+2507:                 f"cue '{candidate_name}' would end {shortfall:g} bars before locked "
+2508:                 f"swap ({repeats} repeats at {chunk_length:g} bars; "
+2509:                 f"{required_repeats} required), and no later named cue fits the "
+2510:                 f"{policy.max_loop_repeats}-repeat/{loop_budget:g}-bar safety limits"
+2511:             )
+2512:         if capped_candidate and candidate_nxt is None and chunk is None:
+2513:             al.outgoing_loop_not_needed = {
+2514:                 "reason": "outgoing reach exceeds cap",
+2515:                 "max_reach_bars": policy.max_outgoing_reach_bars,
+2516:             }
+2517:     if nxt is None and outro is not None and candidate_nxt is not None:
+2518:         # D15/D2: a target WAS correctly identified but no candidate's clean-
+2519:         # drum-window search succeeded anywhere - fall through to the SAME
+2520:         # last-resort mechanism below instead of silently producing
+2521:         # `loop_source: none`. Reuses `nxt`/`target_name` so every downstream
+2522:         # line (gap math, the FillCutSpec) is unchanged code, just newly
+2523:         # reachable - EXCEPT the two safety-limit ValueErrors just below,
+2524:         # which stay guarded by `via_d2_fallback` (see their own comment):
+2525:         # `pick_cue_bounded_drum_loop` (the PRIMARY search) only ever returns
+2526:         # a chunk whose length already divides the gap within
+2527:         # `policy.max_loop_repeats` - so those ValueErrors were effectively
+2528:         # unreachable for it. `pick_clean_drum_loop` / the last-resort "loop
+2529:         # the outro section itself" mechanism below carry no such guarantee
+2530:         # (they were only ever exercised in legacy, non-landmark mode before
+2531:         # this fix, where the "round up, a bar or two past the marker is
+2532:         # fine" leniency a few lines down applies instead). Without this
+2533:         # guard, a target this fallback correctly IDENTIFIED but genuinely
+2534:         # can't reach with a whole number of safety-capped repeats would hard
+2535:         # -crash the whole pipeline instead of falling through to
+2536:         # `loop_source: none` with a D2b note - found live via the corpus
+2537:         # replay, not anticipated by either plan review.
+2538:         nxt = candidate_nxt
+2539:         target_name = candidate_target_name
+2540:         via_d2_fallback = True
+2541:     if nxt is not None and outro is not None:
+2542:         gap = nxt - o.n_bars                                   # exact bars to the marker
+2543:         if gap >= 2:
+2544:             pref = 4 if gap >= 4 else 2
+2545:             if not landmark_mode:
+2546:                 chunk = pick_clean_drum_loop(
+2547:                     o, outro["start_bar"], outro["end_bar"], pref,
+2548:                     insert_bar=float(outro["start_bar"]),
+2549:                 )
+2550:             if chunk is None and o.loop_windows:
+2551:                 # bassy / vocal outro has no clean-drum window â€” use the outgoing's
+2552:                 # LATEST clean-drum window (a late break's drums) as the tail source.
+2553:                 # Not gated on landmark_mode, so D2's fallback (2026-09-22) makes
+2554:                 # THIS tier reachable too, not just the absolute last resort below -
+2555:                 # both are covered by the same via_d2_fallback safety guard.
+2556:                 ws, we = max(o.loop_windows, key=lambda w: w[1])
+2557:                 chunk = pick_clean_drum_loop(
+2558:                     o, ws, we, pref, insert_bar=float(outro["start_bar"])
+2559:                 )
+2560:             if chunk is None:
+2561:                 # last resort (no clean-drum window ANYWHERE, e.g. Crusy): loop the
+2562:                 # outro section itself so it still fires. May carry bass â€” flagged.
+2563:                 e = min(outro["start_bar"] + pref, o.n_bars)
+2564:                 if e - outro["start_bar"] >= 2:
+2565:                     candidate = (float(outro["start_bar"]), float(e))
+2566:                     result = _assess_loop_candidate(
+2567:                         o, candidate[0], candidate[1], float(outro["start_bar"])
+2568:                     )
+2569:                     if result.passed:
+2570:                         _note_unmeasured_acceptance(
+2571:                             o, result, candidate[0], candidate[1]
+2572:                         )
+2573:                         chunk = candidate
+2574:                     else:
+2575:                         _print_loop_rejections(o, [result])
+2576:             if chunk:
+2577:                 clen = chunk[1] - chunk[0]
+2578:                 reps = int(gap // clen)
+2579:                 partial = gap - reps * clen
+2580:                 # Sam (2026-06-09, from his amended-outros ALS): loop in WHOLE phrases.
+2581:                 # A 2-3 bar fragment of a 4-bar phrase cuts mid-phrase and sounds wrong,
+2582:                 # so round a >=2-bar remainder UP to a whole chunk (ending a bar or two
+2583:                 # past the marker is fine). A 1-bar remainder is tiny â€” keep it exact.
+2584:                 if partial >= 2 and not landmark_mode:
+2585:                     reps += 1
+2586:                     partial = 0.0
+2587:                 requested_reps = reps
+2588:                 requested_partial = partial
+2589:                 reps = min(reps, policy.max_loop_repeats, int(loop_budget // clen))
+2590:                 used = reps * clen
+2591:                 remaining = max(0.0, loop_budget - used)
+2592:                 partial = min(requested_partial, remaining)
+2593:                 if landmark_mode and abs(used + partial - gap) > 1e-6:
+2594:                     if not via_d2_fallback:
+2595:                         raise ValueError(
+2596:                             f"Cannot reach named cue '{target_name}' for '{o.name}' -> "
+2597:                             f"'{i.name}' inside loop safety limits"
+2598:                         )
+2599:                     # D15/D2: the fallback found SOME material, but not enough
+2600:                     # whole+partial repeats to exactly reach the target within
+2601:                     # the safety caps. `pick_cue_bounded_drum_loop` (the
+2602:                     # PRIMARY search) already guarantees exact reach for any
+2603:                     # chunk it returns, so this branch is effectively
+2604:                     # unreachable for it - but the fallback's `pick_clean_
+2605:                     # drum_loop` / "loop the outro section itself" mechanism
+2606:                     # below carry no such guarantee (only ever exercised in
+2607:                     # legacy, non-landmark mode before this fix). Fall through
+2608:                     # to no-loop (D2b's abandonment note covers this) instead
+2609:                     # of a hard crash - found live via the corpus replay.
+2610:                     chunk = None
+2611:                 elif (landmark_mode
+2612:                         and float(outro["start_bar"]) + used + partial
+2613:                         < float(al.handoff_bar_out) - 1e-6):
+2614:                     if not via_d2_fallback:
+2615:                         raise ValueError(
+2616:                             f"Outgoing tail loop for '{o.name}' -> '{i.name}' would end "
+2617:                             f"before locked swap at outgoing bar {al.handoff_bar_out:g}"
+2618:                         )
+2619:                     chunk = None
+2620:                 if chunk and (reps >= 1 or partial > 0):
+2621:                     loop_budget -= used + partial
+2622:                     specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
+2623:                         source_start_bar=chunk[0], source_end_bar=chunk[1],
+2624:                         partial_bars=float(partial), target_marker_bar=float(nxt),
+2625:                         target_marker_name=target_name,
+2626:                         note=f"loop outro {clen:.0f}bx{reps}+{partial:.0f}b to "
+2627:                              f"{target_name or 'marker'} {nxt:.0f}"
+2628:                              + (" [safety-capped]" if (reps < requested_reps or
+2629:                                   partial < requested_partial) else "")))
+2630: 
+2631:     # Burn list D15/D2b (2026-09-22): a target WAS identified (candidate_nxt)
+2632:     # but no `outgoing_tail` spec ever got produced for it - the last-resort
+2633:     # fallback above either never found usable audio, or `gap < 2` skipped it
+2634:     # entirely. Record WHY on the Alignment itself (see its own docstring for
+2635:     # why this is a dedicated field and not routed through `al.notes`), so
+
+codex
+The cap and R1 skip are both guarded by the swap being no later than the outgoing’s natural end. I’m checking whether that makes reach optional in the actual renderer, and whether the cap can silence a failure for a target that was still inside the old safety budget.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py'; "'$s=Get-Content -LiteralPath $p; for($n=2540;$n -le 2640;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py'; "'$s=Get-Content -LiteralPath $p; for($n=1140;$n -le 1335;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"outgoing_tail|outgoing_has_post_swap_content|fills_from_decision|alignment_from_decision|handoff_out|swap_bar|handoff_bar_out|_outgoing_has_post_swap_content\" 'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py'" in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+ succeeded in 63ms:
+721:    kind: str                          # 'incoming_intro' | 'outgoing_tail' | 'intro_cut' | 'break_skip'
+751:    handoff_bar_out: float       # mix point in the OUTGOING's bars
+767:    # by compute_aligned_positions via _outgoing_has_post_swap_content and
+773:    outgoing_has_post_swap_content: bool = True
+788:    # loop-quality gate, so no `outgoing_tail` FillCutSpec was produced. Without
+915:#: Hard floor for _outgoing_has_post_swap_content's "genuinely nothing left"
+922:def _outgoing_has_post_swap_content(o: Track, swap_bar: float,
+925:    *swap_bar* (the outgoing's OWN native bar the handoff lands on) - false
+954:    return (end - swap_bar) > MIN_REMAINING_CONTENT_BARS
+1295:            handoff_bar_out=float(outgoing_anchor),
+1323:        handoff_bar_out=float(outgoing_anchor),
+1688:                    handoff_bar_out=bar, handoff_kind=kind,
+1711:    if o.bass_out_bar is not None and not o.bass_out_is_end and best.handoff_bar_out < o.bass_out_bar - 2:
+1712:        best.notes.append(f"faked bass drop ({o.bass_out_bar - best.handoff_bar_out:.0f}b early)")
+1756:        elif fc.kind == "outgoing_tail":
+1767:    mix_x = al.handoff_bar_out
+2415:                and outro is not None and al.handoff_bar_out <= o.n_bars):
+2448:            float(al.handoff_bar_out) - float(outro["start_bar"]),
+2453:        optional_reach = al.handoff_bar_out <= o.n_bars
+2613:                        < float(al.handoff_bar_out) - 1e-6):
+2617:                            f"before locked swap at outgoing bar {al.handoff_bar_out:g}"
+2622:                    specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
+2632:    # but no `outgoing_tail` spec ever got produced for it - the last-resort
+2638:    if candidate_nxt is not None and not any(s.kind == "outgoing_tail" for s in specs):
+2706:def alignment_from_decision(o: "Track", i: "Track", decision: dict,
+2710:    The swap is locked exactly like any other alignment (handoff_bar_out is
+2751:    handoff_out = arr_offset + swap_in
+2752:    if handoff_out > o.n_bars + 1e-6:
+2755:            f"bar {handoff_out:g}, after '{o.name}' ends at bar {o.n_bars}")
+2764:        handoff_bar_out=handoff_out,
+2773:            "arrangement_bar": handoff_out,
+2783:def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutSpec]:
+2820:            kind="outgoing_tail", reps=reps, source_start_bar=s0, source_end_bar=s1,
+2838:    decision is built by alignment_from_decision / fills_from_decision instead
+2853:                   swap (outgoing's final position + handoff_bar_out*4) for apply_automation.
+2903:            al = alignment_from_decision(o, i, decision, policy)
+2915:        al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
+2919:            al.fills_cuts = fills_from_decision(o, i, decision)
+2931:        outgoing_tail = next(
+2932:            (f for f in al.fills_cuts if f.kind == "outgoing_tail"), None
+2935:            max(o.n_bars, float(outgoing_tail.target_marker_bar))
+2936:            if outgoing_tail else None
+2938:        al.outgoing_has_post_swap_content = _outgoing_has_post_swap_content(
+2939:            o, al.handoff_bar_out, effective_end=effective_end
+2998:        print(f"  T{idx}: {o.name[:26]:26} -> {i.name[:26]:26}  swap@{al.handoff_bar_out:5.0f} "
+
+ succeeded in 288ms:
+2540:         via_d2_fallback = True
+2541:     if nxt is not None and outro is not None:
+2542:         gap = nxt - o.n_bars                                   # exact bars to the marker
+2543:         if gap >= 2:
+2544:             pref = 4 if gap >= 4 else 2
+2545:             if not landmark_mode:
+2546:                 chunk = pick_clean_drum_loop(
+2547:                     o, outro["start_bar"], outro["end_bar"], pref,
+2548:                     insert_bar=float(outro["start_bar"]),
+2549:                 )
+2550:             if chunk is None and o.loop_windows:
+2551:                 # bassy / vocal outro has no clean-drum window â€” use the outgoing's
+2552:                 # LATEST clean-drum window (a late break's drums) as the tail source.
+2553:                 # Not gated on landmark_mode, so D2's fallback (2026-09-22) makes
+2554:                 # THIS tier reachable too, not just the absolute last resort below -
+2555:                 # both are covered by the same via_d2_fallback safety guard.
+2556:                 ws, we = max(o.loop_windows, key=lambda w: w[1])
+2557:                 chunk = pick_clean_drum_loop(
+2558:                     o, ws, we, pref, insert_bar=float(outro["start_bar"])
+2559:                 )
+2560:             if chunk is None:
+2561:                 # last resort (no clean-drum window ANYWHERE, e.g. Crusy): loop the
+2562:                 # outro section itself so it still fires. May carry bass â€” flagged.
+2563:                 e = min(outro["start_bar"] + pref, o.n_bars)
+2564:                 if e - outro["start_bar"] >= 2:
+2565:                     candidate = (float(outro["start_bar"]), float(e))
+2566:                     result = _assess_loop_candidate(
+2567:                         o, candidate[0], candidate[1], float(outro["start_bar"])
+2568:                     )
+2569:                     if result.passed:
+2570:                         _note_unmeasured_acceptance(
+2571:                             o, result, candidate[0], candidate[1]
+2572:                         )
+2573:                         chunk = candidate
+2574:                     else:
+2575:                         _print_loop_rejections(o, [result])
+2576:             if chunk:
+2577:                 clen = chunk[1] - chunk[0]
+2578:                 reps = int(gap // clen)
+2579:                 partial = gap - reps * clen
+2580:                 # Sam (2026-06-09, from his amended-outros ALS): loop in WHOLE phrases.
+2581:                 # A 2-3 bar fragment of a 4-bar phrase cuts mid-phrase and sounds wrong,
+2582:                 # so round a >=2-bar remainder UP to a whole chunk (ending a bar or two
+2583:                 # past the marker is fine). A 1-bar remainder is tiny â€” keep it exact.
+2584:                 if partial >= 2 and not landmark_mode:
+2585:                     reps += 1
+2586:                     partial = 0.0
+2587:                 requested_reps = reps
+2588:                 requested_partial = partial
+2589:                 reps = min(reps, policy.max_loop_repeats, int(loop_budget // clen))
+2590:                 used = reps * clen
+2591:                 remaining = max(0.0, loop_budget - used)
+2592:                 partial = min(requested_partial, remaining)
+2593:                 if landmark_mode and abs(used + partial - gap) > 1e-6:
+2594:                     if not via_d2_fallback:
+2595:                         raise ValueError(
+2596:                             f"Cannot reach named cue '{target_name}' for '{o.name}' -> "
+2597:                             f"'{i.name}' inside loop safety limits"
+2598:                         )
+2599:                     # D15/D2: the fallback found SOME material, but not enough
+2600:                     # whole+partial repeats to exactly reach the target within
+2601:                     # the safety caps. `pick_cue_bounded_drum_loop` (the
+2602:                     # PRIMARY search) already guarantees exact reach for any
+2603:                     # chunk it returns, so this branch is effectively
+2604:                     # unreachable for it - but the fallback's `pick_clean_
+2605:                     # drum_loop` / "loop the outro section itself" mechanism
+2606:                     # below carry no such guarantee (only ever exercised in
+2607:                     # legacy, non-landmark mode before this fix). Fall through
+2608:                     # to no-loop (D2b's abandonment note covers this) instead
+2609:                     # of a hard crash - found live via the corpus replay.
+2610:                     chunk = None
+2611:                 elif (landmark_mode
+2612:                         and float(outro["start_bar"]) + used + partial
+2613:                         < float(al.handoff_bar_out) - 1e-6):
+2614:                     if not via_d2_fallback:
+2615:                         raise ValueError(
+2616:                             f"Outgoing tail loop for '{o.name}' -> '{i.name}' would end "
+2617:                             f"before locked swap at outgoing bar {al.handoff_bar_out:g}"
+2618:                         )
+2619:                     chunk = None
+2620:                 if chunk and (reps >= 1 or partial > 0):
+2621:                     loop_budget -= used + partial
+2622:                     specs.append(FillCutSpec(kind="outgoing_tail", reps=reps,
+2623:                         source_start_bar=chunk[0], source_end_bar=chunk[1],
+2624:                         partial_bars=float(partial), target_marker_bar=float(nxt),
+2625:                         target_marker_name=target_name,
+2626:                         note=f"loop outro {clen:.0f}bx{reps}+{partial:.0f}b to "
+2627:                              f"{target_name or 'marker'} {nxt:.0f}"
+2628:                              + (" [safety-capped]" if (reps < requested_reps or
+2629:                                   partial < requested_partial) else "")))
+2630: 
+2631:     # Burn list D15/D2b (2026-09-22): a target WAS identified (candidate_nxt)
+2632:     # but no `outgoing_tail` spec ever got produced for it - the last-resort
+2633:     # fallback above either never found usable audio, or `gap < 2` skipped it
+2634:     # entirely. Record WHY on the Alignment itself (see its own docstring for
+2635:     # why this is a dedicated field and not routed through `al.notes`), so
+2636:     # `loop_source: none` in the report stops being indistinguishable from
+2637:     # "no loop was needed" - the exact ambiguity that hid the original D15 bug.
+2638:     if candidate_nxt is not None and not any(s.kind == "outgoing_tail" for s in specs):
+2639:         al.outgoing_loop_abandoned = {
+2640:             "target": candidate_target_name,
+
+ succeeded in 293ms:
+1140: def _incoming_phrase_anchors(track: Track) -> list[int]:
+1141:     """Natural intro cues at phrase positions â€” Sam's 'intro anchor'."""
+1142:     return _phrase_anchors(_mix_cues(track), PHRASE_POSITIONS, MIXABLE_HEAD_BARS)
+1143: 
+1144: 
+1145: #: One phrase back from a reference cue. ~30 s at 128 BPM, which is where Sam's
+1146: #: rule came from, but expressed in BARS so it stays on the grid at any tempo
+1147: #: (30 s is 17.5 bars at 140 BPM â€” his own correction, 2026-08-17).
+1148: PHRASE_BACKSTEP_BARS = 16
+1149: #: An intro is "deep" when its first usable anchor is further in than this.
+1150: DEEP_INTRO_BARS = 32
+1151: 
+1152: 
+1153: def _deep_intro_anchor(track: Track) -> int | None:
+1154:     """A computed anchor one phrase before a long intro's first real cue.
+1155: 
+1156:     Sam, 2026-08-17, on a track whose first 48 bars carry no detected marker:
+1157:     "at 1:04 it has some hi-hats that come in, that would be a good mix point...
+1158:     we can use the same theory we used for the start and end anchors â€” counting
+1159:     back 30 seconds from the first break gets you to that mix point. So if there
+1160:     is a huge intro with no cue points, find the first cue point and count back
+1161:     from there."
+1162: 
+1163:     Worked case, Andrea Oliva feat. Morchebba (120 BPM, 2.0 s/bar): first cue at
+1164:     bar 48 = 1:36; one phrase back is bar 32 = 1:04 â€” exactly where he hears the
+1165:     hats enter. The detector sees nothing there, so this anchor is COMPUTED, the
+1166:     same way the outgoing tail fallback is, and for the same reason: the music
+1167:     has a usable entry the analysis layer did not mark.
+1168: 
+1169:     Without it such a track is not merely awkward but unmixable: with a first
+1170:     anchor at bar 48 every overlap is >= 48 bars, and it only equals 48 at the
+1171:     outgoing's own end where progress is 1.0 and always rejected. Measured on the
+1172:     14.08.26 corpus: 0 of 19 tracks could mix into Morchebba.
+1173: 
+1174:     Returns None when the intro is not deep, so normal tracks are untouched.
+1175:     """
+1176:     real = _incoming_phrase_anchors(track) or _incoming_drop_anchors(track)
+1177:     if not real:
+1178:         return None
+1179:     first = min(real)
+1180:     if first <= DEEP_INTRO_BARS:
+1181:         return None
+1182:     candidate = first - PHRASE_BACKSTEP_BARS
+1183:     if candidate < PHRASE_BACKSTEP_BARS:
+1184:         # Too close to the head to leave the incoming any establishing bars.
+1185:         return None
+1186:     # Prefer a real marker within a phrase of the computed point, exactly as the
+1187:     # outgoing tail rule does â€” Sam: "there might be a kick dropout or a fill even
+1188:     # if the bass stays in, that is still a marker and would probably line up."
+1189:     cues = _mix_cues(track)
+1190:     near = [bar for bar in cues
+1191:             if abs(bar - candidate) <= PHRASE_ANCHOR_TOL and 0 < bar < first]
+1192:     if near:
+1193:         return min(near, key=lambda bar: (abs(bar - candidate), bar))
+1194:     return int(candidate)
+1195: 
+1196: 
+1197: def _incoming_swap_anchors(track: Track, policy=None) -> list[int]:
+1198:     """Candidate bass-ownership points on the incoming, earliest first.
+1199: 
+1200:     Under the production default this is drop starts only - exactly the previous
+1201:     behaviour. `allow_intro_phrase_swaps` additionally offers interior intro
+1202:     phrase points, which is what makes the measured T4/T5 corrections
+1203:     proposable at all.
+1204:     """
+1205:     policy = policy or _DEFAULT_POLICY
+1206:     anchors = set(_incoming_drop_anchors(track))
+1207:     if CUE_CONFIG.incoming_phrase_anchors:
+1208:         anchors.update(_incoming_phrase_anchors(track))
+1209:     if CUE_CONFIG.deep_intro_anchor:
+1210:         deep = _deep_intro_anchor(track)
+1211:         if deep is not None:
+1212:             anchors.add(deep)
+1213:     if policy.allow_intro_phrase_swaps:
+1214:         anchors.update(_incoming_intro_phrase_anchors(track))
+1215:     return sorted(anchors)
+1216: 
+1217: 
+1218: def _align_pair_landmark_aware(o: Track, i: Track, policy=None) -> Alignment:
+1219:     """Pair a named incoming ownership point with outgoing section/dropout cuts.
+1220: 
+1221:     Default policy: the earliest incoming DROP that yields a valid 16-48 bar
+1222:     blend wins. This prevents a later drop from gaming the score while still
+1223:     allowing a second drop when the first would force an immediate bass swap
+1224:     (Fresh Mix T1).
+1225: 
+1226:     `allow_intro_phrase_swaps` adds interior intro phrase points as a RESCUE
+1227:     pass, tried only when no drop anchor yields a valid blend. That ordering is
+1228:     deliberate. Pooling intro and drop anchors together and ranking them was
+1229:     measured against the correction mix and moved T3 from bar 24 - which the
+1230:     default already gets right, matching Sam - to bar 16. Reproducing Sam's
+1231:     earlier T4/T5 swaps needs a selection rule that distinguishes "wait for the
+1232:     drop after a 24-bar intro" from "take the midpoint of a 32-bar intro", and
+1233:     two examples are not enough to fit one. Until then these anchors may only
+1234:     rescue a transition that would otherwise fail outright; they may never
+1235:     re-decide one the default already handles.
+1236:     """
+1237:     policy = policy or _DEFAULT_POLICY
+1238:     outgoing = _mix_cues(o)
+1239:     incoming = _mix_cues(i)
+1240:     window_start = o.n_bars - o.last_min_bars - HANDOFF_WINDOW_BARS
+1241:     drop_anchors = _incoming_drop_anchors(i)
+1242:     first_drop_bar = float(drop_anchors[0]) if drop_anchors else None
+1243:     chosen = None
+1244: 
+1245:     rescue_anchors = [
+1246:         bar for bar in _incoming_swap_anchors(i, policy)
+1247:         if bar not in set(drop_anchors)
+1248:     ]
+1249:     if CUE_CONFIG.matched_tail_head_swap:
+1250:         chosen = _search_matched_tail_head(
+1251:             o, i, outgoing, incoming, window_start, first_drop_bar, policy)
+1252:     if chosen is None:
+1253:         chosen = _search_anchors(
+1254:             drop_anchors, o, i, outgoing, incoming, window_start,
+1255:             first_drop_bar, policy, rank_all=False,
+1256:         )
+1257:     if chosen is None and rescue_anchors:
+1258:         chosen = _search_anchors(
+1259:             rescue_anchors, o, i, outgoing, incoming, window_start,
+1260:             first_drop_bar, policy, rank_all=True,
+1261:         )
+1262: 
+1263:     if chosen is None and CUE_CONFIG.tail_anchor_rescue:
+1264:         chosen = _search_tail_anchor_rescue(
+1265:             o, i, outgoing, incoming, window_start, first_drop_bar, policy)
+1266: 
+1267:     if chosen is None:
+1268:         raise ValueError(
+1269:             f"No paired section/dropout alignment for '{o.name}' -> '{i.name}' "
+1270:             f"inside the {PHRASE_GRID}-{beats_to_bars(policy.max_overlap_beats)} bar window"
+1271:         )
+1272: 
+1273:     # Two return shapes arrive here:
+1274:     #   (a) _search_anchors / _search_matched_tail_head:
+1275:     #         (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1276:     #          progress, pairs, weighted_score)
+1277:     #       â€” outgoing_cue is the existing cue dict (possibly synthesised
+1278:     #         by matched_tail_head into a local COPY, never the caller's).
+1279:     #   (b) _search_tail_anchor_rescue:
+1280:     #         (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1281:     #          progress, pairs, weighted_score, out_is_real_cue, in_is_real_cue)
+1282:     #       â€” the extra flags tell the caller the anchor provenance so the
+1283:     #         Alignment can be labelled honestly.
+1284:     # Unpack the common prefix; the rescue's extra trailing fields are read
+1285:     # back out of `chosen` below (length-checked) before being discarded.
+1286:     # _search_anchors and _search_matched_tail_head return 8-tuples; the rescue
+1287:     # returns a 10-tuple (8 common + 2 provenance booleans).
+1288:     rescue_tail = chosen[8:] if len(chosen) > 8 else None
+1289:     (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1290:      progress, pairs, weighted_score) = chosen[:8]
+1291:     if rescue_tail is None:
+1292:         return Alignment(
+1293:             out_name=o.name,
+1294:             in_name=i.name,
+1295:             handoff_bar_out=float(outgoing_anchor),
+1296:             handoff_kind=f"paired/{outgoing_cue['labels'][0]}->drop",
+1297:             anchor_bar_in=float(outgoing_anchor - arr_offset),
+1298:             arr_offset_bars=float(arr_offset),
+1299:             overlap_bars=float(overlap),
+1300:             score=len(pairs),
+1301:             alignment_policy="paired_landmarks_v2",
+1302:             paired_cues=pairs,
+1303:             swap_progress=progress,
+1304:             notes=[f"paired cue score {weighted_score}; swap {progress:.0%} through overlap"],
+1305:         )
+1306: 
+1307:     # Rescue path â€” build the honestly-labelled Alignment.
+1308:     out_is_real_cue, in_is_real_cue = rescue_tail
+1309:     out_label = (outgoing_cue["labels"][0]
+1310:                  if out_is_real_cue and outgoing_cue is not None
+1311:                  else "grid_tail")
+1312:     in_label = "drop" if in_is_real_cue else "grid_head"
+1313:     n_real_pairs = sum(
+1314:         1 for p in pairs
+1315:         if "outgoing_labels" in p and "incoming_labels" in p
+1316:     )
+1317:     out_kind = "detected cue" if out_is_real_cue else "grid-derived position (n_bars - 16)"
+1318:     in_kind = "detected cue (first_drop_bar)" if in_is_real_cue \
+1319:         else "grid-derived position (PHRASE_BACKSTEP_BARS fallback)"
+1320:     return Alignment(
+1321:         out_name=o.name,
+1322:         in_name=i.name,
+1323:         handoff_bar_out=float(outgoing_anchor),
+1324:         handoff_kind=f"rescue/{out_label}->{in_label}",
+1325:         anchor_bar_in=float(outgoing_anchor - arr_offset),
+1326:         arr_offset_bars=float(arr_offset),
+1327:         overlap_bars=float(overlap),
+1328:         score=len(pairs),
+1329:         alignment_policy="tail_anchor_rescue_v1",
+1330:         paired_cues=pairs,
+1331:         swap_progress=progress,
+1332:         notes=[
+1333:             f"tail-anchor rescue (Sam: run-back 16 from end, first drop in): "
+1334:             f"outgoing anchor is a {out_kind}, incoming anchor is a {in_kind}; "
+1335:             f"{n_real_pairs} REAL paired cue(s) coincided with the swap point "
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3_change.patch'; "'$s=Get-Content -LiteralPath $p; for($n=1;$n -le $s.Length;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py'; "'$s=Get-Content -LiteralPath $p; for($n=760;$n -le 802;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }; for($n=900;$n -le 960;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }; for($n=2630;$n -le 2665;$n++){ '"'{0,4}: {1}' -f "'$n,$s[$n-1] }' in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"def _search_anchors|def _search_matched_tail_head|def _search_tail_anchor_rescue|outgoing_anchor|o.n_bars|window_start\" 'Users\\Carillon\\AppData\\Local\\Temp\\wt\\r1r3\\Source\\align_engine.py' | Select-Object -First 85" in C:\Users\Carillon\AppData\Local\Temp\room\codex-20261005-115837-933262\files
+ succeeded in 272ms:
+   1: diff --git a/Source/align_engine.py b/Source/align_engine.py
+   2: index 47d5dee..7711d6d 100644
+   3: --- a/Source/align_engine.py
+   4: +++ b/Source/align_engine.py
+   5: @@ -793,6 +793,7 @@ class Alignment:
+   6:      # note-forwarding only matches notes containing "suppressed", which this
+   7:      # is not (found in D15's plan review; a dedicated field is unambiguous).
+   8:      outgoing_loop_abandoned: dict | None = None
+   9: +    outgoing_loop_not_needed: dict | None = None
+  10:  
+  11:  
+  12:  def report_landmark_candidates(
+  13: @@ -2272,6 +2273,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
+  14:      # currently share max_overlap_beats/max_landmark_overlap_beats/
+  15:      # max_loop_extension_beats/max_loop_repeats).
+  16:      policy = policy or _DEFAULT_POLICY
+  17: +    al.outgoing_loop_not_needed = None
+  18:      arr = al.arr_offset_bars
+  19:      specs = []
+  20:      landmark_mode = al.alignment_policy in LANDMARK_POLICIES
+  21: @@ -2405,15 +2407,27 @@ def plan_fill_or_cut(o, i, al, policy=None):
+  22:      target_name = ""
+  23:      section_targets = []
+  24:      landmark_targets = []
+  25: +    skip_outgoing_loop = False
+  26: +    outro = next((s for s in o.sections if s["label"] == "outro"), None)
+  27:      if landmark_mode:
+  28:          current_incoming_bar = o.n_bars - arr
+  29: -        section_targets = _outro_section_target_candidates(i, current_incoming_bar)
+  30: -        landmark_targets = _outro_landmark_target_candidates(i, current_incoming_bar)
+  31: +        if (policy.skip_outgoing_loop_when_on_section_line
+  32: +                and outro is not None and al.handoff_bar_out <= o.n_bars):
+  33: +            near_section = next((s for s in i.sections
+  34: +                                 if abs(float(s["start_bar"]) - current_incoming_bar) <= 2), None)
+  35: +            if near_section is not None:
+  36: +                skip_outgoing_loop = True
+  37: +                al.outgoing_loop_not_needed = {
+  38: +                    "reason": "natural end on section line",
+  39: +                    "section": near_section["name"],
+  40: +                }
+  41: +        if not skip_outgoing_loop:
+  42: +            section_targets = _outro_section_target_candidates(i, current_incoming_bar)
+  43: +            landmark_targets = _outro_landmark_target_candidates(i, current_incoming_bar)
+  44:          nxt = None
+  45:      else:
+  46:          nxt = next((arr + s["start_bar"] for s in i.sections
+  47:                      if (arr + s["start_bar"]) > o.n_bars + 1), None)
+  48: -    outro = next((s for s in o.sections if s["label"] == "outro"), None)
+  49:      chunk = None
+  50:      # Burn list D15/D2 (2026-09-22): the first candidate that would be VIABLE
+  51:      # (within loop_budget, reaches the locked swap) even if no clean loop-source
+  52: @@ -2428,13 +2442,18 @@ def plan_fill_or_cut(o, i, al, policy=None):
+  53:      candidate_nxt = None
+  54:      candidate_target_name = ""
+  55:      via_d2_fallback = False
+  56: -    if landmark_mode and outro is not None:
+  57: +    if landmark_mode and outro is not None and not skip_outgoing_loop:
+  58:          locked_swap_gap = max(
+  59:              0.0,
+  60:              float(al.handoff_bar_out) - float(outro["start_bar"]),
+  61:          )
+  62:          required_boundary_bars = int(round(locked_swap_gap))
+  63:          short_swap_candidate = None
+  64: +        capped_candidate = False
+  65: +        optional_reach = al.handoff_bar_out <= o.n_bars
+  66: +        reach_limit = (min(loop_budget, policy.max_outgoing_reach_bars)
+  67: +                       if optional_reach and policy.max_outgoing_reach_bars is not None
+  68: +                       else loop_budget)
+  69:          # `short_swap_candidate` and the eventual ValueError below stay scoped
+  70:          # across BOTH tiers (one shared `for` body, entered from two sorted
+  71:          # iterables) - splitting this into two independent loops each with
+  72: @@ -2445,7 +2464,9 @@ def plan_fill_or_cut(o, i, al, policy=None):
+  73:              for target_source_bar, candidate_name in tier:
+  74:                  candidate_nxt_here = arr + target_source_bar
+  75:                  candidate_gap = candidate_nxt_here - o.n_bars
+  76: -                if candidate_gap > loop_budget + 1e-6:
+  77: +                if candidate_gap > reach_limit + 1e-6:
+  78: +                    if candidate_gap <= loop_budget + 1e-6:
+  79: +                        capped_candidate = True
+  80:                      continue
+  81:                  if candidate_nxt is None and candidate_gap + 1e-6 >= locked_swap_gap:
+  82:                      candidate_nxt = candidate_nxt_here
+  83: @@ -2476,7 +2497,8 @@ def plan_fill_or_cut(o, i, al, policy=None):
+  84:                      break
+  85:              if chunk is not None:
+  86:                  break
+  87: -        if chunk is None and short_swap_candidate is not None:
+  88: +        if (chunk is None and short_swap_candidate is not None
+  89: +                and not (optional_reach and capped_candidate)):
+  90:              candidate_name, shortfall, repeats, chunk_length, required_repeats = (
+  91:                  short_swap_candidate
+  92:              )
+  93: @@ -2487,6 +2509,11 @@ def plan_fill_or_cut(o, i, al, policy=None):
+  94:                  f"{required_repeats} required), and no later named cue fits the "
+  95:                  f"{policy.max_loop_repeats}-repeat/{loop_budget:g}-bar safety limits"
+  96:              )
+  97: +        if capped_candidate and candidate_nxt is None and chunk is None:
+  98: +            al.outgoing_loop_not_needed = {
+  99: +                "reason": "outgoing reach exceeds cap",
+ 100: +                "max_reach_bars": policy.max_outgoing_reach_bars,
+ 101: +            }
+ 102:      if nxt is None and outro is not None and candidate_nxt is not None:
+ 103:          # D15/D2: a target WAS correctly identified but no candidate's clean-
+ 104:          # drum-window search succeeded anywhere - fall through to the SAME
+ 105: diff --git a/Source/automated_dj_mixes/transition_policy.py b/Source/automated_dj_mixes/transition_policy.py
+ 106: index 584b354..0a3fb80 100644
+ 107: --- a/Source/automated_dj_mixes/transition_policy.py
+ 108: +++ b/Source/automated_dj_mixes/transition_policy.py
+ 109: @@ -48,6 +48,9 @@ class TransitionPolicy:
+ 110:      max_loop_extension_beats: float
+ 111:      max_loop_repeats: int
+ 112:  
+ 113: +    skip_outgoing_loop_when_on_section_line: bool = False
+ 114: +    max_outgoing_reach_bars: float | None = None
+ 115: +
+ 116:      # Extended lane. None disables it outright; a value is only an upper bound -
+ 117:      # authorisation still requires the evidence contract to be satisfied and
+ 118:      # independently revalidated. A policy string alone must never unlock it.
+ 119: @@ -132,6 +135,8 @@ INTERIM_V1 = TransitionPolicy(
+ 120:      max_landmark_overlap_beats=256.0,  # 64 bars, only with a named-cue extension
+ 121:      max_loop_extension_beats=128.0,  # 32 bars
+ 122:      max_loop_repeats=8,
+ 123: +    skip_outgoing_loop_when_on_section_line=True,
+ 124: +    max_outgoing_reach_bars=12.0,
+ 125:      max_extended_overlap_beats=None,  # extended lane unavailable
+ 126:  )
+ 127:  
+ 128: diff --git a/Source/propose_arrangement.py b/Source/propose_arrangement.py
+ 129: index 7510663..d91b68c 100644
+ 130: --- a/Source/propose_arrangement.py
+ 131: +++ b/Source/propose_arrangement.py
+ 132: @@ -2268,6 +2268,8 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
+ 133:              # meaning "no loop was needed" (see Alignment.outgoing_loop_
+ 134:              # abandoned's own docstring for why this is a dedicated field).
+ 135:              t["outgoing_loop_abandoned"] = al.outgoing_loop_abandoned
+ 136: +            if al.outgoing_loop_not_needed is not None:
+ 137: +                t["outgoing_loop_not_needed"] = al.outgoing_loop_not_needed
+ 138:              t["landmark_policy"] = _landmark_policy_label(al.alignment_policy)
+ 139:              # Burn list C9 (2026-09-15): this report used to compute
+ 140:              # selected_style from overlap length alone, a second, unpatched
+ 141: diff --git a/Tests/test_arrangement_safety.py b/Tests/test_arrangement_safety.py
+ 142: index 65c159e..5ad65d2 100644
+ 143: --- a/Tests/test_arrangement_safety.py
+ 144: +++ b/Tests/test_arrangement_safety.py
+ 145: @@ -97,6 +97,16 @@ def test_landmark_alignment_preserves_odd_bar_section_pairing():
+ 146:      assert alignment.swap_progress == pytest.approx(8 / 27)
+ 147:  
+ 148:  
+ 149: +def _pre_simplify_policy():
+ 150: +    """INTERIM_V1 with the 2026-10-05 R1/R3 loop simplification off, so tests
+ 151: +    that pin the older D15 loop-targeting geometry keep testing exactly that."""
+ 152: +    import dataclasses
+ 153: +    from automated_dj_mixes.transition_policy import INTERIM_V1
+ 154: +    return dataclasses.replace(
+ 155: +        INTERIM_V1, skip_outgoing_loop_when_on_section_line=False,
+ 156: +        max_outgoing_reach_bars=None)
+ 157: +
+ 158: +
+ 159:  def test_landmark_loop_reaches_named_cue_without_random_intro_loop():
+ 160:      from align_engine import Alignment, plan_fill_or_cut
+ 161:  
+ 162: @@ -129,7 +139,7 @@ def test_landmark_loop_reaches_named_cue_without_random_intro_loop():
+ 163:          176.0, 37.0, 3, alignment_policy="paired_landmarks_v2",
+ 164:      )
+ 165:  
+ 166: -    specs = plan_fill_or_cut(outgoing, incoming, alignment)
+ 167: +    specs = plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
+ 168:  
+ 169:      assert not any(spec.kind == "incoming_intro" for spec in specs)
+ 170:      tail = next(spec for spec in specs if spec.kind == "outgoing_tail")
+ 171: @@ -170,7 +180,7 @@ def test_landmark_tail_loop_fails_when_repeat_cap_stops_before_swap():
+ 172:      )
+ 173:  
+ 174:      with pytest.raises(ValueError, match=r"6 bars before locked swap.*11 required"):
+ 175: -        plan_fill_or_cut(outgoing, incoming, alignment)
+ 176: +        plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
+ 177:  
+ 178:  
+ 179:  def test_landmark_tail_loop_skips_near_cue_that_ends_before_swap():
+ 180: @@ -200,7 +210,7 @@ def test_landmark_tail_loop_skips_near_cue_that_ends_before_swap():
+ 181:      )
+ 182:  
+ 183:      tail = next(
+ 184: -        spec for spec in plan_fill_or_cut(outgoing, incoming, alignment)
+ 185: +        spec for spec in plan_fill_or_cut(outgoing, incoming, alignment, _pre_simplify_policy())
+ 186:          if spec.kind == "outgoing_tail"
+ 187:      )
+ 188:      extension = (
+ 189: diff --git a/Tests/test_outro_loop_simplify.py b/Tests/test_outro_loop_simplify.py
+ 190: new file mode 100644
+ 191: index 0000000..a3685f6
+ 192: --- /dev/null
+ 193: +++ b/Tests/test_outro_loop_simplify.py
+ 194: @@ -0,0 +1,99 @@
+ 195: +"""R1/R3 outgoing-tail policy checks around a locked swap."""
+ 196: +
+ 197: +import sys
+ 198: +from dataclasses import asdict, replace
+ 199: +from pathlib import Path
+ 200: +
+ 201: +ROOT = Path(__file__).resolve().parent.parent
+ 202: +sys.path.insert(0, str(ROOT / "Source"))
+ 203: +
+ 204: +import align_engine as ae
+ 205: +from automated_dj_mixes.transition_policy import INTERIM_V1
+ 206: +
+ 207: +
+ 208: +def _pair(section_bars, *, swap=100.0):
+ 209: +    outgoing = ae.Track(
+ 210: +        name="out", bpm=128.0, spb=4 * 60.0 / 128.0, downbeat=0.0,
+ 211: +        n_bars=110.0,
+ 212: +        sections=[
+ 213: +            {"name": "drop_1", "label": "drop", "start_bar": 0.0, "end_bar": 100.0},
+ 214: +            {"name": "outro_1", "label": "outro", "start_bar": 100.0, "end_bar": 110.0},
+ 215: +        ],
+ 216: +        bass_in_bar=0.0, bass_out_bar=100.0, last_min_bars=64,
+ 217: +        loop_windows=[(100.0, 110.0)],
+ 218: +    )
+ 219: +    incoming = ae.Track(
+ 220: +        name="in", bpm=128.0, spb=4 * 60.0 / 128.0, downbeat=0.0,
+ 221: +        n_bars=80.0,
+ 222: +        sections=[{"name": f"break_{n}", "label": "break",
+ 223: +                   "start_bar": float(bar), "end_bar": float(bar) + 4.0}
+ 224: +                  for n, bar in enumerate(section_bars, 1)],
+ 225: +        bass_in_bar=0.0, bass_out_bar=72.0, last_min_bars=64,
+ 226: +    )
+ 227: +    alignment = ae.Alignment(
+ 228: +        "out", "in", swap, "outro_start", 0.0, 90.0, 40.0, 0,
+ 229: +        swap_beats=swap * 4, alignment_policy="paired_landmarks_v2",
+ 230: +    )
+ 231: +    return outgoing, incoming, alignment
+ 232: +
+ 233: +
+ 234: +def _tail(specs):
+ 235: +    return next((s for s in specs if s.kind == "outgoing_tail"), None)
+ 236: +
+ 237: +
+ 238: +def test_r1_skips_natural_end_on_section_line(monkeypatch):
+ 239: +    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+ 240: +                        lambda *args, **kwargs: (100.0, 105.0))
+ 241: +    for section_bar in (18.0, 20.0, 22.0):
+ 242: +        outgoing, incoming, alignment = _pair((section_bar, 35.0))
+ 243: +        assert _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment)) is None
+ 244: +        assert alignment.outgoing_loop_not_needed == {
+ 245: +            "reason": "natural end on section line", "section": "break_1"}
+ 246: +        assert alignment.outgoing_loop_abandoned is None
+ 247: +
+ 248: +
+ 249: +def test_r1_does_not_skip_when_swap_needs_loop(monkeypatch):
+ 250: +    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+ 251: +                        lambda *args, **kwargs: (100.0, 104.0))
+ 252: +    outgoing, incoming, alignment = _pair((20.0, 32.0), swap=111.0)
+ 253: +    tail = _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment))
+ 254: +    assert tail is not None
+ 255: +    assert tail.target_marker_name == "section:break_2"
+ 256: +    assert alignment.outgoing_loop_not_needed is None
+ 257: +
+ 258: +
+ 259: +def test_r3_caps_optional_15_bars_but_keeps_10(monkeypatch):
+ 260: +    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+ 261: +                        lambda *args, **kwargs: (100.0, 105.0))
+ 262: +    for section_bar, expected in ((35.0, None), (30.0, "section:break_1")):
+ 263: +        outgoing, incoming, alignment = _pair((section_bar,))
+ 264: +        tail = _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment))
+ 265: +        assert (tail.target_marker_name if tail else None) == expected
+ 266: +
+ 267: +
+ 268: +def test_r3_cap_cannot_create_short_swap_value_error(monkeypatch):
+ 269: +    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+ 270: +                        lambda *args, **kwargs: (100.0, 105.0))
+ 271: +    outgoing, incoming, alignment = _pair((25.0, 35.0), swap=110.0)
+ 272: +    old_policy = replace(INTERIM_V1, max_outgoing_reach_bars=None)
+ 273: +    assert _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment,
+ 274: +                                     policy=old_policy)) is not None
+ 275: +    outgoing, incoming, alignment = _pair((25.0, 35.0), swap=110.0)
+ 276: +    assert _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment)) is None
+ 277: +
+ 278: +
+ 279: +def test_flags_off_preserve_old_decision(monkeypatch):
+ 280: +    monkeypatch.setattr(ae, "pick_cue_bounded_drum_loop",
+ 281: +                        lambda *args, **kwargs: (100.0, 105.0))
+ 282: +    old_policy = replace(INTERIM_V1,
+ 283: +                         skip_outgoing_loop_when_on_section_line=False,
+ 284: +                         max_outgoing_reach_bars=None)
+ 285: +    outgoing, incoming, alignment = _pair((20.0, 35.0))
+ 286: +    tail = _tail(ae.plan_fill_or_cut(outgoing, incoming, alignment,
+ 287: +                                     policy=old_policy))
+ 288: +    assert asdict(tail) == asdict(ae.FillCutSpec(
+ 289: +        kind="outgoing_tail", reps=3, source_start_bar=100.0,
+ 290: +        source_end_bar=105.0, target_marker_bar=125.0,
+ 291: +        target_marker_name="section:break_2",
+ 292: +        note="loop outro 5bx3+0b to section:break_2 125"))
+ 293: +    assert alignment.outgoing_loop_not_needed is None
+ 294: diff --git a/Tools/d15_outro_loop_replay.py b/Tools/d15_outro_loop_replay.py
+ 295: index 3648e66..dcdd10a 100644
+ 296: --- a/Tools/d15_outro_loop_replay.py
+ 297: +++ b/Tools/d15_outro_loop_replay.py
+ 298: @@ -50,6 +50,8 @@ def _outro_loop_record(AE, o, i, al):
+ 299:      tail = next((s for s in specs if s.kind == "outgoing_tail"), None)
+ 300:      if tail is None:
+ 301:          rec.update({"status": "ok", "loop_source": "none"})
+ 302: +        if al.outgoing_loop_not_needed is not None:
+ 303: +            rec["outgoing_loop_not_needed"] = al.outgoing_loop_not_needed
+ 304:          return rec
+ 305:      rec.update({
+ 306:          "status": "ok",
+ 307: @@ -99,7 +101,7 @@ def diff(before_path: Path, after_path: Path) -> int:
+ 308:      for key, b in before.items():
+ 309:          a = after[key]
+ 310:          fields = ("status", "loop_source", "target_marker_name", "reps",
+ 311: -                   "partial_bars", "error")
+ 312: +                   "partial_bars", "error", "outgoing_loop_not_needed")
+ 313:          if any(b.get(f) != a.get(f) for f in fields):
+ 314:              changed.append((key, b, a))
+ 315:  
+ 316: @@ -119,7 +121,8 @@ def diff(before_path: Path, after_path: Path) -> int:
+ 317:                    f"status={b.get('status')}")
+ 318:              print(f"    after:  loop_source={a.get('loop_source')} "
+ 319:                    f"target={a.get('target_marker_name')} reps={a.get('reps')} "
+ 320: -                  f"status={a.get('status')}")
+ 321: +                  f"status={a.get('status')} "
+ 322: +                  f"reason={a.get('outgoing_loop_not_needed')}")
+ 323:          print()
+ 324:      return 0
+ 325:  
+
+ succeeded in 258ms:
+ 760:     notes: list = field(default_factory=list)
+ 761:     landmark_candidates: list = field(default_factory=list)
+ 762:     alignment_policy: str = "legacy_v1"
+ 763:     paired_cues: list = field(default_factory=list)
+ 764:     swap_progress: float | None = None
+ 765:     # Does the outgoing still have real content to fade across after the
+ 766:     # swap, or does it genuinely end here (a "cold ending")? Computed once
+ 767:     # by compute_aligned_positions via _outgoing_has_post_swap_content and
+ 768:     # carried through the arrangement report so apply_automation's margin
+ 769:     # check can tell the two cases apart instead of using overlap length
+ 770:     # alone. Defaults True (the old, stricter behaviour) so an Alignment
+ 771:     # built without going through compute_aligned_positions - direct
+ 772:     # align_pair() calls in tests, mainly - is unaffected.
+ 773:     outgoing_has_post_swap_content: bool = True
+ 774:     # Both tracks' vocal_regions, converted to arrangement-beats, NOT yet
+ 775:     # filtered against the final (post-loop) overlap window - burn list
+ 776:     # D6, same two-step pattern as landmark_candidates: computed once here
+ 777:     # (compute_aligned_positions has the Track objects that carry
+ 778:     # vocal_regions; propose_arrangement.py's OverlapAnalysis layer only
+ 779:     # has TrackInfo, which does not), finalized into OverlapAnalysis.
+ 780:     # vocal_clash_ranges once loops have settled the real overlap window.
+ 781:     # {"outgoing": [(start_beat, end_beat), ...], "incoming": [...]}.
+ 782:     # Report-only - never gates or rejects anything.
+ 783:     vocal_regions_arrangement: dict = field(
+ 784:         default_factory=lambda: {"outgoing": [], "incoming": []})
+ 785:     # Burn list D15/D2b (2026-09-22): set by plan_fill_or_cut when a named
+ 786:     # outgoing-outro-loop target WAS correctly identified (within loop_budget,
+ 787:     # reaches the locked swap) but no candidate's own audio ever passed the
+ 788:     # loop-quality gate, so no `outgoing_tail` FillCutSpec was produced. Without
+ 789:     # this, `loop_source: none` in the report is indistinguishable from "no
+ 790:     # loop was needed" - the exact ambiguity that let the original bug read as
+ 791:     # correct for months. {"target": str, "reason": str} | None. Deliberately
+ 792:     # NOT routed through `al.notes` - propose_arrangement.py's existing
+ 793:     # note-forwarding only matches notes containing "suppressed", which this
+ 794:     # is not (found in D15's plan review; a dedicated field is unambiguous).
+ 795:     outgoing_loop_abandoned: dict | None = None
+ 796:     outgoing_loop_not_needed: dict | None = None
+ 797: 
+ 798: 
+ 799: def report_landmark_candidates(
+ 800:     outgoing: Track,
+ 801:     incoming: Track,
+ 802:     alignment: Alignment,
+ 900:     own field comment); landmark_candidates' start_beat/end_beat are
+ 901:     already in beats, so this is bar*4.0, not a straight add.
+ 902:     """
+ 903:     result: dict = {"outgoing": [], "incoming": []}
+ 904:     for role, track, track_start in (
+ 905:         ("outgoing", outgoing, outgoing_start_beat),
+ 906:         ("incoming", incoming, incoming_start_beat),
+ 907:     ):
+ 908:         for start_bar, end_bar in track.vocal_regions:
+ 909:             absolute_start = track_start + float(start_bar) * 4.0
+ 910:             absolute_end = track_start + float(end_bar) * 4.0
+ 911:             result[role].append((round(absolute_start, 3), round(absolute_end, 3)))
+ 912:     return result
+ 913: 
+ 914: 
+ 915: #: Hard floor for _outgoing_has_post_swap_content's "genuinely nothing left"
+ 916: #: read - matches the existing QUICK_SWAP margin, so a swap that clears this
+ 917: #: floor can already produce a valid (if abrupt) handoff (Rule 1's own
+ 918: #: boundary-margin test already pins that anything tighter is a hard error).
+ 919: MIN_REMAINING_CONTENT_BARS = 1.0
+ 920: 
+ 921: 
+ 922: def _outgoing_has_post_swap_content(o: Track, swap_bar: float,
+ 923:                                     effective_end: float | None = None) -> bool:
+ 924:     """True iff the outgoing still has real content to fade across after
+ 925:     *swap_bar* (the outgoing's OWN native bar the handoff lands on) - false
+ 926:     means this is a genuine cold ending, not a defect to correct.
+ 927: 
+ 928:     Sam, 2026-09-12 (correcting apply_automation's fixed margin rule):
+ 929:     "sometimes the outgoing track can run all the way up to the drop of the
+ 930:     next track... so it could plausibly happen within [a few bars] of the
+ 931:     end of the track" - a swap sitting close to the overlap's end is not
+ 932:     automatically wrong; it depends on whether the outgoing actually has
+ 933:     anything left to give at that point.
+ 934: 
+ 935:     Distance to *effective_end* (defaults to the track's own real end,
+ 936:     `n_bars`) alone: regardless of what's still playing, there's no time
+ 937:     left to fade through once the swap is within MIN_REMAINING_CONTENT_BARS
+ 938:     of it. Pass an explicit `effective_end` when an outgoing-tail loop has
+ 939:     extended playback past the native end (see the compute_aligned_positions
+ 940:     call site, which does this AFTER plan_fill_or_cut runs) - a loop only
+ 941:     ever adds content, so the caller should never pass something SMALLER
+ 942:     than `o.n_bars` here.
+ 943: 
+ 944:     `bass_out_is_end` was tried and DROPPED as a second signal (Codex
+ 945:     review, 2026-09-13): it only means the bass specifically never returns
+ 946:     before the file ends, not that every stem has - Christoph, The Rise
+ 947:     (n_bars=256, bass-out~253, drums-only outro through 256) has 3 real
+ 948:     bars of percussion after its bass-out point, which the bass signal
+ 949:     alone would have misread as a cold ending. Bass ownership is not
+ 950:     sufficient evidence of "nothing left" - only actual distance to the
+ 951:     track's end is checked now.
+ 952:     """
+ 953:     end = o.n_bars if effective_end is None else effective_end
+ 954:     return (end - swap_bar) > MIN_REMAINING_CONTENT_BARS
+ 955: 
+ 956: 
+ 957: def _handoff_candidates(o: Track) -> list[tuple[float, str, str]]:
+ 958:     """EVERY section boundary in the outgoing's last-minute window. The bass
+ 959:     switch can be faked at ANY natural marker (Sam: drop the outgoing's bass
+ 960:     whenever you like, as long as it's on a natural marker), so the switch point
+2630: 
+2631:     # Burn list D15/D2b (2026-09-22): a target WAS identified (candidate_nxt)
+2632:     # but no `outgoing_tail` spec ever got produced for it - the last-resort
+2633:     # fallback above either never found usable audio, or `gap < 2` skipped it
+2634:     # entirely. Record WHY on the Alignment itself (see its own docstring for
+2635:     # why this is a dedicated field and not routed through `al.notes`), so
+2636:     # `loop_source: none` in the report stops being indistinguishable from
+2637:     # "no loop was needed" - the exact ambiguity that hid the original D15 bug.
+2638:     if candidate_nxt is not None and not any(s.kind == "outgoing_tail" for s in specs):
+2639:         al.outgoing_loop_abandoned = {
+2640:             "target": candidate_target_name,
+2641:             "reason": "target identified but no loop-source passed the quality checks",
+2642:         }
+2643: 
+2644:     # (4) NO BREAK-TO-BREAK (mix choice, soft / swappable).
+2645:     bspec = _resolve_break_to_break(o, i, al)
+2646:     if bspec is not None:
+2647:         specs.append(bspec)
+2648: 
+2649:     return specs
+2650: 
+2651: 
+2652: # â”€â”€ Decisions: an arrangement dictated per transition â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+2653: #
+2654: # Claude-arranged mode (Sam, 2026-09-15: "re-run this one in Claude-arranged
+2655: # mode"). Instead of the anchor search, each transition is DECIDED from the
+2656: # evidence - where the incoming enters on the outgoing's own bars, how much of
+2657: # its intro plays, which incoming bar takes the bass, what the outgoing's tail
+2658: # does - and the pipeline executes it through the same Alignment / FillCutSpec
+2659: # path as any other policy, so the report, MixPlan, loops, automation and
+2660: # every gate are unchanged. A decision is a dict:
+2661: #   pair_index, out_track, in_track           (names are checked, not trusted)
+2662: #   entry_out_bar    outgoing source bar where the incoming's first kept clip starts
+2663: #   intro_trim_bars  bars cut from the front of the incoming (0 = whole intro)
+2664: #   swap_in_bar      incoming source bar that takes the bass
+2665: #   tail_loop        {source_start_bar, source_end_bar, reps, partial_bars, target}  (optional)
+
+ succeeded in 267ms:
+942:    than `o.n_bars` here.
+953:    end = o.n_bars if effective_end is None else effective_end
+963:    window_start = o.n_bars - o.last_min_bars - HANDOFF_WINDOW_BARS
+967:        if window_start <= bar <= o.n_bars:
+972:    if o.bass_out_bar is not None and not o.bass_out_is_end and window_start <= o.bass_out_bar <= o.n_bars:
+1240:    window_start = o.n_bars - o.last_min_bars - HANDOFF_WINDOW_BARS
+1251:            o, i, outgoing, incoming, window_start, first_drop_bar, policy)
+1254:            drop_anchors, o, i, outgoing, incoming, window_start,
+1259:            rescue_anchors, o, i, outgoing, incoming, window_start,
+1265:            o, i, outgoing, incoming, window_start, first_drop_bar, policy)
+1275:    #         (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1280:    #         (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1289:    (_rank, arr_offset, overlap, outgoing_anchor, outgoing_cue,
+1295:            handoff_bar_out=float(outgoing_anchor),
+1297:            anchor_bar_in=float(outgoing_anchor - arr_offset),
+1323:        handoff_bar_out=float(outgoing_anchor),
+1325:        anchor_bar_in=float(outgoing_anchor - arr_offset),
+1342:def _search_matched_tail_head(o, i, outgoing, incoming, window_start,
+1378:    out_pt = int(round(o.n_bars - PHRASE_BACKSTEP_BARS))
+1380:    if out_pt < window_start or out_pt <= 0 or in_pt <= 0:
+1384:    overlap = o.n_bars - arr_offset
+1394:    out_anchor = _nearest_cue(outgoing, out_pt, window_start, o.n_bars)
+1398:    overlap = o.n_bars - arr_offset
+1439:def _search_tail_anchor_rescue(o, i, outgoing, incoming, window_start,
+1477:    out_pt_raw = int(round(o.n_bars - PHRASE_BACKSTEP_BARS))
+1478:    if out_pt_raw < window_start or out_pt_raw <= 0:
+1483:    out_anchor = _nearest_cue(outgoing, out_pt_raw, window_start, o.n_bars)
+1498:    overlap = o.n_bars - arr_offset
+1551:def _search_anchors(anchor_bars, o, i, outgoing, incoming, window_start,
+1564:        for outgoing_anchor, outgoing_cue in outgoing.items():
+1565:            if outgoing_anchor < window_start:
+1567:            arr_offset = outgoing_anchor - incoming_anchor
+1568:            overlap = o.n_bars - arr_offset
+1592:            exit_paired = (o.n_bars - arr_offset) in incoming
+1614:            # Ranks an already-admissible cue only -- outgoing_anchor must
+1621:                    and outgoing_anchor == round(float(o.bass_out_bar))):
+1632:            candidates.append((rank, arr_offset, overlap, outgoing_anchor,
+1672:            overlap = o.n_bars - arr_offset
+1694:        min_offset = math.ceil(max(0.0, o.n_bars - MAX_OVERLAP_BARS) / SNAP_BARS) * SNAP_BARS
+1695:        max_offset = math.floor((o.n_bars - PHRASE_GRID) / SNAP_BARS) * SNAP_BARS
+1703:        overlap = o.n_bars - arr_offset
+1725:    x_end = max(o.n_bars, off + i.n_bars)
+1760:            x0 = outro["start_bar"] if outro else o.n_bars
+1772:    ax.axvspan(off, o.n_bars, color="#999", alpha=0.10, zorder=0)
+1774:    ax.axvline(o.n_bars - o.last_min_bars, color="#d6006d", lw=1.0, ls=":", alpha=0.7)
+2413:        current_incoming_bar = o.n_bars - arr
+2415:                and outro is not None and al.handoff_bar_out <= o.n_bars):
+2430:                    if (arr + s["start_bar"]) > o.n_bars + 1), None)
+2453:        optional_reach = al.handoff_bar_out <= o.n_bars
+2466:                candidate_gap = candidate_nxt_here - o.n_bars
+2542:        gap = nxt - o.n_bars                                   # exact bars to the marker
+2563:                e = min(outro["start_bar"] + pref, o.n_bars)
+2752:    if handoff_out > o.n_bars + 1e-6:
+2755:            f"bar {handoff_out:g}, after '{o.name}' ends at bar {o.n_bars}")
+2756:    overlap = float(o.n_bars) - arr_offset
+2760:            f"(entry {entry_out:g} on a {o.n_bars}-bar track)")
+2814:        if s1 > o.n_bars + 1e-6:
+2817:                f"'{o.name}' end at bar {o.n_bars}")
+2821:            partial_bars=partial, target_marker_bar=float(o.n_bars) + ext,
+2935:            max(o.n_bars, float(outgoing_tail.target_marker_bar))
+
+ERROR: Selected model is at capacity. Please try a different model.
+ERROR: Selected model is at capacity. Please try a different model.
+tokens used
+55,159
