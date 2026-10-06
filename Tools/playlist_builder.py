@@ -62,11 +62,12 @@ def fetch(a):
 
 def year(r): return int(r['release_date'][:4]) if r.get('release_date') else None
 
-def title_stem(r): return re.sub(r'[^a-z0-9]+', ' ', re.sub(r'\(.*?\)|\[.*?\]', '', r['title']).lower()).strip()
+def norm(x): return re.sub(r'[^a-z0-9]+', ' ', (x or '').lower()).strip()
 
 def song_keys(r):
-    """Many credit rows are one song (versions, misspelt artists). Same title stem OR same stream count = same song."""
-    return {'t:' + title_stem(r), 's:' + str(r['streams_plays'])}
+    """One key per VERSION. A remix and an original are different tracks with their own streams (Sam, 2026-10-06), so the key is
+    title + remixer + mix name; never the bare song title and never the stream count. Only repeat rows of the SAME version collapse."""
+    return {'v:' + norm(r['title']) + '|' + norm(r.get('remixer')) + '|' + norm(r.get('mix_name'))}
 
 NOT_A_PLAYLIST_TRACK = re.compile(r'acap|instrumental|instrumenatal|\bdub\b|from stems|radio edit|apella|dj tool', re.I)
 
@@ -115,7 +116,7 @@ def build(rows, a):
 
 def report(picked, a):
     print(f"# Playlist draft: arc={a.arc} preset={a.preset} n={len(picked)}  (source: Neon credits ledger)\n")
-    print("Genre is a DB DRAFT tag; streams belong to the SONG, not necessarily the version Sam worked on - check version before use.\n")
+    print("Each row is one VERSION with its own streams (a remix and an original are different tracks). Genre is a DB DRAFT tag.\n")
     for i, r in enumerate(picked, 1):
         ver = r.get('mix_name') or (f"{r['remixer']} remix" if r.get('remixer') else 'original/unspecified')
         print(f"{i:>2}. [{r['heat']}] {r['artist']} - {r['title']}  ({ver}) | {r['label']} {year(r) or '?'} | {r['genre']} | "
