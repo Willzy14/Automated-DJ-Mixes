@@ -221,7 +221,24 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-10-05 (Latest Session) - loop simplification merged, four mixes built, hand corrections learned, D16-D22 worked and logged
+### 2026-10-06 (Latest Session) - Neon-only playlist builder, Defected tweaks learned, DFTD Tech House built
+**Brain:** Claude
+**Focus:** Sam: mixes must be chosen from the Neon credits ledger with a genre story arc; learn from his Defected tweaks; build a DFTD tech house mix.
+
+**Completed**:
+- `Tools/playlist_builder.py`: read-only Neon query (new role `mix_planner_ro`, SELECT on `credits` + `credits_page`, URL in the GitHub-folder `Credentials/Credentials.txt`), label/artist/year/streams/heat filters, genre-heat arcs (rise/wave/flat), hits/cool/cult presets, per-VERSION dedupe, acapella/dub filter. Commits `a9c806d`, `3b2e347`; `--heat-min/--heat-max` added after (uncommitted at wrap-up, committed in the session-end commit).
+- Learned Sam's tweaks to 05.10.26 Defected Selection: 11 entries in `pair_history.jsonl` (T12 Vente->Rushing left out: Sam dropped Rushing), note `Documentation/Mix Patterns Library/05.10.26 Defected Selection Sam Tweaks.md`. His bounce kept crashing at file close: the render finished (identical valid `AbletonTmp-*` files), the export brace was 4.8 min past the last clip. Trimmed copy made outside Dropbox; render check on it: FAIL only for the silent tail, real WARNs = 7.1 dB sub/bass dip at Back Tomorrow->Deeper (~38:40), 2.6 dB at Selace->Love Regenerator.
+- Built `Test Project/06.10.26 DFTD Tech House` (10 tracks, gitignored) end to end with `/mix`: all gates pass (grids, validate_als x4, hint/section 35 checks, MixPlan 73 checks). Output `Output/Sections V4.als`, review `Output/Visualisations/REVIEW_V4.md`. Waiting on Sam's bounce and listen.
+- Global rule added to CLAUDE.md + AGENTS.md: a remix and an original are different tracks (own streams, rights, credit row); Sam never makes remixes.
+
+**Key Learnings**:
+- Never merge versions (by title or stream count); identify a track by artist + title + remixer/mix name.
+- `Tools/resolve_masters.py` can return the WRONG track from a multi-track EP folder (Better When -> Change The Situation, Ghetto -> Let The Beat Talk), and its `must` hint only matches the folder name. Select by exact filename (see the session's inline selection script, not yet saved as a tool).
+- Hard hint/section gate: the auto-derived hints were wrong on 3 tracks (Call 911, Ashibah, Passion); the section chop was wrong on PAX (intro 4 bars, kick enters bar 16). Read the DETECT picture to decide which side is wrong.
+- `apply_section_corrections.py --corrections-json` is the way to patch a chop (arr_offset from the Phase 1a `@ arr-beat` line).
+- The learner handles a track-count change (12 vs 13); `analyze_correction_diff.py` does not.
+
+### 2026-10-05 - loop simplification merged, four mixes built, hand corrections learned, D16-D22 worked and logged
 **Brain:** Claude (Sonnet 5.5 orchestrating; Opus subagents for analysis/review; Codex built R1+R3 and exited early on a 503; MiniMax reviewed three items then hit its token plan; one Sonnet reviewer)
 **Focus:** Sam's feedback that loops were over-used where a section line already exists, then a run of real mixes.
 

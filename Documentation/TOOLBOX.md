@@ -4,6 +4,9 @@ Module reference for all pipeline components.
 
 ## Modules
 
+### `Tools/playlist_builder.py` (2026-10-06, Claude)
+Builds a mix playlist from the Neon credits ledger via the read-only role `mix_planner_ro` (URL: `MIX_PLANNER_RO_DATABASE_URL` in the GitHub-folder `Credentials/Credentials.txt`; or `--rows file.json` offline). `sql` prints the SELECT; `build` filters by label/artist/year/streams/heat, orders by a genre-heat arc (`rise|wave|flat`), presets `hits|cool|cult|any`, one row per VERSION, drops acapella/dub/instrumental/radio edits. Genre tags are drafts. Not yet hooked to `resolve_masters.py`; no tests.
+
 ### Mix prep tools (2026-10-05, Claude)
 - `Tools/build_folder_index.py` -> `Tools/folder_index.json` (gitignored): every project folder under the work folders + STUDIO-2 backup drives G:/F:.
 - `Tools/resolve_masters.py`: best master WAV for an artist/title (prefers Extended/Original, newest SW V/AMENDED, never acapella/instrumental/dub). Copy with `shutil.copyfile`.

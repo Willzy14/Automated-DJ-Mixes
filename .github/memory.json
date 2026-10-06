@@ -820,7 +820,17 @@
         "D21 stem-grid non-determinism",
         "clean Git (card on Master Board); burn-list branch already merged to main ab6f631"
       ]
+    },
+    {
+      "date": "2026-10-06",
+      "brain": "Claude",
+      "summary": "Neon-only playlist builder (read-only role mix_planner_ro); learned Sam's Defected tweaks (11 pair_history entries); diagnosed his bounce crash (export brace 4.8 min past last clip); global rule remix != original in CLAUDE.md/AGENTS.md; built 06.10.26 DFTD Tech House (10 tracks) through /mix, all gates pass.",
+      "pending": [
+        "Sam bounces + listens to DFTD Tech House V4 and the Defected selection; learn from his tweaks",
+        "resolve_masters.py picks wrong EP tracks / must-hint folder-only: fix and save the exact-filename selector",
+        "playlist_builder: hook to resolve_masters, tests, tune cool/cult presets, Sam's call on afro/indie dip"
+      ]
     }
   ],
-  "last_modified": "2026-10-05"
+  "last_modified": "2026-10-06"
 }

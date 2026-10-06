@@ -76,7 +76,7 @@ def prepare(rows, a):
     for r in rows:
         if NOT_A_PLAYLIST_TRACK.search(' '.join(str(r.get(k) or '') for k in ('title', 'mix_name', 'genre'))): continue
         h = HEAT.get(r.get('genre'))
-        if h is None: continue                                            # unknown/odd genre: never guess
+        if h is None or not a.heat_min <= h <= a.heat_max: continue                                            # unknown/odd genre: never guess
         if r.get('bpm') and not TEMPO_BAND[0] <= r['bpm'] <= TEMPO_BAND[1]: continue
         if a.year_from and (not year(r) or year(r) < a.year_from): continue
         if a.year_to and (not year(r) or year(r) > a.year_to): continue
@@ -131,6 +131,7 @@ def main():
     ap.add_argument('--year-from', type=int); ap.add_argument('--year-to', type=int); ap.add_argument('--min-streams', type=int)
     ap.add_argument('--arc', choices=list(ARCS), default='rise'); ap.add_argument('--preset', choices=['hits', 'cool', 'cult', 'any'], default='any')
     ap.add_argument('--n', type=int, default=12); ap.add_argument('--max-per-artist', type=int, default=1)
+    ap.add_argument('--heat-min', type=int, default=0); ap.add_argument('--heat-max', type=int, default=10)
     ap.add_argument('--rows')
     a = ap.parse_args()
     if a.cmd == 'sql': print(SELECT.format(where=where_clause(a))); return
