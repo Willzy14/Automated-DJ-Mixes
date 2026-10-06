@@ -1,0 +1,284 @@
+{
+  "meta": {
+    "render": "C:\\Temp\\Defected\\Sections V4 Sam Tweaks.wav",
+    "sr": 44100.0,
+    "channels": 2,
+    "frames": 173268900,
+    "duration_sec": 3929.0,
+    "bpm": 123.069878,
+    "tempo_map": {
+      "n_points": 25,
+      "min": 123.069878,
+      "max": 127.758705,
+      "is_flat": false
+    },
+    "hop_sec": 0.1,
+    "hop_samples": 4410,
+    "block_samples": 441000,
+    "clip_count": 149,
+    "integrated_lufs": -17.218630662220814,
+    "verdict": "FAIL",
+    "v_suffix": "V4",
+    "arr_start_sec": 0.0,
+    "arr_end_sec": 3929.1999517767654,
+    "n_boundaries": 159,
+    "als_path": "Test Project\\05.10.26 Defected Selection\\Output\\Sections V4 Sam Tweaks Project\\Sections V4 Sam Tweaks.als",
+    "als_sha1": "dc652aa8d068ca8820416542f8d407a0e319bd7f",
+    "report_path": "Test Project\\05.10.26 Defected Selection\\Output\\ARRANGEMENT_REPORT.json",
+    "report_sha1": "1ef8510554de96fadab632434a969b30c8adea83"
+  },
+  "verdict": "FAIL",
+  "exit_code": 2,
+  "findings": [
+    {
+      "check": "hard_silence",
+      "level": "FAIL",
+      "t0": 3923.5,
+      "t1": 3924.1,
+      "beat0": 0.0,
+      "beat1": 0.0,
+      "measured": {
+        "min_db": -68.81566676603178,
+        "frames": 6
+      },
+      "msg": "hard silence (0.6s) inside arrangement span"
+    },
+    {
+      "check": "hard_silence",
+      "level": "FAIL",
+      "t0": 3924.2,
+      "t1": 3929.0,
+      "beat0": 0.0,
+      "beat1": 0.0,
+      "measured": {
+        "min_db": -119.19360377292233,
+        "frames": 48
+      },
+      "msg": "hard silence (4.8s) inside arrangement span"
+    },
+    {
+      "check": "map_vs_render",
+      "level": "INFO",
+      "t0": 0.0,
+      "t1": 0.0,
+      "beat0": 0.0,
+      "beat1": 0.0,
+      "measured": {
+        "arr_end_sec": 3929.1999517767654,
+        "audio_end_sec": 3924.2,
+        "delta_sec": -4.999951776765556,
+        "warn_above_sec": 10.0,
+        "fail_above_sec": 39.29199951776766,
+        "tempo_map_flat": false
+      },
+      "msg": "endpoint consistent (-5.00s; warns past 10.0s, fails past 39.3s)"
+    },
+    {
+      "check": "boundary_click_skipped_tempo_arc",
+      "level": "SKIP",
+      "t0": 156.0,
+      "t1": 3925.4,
+      "beat0": 320.0,
+      "beat1": 8212.0,
+      "measured": {
+        "skipped_check": "boundary_click",
+        "skipped_boundaries": 159,
+        "inspected_boundaries": 0,
+        "from_sec": 156.00893014617273,
+        "click_half_window_sec": 0.002
+      },
+      "msg": "boundary_click skipped for 159 of 159 boundaries: on a tempo arc the map's timing uncertainty is not characterised and the fit scatter alone exceeds the +/-2 ms click window"
+    },
+    {
+      "check": "exposed_solo",
+      "level": "WARN",
+      "t0": 3903.5,
+      "t1": 3925.4,
+      "beat0": 8165.28,
+      "beat1": 8211.91,
+      "measured": {
+        "floor_db": -73.2243364905751,
+        "duration_s": 21.90000000000009
+      },
+      "msg": "near-silent source material exposed solo (21.9s, floor -73.2 dBFS)"
+    },
+    {
+      "check": "exposed_solo",
+      "level": "WARN",
+      "t0": 3925.4,
+      "t1": 3929.0,
+      "beat0": 8211.91,
+      "beat1": 8219.57,
+      "measured": {
+        "floor_db": -119.19360377292233,
+        "duration_s": 3.599999999999909
+      },
+      "msg": "near-silent source material exposed solo (3.6s, floor -119.2 dBFS)"
+    },
+    {
+      "check": "transition_dip",
+      "level": "WARN",
+      "t0": 312.0,
+      "t1": 327.5,
+      "beat0": 640.0,
+      "beat1": 672.0,
+      "measured": {
+        "unbracketed": true,
+        "baseline_lufs": -18.10336915121934,
+        "dip_lufs": -20.718859456461743,
+        "dip_db": 2.6154903052424032,
+        "dip_at_sec": 325.95,
+        "pair_index": 1,
+        "band_db": {
+          "sub": -7.0,
+          "bass": -1.2,
+          "lowmid": -1.8,
+          "mid": -5.51,
+          "high": -1.43
+        },
+        "deficit_band": "sub",
+        "steady_db": {
+          "sub": -2.95,
+          "bass": -0.27,
+          "lowmid": -2.23,
+          "mid": 3.97,
+          "high": 3.22
+        },
+        "dip_kind": "unknown"
+      },
+      "msg": "transition pair 1 dips 2.6 dB vs baseline (-18.1 LUFS), deficit in sub (-7.0 dB), unknown [UNBRACKETED: the minimum is on the edge of the search window, so the real trough lies beyond it - do not size a repair from this]"
+    },
+    {
+      "check": "transition_dip",
+      "level": "WARN",
+      "t0": 2320.2,
+      "t1": 2335.5,
+      "beat0": 4824.0,
+      "beat1": 4856.0,
+      "measured": {
+        "unbracketed": false,
+        "baseline_lufs": -17.655604875753518,
+        "dip_lufs": -24.745330858529677,
+        "dip_db": 7.089725982776159,
+        "dip_at_sec": 2332.75,
+        "pair_index": 7,
+        "band_db": {
+          "sub": -23.13,
+          "bass": -17.46,
+          "lowmid": -7.7,
+          "mid": -2.53,
+          "high": -2.61
+        },
+        "deficit_band": "sub",
+        "steady_db": {
+          "sub": -1.05,
+          "bass": -0.57,
+          "lowmid": 2.65,
+          "mid": 2.45,
+          "high": -2.17
+        },
+        "dip_kind": "momentary"
+      },
+      "msg": "transition pair 7 dips 7.1 dB vs baseline (-17.7 LUFS), deficit in sub (-23.1 dB), momentary"
+    },
+    {
+      "check": "loop_verbatim_under_automation",
+      "level": "INFO",
+      "t0": 312.0,
+      "t1": 325.6,
+      "beat0": 640.0,
+      "beat1": 668.0,
+      "measured": {
+        "swap_beat": 640.0,
+        "iters": 7,
+        "rs": [
+          0.928,
+          0.937,
+          0.943,
+          0.927,
+          0.949,
+          0.918
+        ]
+      },
+      "msg": "loop plays under transition automation (swap at beat 640) - verbatim check not applicable"
+    },
+    {
+      "check": "loop_verbatim_under_automation",
+      "level": "INFO",
+      "t0": 2526.6,
+      "t1": 2541.8,
+      "beat0": 5256.0,
+      "beat1": 5288.0,
+      "measured": {
+        "swap_beat": 5256.0,
+        "iters": 4,
+        "rs": [
+          0.914,
+          0.902,
+          0.903
+        ]
+      },
+      "msg": "loop plays under transition automation (swap at beat 5256) - verbatim check not applicable"
+    },
+    {
+      "check": "loop_verbatim_under_automation",
+      "level": "INFO",
+      "t0": 3012.5,
+      "t1": 3033.4,
+      "beat0": 6276.0,
+      "beat1": 6320.0,
+      "measured": {
+        "swap_beat": 6216.0,
+        "iters": 3,
+        "rs": [
+          0.878,
+          0.87
+        ]
+      },
+      "msg": "loop plays under transition automation (swap at beat 6216) - verbatim check not applicable"
+    },
+    {
+      "check": "grid_fold",
+      "level": "WARN",
+      "t0": 512.6,
+      "t1": 3279.6,
+      "beat0": 1056.0,
+      "beat1": 6840.0,
+      "measured": {
+        "medians_ms": [
+          49.7341223819542,
+          88.25589562826889,
+          110.60497974388676
+        ],
+        "primary_medians_ms": [
+          -191.09456334574634,
+          88.25589562826889,
+          110.60497974388676
+        ],
+        "alt_used": [
+          true,
+          false,
+          false
+        ],
+        "regions": [
+          [
+            512.6,
+            620.5
+          ],
+          [
+            1816.9,
+            1901.6
+          ],
+          [
+            3226.6,
+            3279.6
+          ]
+        ],
+        "drift_ms": 60.87085736193256,
+        "tempo_map_flat": false,
+        "gates": false
+      },
+      "msg": "beat grid drift measured at 60.9 ms; on a tempo arc this reports only - the map's uncertainty is not characterised, so the threshold cannot gate"
+    }
+  ]
+}
