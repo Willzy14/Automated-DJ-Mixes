@@ -28,6 +28,7 @@ import ast
 import io
 import os
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -587,6 +588,7 @@ def test_failed_replace_raises_and_keeps_old_cache_and_leaves_no_partial(
     wav, cache_dir, cache, canonical = _make_cache(tmp_path)
     _stub_compute(monkeypatch)
     before = cache.read_bytes()
+    monkeypatch.setattr(taf, "_pause", lambda _s: None)  # the swap is retried; do not wait
     real_replace = os.replace
 
     def locked(src, dst, *args, **kwargs):
@@ -635,8 +637,9 @@ def test_successful_cache_write_round_trips_same_arrays_and_leaves_no_partial(
 
 def test_successful_cache_write_goes_through_a_same_folder_partial_then_replace(
         tmp_path, monkeypatch):
-    """The new cache is built under a temporary '.partial' name in the SAME
-    folder (so the swap stays on one volume) and swapped in by os.replace."""
+    """The new cache is built under a temporary '~<cache name>.<pid>.<id>.tmp'
+    name in the SAME folder (so the swap stays on one volume; Dropbox ignores
+    ~*.tmp) and swapped in by os.replace."""
     wav, cache_dir, cache, _canonical = _make_cache(tmp_path)
     _stub_compute(monkeypatch)
     calls = []
@@ -652,7 +655,7 @@ def test_successful_cache_write_goes_through_a_same_folder_partial_then_replace(
     src, dst, src_existed = calls[0]
     assert dst == cache
     assert src.parent == cache_dir and src != cache
-    assert src.name.endswith(".partial")
+    assert src.name.startswith("~" + cache.name) and src.name.endswith(".tmp")
     assert src_existed
     assert _listing(cache_dir) == [cache.name]
 
@@ -707,6 +710,150 @@ def test_cache_is_free_to_replace_and_delete_while_a_failure_traceback_is_alive(
     assert excinfo.value is not None
 
 
+def test_partial_is_a_tilde_tmp_file_while_writing_and_gone_after(tmp_path, monkeypatch):
+    """While the write is in progress the only extra file in the cache folder
+    starts with '~' and ends with '.tmp' (Dropbox ignores ~*.tmp, so it never
+    uploads a half-written cache); after success no ~*.tmp remains."""
+    wav, cache_dir, cache, _canonical = _make_cache(tmp_path)
+    _stub_compute(monkeypatch)
+    seen = []
+    real_savez = np.savez_compressed
+
+    def watching(target, **arrays):
+        seen.append(_listing(cache_dir))
+        return real_savez(target, **arrays)
+
+    monkeypatch.setattr(np, "savez_compressed", watching)
+    taf.ensure_tier_a_arrays(wav, cache_dir)
+    assert len(seen) == 1
+    extra = [n for n in seen[0] if n != cache.name]
+    assert len(extra) == 1, f"expected exactly one extra file mid-write, saw {extra}"
+    assert extra[0].startswith("~") and extra[0].endswith(".tmp") and cache.name in extra[0], extra[0]
+    left = [n for n in _listing(cache_dir) if n.startswith("~") or n.endswith(".tmp")]
+    assert left == [], f"temporary file left behind: {left}"
+
+
+def test_replace_retries_a_transient_permission_error_then_succeeds(tmp_path, monkeypatch):
+    """One PermissionError on the swap (another process briefly holds the
+    cache), then success: one pause, the new cache is in place, no partial."""
+    wav, cache_dir, cache, _canonical = _make_cache(tmp_path)
+    expected = _stub_compute(monkeypatch)
+    pauses = []
+    monkeypatch.setattr(taf, "_pause", pauses.append)
+    real_replace = os.replace
+    attempts = []
+
+    def flaky(src, dst, *args, **kwargs):
+        attempts.append(Path(dst))
+        if len(attempts) == 1:
+            raise PermissionError(13, "simulated: another process holds the cache open")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    out = taf.ensure_tier_a_arrays(wav, cache_dir)
+    assert len(attempts) == 2
+    assert pauses == [taf.CACHE_REPLACE_PAUSE_SEC]
+    for k in taf.TIERA_KEYS:
+        np.testing.assert_array_equal(out[k], expected[k])
+    with np.load(cache, allow_pickle=False) as z:
+        for k in taf.TIERA_KEYS:
+            np.testing.assert_array_equal(z[k], expected[k])
+    assert _listing(cache_dir) == [cache.name]
+
+
+def test_replace_gives_up_after_eleven_attempts_and_ten_pauses(tmp_path, monkeypatch):
+    """A permanent PermissionError: 1 attempt + 10 retries = 11 attempts and
+    10 pauses of 0.1 s (pinned), then the PermissionError is re-raised, the old
+    cache is byte-for-byte intact and no partial remains."""
+    assert taf.CACHE_REPLACE_RETRIES == 10 and taf.CACHE_REPLACE_PAUSE_SEC == 0.1
+    wav, cache_dir, cache, canonical = _make_cache(tmp_path)
+    _stub_compute(monkeypatch)
+    before = cache.read_bytes()
+    pauses = []
+    monkeypatch.setattr(taf, "_pause", pauses.append)
+    real_replace = os.replace
+    attempts = []
+
+    def locked(src, dst, *args, **kwargs):
+        if Path(dst) == cache:
+            attempts.append(1)
+            raise PermissionError(13, "simulated sharing violation")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", locked)
+    with pytest.raises(PermissionError):
+        taf.ensure_tier_a_arrays(wav, cache_dir)
+    assert len(attempts) == 11, f"expected 11 attempts, saw {len(attempts)}"
+    assert pauses == [0.1] * 10
+    _assert_old_cache_intact(cache, before, canonical)
+    assert _listing(cache_dir) == [cache.name], f"leftover files: {_listing(cache_dir)}"
+
+
+def test_replace_does_not_retry_other_errors(tmp_path, monkeypatch):
+    """Only PermissionError is retried. Any other error from the swap is raised
+    at once (one attempt, no pause), with the partial removed and the old cache
+    intact. (A pin: it also holds on the code before the retry existed.)"""
+    wav, cache_dir, cache, canonical = _make_cache(tmp_path)
+    _stub_compute(monkeypatch)
+    before = cache.read_bytes()
+    pauses = []
+    monkeypatch.setattr(taf, "_pause", pauses.append)
+    real_replace = os.replace
+    attempts = []
+
+    def broken(src, dst, *args, **kwargs):
+        if Path(dst) == cache:
+            attempts.append(1)
+            raise FileExistsError(17, "simulated: not a permission problem")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", broken)
+    with pytest.raises(FileExistsError):
+        taf.ensure_tier_a_arrays(wav, cache_dir)
+    assert len(attempts) == 1 and pauses == []
+    _assert_old_cache_intact(cache, before, canonical)
+    assert _listing(cache_dir) == [cache.name]
+
+
+def test_replace_succeeds_when_another_handle_is_released_a_moment_later(tmp_path, monkeypatch):
+    """A REAL open handle on the cache, released by a thread after 0.3 s. On
+    Windows os.replace over a file open elsewhere raises PermissionError, so the
+    write only succeeds because the swap is retried. The retry window is made
+    long (100 x 0.05 s = 5 s against a 0.3 s hold) so a slow machine cannot flake
+    it. On other platforms nothing blocks the swap and it passes at once."""
+    wav, cache_dir, cache, _canonical = _make_cache(tmp_path)
+    expected = _stub_compute(monkeypatch)
+    monkeypatch.setattr(taf, "CACHE_REPLACE_RETRIES", 100)
+    monkeypatch.setattr(taf, "CACHE_REPLACE_PAUSE_SEC", 0.05)
+    blocked = []
+    real_replace = os.replace
+
+    def spy(src, dst, *args, **kwargs):
+        try:
+            return real_replace(src, dst, *args, **kwargs)
+        except PermissionError:
+            blocked.append(1)
+            raise
+
+    monkeypatch.setattr(os, "replace", spy)
+    holder = open(cache, "rb")
+    timer = threading.Timer(0.3, holder.close)
+    timer.start()
+    try:
+        out = taf.ensure_tier_a_arrays(wav, cache_dir)
+    finally:
+        timer.join()
+        holder.close()
+    if sys.platform == "win32":
+        assert blocked, "the open handle never blocked the swap, so this proved nothing"
+    for k in taf.TIERA_KEYS:
+        np.testing.assert_array_equal(out[k], expected[k])
+    with np.load(cache, allow_pickle=False) as z:
+        for k in taf.TIERA_KEYS:
+            np.testing.assert_array_equal(z[k], expected[k])
+    assert _listing(cache_dir) == [cache.name]
+
+
 def test_mono_source_collapses_all_five_tiera_arrays_to_empty_and_caches_them(tmp_path):
     """End to end through the real computes on a mono wav: the empty width and
     corr make the trim-to-shortest collapse ALL five tiera_* arrays to length 0
@@ -742,14 +889,89 @@ def _is_rb(name) -> bool:
     return isinstance(name, str) and name.split(".")[0] == _RB_ROOT
 
 
+_DYNAMIC_IMPORTERS = ("import_module", "__import__")
+
+
+def _const_str(node):
+    """The string `node` evaluates to when it is built only from constants (a
+    literal, an f-string whose parts are all constants, or constants joined
+    with +); None when any part is not a constant."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for part in node.values:
+            if isinstance(part, ast.FormattedValue):
+                if part.conversion != -1 or part.format_spec is not None:
+                    return None
+                piece = _const_str(part.value)
+            else:
+                piece = _const_str(part)
+            if piece is None:
+                return None
+            parts.append(piece)
+        return "".join(parts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _const_str(node.left), _const_str(node.right)
+        return None if left is None or right is None else left + right
+    return None
+
+
 def _pyrekordbox_import_hits(source, label: str = "<source>") -> list:
     """Every place `source` (text or bytes) imports pyrekordbox, however it is
     spelled: import / import-as / from-import / submodule forms, and the
-    dynamic importlib.import_module("...") and __import__("...") calls with a
-    literal name. A fully dynamic name (a variable) cannot be seen statically."""
+    dynamic importlib.import_module(...) and __import__(...) calls whose name
+    is a constant (a literal, a constant-only f-string, constants joined by +).
+    The dynamic importers are followed through `from importlib import
+    import_module as im`, `from builtins import __import__ as ib` and plain
+    assignments (`im = importlib.import_module`, chains included). A function
+    of the same name that this file defines itself (def, async def, or a name
+    bound to a lambda) is not the importer and is not flagged, unless the file
+    also imports the real one. A name built at run time cannot be seen
+    statically."""
     tree = ast.parse(source)
+    nodes = list(ast.walk(tree))
+
+    local_defs = set()
+    for node in nodes:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            local_defs.add(node.name)
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Lambda):
+            local_defs.update(t.id for t in node.targets if isinstance(t, ast.Name))
+
+    aliases = set()
+    for node in nodes:
+        if isinstance(node, ast.ImportFrom) and node.module in ("importlib", "builtins"):
+            for alias in node.names:
+                if alias.name in _DYNAMIC_IMPORTERS:
+                    aliases.add(alias.asname or alias.name)
+
+    def is_importer(expr) -> bool:
+        if isinstance(expr, ast.Name):
+            return expr.id in aliases or (
+                expr.id in _DYNAMIC_IMPORTERS and expr.id not in local_defs)
+        if isinstance(expr, ast.Attribute):
+            return expr.attr in _DYNAMIC_IMPORTERS
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for node in nodes:
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if is_importer(value):
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id not in aliases:
+                        aliases.add(target.id)
+                        changed = True
+
     hits = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if _is_rb(alias.name):
@@ -761,16 +983,13 @@ def _pyrekordbox_import_hits(source, label: str = "<source>") -> list:
                 for alias in node.names:
                     if _is_rb(alias.name):
                         hits.append(f"{label}:{node.lineno}: from {node.module} import {alias.name}")
-        elif isinstance(node, ast.Call):
-            fn = node.func
-            fn_name = fn.id if isinstance(fn, ast.Name) else (
-                fn.attr if isinstance(fn, ast.Attribute) else None)
-            if fn_name in ("import_module", "__import__"):
-                args = list(node.args[:1]) + [
-                    kw.value for kw in node.keywords if kw.arg == "name"]
-                for arg in args:
-                    if isinstance(arg, ast.Constant) and _is_rb(arg.value):
-                        hits.append(f"{label}:{node.lineno}: {fn_name}({arg.value!r})")
+        elif isinstance(node, ast.Call) and is_importer(node.func):
+            args = list(node.args[:1]) + [
+                kw.value for kw in node.keywords if kw.arg == "name"]
+            for arg in args:
+                value = _const_str(arg)
+                if _is_rb(value):
+                    hits.append(f"{label}:{node.lineno}: {ast.unparse(node.func)}({value!r})")
     return hits
 
 
@@ -790,6 +1009,18 @@ _RB_ALIAS_SOURCES = {
     "inside a function": "def f():\n    import pyrekordbox as pr\n    return pr\n",
     "inside try": "try:\n    import pyrekordbox as pr\nexcept ImportError:\n    pr = None\n",
     "relative from": "from . import pyrekordbox\n",
+    "from-import as an alias": "from importlib import import_module as im\nrb = im('pyrekordbox')\n",
+    "alias of importlib module": "import importlib as il\nrb = il.import_module('pyrekordbox')\n",
+    "import_module assigned to a name": "import importlib\nim = importlib.import_module\nrb = im('pyrekordbox')\n",
+    "imported import_module assigned": "from importlib import import_module\nim = import_module\nrb = im('pyrekordbox')\n",
+    "__import__ assigned to a name": "ib = __import__\nrb = ib('pyrekordbox')\n",
+    "builtins __import__ as an alias": "from builtins import __import__ as ib\nrb = ib('pyrekordbox')\n",
+    "alias chain": "import importlib\na = importlib.import_module\nb = a\nrb = b('pyrekordbox')\n",
+    "f-string of one constant": "import importlib\nrb = importlib.import_module(f'pyrekordbox')\n",
+    "f-string with a constant field": "import importlib\nrb = importlib.import_module(f'{\"pyrekordbox\"}.db')\n",
+    "f-string of two constants": "rb = __import__(f'pyrekordbox' f'.db')\n",
+    "constant string sum": "import importlib\nrb = importlib.import_module('pyre' + 'kordbox')\n",
+    "a def does not hide a real importlib alias": "from importlib import import_module\ndef import_module(x):\n    return x\nrb = import_module('pyrekordbox')\n",
 }
 
 _RB_CLEAN_SOURCES = {
@@ -799,6 +1030,12 @@ _RB_CLEAN_SOURCES = {
     "lookalike module name": "import pyrekordbox_stub\nfrom pyrekordbox_stub import x\n",
     "import_module of something else": 'import importlib\nimportlib.import_module("numpy")\n',
     "dynamic name": "name = 'x'\n__import__(name)\n",
+    "f-string with a variable (cannot be seen statically)": "import importlib\nrb = importlib.import_module(f'pyrekordbox{suffix}')\n",
+    "alias of an unrelated import": "from importlib import import_module as im\nrb = im('numpy')\n",
+    "locally defined import_module": "def import_module(x):\n    return x\nrb = import_module('pyrekordbox')\n",
+    "locally defined async import_module": "async def import_module(x):\n    return x\n\nasync def f():\n    return await import_module('pyrekordbox')\n",
+    "import_module bound to a lambda": "import_module = lambda x: x\nrb = import_module('pyrekordbox')\n",
+    "locally defined __import__": "def __import__(x):\n    return x\nrb = __import__('pyrekordbox')\n",
 }
 
 
@@ -818,18 +1055,45 @@ def _source_root() -> Path:
     return Path(__file__).resolve().parent.parent / "Source"
 
 
-def test_no_module_in_source_imports_pyrekordbox_under_any_alias():
-    root = _source_root()
+def _scan_source_tree(root: Path):
+    """(files scanned, pyrekordbox import hits) for every .py under `root`,
+    skipping the TOP-LEVEL Archive folder (the archived Rekordbox reader lives
+    there) and __pycache__."""
     files = [
         p for p in sorted(root.rglob("*.py"))
-        if "Archive" not in p.relative_to(root).parts
+        if p.relative_to(root).parts[0] != "Archive"
         and "__pycache__" not in p.relative_to(root).parts
     ]
-    assert len(files) > 10, f"scanner saw only {len(files)} files under {root}"
     hits = []
     for p in files:
         hits.extend(_pyrekordbox_import_hits(p.read_bytes(), str(p.relative_to(root))))
+    return files, hits
+
+
+def test_no_module_in_source_imports_pyrekordbox_under_any_alias():
+    root = _source_root()
+    files, hits = _scan_source_tree(root)
+    assert len(files) > 10, f"scanner saw only {len(files)} files under {root}"
     assert hits == [], "pyrekordbox imported outside Source/Archive:\n" + "\n".join(hits)
+
+
+def test_scanner_scans_a_nested_folder_named_archive(tmp_path):
+    """Only the top-level Archive folder is skipped. A folder that merely has
+    the name Archive further down is scanned."""
+    nested = tmp_path / "x" / "Archive"
+    nested.mkdir(parents=True)
+    (nested / "y.py").write_text("import pyrekordbox as pr\n", encoding="utf-8")
+    files, hits = _scan_source_tree(tmp_path)
+    assert [p.name for p in files] == ["y.py"]
+    assert hits, "a pyrekordbox import under Source/x/Archive/ was not flagged"
+
+
+def test_scanner_skips_the_top_level_archive_folder(tmp_path):
+    (tmp_path / "Archive").mkdir()
+    (tmp_path / "Archive" / "old.py").write_text("import pyrekordbox\n", encoding="utf-8")
+    (tmp_path / "ok.py").write_text("import os\n", encoding="utf-8")
+    files, hits = _scan_source_tree(tmp_path)
+    assert [p.name for p in files] == ["ok.py"] and hits == []
 
 
 def test_pyrekordbox_pin_flags_the_real_archived_reader():

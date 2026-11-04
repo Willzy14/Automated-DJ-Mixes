@@ -10,10 +10,12 @@ can read the music better than the existing loudness-only path:
 
   * tiera_width -- per-frame side/mid RMS ratio from the STEREO wav (native
     sr). mid = 0.5*(L+R), side = 0.5*(L-R), width = side_rms/(mid_rms+1e-12).
-    Mono source -> zeros. Matches the Loudness Leveller width measure.
+    Mono source -> an EMPTY (length 0) float32 array, which downstream reads as
+    "unmeasured" (not zeros). Matches the Loudness Leveller width measure.
 
   * tiera_lr_corr -- per-frame Pearson correlation of L and R. Zero-variance
-    frames (silence) -> 1.0. Mono source -> ones.
+    frames (silence) -> 1.0. Mono source -> an EMPTY (length 0) float32 array
+    (not ones).
 
 All new arrays are float32 (features, not audio), namespaced under the
 "tiera_" prefix so the existing _separate_envelopes loader excludes them
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Iterable
@@ -61,6 +64,19 @@ TIERA_KEYS = (
     TIERA_WIDTH_KEY,
     TIERA_LR_CORR_KEY,
 )
+
+# Replacing the cache can fail briefly on Windows when another process (an
+# un-closed reader, Dropbox, a virus scanner) has the file open. The swap is
+# retried on PermissionError only: 1 attempt, then CACHE_REPLACE_RETRIES more,
+# CACHE_REPLACE_PAUSE_SEC apart (about a second in all), then the error is
+# re-raised.
+CACHE_REPLACE_RETRIES = 10
+CACHE_REPLACE_PAUSE_SEC = 0.1
+
+
+def _pause(seconds: float) -> None:
+    """Sleep hook for the replace retry (tests replace it so they do not wait)."""
+    time.sleep(seconds)
 
 
 def _frame_rms(samples: np.ndarray, hop: int) -> np.ndarray:
@@ -147,9 +163,10 @@ def _compute_band_envelopes(wav_path: Path, hop_sec: float) -> tuple[np.ndarray,
 def _compute_stereo_envelopes(wav_path: Path, hop_sec: float) -> tuple[np.ndarray, np.ndarray]:
     """Per-frame width and L/R correlation from the STEREO wav at native sr.
 
-    Mono source -> width=zeros, corr=ones (so the flag-off path through
-    downstream code that uses these for plotting is not visibly broken on a
-    mono file — Sam may end up with a mono export in a future test).
+    A mono source (one channel) has no side information, so BOTH returns are
+    EMPTY (length 0) float32 arrays, not zeros and ones. Downstream reads a
+    zero-length tiera_* array as "unmeasured", and _align_lengths then
+    collapses all five tiera_* arrays to length 0 for a mono file.
 
     width = RMS(side) / (RMS(mid) + 1e-12) -- the linear ratio the
     Revoloution 0.170 -> 0.107 reference was measured in: Loudness Leveller
@@ -157,8 +174,8 @@ def _compute_stereo_envelopes(wav_path: Path, hop_sec: float) -> tuple[np.ndarra
     """
     data, sr = sf.read(str(wav_path), always_2d=True)
     if data.shape[1] == 1:
-        # Mono source -> width is degenerate; default to zeros (and corr to
-        # ones so the curve doesn't pretend to measure correlation).
+        # Mono source -> no side information: return EMPTY (length 0) arrays
+        # for both (not zeros/ones); a zero-length array means "unmeasured".
         return np.zeros(0, dtype=np.float32), np.ones(0, dtype=np.float32)
     L = data[:, 0].astype(np.float64)
     R = data[:, 1].astype(np.float64)
@@ -187,24 +204,47 @@ def _align_lengths(arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {k: v[:L] for k, v in arrays.items()}
 
 
+def _replace_with_retry(partial: Path, cache: Path) -> None:
+    """os.replace(partial, cache), retried when it raises PermissionError.
+
+    On Windows the swap fails while another process has the cache open (an
+    un-closed reader, Dropbox, a virus scanner). That is usually over within a
+    moment, so the swap is tried again up to CACHE_REPLACE_RETRIES more times,
+    CACHE_REPLACE_PAUSE_SEC apart; if it still fails the last PermissionError
+    is raised. Any other error is raised at once.
+    """
+    retries_left = CACHE_REPLACE_RETRIES
+    while True:
+        try:
+            os.replace(partial, cache)
+            return
+        except PermissionError:
+            if retries_left <= 0:
+                raise
+            retries_left -= 1
+            _pause(CACHE_REPLACE_PAUSE_SEC)
+
+
 def _write_cache_atomically(cache: Path, arrays: dict[str, np.ndarray]) -> None:
     """Write `arrays` to `cache` so a reader never sees a half-written file.
 
-    The npz is written to a unique '<cache name>.<pid>.<id>.partial' in the
-    SAME folder (so the swap stays on one volume), flushed to disk, then moved
-    over the cache with os.replace. On ANY failure (including Ctrl+C) the
-    partial is removed and the original exception propagates, exactly as a
-    failed np.savez_compressed did before; the previous cache is left as it
-    was. A file object is handed to np.savez_compressed so it cannot append
-    '.npz' to the temporary name; the final name is whatever `cache` is.
+    The npz is written to a unique '~<cache name>.<pid>.<id>.tmp' in the SAME
+    folder (so the swap stays on one volume; Dropbox ignores ~*.tmp, so it
+    never uploads a half-written cache), flushed to disk, then moved over the
+    cache with os.replace (retried briefly on PermissionError, see
+    _replace_with_retry). On ANY failure (including Ctrl+C) the partial is
+    removed and the original exception propagates, exactly as a failed
+    np.savez_compressed did before; the previous cache is left as it was. A
+    file object is handed to np.savez_compressed so it cannot append '.npz' to
+    the temporary name; the final name is whatever `cache` is.
     """
-    partial = cache.with_name(f"{cache.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.partial")
+    partial = cache.with_name(f"~{cache.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         with open(partial, "xb") as fh:
             np.savez_compressed(fh, **arrays)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(partial, cache)
+        _replace_with_retry(partial, cache)
     except BaseException:
         with contextlib.suppress(OSError):
             partial.unlink()
