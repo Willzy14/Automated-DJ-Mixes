@@ -3494,3 +3494,148 @@ def test_boundary_click_coverage_absent_on_the_bail_paths(tmp_path):
     assert "boundary_click: inspected" not in text
     assert "(none)" in text.split("## Checks run clean", 1)[1]
     assert json.loads(js_path.read_text(encoding="utf-8"))["coverage"] == {}
+
+
+# --- round 2: the shape gate and non-finite audio --------------------------
+
+def _cov_bump_render(path, *, half_ms=1.8, amp=0.9):
+    """Flat 30 s render with one smooth, loud Hann-shaped hit centred on the
+    beat-10 boundary and wholly INSIDE the +/-2 ms window: steeper than the
+    5 ms ramp, wide (not click-shaped), no abrupt edge."""
+    def bump(t, L, R):
+        L = L.copy(); R = R.copy()
+        c = int(round((10 / _COV_BPS) * 44100))
+        h = int(round(half_ms / 1000.0 * 44100))
+        shape = amp * np.hanning(2 * h)
+        L[c - h:c + h] += shape
+        R[c - h:c + h] += shape
+        return L, R
+    _synth_render(path, 30.0, clips=_cov_clips(), extra_process=bump)
+
+
+def _cov_float_render(path, mutate):
+    """The usual flat 30 s render, stored as a float WAV (PCM cannot hold
+    NaN or inf) after mutate(data, sr) has edited the samples in place."""
+    base = path.with_name(path.stem + "_pcm.wav")
+    _synth_render(base, 30.0, clips=_cov_clips())
+    data, sr = sf.read(str(base), dtype="float64", always_2d=True)
+    mutate(data, sr)
+    sf.write(str(path), data, sr, subtype="FLOAT")
+
+
+def test_boundary_click_coverage_wide_loud_hit_is_inspected_not_failed(
+        tmp_path, monkeypatch):
+    """`failed` must follow the click-SHAPE gate, not just the ratio and z
+    gates. A loud hit that is wide, not click-shaped, is inspected and passes."""
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    two = [10 / _COV_BPS, 40 / _COV_BPS]
+
+    # The existing 5 ms ramped-hit negative control, at the beat-10 boundary.
+    ramp = tmp_path / "ramp.wav"
+
+    def ramp_hit(t, L, R):
+        L = L.copy(); R = R.copy()
+        t_b = 10 / _COV_BPS
+        i0 = int(round((t_b - 0.003) * 44100))
+        i1 = int(round((t_b + 0.003) * 44100))
+        r = np.linspace(0, 0.9, i1 - i0)
+        L[i0:i1] += r
+        R[i0:i1] += r
+        return L, R
+
+    _synth_render(ramp, 30.0, clips=_cov_clips(), extra_process=ramp_hit)
+    cov = {}
+    fs = render_check.check_boundary_click(ramp, two, tm, coverage=cov)
+    _cov_balanced(cov)
+    assert fs == [] and cov["failed"] == 0
+    assert cov["inspected"] == 2 and cov["skipped"] == 0
+
+    # That ramp is gentle enough to miss the ratio gate on its own, so it
+    # cannot tell a shape-blind `failed` from a correct one. This smooth hit
+    # clears BOTH the ratio and z gates and only the shape gate stops it.
+    bump = tmp_path / "bump.wav"
+    _cov_bump_render(bump)
+    cov2 = {}
+    fs2 = render_check.check_boundary_click(bump, two, tm, coverage=cov2)
+    _cov_balanced(cov2)
+    assert not any(f.check == "boundary_click" for f in fs2), fs2
+    assert cov2["failed"] == 0
+    assert cov2["inspected"] == 2 and cov2["skipped"] == 0
+
+    # Prove the test: with the shape gate forced open the same render FAILs,
+    # so ratio and z really passed and the shape gate really did the work.
+    monkeypatch.setattr(render_check, "_click_shape", lambda y: True)
+    cov3 = {}
+    fs3 = render_check.check_boundary_click(bump, two, tm, coverage=cov3)
+    assert [f.check for f in fs3] == ["boundary_click"], fs3
+    assert cov3["failed"] == 1
+
+
+def test_boundary_click_coverage_nan_audio_is_not_inspected(tmp_path):
+    """NaN makes every comparison False, so it used to read as a clean pass
+    and count as inspected. No verdict was reached, so it is skipped."""
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    two = [10 / _COV_BPS, 40 / _COV_BPS]
+
+    # Control: the same float WAV with no NaN is inspected 2 of 2.
+    clean = tmp_path / "clean.wav"
+    _cov_float_render(clean, lambda data, sr: None)
+    ctl = {}
+    assert render_check.check_boundary_click(clean, two, tm, coverage=ctl) == []
+    _cov_balanced(ctl)
+    assert ctl["inspected"] == 2
+
+    # NaN across the boundary's own window: inspected drops by exactly one,
+    # the boundary is counted as window_unreadable, the findings are the same
+    # (none) as before the change.
+    def nan_at_boundary(data, sr):
+        c = int(round(two[0] * sr))
+        data[c - 220:c + 220, :] = np.nan
+
+    own = tmp_path / "nan_own.wav"
+    _cov_float_render(own, nan_at_boundary)
+    cov = {}
+    fs = render_check.check_boundary_click(own, two, tm, coverage=cov)
+    assert fs == []
+    _cov_balanced(cov)
+    assert cov["boundaries"] == 2
+    assert cov["inspected"] == ctl["inspected"] - 1 == 1
+    assert cov["skipped_by_reason"]["window_unreadable"] == 1
+    assert cov["skipped"] == 1 and cov["failed"] == 0
+
+    # NaN only in a NULL window (beat 5 is a null beat of the beat-10
+    # boundary): its own metric is finite but its z is not, so it is skipped
+    # too, while the beat-40 boundary (null beats 24..56) is untouched.
+    def nan_in_null_window(data, sr):
+        c = int(round((5 / _COV_BPS) * sr))
+        data[c - 220:c + 220, :] = np.nan
+
+    nul = tmp_path / "nan_null.wav"
+    _cov_float_render(nul, nan_in_null_window)
+    cov2 = {}
+    fs2 = render_check.check_boundary_click(nul, two, tm, coverage=cov2)
+    assert fs2 == []
+    _cov_balanced(cov2)
+    assert cov2["inspected"] == 1
+    assert cov2["skipped_by_reason"]["window_unreadable"] == 1
+
+
+def test_boundary_click_coverage_inf_click_still_fails_and_is_inspected(tmp_path):
+    """PIN. One +inf sample is a real click verdict (metric and z are inf and
+    the shape gate passes), and it FAILed before the NaN rule existed. A
+    boundary that produced a FAIL had a verdict, so it is inspected AND
+    failed, never skipped, and the finding is untouched."""
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    two = [10 / _COV_BPS, 40 / _COV_BPS]
+
+    def inf_at_boundary(data, sr):
+        data[int(round(two[0] * sr)), :] = np.inf
+
+    wav = tmp_path / "inf.wav"
+    _cov_float_render(wav, inf_at_boundary)
+    cov = {}
+    fs = render_check.check_boundary_click(wav, two, tm, coverage=cov)
+    assert [(f.check, f.level) for f in fs] == [("boundary_click", "FAIL")]
+    _cov_balanced(cov)
+    assert cov["inspected"] == 2 and cov["failed"] == 1
+    assert cov["skipped_by_reason"]["window_unreadable"] == 0

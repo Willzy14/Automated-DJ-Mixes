@@ -1368,7 +1368,8 @@ def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
 #: Why a boundary can end up with no click verdict. Every boundary is either
 #: inspected (a metric AND a null set of >= 8 beats existed, so a verdict,
 #: pass or fail, was reached) or skipped for exactly one of these:
-#:   window_unreadable   its own +/-2 ms window could not be read
+#:   window_unreadable   its own +/-2 ms window could not be read, or NaN in it
+#:                       or in a null window made a verdict impossible
 #:   null_set_too_small  fewer than 8 usable null beats around it
 #:   eof                 its own window extends past the end of the file
 #:   tempo_arc           never handed to the check: run_check skips every
@@ -1468,10 +1469,20 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
             null_mean = float(null.mean())
             null_std = float(null.std())
             z = (metric - null_mean) / (null_std + 1e-12)
-            inspected += 1
+            clicked = (metric > CLICK_NULL_RATIO * null_max
+                       and z > CLICK_NULL_Z and _click_shape(y))
+            # NaN in the window or in any null window makes every comparison
+            # False, which would read as a clean pass although no verdict was
+            # reached: that boundary is skipped, not inspected. A FAIL is a
+            # verdict even when the numbers are infinite (one +inf sample is a
+            # real click), so it still counts. What is appended below is
+            # decided exactly as before.
+            if clicked or (np.isfinite(metric) and np.isfinite(z)):
+                inspected += 1
+            else:
+                skipped["window_unreadable"] += 1
 
-            if (metric > CLICK_NULL_RATIO * null_max and z > CLICK_NULL_Z
-                    and _click_shape(y)):
+            if clicked:
                 failed += 1
                 t0 = max(0.0, t_sec - 0.005)
                 findings.append(Finding(
