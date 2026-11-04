@@ -18,15 +18,16 @@ report names every pair whose decision moved and how, so the change can be inspe
 and attributed to one signal. When a diff is reviewed and accepted, refresh the
 baseline deliberately with:
 
-    PYTHONPATH=Source python Tests/test_alignment_baseline.py --refresh --reason "<why this diff is accepted, 15+ characters>" [--reviewer "<name>"] [--accept-shift]
+    PYTHONPATH=Source python Tests/test_alignment_baseline.py --refresh --reason "<why this diff is accepted, 15+ letters or digits>" [--reviewer "<name>"] [--accept-shift]
 
 --reason is REQUIRED: without it the command exits before anything is written. Each
 refresh writes baseline_alignments.refresh-<UTC time>.json beside the baseline FIRST
 (reason, reviewer, git commit, hashes of the corpus and code it was made from, old and
 new file hashes, a diff summary, the policy shift) and then replaces the baseline
-atomically. A refresh that moves 10+ pairs (or over 10 percent) between named_landmark_64
-and standard_48, or drops over 5 percent of the pairs, is REFUSED unless --accept-shift
-is given. Details and the tunable limits: Tests/baseline_refresh.py.
+atomically. A refresh is REFUSED unless --accept-shift is given when 10+ pairs (or over
+10 percent) move between named_landmark_64 and standard_48, flip between align and raise,
+or change overlap_policy in any way, or when over 5 percent of the pairs are dropped.
+Details and the tunable limits: Tests/baseline_refresh.py.
 
 Never refresh to make a red test green without reading the diff.
 
@@ -278,7 +279,7 @@ def test_alignment_decisions_match_baseline():
     report = _failure_report(
         "alignment decisions moved against the frozen baseline",
         expected, actual, PINNED,
-        "Tests/test_alignment_baseline.py --refresh",
+        'Tests/test_alignment_baseline.py --refresh --reason "<why>"',
     )
     if report is not None:
         pytest.fail(report)

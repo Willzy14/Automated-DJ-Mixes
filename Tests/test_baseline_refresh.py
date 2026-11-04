@@ -149,7 +149,10 @@ def test_refresh_without_reason_exits_nonzero_and_writes_nothing(env, capsys):
 
 
 @pytest.mark.parametrize("reason", [
-    "", "   ", "too short", "a b c d e f g h i j k l m n",  # 14 non-space characters
+    "", "   ", "too short", "a b c d e f g h i j k l m n",  # 14 letters
+    "." * 15,                                               # 15 non-space, none alphanumeric
+    chr(0x200b) * 15,                                       # 15 zero-width spaces
+    "a" * 14 + "-" * 40,                                    # 14 letters among punctuation
 ])
 def test_refresh_with_too_short_reason_exits_nonzero_and_writes_nothing(env, capsys, reason):
     env.write_old(_grid(_pairs(5), []))
@@ -162,10 +165,43 @@ def test_refresh_with_too_short_reason_exits_nonzero_and_writes_nothing(env, cap
     assert len(_messages(capsys)) == 1
 
 
-def test_reason_of_exactly_15_non_space_characters_is_enough():
+def test_reason_of_exactly_15_letters_or_digits_is_enough():
     assert BR.validate_reason("abcde fghij klmno") == "abcde fghij klmno"
     with pytest.raises(BR.RefreshRefused):
         BR.validate_reason("abcde fghij klmn")
+
+
+def test_reason_counts_letters_and_digits_only():
+    assert BR.validate_reason("ab12 cd34, ef56 - gh7") == "ab12 cd34, ef56 - gh7"   # 15 alnum
+    assert BR.validate_reason("caf" + chr(0xe9) + " " + "x" * 11)                  # unicode letters count
+    for junk in ("." * 15, chr(0x200b) * 15, "!?" * 30, "a" * 14 + "." * 30):
+        with pytest.raises(BR.RefreshRefused):
+            BR.validate_reason(junk)
+
+
+@pytest.mark.parametrize("flag,other", [
+    ("--reason", ["--reviewer", "Sam"]),
+    ("--reviewer", ["--reason", GOOD_REASON]),
+])
+def test_a_repeated_reason_or_reviewer_is_refused_before_anything_is_computed(
+        env, capsys, flag, other):
+    env.write_old(_grid(_pairs(5), []))
+    before_bytes, before_files = env.baseline.read_bytes(), env.files()
+    first = GOOD_REASON if flag == "--reason" else "Sam"
+    argv = ["--refresh", flag, first, *other, flag, "a second value that would win silently"]
+    rc = env.run(argv, _grid(_pairs(5), [("T00", "T01")]))
+    assert rc == 2
+    assert env.called == [], "the slow regeneration must not start"
+    assert env.baseline.read_bytes() == before_bytes and env.files() == before_files
+    lines = _messages(capsys)
+    assert len(lines) == 1 and flag in lines[0] and "more than once" in lines[0]
+
+
+def test_the_equals_form_counts_as_a_repeat_too(env):
+    env.write_old(_grid(_pairs(5), []))
+    rc = env.run(["--refresh", f"--reason={GOOD_REASON}", "--reason", "another long reason here"],
+                 _grid(_pairs(5), []))
+    assert rc == 2 and env.called == []
 
 
 def test_unknown_or_abbreviated_flags_are_refused(env, capsys):
@@ -337,6 +373,150 @@ def test_two_refreshes_in_the_same_second_keep_both_records(env):
     assert json.loads(after[0].read_bytes())["reason"] == "second look, same second, kept"
 
 
+KILL_AT_SWAP = '''
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import baseline_refresh as BR
+baseline = os.path.abspath(sys.argv[2])
+real_replace = os.replace
+
+
+def kill_at_the_swap(src, dst):
+    if os.path.abspath(dst) == baseline:
+        os._exit(9)                      # a hard kill: no except, no finally, no cleanup
+    return real_replace(src, dst)
+
+
+os.replace = kill_at_the_swap
+with open(sys.argv[3], encoding="ascii") as fh:
+    payload = json.load(fh)
+BR.refresh_baseline(baseline, payload, reason="killed on purpose just before the swap",
+                    head=lambda cwd: "b" * 40)
+'''
+
+
+def _hard_kill_a_refresh(env, new_payload, tmp_path):
+    payload_file = tmp_path / "payload.json"
+    payload_file.write_text(json.dumps(new_payload), encoding="ascii")
+    child_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    done = subprocess.run([sys.executable, "-c", KILL_AT_SWAP, str(TESTS_DIR),
+                           str(env.baseline), str(payload_file)],
+                          env=child_env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 9, done.stderr + done.stdout
+
+
+def _age(path, seconds=3600):
+    stamp = path.stat().st_mtime - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def test_a_hard_kill_before_the_swap_is_cleaned_up_by_the_next_refresh(env, tmp_path, capsys):
+    pairs = _pairs(5)
+    old = env.write_old(_grid(pairs, []))
+    old_bytes = env.baseline.read_bytes()
+    _hard_kill_a_refresh(env, _grid(pairs, [("T00", "T01")]), tmp_path)
+    # the junk a kill leaves behind: a full-size temp copy and a record with a live name
+    junk_tmp = [n for n in env.files() if n.endswith(".tmp")]
+    live_sidecars = env.sidecars()
+    assert len(junk_tmp) == 1 and len(live_sidecars) == 1, env.files()
+    assert env.baseline.read_bytes() == old_bytes
+    rec = json.loads(live_sidecars[0].read_bytes())
+    assert rec["new_baseline_sha256"] != BR.sha256_file(env.baseline)
+    assert rec["old_baseline_sha256"] == BR.sha256_file(env.baseline)
+    for p in list(env.dir.iterdir()):
+        if p != env.baseline:
+            _age(p)
+
+    new = _grid(pairs, [("T00", "T01"), ("T01", "T02")])
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 0
+    names = env.files()
+    assert not any(n.endswith(".tmp") for n in names), names
+    assert live_sidecars[0].name + ".not-applied" in names
+    assert live_sidecars[0] not in env.sidecars()
+    assert len(env.sidecars()) == 1                                  # only the refresh that landed
+    assert json.loads(env.sidecars()[0].read_bytes())["new_baseline_sha256"] == BR.sha256_file(env.baseline)
+    assert json.loads(env.baseline.read_bytes()) == new and old != new
+    cleanup_lines = [ln for ln in _messages(capsys) if "interrupted" in ln]
+    assert len(cleanup_lines) == 1, cleanup_lines
+
+
+def test_stale_leftovers_are_cleaned_but_only_the_matching_ones(env):
+    env.write_old(_grid(_pairs(4), []))
+    stale = [env.dir / "baseline_alignments.json.tmp",              # the round-1 spelling
+             env.dir / "baseline_alignments.json.4242.tmp",
+             env.dir / "baseline_alignments.refresh-20260101T000000Z.json.4242.tmp"]
+    keep = [env.dir / "notes.tmp", env.dir / "baseline_alignments.PRE-REBUILD.json",
+            env.dir / "baseline_alignments.json.bak"]
+    for p in stale + keep:
+        p.write_bytes(b"x" * 10)
+        _age(p)
+    done = BR.cleanup_interrupted(env.baseline)
+    assert sorted(done["removed"]) == sorted(p.name for p in stale)
+    assert done["marked"] == []
+    assert all(p.exists() for p in keep) and not any(p.exists() for p in stale)
+
+
+def test_young_leftovers_are_left_alone_in_case_another_refresh_is_running(env, tmp_path):
+    pairs = _pairs(5)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, [("T00", "T01")]), tmp_path)
+    before = env.files()
+    done = BR.cleanup_interrupted(env.baseline)                      # nothing is older than the limit
+    assert done == {"removed": [], "marked": []} and env.files() == before
+
+
+def test_a_sidecar_that_did_land_or_belongs_to_older_history_is_never_renamed(env):
+    pairs = _pairs(5)
+    env.write_old(_grid(pairs, []))
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(pairs, [("T00", "T01")])) == 0
+    assert env.run(["--refresh", "--reason", "second one lands too"],
+                   _grid(pairs, [("T00", "T01"), ("T01", "T02")])) == 0
+    stray = env.dir / "baseline_alignments.refresh-20250101T000000Z.json"
+    stray.write_text(json.dumps({"old_baseline_sha256": "x" * 64,
+                                 "new_baseline_sha256": "y" * 64}), encoding="ascii")
+    for p in env.sidecars():
+        _age(p)
+    before = env.files()
+    assert BR.cleanup_interrupted(env.baseline) == {"removed": [], "marked": []}
+    assert env.files() == before
+
+
+def test_an_empty_record_left_by_a_kill_before_its_content_was_written_is_marked(env):
+    env.write_old(_grid(_pairs(4), []))
+    husk = env.dir / "baseline_alignments.refresh-20260101T000000Z.json"
+    husk.write_bytes(b"")
+    _age(husk)
+    done = BR.cleanup_interrupted(env.baseline)
+    assert done["marked"] == [husk.name] and not husk.exists()
+    assert (env.dir / (husk.name + ".not-applied")).exists()
+
+
+def test_the_temp_file_name_is_unique_to_the_process(env, monkeypatch):
+    env.write_old(_grid(_pairs(5), []))
+    seen = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen.append(Path(src).name)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(_pairs(5), [("T00", "T01")])) == 0
+    monkeypatch.undo()
+    assert f"baseline_alignments.json.{os.getpid()}.tmp" in seen
+    assert any(n.startswith("baseline_alignments.refresh-") and n.endswith(f".json.{os.getpid()}.tmp")
+               for n in seen)
+
+
+def test_cleanup_does_not_run_when_the_arguments_are_refused(env):
+    env.write_old(_grid(_pairs(4), []))
+    husk = env.dir / "baseline_alignments.refresh-20260101T000000Z.json"
+    husk.write_bytes(b"")
+    _age(husk)
+    assert env.run(["--refresh"], _grid(_pairs(4), [])) == 2
+    assert husk.exists(), "a refused command must not touch any file"
+
+
 # ---------------------------------------------------------------------------
 # The large-shift guard
 # ---------------------------------------------------------------------------
@@ -434,6 +614,89 @@ def test_removed_pairs_guard_edges(removed, old_pairs, tripped):
     shift = {"total_moved": 0, "pairs_compared": old_pairs}
     summary = {"pairs_old": old_pairs, "pairs_removed": removed}
     assert bool(BR.guard_trips(shift, summary)) is tripped
+
+
+def _guard_names(trips):
+    return [t.split(":")[0] for t in trips]
+
+
+def test_all_ok_pairs_flipping_to_raise_is_refused_then_accepted_and_recorded(env, capsys):
+    pairs = _pairs(11)                                           # 110 pairs
+    old = env.write_old(_grid(pairs, pairs[:60]))
+    new = _payload([_raise_row(a, b) for a, b in pairs])         # every pair now raises
+    assert BR.policy_shift(old, new)["total_moved"] == 0         # the named-policy guard is blind to this
+    before_bytes, before_files = env.baseline.read_bytes(), env.files()
+    rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
+    assert rc != 0
+    assert env.baseline.read_bytes() == before_bytes and env.files() == before_files
+    lines = _messages(capsys)
+    assert len(lines) == 1 and "status_flips" in lines[0] and "--accept-shift" in lines[0]
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["accepted_shift"] is True
+    assert "status_flips" in rec["guards_tripped_names"]
+    assert rec["diff_summary"]["changed_by_field"]["status_flip"] == 110
+    assert json.loads(env.baseline.read_bytes()) == new
+
+
+def test_overlap_policy_changes_of_any_kind_are_refused_then_accepted_and_recorded(env, capsys):
+    pairs = _pairs(11)
+    old = env.write_old(_grid(pairs, pairs[:60]))                # 60 named
+    rows = []
+    for idx, (a, b) in enumerate(pairs):
+        policy = None if idx < 30 else ("short_32" if idx < 60 else STANDARD)
+        rows.append(_ok_row(a, b, policy))
+    new = _payload(rows)                                         # 30 named->None, 30 named->short_32
+    assert BR.policy_shift(old, new)["total_moved"] == 0
+    before_bytes = env.baseline.read_bytes()
+    rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
+    assert rc != 0 and env.baseline.read_bytes() == before_bytes and env.sidecars() == []
+    lines = _messages(capsys)
+    assert len(lines) == 1 and "overlap_policy_changes" in lines[0]
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["accepted_shift"] is True
+    assert rec["guards_tripped_names"] == ["overlap_policy_changes"]
+    assert rec["diff_summary"]["changed_by_field"]["overlap_policy"] == 60
+
+
+def test_a_3_pair_status_flip_passes(env):
+    pairs = _pairs(11)
+    old = env.write_old(_grid(pairs, pairs[:60]))
+    new = _payload([_raise_row(a, b) if (a, b) in pairs[60:63] else row
+                    for (a, b), row in zip(pairs, old["rows"])])
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["accepted_shift"] is False and rec["guards_tripped"] == []
+    assert rec["diff_summary"]["changed_by_field"]["status_flip"] == 3
+
+
+@pytest.mark.parametrize("field,guard,other", [
+    ("status_flip", "status_flips", "overlap_policy_changes"),
+    ("overlap_policy", "overlap_policy_changes", "status_flips"),
+])
+@pytest.mark.parametrize("count,compared,tripped", [
+    (9, 1000, False),     # under the pair count
+    (10, 1000, True),     # the pair count is reached
+    (5, 50, False),       # exactly 10 percent is not "more than 10 percent"
+    (6, 50, True),        # 12 percent
+    (0, 0, False),
+])
+def test_status_and_overlap_guard_edges(field, guard, other, count, compared, tripped):
+    shift = {"total_moved": 0, "pairs_compared": compared}
+    summary = {"pairs_old": compared, "pairs_removed": 0,
+               "changed_by_field": {field: count}}
+    names = _guard_names(BR.guard_trips(shift, summary))
+    assert (guard in names) is tripped
+    assert other not in names and "policy_shift" not in names and "pairs_removed" not in names
+
+
+def test_each_guard_is_reported_under_its_own_name():
+    shift = {"total_moved": 20, "pairs_compared": 100}
+    summary = {"pairs_old": 100, "pairs_removed": 10,
+               "changed_by_field": {"status_flip": 20, "overlap_policy": 20}}
+    assert _guard_names(BR.guard_trips(shift, summary)) == [
+        "policy_shift", "status_flips", "overlap_policy_changes", "pairs_removed"]
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +800,42 @@ def test_generator_inputs_lists_stems_overrides_and_code(tmp_path):
     assert not any("unrelated" in k for k in hashes)
 
 
+def _stem(stem_dir, file_key, track=None):
+    (stem_dir / f"SECTIONS_STEM_{file_key}.json").write_text(
+        json.dumps({"track": track or file_key, "bpm": 128}), encoding="ascii")
+
+
+def test_generator_inputs_include_each_tracks_stem_envelope_cache(tmp_path):
+    stem_dir = tmp_path / "Test Project" / "14.08.26" / "_Stem Analysis"
+    stem_dir.mkdir(parents=True)
+    _stem(stem_dir, "Alpha")
+    _stem(stem_dir, "Beta")
+    _stem(stem_dir, "x", track="Real Name")        # file name and track field disagree
+    (stem_dir / "Alpha__stemenv.npz").write_bytes(b"npz-alpha")
+    (stem_dir / "Real Name__stemenv.npz").write_bytes(b"npz-real")
+    (stem_dir / "x__stemenv.npz").write_bytes(b"decoy named after the file, not the track")
+    hashes = BR.input_hashes(BR.generator_inputs(tmp_path, stem_dir), root=tmp_path)
+    base = "Test Project/14.08.26/_Stem Analysis/"
+    assert hashes[base + "Alpha__stemenv.npz"] == hashlib.sha256(b"npz-alpha").hexdigest()
+    assert hashes[base + "Beta__stemenv.npz"] == "missing"
+    # align_engine.load_track names the cache from the JSON's `track` field
+    assert hashes[base + "Real Name__stemenv.npz"] == hashlib.sha256(b"npz-real").hexdigest()
+    assert base + "x__stemenv.npz" not in hashes
+    # load_loop_quality_context reads SECTIONS_STEM_<track>.json beside the cache
+    assert hashes[base + "SECTIONS_STEM_Real Name.json"] == "missing"
+    assert hashes[base + "SECTIONS_STEM_Alpha.json"] != "missing"
+
+
+def test_generator_inputs_never_raise_on_an_unreadable_stem_json(tmp_path):
+    stem_dir = tmp_path / "stems"
+    stem_dir.mkdir()
+    (stem_dir / "SECTIONS_STEM_bad.json").write_bytes(b"{ not json")
+    (stem_dir / "SECTIONS_STEM_list.json").write_bytes(b"[1, 2]")
+    hashes = BR.input_hashes(BR.generator_inputs(tmp_path, stem_dir), root=tmp_path)
+    assert hashes["stems/bad__stemenv.npz"] == "missing"       # falls back to the file name
+    assert hashes["stems/list__stemenv.npz"] == "missing"
+
+
 def test_every_code_input_exists_in_the_real_tree():
     missing = [rel for rel in BR.CODE_INPUTS if not (ROOT / rel).is_file()]
     assert missing == [], f"baseline_refresh.CODE_INPUTS names files that moved: {missing}"
@@ -560,7 +859,10 @@ def test_the_guard_limits_are_named_constants_with_the_documented_values():
     assert BR.SHIFT_MAX_PAIRS == 10
     assert BR.SHIFT_MAX_FRACTION == 0.10
     assert BR.REMOVED_MAX_FRACTION == 0.05
+    assert BR.STATUS_FLIP_MAX_PAIRS == 10 and BR.STATUS_FLIP_MAX_FRACTION == 0.10
+    assert BR.OVERLAP_CHANGE_MAX_PAIRS == 10 and BR.OVERLAP_CHANGE_MAX_FRACTION == 0.10
     assert BR.MIN_REASON_CHARS == 15
+    assert BR.STALE_AFTER_SECONDS == 120
 
 
 # ---------------------------------------------------------------------------
@@ -635,8 +937,11 @@ class Scratch:
             (source / rel).write_text("# stub\n", encoding="ascii")
         stems = self.root / "Test Project" / "14.08.26" / "_Stem Analysis"
         stems.mkdir(parents=True)
+        self.stems = stems
         for n in self.names:
-            (stems / f"SECTIONS_STEM_{n}.json").write_text('{"bpm": 128}', encoding="ascii")
+            (stems / f"SECTIONS_STEM_{n}.json").write_text(
+                json.dumps({"track": n, "bpm": 128}), encoding="ascii")
+            (stems / f"{n}__stemenv.npz").write_bytes(b"npz " + n.encode("ascii"))
         self.plans = self.root / "Documentation" / "Plans" / "arranger-signal-rewiring"
         self.plans.mkdir(parents=True)
         self.baseline = self.plans / "baseline_alignments.json"
@@ -741,6 +1046,40 @@ def test_cli_a_3_pair_shift_needs_no_flag(scratch):
     assert done.returncode == 0, done.stderr + done.stdout
 
 
+def test_cli_removing_a_stem_cache_after_a_refresh_changes_the_recorded_hashes(scratch):
+    npz_label = "Test Project/14.08.26/_Stem Analysis/T00__stemenv.npz"
+    first = scratch.sidecars()
+    assert len(first) == 1                                   # the fixture's bootstrap refresh
+    h1 = json.loads(first[0].read_bytes())["input_hashes"]
+    assert h1[npz_label] == hashlib.sha256(b"npz T00").hexdigest()
+    assert sum(1 for k in h1 if k.endswith("__stemenv.npz")) == 11
+    (scratch.stems / "T00__stemenv.npz").unlink()
+    done = scratch.refresh("--reason", "the T00 envelope cache was deleted, re-pin the inputs")
+    assert done.returncode == 0, done.stderr + done.stdout
+    second = [p for p in scratch.sidecars() if p not in first]
+    assert len(second) == 1
+    h2 = json.loads(second[0].read_bytes())["input_hashes"]
+    assert h2[npz_label] == "missing"
+    assert h2 != h1
+    assert {k: v for k, v in h2.items() if k != npz_label} == {
+        k: v for k, v in h1.items() if k != npz_label}
+
+
+def test_cli_every_pair_raising_is_refused_then_accepted_with_the_flag(scratch):
+    scratch.control(named=scratch.pairs()[:60], raising=scratch.pairs())
+    before = scratch.tree()
+    refused = scratch.refresh("--reason", "everything raises now, trying without the flag")
+    assert refused.returncode != 0
+    assert scratch.tree() == before
+    assert "status_flips" in (refused.stderr + refused.stdout)
+    accepted = scratch.refresh("--reason", "everything raises, read through and accepted",
+                               "--accept-shift")
+    assert accepted.returncode == 0, accepted.stderr + accepted.stdout
+    recs = [json.loads(p.read_bytes()) for p in scratch.sidecars()]
+    flagged = [r for r in recs if r["accepted_shift"]]
+    assert len(flagged) == 1 and "status_flips" in flagged[0]["guards_tripped_names"]
+
+
 def test_cli_dropping_a_track_removes_more_than_5_percent_and_is_refused(scratch):
     before = scratch.tree()
     gone = scratch.names[-1]
@@ -782,6 +1121,19 @@ def test_the_existing_baseline_tests_still_collect_with_the_same_names():
         assert hasattr(TAB, helper), helper
     assert "--reason" in TAB.__doc__
     assert TAB.BASELINE == REAL_BASELINE
+
+
+def test_the_failing_test_report_tells_the_reader_to_give_a_reason(tmp_path, monkeypatch):
+    import test_alignment_baseline as TAB
+    row = _ok_row("A", "B")
+    baseline = tmp_path / "baseline_alignments.json"
+    baseline.write_text(json.dumps(_payload([row])), encoding="ascii")
+    monkeypatch.setattr(TAB, "BASELINE", baseline)
+    monkeypatch.setattr(TAB, "compute_rows", lambda: [dict(row, score=99)])
+    with pytest.raises(pytest.fail.Exception) as info:
+        TAB.test_alignment_decisions_match_baseline()
+    text = str(info.value)
+    assert "--refresh" in text and "--reason" in text, text
 
 
 def test_the_new_files_are_ascii_only():
