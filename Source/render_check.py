@@ -185,6 +185,11 @@ class CheckResult:
     verdict: str
     exit_code: int
     meta: dict
+    #: How much each check really inspected, keyed by check name. Findings only
+    #: say what a check FOUND; this says how much it LOOKED AT, so "ran on 101
+    #: boundaries and found nothing" is distinguishable from "never ran". It
+    #: never feeds the verdict. Empty when no audio check ran (the early bails).
+    coverage: dict = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -1360,8 +1365,33 @@ def check_map_vs_render(rms100_db: np.ndarray, fps: int, arr_end_sec: float,
     )]
 
 
+#: Why a boundary can end up with no click verdict. Every boundary is either
+#: inspected (a metric AND a null set of >= 8 beats existed, so a verdict,
+#: pass or fail, was reached) or skipped for exactly one of these:
+#:   window_unreadable   its own +/-2 ms window could not be read
+#:   null_set_too_small  fewer than 8 usable null beats around it
+#:   eof                 its own window extends past the end of the file
+#:   tempo_arc           never handed to the check: run_check skips every
+#:                       boundary on a tempo-arc map (see boundary_click_
+#:                       skipped_tempo_arc)
+BOUNDARY_CLICK_SKIP_REASONS = ("window_unreadable", "null_set_too_small",
+                               "eof", "tempo_arc")
+
+
+def _boundary_click_coverage(boundaries: int, inspected: int,
+                             skipped_by_reason: dict, failed: int) -> dict:
+    """The one shape of a boundary_click coverage record, so the function and
+    run_check cannot drift apart. boundaries == inspected + skipped."""
+    by_reason = {r: int(skipped_by_reason.get(r, 0))
+                 for r in BOUNDARY_CLICK_SKIP_REASONS}
+    return {"boundaries": int(boundaries), "inspected": int(inspected),
+            "skipped": sum(by_reason.values()),
+            "skipped_by_reason": by_reason, "failed": int(failed)}
+
+
 def check_boundary_click(render_path: Path, boundaries_sec: list[float],
-                         tempo_map: TempoMap) -> list[Finding]:
+                         tempo_map: TempoMap,
+                         coverage: dict | None = None) -> list[Finding]:
     """For each boundary: read +/-2 ms, metric vs null on 32 nearest beats.
 
     Null set: integer beats 16 each side of the boundary, skipping any beat
@@ -1372,10 +1402,20 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
     Any boundary or null window whose requested span extends past EOF is
     counted (past-EOF only; a request that starts before 0 is just a normal
     leading-edge clip). The count is surfaced as a FAIL finding so a render
-    cut off mid-mix can never pass by silently skipping its tail windows."""
+    cut off mid-mix can never pass by silently skipping its tail windows.
+
+    The return value is only ever the findings, and a clean pass appends
+    nothing, so on its own "inspected 101 boundaries" and "never looked" read
+    the same. If `coverage` is given it is filled in place with how many
+    boundaries were really inspected (see BOUNDARY_CLICK_SKIP_REASONS):
+    boundaries, inspected, skipped, skipped_by_reason, failed. It never
+    changes the findings."""
     findings: list[Finding] = []
     null_cache: dict[int, float] = {}
     eof_truncated_count = 0
+    inspected = 0
+    failed = 0
+    skipped = {"window_unreadable": 0, "null_set_too_small": 0, "eof": 0}
 
     with sf.SoundFile(str(render_path), "r") as fh:
         sr = float(fh.samplerate)
@@ -1386,9 +1426,11 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
             center = int(round(t_sec * sr))
             if center + half > fh.frames:
                 eof_truncated_count += 1
+                skipped["eof"] += 1
                 continue
             y = _read_window(fh, center, half)
             if y is None:
+                skipped["window_unreadable"] += 1
                 continue
             metric = _boundary_metric(y)
 
@@ -1419,15 +1461,18 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
                 null_metrics.append(m0)
 
             if len(null_metrics) < 8:
+                skipped["null_set_too_small"] += 1
                 continue
             null = np.asarray(null_metrics)
             null_max = float(null.max())
             null_mean = float(null.mean())
             null_std = float(null.std())
             z = (metric - null_mean) / (null_std + 1e-12)
+            inspected += 1
 
             if (metric > CLICK_NULL_RATIO * null_max and z > CLICK_NULL_Z
                     and _click_shape(y)):
+                failed += 1
                 t0 = max(0.0, t_sec - 0.005)
                 findings.append(Finding(
                     check="boundary_click", level="FAIL",
@@ -1451,6 +1496,10 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
             msg=(f"{eof_truncated_count} boundary window reads truncated by "
                  "EOF"),
         ))
+    if coverage is not None:
+        coverage.clear()
+        coverage.update(_boundary_click_coverage(
+            len(boundaries_sec), inspected, skipped, failed))
     return findings
 
 
@@ -2728,6 +2777,10 @@ def run_check(render_path: Path, report_path: Path,
     findings += check_map_vs_render(sweep.rms100_db, fps, arr_end_s, tempo_map)
 
     boundaries_sec = collect_boundaries(clips, loops, arr_end_b, tempo_map)
+    # How much boundary_click really looked at. Always recorded, an empty
+    # boundary list included ("inspected 0 of 0"), so the report never has to
+    # leave the line out. Reporting only, never part of the verdict.
+    click_checked = _boundary_click_coverage(0, 0, {}, 0)
     if boundaries_sec:
         # check_boundary_click reads a +/-CLICK_HALF_WINDOW_SEC (2 ms) window
         # around each mapped boundary. The map's measured residual grows with
@@ -2758,7 +2811,8 @@ def run_check(render_path: Path, report_path: Path,
         else:
             trusted, untrusted = [], list(boundaries_sec)
         if trusted:
-            findings += check_boundary_click(render_path, trusted, tempo_map)
+            findings += check_boundary_click(render_path, trusted, tempo_map,
+                                             coverage=click_checked)
         if untrusted:
             # A NAMED skip, never a silent pass. skipped_check lets the report
             # keep boundary_click out of "Checks run clean" - without it the
@@ -2779,6 +2833,13 @@ def run_check(render_path: Path, report_path: Path,
                      "map's timing uncertainty is not characterised and the "
                      "fit scatter alone exceeds the +/-2 ms click window"),
             ))
+        # The boundaries never handed to the check are the same `untrusted`
+        # count the SKIP finding above reports, folded into the one record.
+        click_checked = _boundary_click_coverage(
+            len(boundaries_sec), click_checked["inspected"],
+            {**click_checked["skipped_by_reason"],
+             "tempo_arc": len(untrusted)},
+            click_checked["failed"])
 
     findings += check_level_cliff(loops, sweep.beat_rms_db, tempo_map)
     findings += check_loop_exit_jump(loops, sweep.beat_rms_db, clips,
@@ -2829,7 +2890,7 @@ def run_check(render_path: Path, report_path: Path,
         "report_sha1": report_sha1,
     })
     return CheckResult(findings=findings, verdict=verdict, exit_code=exit_code,
-                       meta=meta)
+                       meta=meta, coverage={"boundary_click": click_checked})
 
 
 # --------------------------------------------------------------------------- #
@@ -2855,6 +2916,16 @@ def _round_finding(f: Finding) -> dict:
         "measured": f.measured,
         "msg": f.msg,
     }
+
+
+def _coverage_line(name: str, rec: dict) -> str:
+    """One plain line, e.g. `boundary_click: inspected 97 of 101 boundaries
+    (skipped 4: null_set_too_small 4), 0 failed`."""
+    reasons = ", ".join(f"{r} {n}" for r, n in rec["skipped_by_reason"].items()
+                        if n)
+    skipped = f"skipped {rec['skipped']}" + (f": {reasons}" if reasons else "")
+    return (f"{name}: inspected {rec['inspected']} of {rec['boundaries']} "
+            f"boundaries ({skipped}), {rec['failed']} failed")
 
 
 def write_report(result: CheckResult, render_path: Path,
@@ -2901,6 +2972,14 @@ def write_report(result: CheckResult, render_path: Path,
         md.append(f"| {i} | {time} | {bts} | {f.check} | {f.level} | "
                   f"{measured} | {f.msg} |")
 
+    # How much each check really inspected. Sits BEFORE "Checks run clean" on
+    # purpose: a reader (and the tests) take everything after that heading as
+    # the clean list. Omitted only when no audio check ran at all.
+    if result.coverage:
+        md.append("\n## Coverage\n")
+        for name, rec in result.coverage.items():
+            md.append(_coverage_line(name, rec))
+
     all_checks = {"hard_silence", "boundary_click", "level_cliff",
                   "loop_exit_jump", "loop_period", "exposed_solo",
                   "loop_hole", "transition_dip", "loop_verbatim",
@@ -2935,6 +3014,7 @@ def write_report(result: CheckResult, render_path: Path,
         "verdict": result.verdict,
         "exit_code": result.exit_code,
         "findings": [_round_finding(f) for f in result.findings],
+        "coverage": result.coverage,
     }
     js_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return md_path, js_path
