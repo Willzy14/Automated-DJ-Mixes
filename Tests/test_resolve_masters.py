@@ -123,20 +123,66 @@ def test_must_in_the_folder_name_still_filters_folders(tmp_path):
     assert sorted(names(mod.resolve("Artist", "Title"))) == ["Title A.wav", "Title B.wav"]
 
 
-def test_exact_filename_beats_partial_matches(tmp_path):
-    # PINNED: a file named exactly like the requested title beats every partial match, including the
-    # "(Extended Mix)" file that the old rank preferred, and the "(Dub)" file.
-    files = ["Better When (Dub).wav", "Better When (Extended Mix).wav", "Better When.wav"]
-    mod = one_folder(tmp_path, "Artist - Better When [Label] Project", files)
-    r = names(mod.resolve("Artist", "Better When"))
-    assert r[0] == "Better When.wav"
-    assert r == ["Better When.wav", "Better When (Extended Mix).wav", "Better When (Dub).wav"]
+def test_latest_version_wins_and_the_exact_name_only_breaks_ties(tmp_path):
+    # Sam's standing rule: the latest version wins. A bare "Better When.wav" does NOT beat the newer decorated file (A02),
+    # and the "(Dub)" file is buried by the old rank. The exact name only decides between files of the SAME version rank.
+    mod = one_folder(tmp_path, "Artist - Better When [Label] Project", ["Better When.wav", "Better When (Extended Mix) SW V2.wav"])
+    assert names(mod.resolve("Artist", "Better When")) == ["Better When (Extended Mix) SW V2.wav", "Better When.wav"]
+    mod = one_folder(tmp_path / "b", "Artist - Better When [Label] Project",
+                     ["Better When (Dub).wav", "Better When (Extended Mix).wav", "Better When.wav"])
+    assert names(mod.resolve("Artist", "Better When")) == ["Better When (Extended Mix).wav", "Better When.wav", "Better When (Dub).wav"]
 
 
-def test_exact_filename_matches_artist_dash_title_too(tmp_path):
-    files = ["Artist - Better When (Extended Mix).wav", "Artist - Better When.wav"]
+def test_at_equal_version_rank_the_exact_title_wins(tmp_path):
+    # Path descending alone would put "Better When Remaster.wav" before "01 Better When.wav"; the exact name decides the tie.
+    files = ["01 Better When.wav", "Better When Remaster.wav", "Better When (Extended Mix) SW V2.wav"]
     mod = one_folder(tmp_path, "Artist - Better When [Label] Project", files)
-    assert names(mod.resolve("Artist", "Better When"))[0] == "Artist - Better When.wav"
+    assert names(mod.resolve("Artist", "Better When")) == [
+        "Better When (Extended Mix) SW V2.wav", "01 Better When.wav", "Better When Remaster.wav"]
+
+
+def test_an_upper_case_wav_extension_is_still_the_exact_name(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Better When [Label] Project", ["01 Better When.WAV", "Better When Remaster.wav"])
+    assert names(mod.resolve("Artist", "Better When")) == ["01 Better When.WAV", "Better When Remaster.wav"]
+    mod2 = one_folder(tmp_path / "b", "Artist - Better When [Label] Project", ["02 Better When.wav", "Better When.WAV"])
+    assert names(mod2.resolve("Artist", "Better When", None, "Better When")) == ["Better When.WAV"]
+
+
+def test_artist_dash_title_is_an_exact_name_that_only_breaks_ties(tmp_path):
+    files = ["Artist - Better When (Extended Mix).wav", "Artist - Better When.wav", "Better When Remaster.wav"]
+    mod = one_folder(tmp_path, "Artist - Better When [Label] Project", files)
+    assert names(mod.resolve("Artist", "Better When")) == [
+        "Artist - Better When (Extended Mix).wav", "Artist - Better When.wav", "Better When Remaster.wav"]
+
+
+@pytest.mark.parametrize("artist,folder,title,files,expected", [
+    pytest.param("Artist", "Artist - Better When [Label] Project", "Better When",
+                 ["Better When.wav", "Better When (Extended Mix) SW V2.wav"],
+                 ["Better When (Extended Mix) SW V2.wav", "Better When.wav"], id="A02-bare-vs-SW-V2"),
+    pytest.param("Artist", "Artist - Title [Label] Project", "Title",
+                 ["Title.wav", "Title SW V2.wav", "Title SW V3.wav"],
+                 ["Title SW V3.wav", "Title SW V2.wav", "Title.wav"], id="A16-bare-vs-V2-V3"),
+    pytest.param("A03", "A03 - Title [Label] Project", "Title",
+                 ["A03 - Title.wav", "A03 - Title 24 Bit MASTER.wav", "A03 - Title MASTER AMENDED.wav"],
+                 ["A03 - Title MASTER AMENDED.wav", "A03 - Title 24 Bit MASTER.wav", "A03 - Title.wav"], id="A03-bare-vs-AMENDED"),
+    pytest.param("Artist", "Artist - Title [Label] Project", "Title",
+                 ["Title.wav", "Title (Extended Mix).wav"], ["Title (Extended Mix).wav", "Title.wav"], id="A14-bare-vs-Extended"),
+    pytest.param("Artist", "Artist - Title [Label] Project", "Title",
+                 ["Title.wav", "Title (Original Mix).wav"], ["Title (Original Mix).wav", "Title.wav"], id="A15-bare-vs-Original"),
+    pytest.param("A30", "A30 - Title [Label] Project", "Title",
+                 ["A30 - Title.wav", "A30 - Title (Extended Mix) SW V1.wav"],
+                 ["A30 - Title (Extended Mix) SW V1.wav", "A30 - Title.wav"], id="A30-bare-vs-Extended-V1"),
+])
+def test_the_version_rule_beats_a_bare_exact_name(tmp_path, artist, folder, title, files, expected):
+    # Regressions a reviewer measured against the first round: the old rank (Extended/Original, newest SW V, AMENDED) must decide.
+    # For A03 and A30 the artist key matches the "A03 - Title" file name, which is what made the bare file an exact match.
+    mod = one_folder(tmp_path, folder, files)
+    assert names(mod.resolve(artist, title)) == expected
+
+
+def test_an_empty_must_hint_is_no_hint(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Better When [Label] Project", ["Better When.wav", "Better When (Extended Mix) SW V2.wav"])
+    assert names(mod.resolve("Artist", "Better When", ""))[0] == "Better When (Extended Mix) SW V2.wav"
 
 
 def test_exact_selector_picks_only_that_file(tmp_path):
@@ -259,6 +305,150 @@ def test_folder_must_contain_both_artist_and_title(tmp_path):
 def test_at_most_three_results(tmp_path):
     mod = one_folder(tmp_path, "Artist - Title [Label] Project", [f"Title V{i}.wav" for i in range(6)])
     assert len(mod.resolve("Artist", "Title")) == 3
+
+
+# --- round 2: variants, the must hint, ties, track numbers, the exact selector -----------------------------------------
+
+@pytest.mark.parametrize("variant", ["(Someone Remix)", "(Someone Rework)", "(Someone Refix)", "(Someone Bootleg)",
+                                     "(Someone VIP)", "(VIP Mix)", "[Someone VIP]"])
+def test_a_remix_like_variant_is_never_the_named_track(tmp_path, variant):
+    # A remix and an original are different tracks: even with the newer version (A33) the variant does not win.
+    files = ["Artist - Title (Extended Mix) SW V1.wav", f"Artist - Title {variant} (Extended Mix) SW V3.wav"]
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title")) == files
+
+
+def test_original_folder_beats_a_remix_folder_with_a_higher_version(tmp_path):                         # A17
+    lib = tmp_path / "Library"
+    orig = make_folder(lib, "Artist - Title [Label] Project", ["Artist - Title (Extended Mix) SW V1.wav"])
+    remix = make_folder(lib, "Artist - Title (Someone Remix) [Label] Project",
+                        ["Artist - Title (Someone Remix) (Extended Mix) SW V2.wav"])
+    mod, _ = load_resolver(tmp_path, [("Artist - Title [Label] Project", orig),
+                                      ("Artist - Title (Someone Remix) [Label] Project", remix)])
+    assert names(mod.resolve("Artist", "Title")) == [
+        "Artist - Title (Extended Mix) SW V1.wav", "Artist - Title (Someone Remix) (Extended Mix) SW V2.wav"]
+
+
+def test_a_remix_folder_alone_still_resolves(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Title (Someone Remix) [Label] Project",
+                     ["Artist - Title (Someone Remix) SW V1.wav", "Artist - Title (Someone Remix) SW V2.wav"])
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title (Someone Remix) SW V2.wav"
+
+
+def test_the_must_hint_beats_the_plain_title(tmp_path):                                                # A22
+    mod = one_folder(tmp_path, "Artist - Title (Someone Remix) [Label] Project", ["Title.wav", "Title (Someone Remix) SW V2.wav"])
+    assert names(mod.resolve("Artist", "Title", "Someone Remix")) == ["Title (Someone Remix) SW V2.wav", "Title.wav"]
+
+
+def test_the_hint_picks_the_latest_version_of_the_remix(tmp_path):
+    files = ["Artist - Title.wav", "Artist - Title (Someone Remix) SW V1.wav", "Artist - Title (Someone Remix) SW V2.wav"]
+    mod = one_folder(tmp_path, "Artist - Title (Someone Remix) [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title", "Someone Remix"))[:2] == [
+        "Artist - Title (Someone Remix) SW V2.wav", "Artist - Title (Someone Remix) SW V1.wav"]
+
+
+def test_a_title_that_says_remix_names_the_remix(tmp_path):
+    files = ["Artist - Title SW V3.wav", "Artist - Title (Someone Remix) SW V2.wav"]
+    mod = one_folder(tmp_path, "Artist - Title Someone Remix [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title (Someone Remix)"))[0] == "Artist - Title (Someone Remix) SW V2.wav"
+
+
+def test_vip_is_matched_as_a_whole_word_and_a_title_that_has_it_switches_it_off(tmp_path):
+    # vip can be a word in a real title: asking for "VIP Lounge" makes the VIP Lounge file the named track ...
+    mod = one_folder(tmp_path, "Artist - VIP Lounge [Label] Project", ["VIP Lounge SW V3.wav", "Lounge SW V1.wav"])
+    assert names(mod.resolve("Artist", "VIP Lounge"))[0] == "VIP Lounge SW V3.wav"
+    # ... asking for "Lounge" does not (a VIP is another track) ...
+    assert names(mod.resolve("Artist", "Lounge"))[0] == "Lounge SW V1.wav"
+    # ... and vip inside another word (Viper) is not a marker at all.
+    mod2 = one_folder(tmp_path / "b", "Artist - Viper [Label] Project", ["Viper SW V3.wav", "Viper (Radio Edit) SW V1.wav"])
+    assert names(mod2.resolve("Artist", "Viper"))[0] == "Viper SW V3.wav"
+
+
+def test_must_hint_in_a_filename_beats_the_version_rank(tmp_path):
+    # The folder name carries the hint, so both files are eligible; the file that contains it wins over the newer Extended Mix.
+    files = ["Artist - Title (Club Mix) SW V1.wav", "Artist - Title (Extended Mix) SW V2.wav"]
+    mod = one_folder(tmp_path, "Artist - Title Club Mix [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title", "Club Mix")) == files
+
+
+def test_must_hint_that_is_a_full_filename_beats_the_version_rank(tmp_path):
+    # title is "Better" so the exact-title tie-break is not involved: only the must hint's exact tier can put the bare file first.
+    mod = one_folder(tmp_path, "Artist - Better When [Label] Project", ["Better When.wav", "Better When (Extended Mix) SW V2.wav"])
+    assert names(mod.resolve("Artist", "Better", "Better When")) == ["Better When.wav", "Better When (Extended Mix) SW V2.wav"]
+
+
+def test_files_that_tie_on_everything_sort_by_path_descending(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", ["Title A.wav", "Title C.wav", "Title B.wav"])
+    assert names(mod.resolve("Artist", "Title")) == ["Title C.wav", "Title B.wav", "Title A.wav"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("02 - Better When", "Better When"), ("02. Better When", "Better When"), ("02_Better When", "Better When"),
+    ("02) Better When", "Better When"), ("2) Better When", "Better When"), ("02.Better When", "Better When"),
+    ("02 Better When", "Better When"),                       # zero-padded: a track number
+    ("7 Seconds", "7 Seconds"), ("100 Ways", "100 Ways"), ("007 Theme", "007 Theme"), ("0 To 100", "0 To 100"),
+    ("1999", "1999"), ("24K Magic", "24K Magic"), ("2 Hearts", "2 Hearts"),
+])
+def test_a_leading_number_is_dropped_only_with_a_separator_or_zero_padded(tmp_path, raw, expected):
+    mod, _ = load_resolver(tmp_path, [])
+    assert mod.strip_num(raw) == expected
+
+
+def test_a_bare_leading_number_is_part_of_another_song(tmp_path):                                      # A19
+    mod = one_folder(tmp_path, "Artist - Seconds [Label] Project", ["7 Seconds.wav", "Seconds (Extended Mix) SW V2.wav"])
+    assert names(mod.resolve("Artist", "Seconds"))[0] == "Seconds (Extended Mix) SW V2.wav"
+    assert mod.resolve("Artist", "Seconds", None, "Seconds") == []                     # 7 Seconds is not "Seconds"
+    assert names(mod.resolve("Artist", "Seconds", None, "7 Seconds")) == ["7 Seconds.wav"]
+
+
+def test_asking_for_7_seconds_returns_7_seconds(tmp_path):
+    mod = one_folder(tmp_path, "Artist - 7 Seconds [Label] Project", ["7 Seconds.wav", "Seconds (Extended Mix) SW V2.wav"])
+    assert names(mod.resolve("Artist", "7 Seconds"))[0] == "7 Seconds.wav"
+
+
+def test_100_ways_is_not_ways(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Ways [Label] Project", ["100 Ways.wav", "Ways SW V1.wav"])
+    assert names(mod.resolve("Artist", "Ways"))[0] == "Ways SW V1.wav"
+    assert mod.resolve("Artist", "Ways", None, "Ways") == []
+    mod2 = one_folder(tmp_path / "b", "Artist - 100 Ways [Label] Project", ["100 Ways.wav", "Ways SW V1.wav"])
+    assert names(mod2.resolve("Artist", "100 Ways"))[0] == "100 Ways.wav"
+
+
+def test_exact_selector_full_stem_beats_the_number_stripped_match(tmp_path):
+    mod = one_folder(tmp_path, EP_FOLDER, ["02 Better When.wav", "Better When.wav", "99 Zebra.wav"])
+    assert names(mod.resolve("Artist", "Better When", None, "Better When")) == ["Better When.wav"]
+    assert names(mod.resolve("Artist", "Better When", None, "02 Better When")) == ["02 Better When.wav"]
+
+
+def test_exact_selector_falls_back_to_the_number_stripped_name_only_without_a_full_match(tmp_path):
+    mod = one_folder(tmp_path, EP_FOLDER, ["02 Better When.wav", "99 Zebra.wav"])
+    assert names(mod.resolve("Artist", "Better When", None, "Better When")) == ["02 Better When.wav"]
+
+
+def test_exact_selector_does_not_return_another_track_number(tmp_path):
+    mod = one_folder(tmp_path, "Art - Night EP [Lab] Project", ["01 Intro.wav", "05 Night.wav", "12 Intro.wav"])
+    assert names(mod.resolve("Art", "Night", None, "01 Intro")) == ["01 Intro.wav"]
+    assert names(mod.resolve("Art", "Night", None, "12 Intro")) == ["12 Intro.wav"]
+
+
+@pytest.mark.parametrize("given", [" 02 Better When.wav ", "02 Better When.wav ", "MASTER RENDERS\\02 Better When.wav",
+                                   "MASTER RENDERS/02 Better When.wav", "C:\\x\\MASTER RENDERS\\02 Better When", "02  better   WHEN.WAV"])
+def test_exact_selector_ignores_spaces_a_folder_part_and_case(tmp_path, given):
+    mod = one_folder(tmp_path, EP_FOLDER, EP_FILES)
+    assert names(mod.resolve("Artist", "Better When", None, given)) == ["02 Better When.wav"]
+
+
+def test_exact_selector_does_not_fold_punctuation(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Better When [Label] Project", ["Better When Dub.wav"])
+    assert mod.resolve("Artist", "Better When", None, "Better When (Dub)") == []
+    assert mod.resolve("Artist", "Better When", None, "Better-When_Dub") == []
+    assert names(mod.resolve("Artist", "Better When", None, "better when dub")) == ["Better When Dub.wav"]
+
+
+@pytest.mark.parametrize("given", ["!!!", " ", "\\", "/"])
+def test_exact_selector_with_nothing_to_match_returns_nothing(tmp_path, given):
+    mod = one_folder(tmp_path, EP_FOLDER, EP_FILES)
+    assert mod.resolve("Artist", "Better When", None, given) == []
 
 
 # --- the command line ---------------------------------------------------------------------------------------------
