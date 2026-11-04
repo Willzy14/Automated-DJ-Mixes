@@ -71,7 +71,10 @@ def _discard_partial(partial: Path) -> None:
         pass
 
 
-def compress_als(lines: list[str], output_path: Path) -> Path:
+def compress_als(lines: list[str], output_path: Path,
+                 expect_track_count: int | None = None,
+                 expect_track_devices: tuple[tuple[str, str], ...] | None = None,
+                 ) -> Path:
     """Compress lines back into an ALS file: write, validate, THEN publish.
 
     The ALS is written to a sibling `.partial` file and renamed onto
@@ -80,7 +83,14 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
     .als behind for a resumed run, or Ableton, to pick up. The partial is
     removed on every outcome. A failed final rename (a read-only or locked
     output) is reported as ValueError and leaves any existing output intact.
+
+    A caller that knows its job can pass `expect_track_count` and/or
+    `expect_track_devices`: validate_als then also runs those job-aware
+    expectations on the partial, before the rename, so a file that fails them
+    is not published either. With neither given, behaviour is unchanged.
+    `output_path` may be text; it is returned as a Path.
     """
+    output_path = Path(output_path)
     content = "".join(lines)
     raw_bytes = content.encode("utf-8")
     partial = output_path.with_name(output_path.name + ".partial")
@@ -98,6 +108,18 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
             raise ValueError(
                 f"ALS validation failed for {output_path.name}: {errors[0]}"
             )
+        if expect_track_count is not None or expect_track_devices is not None:
+            from validate_als import validate_als
+            expectation_errors = validate_als(
+                partial,
+                expected_track_count=expect_track_count,
+                expected_track_devices=expect_track_devices,
+            )
+            if expectation_errors:
+                raise ValueError(
+                    f"ALS expectation gate failed for {output_path.name}: "
+                    f"{expectation_errors[0]}"
+                )
         try:
             partial.replace(output_path)
         except OSError as exc:
@@ -1130,26 +1152,20 @@ def generate_session(
         tempo_points = [(p.time_beats, p.value) for p in tempo_automation]
         _insert_main_track_tempo_envelope(lines, tempo_points)
 
-    result = compress_als(lines, output_path)
-
-    # Codex B6: job-aware expectation gate. compress_als already ran the
-    # generic corruption gate (layers 1-4); this generator KNOWS the job, so
-    # it also asserts the written ALS carries exactly len(patches) clip-bearing
-    # tracks, each with the mixer devices the automation stage later targets
-    # (Utility gain + Channel EQ low shelf). Catches a clip insertion that
-    # silently failed and a stripped/wrong template — before the file ships.
-    from validate_als import MIXER_AUTOMATION_DEVICES, validate_als
-    expectation_errors = validate_als(
-        output_path,
-        expected_track_count=len(patches),
-        expected_track_devices=MIXER_AUTOMATION_DEVICES,
+    # Codex B6: job-aware expectation gate. compress_als runs the generic
+    # corruption gate (layers 1-4); this generator KNOWS the job, so it also
+    # asserts the ALS carries exactly len(patches) clip-bearing tracks, each
+    # with the mixer devices the automation stage later targets (Utility gain
+    # + Channel EQ low shelf). Catches a clip insertion that silently failed
+    # and a stripped/wrong template. Both gates run on the .partial BEFORE it
+    # is renamed onto output_path (burn list D22), so a failing gate
+    # publishes nothing.
+    from validate_als import MIXER_AUTOMATION_DEVICES
+    return compress_als(
+        lines, output_path,
+        expect_track_count=len(patches),
+        expect_track_devices=MIXER_AUTOMATION_DEVICES,
     )
-    if expectation_errors:
-        raise ValueError(
-            f"ALS expectation gate failed for {output_path.name}: "
-            f"{expectation_errors[0]}"
-        )
-    return result
 
 
 def _set_project_bpm(lines: list[str], bpm: float) -> None:

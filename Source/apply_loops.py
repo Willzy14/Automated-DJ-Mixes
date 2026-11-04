@@ -69,6 +69,7 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
     removed on every outcome. A failed final rename (a read-only or locked
     output) is reported as ValueError, like a validation failure, and leaves
     any existing output intact."""
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     content = "".join(lines)
     partial = output_path.with_name(output_path.name + ".partial")
@@ -471,6 +472,11 @@ def find_insertion_point(lines: list[str], events_start: int,
     return last_clip_end  # insert after all existing clips
 
 
+# A number as an XML writer may spell it: optional sign, digits with an optional
+# fraction (or a bare fraction), optional exponent (1.5, +4, -2, .5, 1E-06).
+_XML_NUMBER = r"[+\-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+\-]?\d+)?"
+
+
 def shift_named_clip(lines: list[str], track_start: int, track_end: int,
                      clip_name: str, delta_beats: float) -> int:
     """Shift the Time/CurrentStart/CurrentEnd of a single named clip later
@@ -511,21 +517,21 @@ def shift_named_clip(lines: list[str], track_start: int, track_end: int,
     # Patch attributes within this clip
     changed = 0
     # 1) Time on the opening tag
-    m = re.search(r'Time="([\d.\-]+)"', lines[clip_open_idx])
+    m = re.search(rf'Time="({_XML_NUMBER})"', lines[clip_open_idx])
     if m:
         new_t = float(m.group(1)) + delta_beats
         lines[clip_open_idx] = re.sub(
-            r'Time="[\d.\-]+"', f'Time="{new_t}"', lines[clip_open_idx], count=1)
+            rf'Time="{_XML_NUMBER}"', f'Time="{new_t}"', lines[clip_open_idx], count=1)
         changed += 1
     # 2) CurrentStart, CurrentEnd inside the clip (arrangement-beats fields)
     for k in range(clip_open_idx, clip_close_idx + 1):
         line = lines[k]
         for tag in ("CurrentStart", "CurrentEnd"):
-            m = re.search(rf'<{tag} Value="([\d.\-]+)"', line)
+            m = re.search(rf'<{tag} Value="({_XML_NUMBER})"', line)
             if m:
                 new_v = float(m.group(1)) + delta_beats
                 lines[k] = re.sub(
-                    rf'(<{tag} Value=")[\d.\-]+(")',
+                    rf'(<{tag} Value="){_XML_NUMBER}(")',
                     rf'\g<1>{new_v}\g<2>', line, count=1)
                 line = lines[k]
                 changed += 1
@@ -577,7 +583,7 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
 
     def _first_value(tag: str):
         for k in range(clip_open_idx, clip_close_idx + 1):
-            m_val = re.search(rf'<{tag} Value="([\d.\-]+)"', lines[k])
+            m_val = re.search(rf'<{tag} Value="({_XML_NUMBER})"', lines[k])
             if m_val:
                 return float(m_val.group(1))
         return None
@@ -591,10 +597,10 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
                 f"trim_named_clip_front: trimming {trim_beats:g} beats would empty "
                 f"clip '{clip_name}' ({hi_tag} - {lo_tag} = {hi - lo:g} beats)")
     changed = 0
-    m = re.search(r'Time="([\d.\-]+)"', lines[clip_open_idx])
+    m = re.search(rf'Time="({_XML_NUMBER})"', lines[clip_open_idx])
     if m:
         lines[clip_open_idx] = re.sub(
-            r'Time="[\d.\-]+"', f'Time="{float(m.group(1)) + trim_beats}"',
+            rf'Time="{_XML_NUMBER}"', f'Time="{float(m.group(1)) + trim_beats}"',
             lines[clip_open_idx], count=1)
         changed += 1
     # ONLY the start fields move (keep the end). CurrentStart + LoopStart shift
@@ -602,10 +608,10 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
     for k in range(clip_open_idx, clip_close_idx + 1):
         line = lines[k]
         for tag in ("CurrentStart", "LoopStart"):
-            m = re.search(rf'<{tag} Value="([\d.\-]+)"', line)
+            m = re.search(rf'<{tag} Value="({_XML_NUMBER})"', line)
             if m:
                 lines[k] = re.sub(
-                    rf'(<{tag} Value=")[\d.\-]+(")',
+                    rf'(<{tag} Value="){_XML_NUMBER}(")',
                     rf'\g<1>{float(m.group(1)) + trim_beats}\g<2>', line, count=1)
                 line = lines[k]
                 changed += 1

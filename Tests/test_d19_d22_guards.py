@@ -359,3 +359,339 @@ def test_d19_trim_named_clip_front_zero_trim_and_unknown_clip_still_return_0():
     assert _trim(lines, -4.0) == 0
     assert _trim(lines, 4.0, name="no_such_clip") == 0
     assert lines == before
+
+
+# --------------------------------------------------------------------------- #
+# Round 2 (2026-11-04)                                                        #
+# --------------------------------------------------------------------------- #
+
+# Item 1: the job-aware gate (track count + mixer devices) used to run in
+# generate_session on the ALREADY PUBLISHED file, so a failing gate left an
+# invalid-for-the-job .als on disk for a resumed run to pick up (D22). It now
+# runs on the .partial inside compress_als, before the rename.
+
+def _gate_case(case):
+    from validate_als import MIXER_AUTOMATION_DEVICES
+    if case == "track_count":
+        return ["<Ableton>\n", "</Ableton>\n"], {"expect_track_count": 2}
+    return _one_clip_als(), {"expect_track_count": 1,
+                             "expect_track_devices": MIXER_AUTOMATION_DEVICES}
+
+
+@pytest.mark.parametrize("case", ["track_count", "mixer_devices"])
+def test_d22_a_failed_job_gate_leaves_no_output_and_no_partial(tmp_path, case):
+    from automated_dj_mixes import als_generator
+    lines, gate = _gate_case(case)
+    out = tmp_path / "Sections V9.als"
+    with pytest.raises(ValueError, match="ALS expectation gate failed for Sections V9.als"):
+        als_generator.compress_als(lines, out, **gate)
+    assert not out.exists()
+    assert _partials(tmp_path) == []
+
+
+@pytest.mark.parametrize("case", ["track_count", "mixer_devices"])
+def test_d22_a_failed_job_gate_keeps_an_existing_output_byte_identical(tmp_path, case):
+    from automated_dj_mixes import als_generator
+    lines, gate = _gate_case(case)
+    out, before = _existing_output(tmp_path)
+    with pytest.raises(ValueError, match="ALS expectation gate failed"):
+        als_generator.compress_als(lines, out, **gate)
+    assert out.read_bytes() == before
+    assert _partials(tmp_path) == []
+
+
+@pytest.mark.parametrize("case", ["track_count", "mixer_devices"])
+def test_d22_the_job_gate_error_text_is_the_text_generate_session_used_to_raise(
+        tmp_path, case):
+    import validate_als
+    from automated_dj_mixes import als_generator
+    lines, gate = _gate_case(case)
+    old_dir = tmp_path / "old"
+    new_dir = tmp_path / "new"
+    old_dir.mkdir()
+    new_dir.mkdir()
+    # The old path: publish after the basic gate, then run the job gate on the
+    # published file and raise this message (the f-string is the old one).
+    old_out = old_dir / "Sections V9.als"
+    als_generator.compress_als(lines, old_out)
+    errors = validate_als.validate_als(
+        old_out, expected_track_count=gate.get("expect_track_count"),
+        expected_track_devices=gate.get("expect_track_devices"))
+    assert errors
+    old_text = f"ALS expectation gate failed for {old_out.name}: {errors[0]}"
+    with pytest.raises(ValueError) as exc:
+        als_generator.compress_als(lines, new_dir / "Sections V9.als", **gate)
+    assert str(exc.value) == old_text
+
+
+def test_d22_a_passing_job_gate_writes_the_same_bytes_as_before(tmp_path, monkeypatch):
+    import time
+    from automated_dj_mixes import als_generator
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+    lines = _one_clip_als()
+    old_dir = tmp_path / "old"
+    new_dir = tmp_path / "new"
+    old_dir.mkdir()
+    new_dir.mkdir()
+    old = old_dir / "Sections V9.als"
+    with gzip.open(old, "wb") as f:        # the pre-D22 direct write
+        f.write("".join(lines).encode("utf-8"))
+    new = new_dir / "Sections V9.als"
+    assert als_generator.compress_als(lines, new, expect_track_count=1) == new
+    assert new.read_bytes() == old.read_bytes()
+    assert _partials(new_dir) == []
+
+
+TEMPLATE = ROOT / "Templates" / "DJ Mix Template 2026.als"
+skip_no_template = pytest.mark.skipif(
+    not TEMPLATE.exists(), reason="ALS template not present")
+
+
+def _template_patch():
+    from automated_dj_mixes.als_generator import TrackPatch
+    from automated_dj_mixes.analysis import TrackAnalysis
+    from automated_dj_mixes.warping import WarpMarker
+    analysis = TrackAnalysis(
+        path=Path("C:/fake/test_track.wav"), key="Am", camelot="8A", bpm=126.0,
+        lufs=-8.5, first_downbeat_sec=0.3, duration_sec=300.0, sample_rate=44100)
+    markers = [WarpMarker(beat_time=0.0, sample_time=0.3),
+               WarpMarker(beat_time=629.37, sample_time=300.0)]
+    return TrackPatch(analysis=analysis, track_index=0, warp_markers=markers)
+
+
+@skip_no_template
+@pytest.mark.parametrize("old_output_exists", [False, True])
+def test_d22_generate_session_publishes_nothing_when_the_job_gate_fails(
+        tmp_path, monkeypatch, old_output_exists):
+    import validate_als
+    from automated_dj_mixes import als_generator
+    real = validate_als.validate_als
+
+    def forced(path, expected_track_count=None, expected_track_devices=None,
+               expected_transitions=None):
+        if (expected_track_count is None and expected_track_devices is None
+                and expected_transitions is None):
+            return real(path)             # the basic gate stays real
+        return ["forced expectation failure"]
+
+    monkeypatch.setattr(validate_als, "validate_als", forced)
+    if old_output_exists:
+        out, before = _existing_output(tmp_path)
+    else:
+        out, before = tmp_path / "Sections V9.als", None
+    with pytest.raises(ValueError) as exc:
+        als_generator.generate_session(TEMPLATE, [_template_patch()], out)
+    assert str(exc.value) == (
+        f"ALS expectation gate failed for {out.name}: forced expectation failure")
+    if before is None:
+        assert not out.exists()
+    else:
+        assert out.read_bytes() == before
+    assert _partials(tmp_path) == []
+
+
+@skip_no_template
+def test_d22_generate_session_runs_the_job_gate_on_the_partial_not_the_published_file(
+        tmp_path, monkeypatch):
+    import validate_als
+    from automated_dj_mixes import als_generator
+    real = validate_als.validate_als
+    calls = []
+
+    def spy(path, *args, **kwargs):
+        calls.append((Path(path), kwargs.get("expected_track_count"),
+                      kwargs.get("expected_track_devices")))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(validate_als, "validate_als", spy)
+    out = tmp_path / "Sections V9.als"
+    als_generator.generate_session(TEMPLATE, [_template_patch()], out)
+    job = [c for c in calls if c[1] is not None]
+    assert len(job) == 1
+    path, count, devices = job[0]
+    assert path.name == "Sections V9.als.partial"
+    assert count == 1 and devices == validate_als.MIXER_AUTOMATION_DEVICES
+    assert all(c[0] != out for c in calls), "nothing re-validates the published file"
+    assert out.exists() and _partials(tmp_path) == []
+
+
+# Item 2: the trim guard's SOURCE (loop) window, on its own.
+
+def test_d19_trim_named_clip_front_refuses_when_only_the_loop_window_is_too_short():
+    lines = [ln.replace('<LoopEnd Value="32.0" />', '<LoopEnd Value="16.0" />')
+             for ln in _one_clip_als(time=100.0, length=32.0, src=0.0)]
+    f = _clip_fields(lines)
+    # arrangement window 32 beats, source window 16 beats; trim 20 is between
+    assert (f["CurrentEnd"] - f["CurrentStart"], f["LoopEnd"] - f["LoopStart"]) == (32.0, 16.0)
+    before = list(lines)
+    with pytest.raises(ValueError, match="LoopEnd - LoopStart"):
+        _trim(lines, 20.0)
+    assert lines == before
+    assert _trim(lines, 12.0) == 3         # a trim inside both windows still works
+
+
+# Item 3: a text output path.
+
+@pytest.mark.parametrize("name", _WRITERS)
+def test_d22_a_text_output_path_still_works_for_a_valid_write(
+        tmp_path, monkeypatch, name):
+    import validate_als
+    monkeypatch.setattr(validate_als, "report_als", lambda p: [])
+    out = tmp_path / "Sections V9.als"
+    result = _writer(name)(["<Ableton/>\n"], str(out))
+    assert Path(result) == out
+    assert gzip.open(out, "rb").read() == b"<Ableton/>\n"
+    assert _partials(tmp_path) == []
+
+
+@pytest.mark.parametrize("name", _WRITERS)
+def test_d22_a_text_output_path_is_refused_with_valueerror_not_attributeerror(
+        tmp_path, name):
+    out = tmp_path / "Sections V9.als"
+    with pytest.raises(ValueError, match="ALS validation failed"):
+        _writer(name)(["<not-an-als>\n"], str(out))
+    assert not out.exists()
+    assert _partials(tmp_path) == []
+
+
+# Item 4: the guard reads numbers the way an XML writer may spell them.
+
+@pytest.mark.parametrize("start_text, end_text", [
+    ("1E2", "1.32E+2"), ("+100", "+132"), ("1.0E+02", "132")])
+def test_d19_trim_named_clip_front_measures_exponent_and_plus_sign_values(
+        start_text, end_text):
+    # The loop window is made longer than the trim so only the arrangement
+    # window, written in the odd spelling, can raise.
+    lines = [ln.replace('<CurrentStart Value="100.0" />',
+                        f'<CurrentStart Value="{start_text}" />')
+               .replace('<CurrentEnd Value="132.0" />',
+                        f'<CurrentEnd Value="{end_text}" />')
+               .replace('<LoopEnd Value="32.0" />', '<LoopEnd Value="64.0" />')
+             for ln in _one_clip_als(time=100.0, length=32.0)]
+    before = list(lines)
+    with pytest.raises(ValueError, match="CurrentEnd - CurrentStart"):
+        _trim(lines, 32.0)
+    assert lines == before
+
+
+def test_d19_trim_named_clip_front_does_not_refuse_a_window_it_cannot_measure():
+    lines = [ln for ln in _one_clip_als()
+             if "<LoopStart" not in ln and "<LoopEnd" not in ln]
+    assert _trim(lines, 12.0) == 2          # Time + CurrentStart only
+
+
+# --------------------------------------------------------------------------- #
+# Round 3 (2026-11-04): the edit loops of trim_named_clip_front and           #
+# shift_named_clip read numbers the way the trim guard does, so an exponent   #
+# or plus-sign start is moved, not just measured (no silent half-trim).       #
+# --------------------------------------------------------------------------- #
+
+import re
+
+
+def _shift(lines, delta, name="intro_1"):
+    start, end, _ = apply_loops.find_track_line_ranges(lines)[0]
+    return apply_loops.shift_named_clip(lines, start, end, name, delta)
+
+
+def _spelled_clip(time_text, cs_text, ce_text, ls_text, le_text):
+    """The clip of _one_clip_als(time=100, length=32, src=4) with each number
+    written the way the arguments spell it."""
+    swaps = [
+        ('Time="100.0"', f'Time="{time_text}"'),
+        ('<CurrentStart Value="100.0" />', f'<CurrentStart Value="{cs_text}" />'),
+        ('<CurrentEnd Value="132.0" />', f'<CurrentEnd Value="{ce_text}" />'),
+        ('<LoopStart Value="4.0" />', f'<LoopStart Value="{ls_text}" />'),
+        ('<LoopEnd Value="36.0" />', f'<LoopEnd Value="{le_text}" />'),
+    ]
+    out = []
+    for ln in _one_clip_als(time=100.0, length=32.0, src=4.0):
+        for old, new in swaps:
+            ln = ln.replace(old, new)
+        out.append(ln)
+    return out
+
+
+def _written(lines):
+    text = "".join(lines)
+    get = lambda pattern: re.search(pattern, text).group(1)
+    return {"Time": get(r'<AudioClip Id="1" Time="([^"]+)"'),
+            "CurrentStart": get(r'<CurrentStart Value="([^"]+)"'),
+            "CurrentEnd": get(r'<CurrentEnd Value="([^"]+)"'),
+            "LoopStart": get(r'<LoopStart Value="([^"]+)"'),
+            "LoopEnd": get(r'<LoopEnd Value="([^"]+)"')}
+
+
+def _changed_lines(before, after):
+    return [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
+
+
+@pytest.mark.parametrize("time_text, cs_text, ce_text, ls_text, le_text", [
+    ("100.0", "1E2", "132.0", "4E0", "36.0"),
+    ("+100", "+100", "1.32E+2", "+4", "3.6E1"),
+    ("1E2", "1.0E+02", "132.0", "4.0", "+36"),
+])
+def test_d19_trim_named_clip_front_moves_odd_spellings_by_exactly_the_trim(
+        time_text, cs_text, ce_text, ls_text, le_text):
+    lines = _spelled_clip(time_text, cs_text, ce_text, ls_text, le_text)
+    before = list(lines)
+    assert _trim(lines, 12.0) == 3
+    w = _written(lines)
+    assert (float(w["Time"]), float(w["CurrentStart"]), float(w["LoopStart"])) == (
+        112.0, 112.0, 16.0)
+    for key in ("Time", "CurrentStart", "LoopStart"):
+        assert re.fullmatch(r"-?\d+\.\d+", w[key]), (key, w[key])   # no exponent
+    # CurrentEnd and LoopEnd are untouched, not even re-spelled.
+    changed = _changed_lines(before, lines)
+    assert len(changed) == 3 and all("End" not in lines[i] for i in changed)
+    assert (w["CurrentEnd"], w["LoopEnd"]) == (ce_text, le_text)
+
+
+@pytest.mark.parametrize("time_text, cs_text, ce_text", [
+    ("1E2", "+100", "1.32E+2"),
+    ("+100", "1.0E+02", "+132"),
+])
+def test_d19_shift_named_clip_moves_odd_spellings_by_exactly_the_delta(
+        time_text, cs_text, ce_text):
+    lines = _spelled_clip(time_text, cs_text, ce_text, "4.0", "36.0")
+    before = list(lines)
+    assert _shift(lines, 8.0) == 3
+    w = _written(lines)
+    assert (float(w["Time"]), float(w["CurrentStart"]), float(w["CurrentEnd"])) == (
+        108.0, 108.0, 140.0)
+    for key in ("Time", "CurrentStart", "CurrentEnd"):
+        assert re.fullmatch(r"-?\d+\.\d+", w[key]), (key, w[key])   # no exponent
+    # The source window is not touched by a shift.
+    changed = _changed_lines(before, lines)
+    assert len(changed) == 3 and all("Loop" not in lines[i] for i in changed)
+    assert (w["LoopStart"], w["LoopEnd"]) == ("4.0", "36.0")
+
+
+@pytest.mark.parametrize("kind, spec, amount, expected_changes", [
+    # Expected lines were taken from the trim_named_clip_front and
+    # shift_named_clip that existed before round 3, run on these clips.
+    ("trim", dict(time=100.0, length=32.0, src=0.0), 12.0,
+     {9: '<AudioClip Id="1" Time="112.0">\r\n',
+      10: '  <CurrentStart Value="112.0" />\r\n',
+      13: '    <LoopStart Value="12.0" />\r\n'}),
+    ("trim", dict(time=100.25, length=31.5, src=4.5), 3.5,
+     {9: '<AudioClip Id="1" Time="103.75">\r\n',
+      10: '  <CurrentStart Value="103.75" />\r\n',
+      13: '    <LoopStart Value="8.0" />\r\n'}),
+    ("shift", dict(time=100.0, length=32.0, src=0.0), 8.0,
+     {9: '<AudioClip Id="1" Time="108.0">\r\n',
+      10: '  <CurrentStart Value="108.0" />\r\n',
+      11: '  <CurrentEnd Value="140.0" />\r\n'}),
+    ("shift", dict(time=100.25, length=31.5, src=4.5), -2.25,
+     {9: '<AudioClip Id="1" Time="98.0">\r\n',
+      10: '  <CurrentStart Value="98.0" />\r\n',
+      11: '  <CurrentEnd Value="129.5" />\r\n'}),
+])
+def test_d19_plain_decimal_clips_give_the_same_lines_as_the_pre_round_3_functions(
+        kind, spec, amount, expected_changes):
+    lines = _one_clip_als(**spec)
+    expected = list(lines)
+    for index, text in expected_changes.items():
+        expected[index] = text
+    assert (_trim if kind == "trim" else _shift)(lines, amount) == 3
+    assert lines == expected
