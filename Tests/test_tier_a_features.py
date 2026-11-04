@@ -24,6 +24,9 @@ The five test cases:
 
 from __future__ import annotations
 
+import ast
+import io
+import os
 import sys
 from pathlib import Path
 
@@ -87,20 +90,32 @@ def test_width_l_eq_neg_r_yields_large_width_and_negative_corr(tmp_path):
     assert (corr <= -0.95).all(), f"L==-R corr should be ~-1, got max={corr.max():.4f}"
 
 
-def test_width_corr_for_mono_source_returns_zeroes_and_ones(tmp_path):
-    """A mono source has no side information -> width=0, corr=1 (the
-    defensible no-op defaults). Sam may end up with a mono export in a
-    future test."""
+def test_mono_source_width_and_corr_are_empty_float32_arrays(tmp_path):
+    """A mono source has no side information, so _compute_stereo_envelopes
+    returns EMPTY (length 0) float32 arrays for width and corr, not zeros and
+    ones. Downstream (align_engine) reads a zero-length tiera_* array as
+    'unmeasured', so the shape is the contract and it is pinned here.
+
+    Rewritten for card 216: the old version asserted np.all(width == 0.0) and
+    np.all(corr == 1.0), and np.all over an empty array is True for any value,
+    so it said nothing about what the mono branch returned (it also passed for
+    non-empty zeros/ones, a different contract, and for empty float64)."""
     sr = 44100
     x = _sine_at(440.0, 0.5, sr=sr)
     data = x.astype(np.float32).reshape(-1, 1)  # 1 channel
     wav = tmp_path / "mono.wav"
     sf.write(str(wav), data, sr, subtype="FLOAT")
     width, corr = taf._compute_stereo_envelopes(wav, hop_sec=0.1)
-    # Mono source -> width is degenerate (zeros per the helper contract).
-    assert np.all(width == 0.0)
-    # Corr is also degenerate (ones, so the plot doesn't break).
-    assert np.all(corr == 1.0)
+    assert width.shape == (0,), f"mono width should be empty, got shape {width.shape}"
+    assert corr.shape == (0,), f"mono corr should be empty, got shape {corr.shape}"
+    assert width.dtype == np.float32 and corr.dtype == np.float32
+    # Positive control: the same helper on a 2-channel copy of the same signal
+    # is NOT empty, so the empty result above is the mono handling and not a
+    # helper that always returns nothing.
+    stereo = tmp_path / "stereo.wav"
+    _write_stereo_wav(stereo, x, x, sr=sr)
+    width2, corr2 = taf._compute_stereo_envelopes(stereo, hop_sec=0.1)
+    assert len(width2) > 0 and len(corr2) == len(width2)
 
 
 # --- (b) Band routing: low / mid / high --------------------------------------
@@ -455,3 +470,373 @@ def test_corpus_detect_off_is_stable_after_npzaugment(tmp_path):
     # set downstream consumers depend on.
     assert set(envs.keys()) == {"drums", "bass", "other", "vocals", "mix"}
     assert hop_t == 0.1
+
+
+# --- Hardening: atomic cache write, closed load handle, mono, Rekordbox pin ---
+# Added for Master Board card 216 (Tier A cache hardening). The cache tests use
+# stubbed envelope computes (the real compute is covered above) so they isolate
+# the cache read/write behaviour and stay fast.
+
+def _canonical_cache_arrays(n_frames: int = 10) -> dict:
+    return {
+        "hop_t": np.array(0.1, dtype=np.float64),
+        "drums": np.linspace(0.1, 0.5, n_frames).astype(np.float64),
+        "bass": np.linspace(0.2, 0.4, n_frames).astype(np.float64),
+        "other": np.linspace(0.05, 0.3, n_frames).astype(np.float64),
+        "vocals": np.linspace(0.0, 0.7, n_frames).astype(np.float64),
+        "mix": np.linspace(0.3, 0.9, n_frames).astype(np.float64),
+    }
+
+
+def _make_cache(tmp_path: Path, mono: bool = False):
+    """A wav plus a canonical (un-augmented) cache beside it. Returns
+    (wav, cache_dir, cache_path, canonical_arrays)."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    wav = tmp_path / "fake.wav"
+    x = _sine_at(440.0, 1.0, sr=44100)
+    if mono:
+        sf.write(str(wav), x.reshape(-1, 1), 44100, subtype="FLOAT")
+    else:
+        _write_stereo_wav(wav, x, x, sr=44100)
+    canonical = _canonical_cache_arrays()
+    cache = cache_dir / f"{wav.stem}__stemenv.npz"
+    np.savez_compressed(cache, **canonical)
+    return wav, cache_dir, cache, canonical
+
+
+def _stub_compute(monkeypatch) -> dict:
+    """Replace the two envelope computes with cheap deterministic arrays (bands
+    one frame longer than width/corr, so the trim-to-shortest still runs).
+    Returns the arrays ensure_tier_a_arrays is expected to hand back."""
+    band_low = np.linspace(0.1, 0.2, 9).astype(np.float32)
+    band_mid = np.linspace(0.2, 0.3, 9).astype(np.float32)
+    band_high = np.linspace(0.3, 0.4, 9).astype(np.float32)
+    width = np.linspace(0.0, 1.0, 8).astype(np.float32)
+    corr = np.linspace(1.0, 0.5, 8).astype(np.float32)
+    monkeypatch.setattr(taf, "_compute_band_envelopes",
+                        lambda _w, _h: (band_low, band_mid, band_high))
+    monkeypatch.setattr(taf, "_compute_stereo_envelopes",
+                        lambda _w, _h: (width, corr))
+    return {
+        taf.TIERA_BAND_LOW_KEY: band_low[:8],
+        taf.TIERA_BAND_MID_KEY: band_mid[:8],
+        taf.TIERA_BAND_HIGH_KEY: band_high[:8],
+        taf.TIERA_WIDTH_KEY: width,
+        taf.TIERA_LR_CORR_KEY: corr,
+    }
+
+
+def _listing(folder: Path) -> list:
+    return sorted(p.name for p in folder.iterdir())
+
+
+def _assert_old_cache_intact(cache: Path, before: bytes, canonical: dict) -> None:
+    assert cache.read_bytes() == before, (
+        "the previous cache must be byte-for-byte intact after a failed write"
+    )
+    with np.load(cache, allow_pickle=False) as z:
+        assert z.files == list(canonical)
+        for k, v in canonical.items():
+            np.testing.assert_array_equal(z[k], v)
+
+
+def test_module_under_test_is_this_checkout():
+    """Guard against importing a stale copy of the module (the repo also has
+    a main checkout and other worktrees). Prints the path (run with -s)."""
+    expected = (Path(__file__).resolve().parent.parent / "Source").resolve()
+    print(f"_tier_a_features imported from: {taf.__file__}")
+    assert Path(taf.__file__).resolve().parent == expected
+
+
+@pytest.mark.parametrize("exc_type", [OSError, KeyboardInterrupt])
+def test_interrupted_cache_write_keeps_old_cache_and_leaves_no_partial(
+        tmp_path, monkeypatch, exc_type):
+    """Half the new npz reaches disk, then the write dies. The previous cache
+    must be untouched (it loads, byte-for-byte) and no partial file remains.
+    The original exception propagates, as it does today."""
+    wav, cache_dir, cache, canonical = _make_cache(tmp_path)
+    _stub_compute(monkeypatch)
+    before = cache.read_bytes()
+    real_savez = np.savez_compressed
+
+    def interrupted(target, **arrays):
+        buf = io.BytesIO()
+        real_savez(buf, **arrays)
+        blob = buf.getvalue()
+        half = blob[: len(blob) // 2]
+        if hasattr(target, "write"):
+            target.write(half)
+            target.flush()
+        else:
+            Path(target).write_bytes(half)
+        raise exc_type("simulated interruption mid-write")
+
+    monkeypatch.setattr(np, "savez_compressed", interrupted)
+    with pytest.raises(exc_type):
+        taf.ensure_tier_a_arrays(wav, cache_dir)
+    _assert_old_cache_intact(cache, before, canonical)
+    assert _listing(cache_dir) == [cache.name], f"leftover files: {_listing(cache_dir)}"
+
+
+def test_failed_replace_raises_and_keeps_old_cache_and_leaves_no_partial(
+        tmp_path, monkeypatch):
+    """The npz is fully written but the swap into place fails (a reader holds
+    the cache open on Windows). The PermissionError propagates, the old cache
+    is intact and the partial is removed."""
+    wav, cache_dir, cache, canonical = _make_cache(tmp_path)
+    _stub_compute(monkeypatch)
+    before = cache.read_bytes()
+    real_replace = os.replace
+
+    def locked(src, dst, *args, **kwargs):
+        if Path(dst) == cache:
+            raise PermissionError(13, "simulated sharing violation")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", locked)
+    with pytest.raises(PermissionError):
+        taf.ensure_tier_a_arrays(wav, cache_dir)
+    _assert_old_cache_intact(cache, before, canonical)
+    assert _listing(cache_dir) == [cache.name], f"leftover files: {_listing(cache_dir)}"
+
+
+def test_successful_cache_write_round_trips_same_arrays_and_leaves_no_partial(
+        tmp_path, monkeypatch):
+    """Regression pin (passes on the old and the new code by design): a
+    successful write then a load returns the same arrays, original keys stay
+    byte-identical and in order, the final file name is unchanged, nothing else
+    is left in the folder, and a second call is a cache hit."""
+    wav, cache_dir, cache, canonical = _make_cache(tmp_path)
+    expected = _stub_compute(monkeypatch)
+    out = taf.ensure_tier_a_arrays(wav, cache_dir)
+    assert list(out) == list(taf.TIERA_KEYS)
+    for k in taf.TIERA_KEYS:
+        assert out[k].dtype == np.float32
+        np.testing.assert_array_equal(out[k], expected[k])
+    assert _listing(cache_dir) == [cache.name]
+    with np.load(cache, allow_pickle=False) as z:
+        assert z.files == list(canonical) + list(taf.TIERA_KEYS)
+        for k, v in canonical.items():
+            assert z[k].dtype == v.dtype and z[k].tobytes() == v.tobytes()
+        for k in taf.TIERA_KEYS:
+            np.testing.assert_array_equal(z[k], expected[k])
+
+    def must_not_recompute(*_a, **_k):
+        raise AssertionError("cache hit must not recompute")
+
+    monkeypatch.setattr(taf, "_compute_band_envelopes", must_not_recompute)
+    monkeypatch.setattr(taf, "_compute_stereo_envelopes", must_not_recompute)
+    again = taf.ensure_tier_a_arrays(wav, cache_dir)
+    for k in taf.TIERA_KEYS:
+        np.testing.assert_array_equal(again[k], expected[k])
+    assert _listing(cache_dir) == [cache.name]
+
+
+def test_successful_cache_write_goes_through_a_same_folder_partial_then_replace(
+        tmp_path, monkeypatch):
+    """The new cache is built under a temporary '.partial' name in the SAME
+    folder (so the swap stays on one volume) and swapped in by os.replace."""
+    wav, cache_dir, cache, _canonical = _make_cache(tmp_path)
+    _stub_compute(monkeypatch)
+    calls = []
+    real_replace = os.replace
+
+    def spy(src, dst, *args, **kwargs):
+        calls.append((Path(src), Path(dst), Path(src).exists()))
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", spy)
+    taf.ensure_tier_a_arrays(wav, cache_dir)
+    assert len(calls) == 1, f"expected exactly one os.replace, saw {len(calls)}"
+    src, dst, src_existed = calls[0]
+    assert dst == cache
+    assert src.parent == cache_dir and src != cache
+    assert src.name.endswith(".partial")
+    assert src_existed
+    assert _listing(cache_dir) == [cache.name]
+
+
+def test_cache_load_closes_its_file_handle(tmp_path, monkeypatch):
+    """np.load of an npz is lazy and holds the file open until it is closed.
+    Keep a reference to every NpzFile the module opens (so garbage collection
+    cannot close it for us) and require each to be closed already, on the
+    cache-miss path and on the cache-hit path."""
+    wav, cache_dir, _cache, _canonical = _make_cache(tmp_path)
+    _stub_compute(monkeypatch)
+    opened = []
+    real_load = np.load
+
+    def spy(*args, **kwargs):
+        z = real_load(*args, **kwargs)
+        opened.append(z)
+        return z
+
+    monkeypatch.setattr(np, "load", spy)
+    first = taf.ensure_tier_a_arrays(wav, cache_dir)
+    second = taf.ensure_tier_a_arrays(wav, cache_dir)
+    assert len(opened) == 2
+    for z in opened:
+        assert z.zip is None, "np.load handle still open after ensure_tier_a_arrays returned"
+    # The arrays handed back are plain in-memory arrays, usable after the close.
+    for k in taf.TIERA_KEYS:
+        np.testing.assert_array_equal(first[k], second[k])
+
+
+def test_cache_is_free_to_replace_and_delete_while_a_failure_traceback_is_alive(
+        tmp_path, monkeypatch):
+    """Windows proof of the closed handle. A compute failure leaves its
+    traceback (and so every local of ensure_tier_a_arrays) alive in excinfo.
+    If the cache were still open there, os.replace / unlink on it would raise a
+    PermissionError sharing violation on Windows. (On other platforms this
+    passes either way; the handle test above is the portable proof.)"""
+    wav, cache_dir, cache, canonical = _make_cache(tmp_path)
+    _stub_compute(monkeypatch)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("compute failed")
+
+    monkeypatch.setattr(taf, "_compute_band_envelopes", boom)
+    with pytest.raises(RuntimeError, match="compute failed") as excinfo:
+        taf.ensure_tier_a_arrays(wav, cache_dir)
+    replacement = cache_dir / "replacement.npz"
+    np.savez_compressed(replacement, **canonical)
+    os.replace(replacement, cache)
+    cache.unlink()
+    assert not cache.exists()
+    assert excinfo.value is not None
+
+
+def test_mono_source_collapses_all_five_tiera_arrays_to_empty_and_caches_them(tmp_path):
+    """End to end through the real computes on a mono wav: the empty width and
+    corr make the trim-to-shortest collapse ALL five tiera_* arrays to length 0
+    (the mono wart align_engine reads as 'unmeasured'). They are written to the
+    cache as empty float32 arrays, the original keys survive, and a second call
+    is a cache hit returning the same empties."""
+    wav, cache_dir, cache, canonical = _make_cache(tmp_path, mono=True)
+    out = taf.ensure_tier_a_arrays(wav, cache_dir)
+    assert list(out) == list(taf.TIERA_KEYS)
+    for k, v in out.items():
+        assert v.shape == (0,) and v.dtype == np.float32, f"{k}: {v.shape} {v.dtype}"
+    with np.load(cache, allow_pickle=False) as z:
+        for k in canonical:
+            assert z[k].tobytes() == canonical[k].tobytes()
+        for k in taf.TIERA_KEYS:
+            assert z[k].shape == (0,) and z[k].dtype == np.float32
+    again = taf.ensure_tier_a_arrays(wav, cache_dir)
+    for k in taf.TIERA_KEYS:
+        assert again[k].shape == (0,)
+    assert _listing(cache_dir) == [cache.name]
+
+
+# --- Rekordbox removal pin: any spelling of an import of pyrekordbox ---------
+# Tests/test_rekordbox_health.py::test_no_rb_imports_in_package only greps the
+# package text for two module names, so `import pyrekordbox as pr` passes it.
+# This pin reads the syntax tree instead. (That file is outside the files this
+# card may edit, so the stronger pin lives here.)
+
+_RB_ROOT = "pyrekordbox"
+
+
+def _is_rb(name) -> bool:
+    return isinstance(name, str) and name.split(".")[0] == _RB_ROOT
+
+
+def _pyrekordbox_import_hits(source, label: str = "<source>") -> list:
+    """Every place `source` (text or bytes) imports pyrekordbox, however it is
+    spelled: import / import-as / from-import / submodule forms, and the
+    dynamic importlib.import_module("...") and __import__("...") calls with a
+    literal name. A fully dynamic name (a variable) cannot be seen statically."""
+    tree = ast.parse(source)
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _is_rb(alias.name):
+                    hits.append(f"{label}:{node.lineno}: import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if _is_rb(node.module):
+                hits.append(f"{label}:{node.lineno}: from {node.module} import ...")
+            else:
+                for alias in node.names:
+                    if _is_rb(alias.name):
+                        hits.append(f"{label}:{node.lineno}: from {node.module} import {alias.name}")
+        elif isinstance(node, ast.Call):
+            fn = node.func
+            fn_name = fn.id if isinstance(fn, ast.Name) else (
+                fn.attr if isinstance(fn, ast.Attribute) else None)
+            if fn_name in ("import_module", "__import__"):
+                args = list(node.args[:1]) + [
+                    kw.value for kw in node.keywords if kw.arg == "name"]
+                for arg in args:
+                    if isinstance(arg, ast.Constant) and _is_rb(arg.value):
+                        hits.append(f"{label}:{node.lineno}: {fn_name}({arg.value!r})")
+    return hits
+
+
+_RB_ALIAS_SOURCES = {
+    "plain import": "import pyrekordbox\n",
+    "import as": "import pyrekordbox as pr\n",
+    "from import": "from pyrekordbox import Rekordbox6Database\n",
+    "from submodule import": "from pyrekordbox.db6 import Rekordbox6Database\n",
+    "import submodule": "import pyrekordbox.db\n",
+    "import submodule as": "import pyrekordbox.db as rbdb\n",
+    "import in a list": "import os, pyrekordbox\n",
+    "importlib.import_module": 'import importlib\nrb = importlib.import_module("pyrekordbox")\n',
+    "import_module submodule": 'import importlib\nrb = importlib.import_module("pyrekordbox.db")\n',
+    "import_module keyword": 'import importlib\nrb = importlib.import_module(name="pyrekordbox")\n',
+    "bare import_module": "from importlib import import_module\nrb = import_module('pyrekordbox')\n",
+    "__import__": 'rb = __import__("pyrekordbox")\n',
+    "inside a function": "def f():\n    import pyrekordbox as pr\n    return pr\n",
+    "inside try": "try:\n    import pyrekordbox as pr\nexcept ImportError:\n    pr = None\n",
+    "relative from": "from . import pyrekordbox\n",
+}
+
+_RB_CLEAN_SOURCES = {
+    "no rekordbox": "import os\n",
+    "name only in a string": 'NAME = "pyrekordbox"\n',
+    "name only in a comment": "# import pyrekordbox as pr\nimport os\n",
+    "lookalike module name": "import pyrekordbox_stub\nfrom pyrekordbox_stub import x\n",
+    "import_module of something else": 'import importlib\nimportlib.import_module("numpy")\n',
+    "dynamic name": "name = 'x'\n__import__(name)\n",
+}
+
+
+@pytest.mark.parametrize("label", sorted(_RB_ALIAS_SOURCES))
+def test_pyrekordbox_pin_flags_every_alias_of_the_import(label):
+    hits = _pyrekordbox_import_hits(_RB_ALIAS_SOURCES[label], label)
+    assert hits, f"the pin missed this spelling of a pyrekordbox import: {label}"
+
+
+@pytest.mark.parametrize("label", sorted(_RB_CLEAN_SOURCES))
+def test_pyrekordbox_pin_does_not_flag_clean_sources(label):
+    hits = _pyrekordbox_import_hits(_RB_CLEAN_SOURCES[label], label)
+    assert hits == [], f"false positive on {label}: {hits}"
+
+
+def _source_root() -> Path:
+    return Path(__file__).resolve().parent.parent / "Source"
+
+
+def test_no_module_in_source_imports_pyrekordbox_under_any_alias():
+    root = _source_root()
+    files = [
+        p for p in sorted(root.rglob("*.py"))
+        if "Archive" not in p.relative_to(root).parts
+        and "__pycache__" not in p.relative_to(root).parts
+    ]
+    assert len(files) > 10, f"scanner saw only {len(files)} files under {root}"
+    hits = []
+    for p in files:
+        hits.extend(_pyrekordbox_import_hits(p.read_bytes(), str(p.relative_to(root))))
+    assert hits == [], "pyrekordbox imported outside Source/Archive:\n" + "\n".join(hits)
+
+
+def test_pyrekordbox_pin_flags_the_real_archived_reader():
+    """Positive control on a real file: the archived reader really imports
+    pyrekordbox, so the scanner must flag it (proves it works on real source,
+    not just on synthetic strings)."""
+    archived = _source_root() / "Archive" / "rekordbox_reader.py"
+    if not archived.exists():
+        pytest.skip("Source/Archive/rekordbox_reader.py is gone")
+    assert _pyrekordbox_import_hits(archived.read_bytes(), archived.name)

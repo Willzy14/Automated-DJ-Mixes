@@ -28,6 +28,9 @@ are trimmed to a common consensus length AFTER computation; the existing
 
 from __future__ import annotations
 
+import contextlib
+import os
+import uuid
 from pathlib import Path
 from typing import Iterable
 
@@ -184,6 +187,30 @@ def _align_lengths(arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {k: v[:L] for k, v in arrays.items()}
 
 
+def _write_cache_atomically(cache: Path, arrays: dict[str, np.ndarray]) -> None:
+    """Write `arrays` to `cache` so a reader never sees a half-written file.
+
+    The npz is written to a unique '<cache name>.<pid>.<id>.partial' in the
+    SAME folder (so the swap stays on one volume), flushed to disk, then moved
+    over the cache with os.replace. On ANY failure (including Ctrl+C) the
+    partial is removed and the original exception propagates, exactly as a
+    failed np.savez_compressed did before; the previous cache is left as it
+    was. A file object is handed to np.savez_compressed so it cannot append
+    '.npz' to the temporary name; the final name is whatever `cache` is.
+    """
+    partial = cache.with_name(f"{cache.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.partial")
+    try:
+        with open(partial, "xb") as fh:
+            np.savez_compressed(fh, **arrays)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(partial, cache)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            partial.unlink()
+        raise
+
+
 def ensure_tier_a_arrays(wav_path: Path, cache_dir: Path) -> dict[str, np.ndarray]:
     """Ensure the npz cache at <cache_dir>/<wav_stem>__stemenv.npz carries
     the five tiera_* arrays. Returns them as a dict (in the same order as
@@ -209,16 +236,22 @@ def ensure_tier_a_arrays(wav_path: Path, cache_dir: Path) -> dict[str, np.ndarra
             f"Expected cached envelopes at {cache}. Run "
             "stem_section_probe._separate_envelopes first."
         )
-    d = np.load(cache, allow_pickle=False)
-    files = set(d.files)
-    if all(k in files for k in TIERA_KEYS):
-        return {k: d[k] for k in TIERA_KEYS}
+    # np.load of an npz is lazy and holds the file open until closed, and on
+    # Windows an open file cannot be replaced or deleted. So everything needed
+    # is copied out INSIDE the with block and the handle is closed before any
+    # compute or write.
+    with np.load(cache, allow_pickle=False) as d:
+        names = list(d.files)
+        files = set(names)
+        if all(k in files for k in TIERA_KEYS):
+            return {k: d[k] for k in TIERA_KEYS}
 
-    # Pull the hop from the existing cache so the new arrays land at the
-    # SAME rate as the existing envelopes (Per-bar conversion happens later
-    # in detect() via _per_bar; everything must be at the same hop or the
-    # per-bar array alignments get weird).
-    hop_sec = float(d["hop_t"])
+        # Pull the hop from the existing cache so the new arrays land at the
+        # SAME rate as the existing envelopes (Per-bar conversion happens later
+        # in detect() via _per_bar; everything must be at the same hop or the
+        # per-bar array alignments get weird).
+        hop_sec = float(d["hop_t"])
+        loaded = {k: d[k] for k in names}
 
     band_low, band_mid, band_high = _compute_band_envelopes(wav_path, hop_sec)
     width, lr_corr = _compute_stereo_envelopes(wav_path, hop_sec)
@@ -233,7 +266,7 @@ def ensure_tier_a_arrays(wav_path: Path, cache_dir: Path) -> dict[str, np.ndarra
 
     # Round-trip the original arrays BYTE-IDENTICALLY. Re-save with the
     # exact same loaded arrays (no .copy(), no .astype(), no .reshape()).
-    save_kwargs: dict[str, np.ndarray] = {k: d[k] for k in d.files}
+    save_kwargs: dict[str, np.ndarray] = dict(loaded)
     save_kwargs.update(new_arrays)
     # Preserve the canonical is_hop_t-first ordering by listing hop_t first
     # explicitly so the file's key order doesn't depend on dict insertion in
@@ -242,14 +275,14 @@ def ensure_tier_a_arrays(wav_path: Path, cache_dir: Path) -> dict[str, np.ndarra
     ordered = {}
     if "hop_t" in save_kwargs:
         ordered["hop_t"] = save_kwargs["hop_t"]
-    for k in d.files:
+    for k in names:
         if k == "hop_t":
             continue
         ordered[k] = save_kwargs[k]
     for k in TIERA_KEYS:
         if k not in ordered:
             ordered[k] = new_arrays[k]
-    np.savez_compressed(cache, **ordered)
+    _write_cache_atomically(cache, ordered)
     return {k: ordered[k] for k in TIERA_KEYS}
 
 
