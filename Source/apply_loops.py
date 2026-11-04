@@ -52,31 +52,43 @@ def decompress_als(als_path: Path) -> list[str]:
     return content.splitlines(keepends=True)
 
 
+def _discard_partial(partial: Path) -> None:
+    """Best-effort removal of a `.partial` file; never raises, so cleanup can
+    not mask the error that is already on its way out."""
+    try:
+        partial.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def compress_als(lines: list[str], output_path: Path) -> Path:
     """Write, validate, THEN publish. The ALS is written to a sibling
     `.partial` file and renamed onto `output_path` only if it validates, so a
     rejected build never leaves an invalid Sections V<N>.als behind for a
-    resumed run (or Ableton) to pick up (burn list D22)."""
+    resumed run (or Ableton) to pick up (burn list D22). The partial is
+    removed on every outcome. A failed final rename (a read-only or locked
+    output) is reported as ValueError, like a validation failure, and leaves
+    any existing output intact."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     content = "".join(lines)
     partial = output_path.with_name(output_path.name + ".partial")
-    with gzip.open(partial, "wb") as f:
-        f.write(content.encode("utf-8"))
-    from validate_als import report_als
     try:
+        with gzip.open(partial, "wb") as f:
+            f.write(content.encode("utf-8"))
+        from validate_als import report_als
         errors = report_als(partial)
-    except Exception:
-        partial.unlink(missing_ok=True)
-        raise
-    if errors:
-        partial.unlink(missing_ok=True)
-        raise ValueError(
-            f"ALS validation failed for {output_path.name}: {errors[0]}"
-        )
-    try:
-        partial.replace(output_path)
+        if errors:
+            raise ValueError(
+                f"ALS validation failed for {output_path.name}: {errors[0]}"
+            )
+        try:
+            partial.replace(output_path)
+        except OSError as exc:
+            raise ValueError(
+                f"ALS write failed for {output_path.name}: {exc}"
+            ) from exc
     finally:
-        partial.unlink(missing_ok=True)
+        _discard_partial(partial)
     return output_path
 
 
@@ -529,6 +541,11 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
     front was — the outgoing track covers it. Used for partial intro trims (e.g.
     My Own Thang: trim the front of its 32-bar intro to land on a marker) that
     can't be done by whole-clip removal. Returns fields modified (0 if not found).
+
+    Raises ValueError, changing nothing, when the trim is at or past the clip's
+    own length: that would leave CurrentStart at CurrentEnd (a zero-length clip
+    the ALS validator rejects only after the whole build; burn list D19). It
+    raises rather than returning 0 because callers read 0 as "clip not found".
     """
     if trim_beats <= 0:
         return 0
@@ -557,6 +574,22 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
             break
     if clip_close_idx is None:
         return 0
+
+    def _first_value(tag: str):
+        for k in range(clip_open_idx, clip_close_idx + 1):
+            m_val = re.search(rf'<{tag} Value="([\d.\-]+)"', lines[k])
+            if m_val:
+                return float(m_val.group(1))
+        return None
+
+    # Same two windows validate_als checks for zero/negative length: the
+    # arrangement window and the source window.
+    for lo_tag, hi_tag in (("CurrentStart", "CurrentEnd"), ("LoopStart", "LoopEnd")):
+        lo, hi = _first_value(lo_tag), _first_value(hi_tag)
+        if lo is not None and hi is not None and trim_beats >= (hi - lo) - 1e-6:
+            raise ValueError(
+                f"trim_named_clip_front: trimming {trim_beats:g} beats would empty "
+                f"clip '{clip_name}' ({hi_tag} - {lo_tag} = {hi - lo:g} beats)")
     changed = 0
     m = re.search(r'Time="([\d.\-]+)"', lines[clip_open_idx])
     if m:

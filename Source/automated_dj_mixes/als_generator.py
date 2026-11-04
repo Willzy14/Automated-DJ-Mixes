@@ -62,18 +62,50 @@ def decompress_als(als_path: Path) -> list[str]:
     return content.splitlines(keepends=True)
 
 
+def _discard_partial(partial: Path) -> None:
+    """Best-effort removal of a `.partial` file; never raises, so cleanup can
+    not mask the error that is already on its way out."""
+    try:
+        partial.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def compress_als(lines: list[str], output_path: Path) -> Path:
-    """Compress lines back into an ALS file."""
+    """Compress lines back into an ALS file: write, validate, THEN publish.
+
+    The ALS is written to a sibling `.partial` file and renamed onto
+    `output_path` only if it validates (burn list D22; same shape as
+    apply_loops.compress_als), so a rejected build never leaves an invalid
+    .als behind for a resumed run, or Ableton, to pick up. The partial is
+    removed on every outcome. A failed final rename (a read-only or locked
+    output) is reported as ValueError and leaves any existing output intact.
+    """
     content = "".join(lines)
     raw_bytes = content.encode("utf-8")
-    with gzip.open(output_path, "wb") as f:
-        f.write(raw_bytes)
-    from validate_als import report_als
-    errors = report_als(output_path)
-    if errors:
-        raise ValueError(
-            f"ALS validation failed for {output_path.name}: {errors[0]}"
-        )
+    partial = output_path.with_name(output_path.name + ".partial")
+    try:
+        # The gzip header records the file name; give it the FINAL name, not
+        # "<name>.partial", so a valid write is byte-identical to the old
+        # direct write.
+        with open(partial, "wb") as raw:
+            with gzip.GzipFile(filename=output_path.name, mode="wb",
+                               fileobj=raw) as f:
+                f.write(raw_bytes)
+        from validate_als import report_als
+        errors = report_als(partial)
+        if errors:
+            raise ValueError(
+                f"ALS validation failed for {output_path.name}: {errors[0]}"
+            )
+        try:
+            partial.replace(output_path)
+        except OSError as exc:
+            raise ValueError(
+                f"ALS write failed for {output_path.name}: {exc}"
+            ) from exc
+    finally:
+        _discard_partial(partial)
     return output_path
 
 

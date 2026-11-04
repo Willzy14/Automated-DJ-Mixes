@@ -386,3 +386,88 @@ def test_out_of_range_pair_index_is_refused():
 def test_valid_pair_indices_pass_silently():
     from propose_arrangement import _validate_decision_pair_indices
     _validate_decision_pair_indices([1, 2, 3, 4], n_tracks=5, filename="test.json")  # no raise
+
+
+# --------------------------------------------------------------------------- #
+# Burn list D19 remainder (2026-11-04): the planner never lets an intro cut   #
+# take the whole intro (it leaves >= 0.25 bar, commit ae3cc35), but a written #
+# decision could: intro_trim_bars equal to the incoming's intro became a      #
+# zero-length clip that only the ALS validator caught, after the build.       #
+# --------------------------------------------------------------------------- #
+
+def _in_with_intro_end(intro_end):
+    return _track(IN.name, 152, [
+        {"name": "intro_1", "label": "intro", "start_bar": 0.0, "end_bar": intro_end},
+        {"name": "drop_1", "label": "drop", "start_bar": intro_end, "end_bar": 40.0},
+    ])
+
+
+def test_d19_a_decision_that_trims_the_whole_intro_is_refused():
+    # IN's intro is bars 0-16. Trimming 16 leaves nothing of it; swap_in 32 is
+    # past the trim, so the older swap-after-trim check does not catch this.
+    d = _decision(entry_out_bar=180, intro_trim_bars=16, swap_in_bar=32)
+    with pytest.raises(ValueError, match="whole intro"):
+        AE.alignment_from_decision(OUT, IN, d)
+    with pytest.raises(ValueError, match="whole intro"):
+        AE.fills_from_decision(OUT, IN, d)
+
+
+def test_d19_a_decision_that_trims_more_than_the_intro_is_refused():
+    d = _decision(entry_out_bar=180, intro_trim_bars=20, swap_in_bar=32)
+    with pytest.raises(ValueError, match="whole intro"):
+        AE.alignment_from_decision(OUT, IN, d)
+    with pytest.raises(ValueError, match="whole intro"):
+        AE.fills_from_decision(OUT, IN, d)
+
+
+def test_d19_the_refusal_names_the_pair_the_trim_and_where_the_intro_ends():
+    d = _decision(pair_index=7, entry_out_bar=180, intro_trim_bars=16, swap_in_bar=32)
+    with pytest.raises(ValueError) as err:
+        AE.alignment_from_decision(OUT, IN, d)
+    text = str(err.value)
+    assert "pair 7" in text and "intro_trim_bars 16" in text
+    assert IN.name in text and "bar 16" in text
+
+
+def test_d19_a_trim_that_leaves_half_a_bar_of_the_intro_passes_unchanged():
+    # Intro ends at bar 8.5; trimming 8 leaves 0.5 bar. Same numbers as before.
+    inc = _in_with_intro_end(8.5)
+    d = _decision(entry_out_bar=180, intro_trim_bars=8, swap_in_bar=16)
+    al = AE.alignment_from_decision(OUT, inc, d)
+    assert al.arr_offset_bars == 172          # entry 180 - trim 8
+    assert al.handoff_bar_out == 188          # origin 172 + swap_in 16
+    assert al.overlap_bars == 42              # 214 - 172
+    assert al.intro_cut_bars == 8
+    cut = [f for f in AE.fills_from_decision(OUT, inc, d) if f.kind == "intro_cut"]
+    assert len(cut) == 1 and cut[0].cut_to_bar == 8 and cut[0].target_marker_bar == 16
+
+
+def test_d19_the_float_edge_case_is_refused_but_a_quarter_bar_is_enough():
+    # The Dombresky case from the burn list: intro ends at 8.0018, trim 8.
+    d = _decision(entry_out_bar=180, intro_trim_bars=8, swap_in_bar=16)
+    for intro_end in (8.0018, 8.2499):
+        with pytest.raises(ValueError, match="whole intro"):
+            AE.alignment_from_decision(OUT, _in_with_intro_end(intro_end), d)
+        with pytest.raises(ValueError, match="whole intro"):
+            AE.fills_from_decision(OUT, _in_with_intro_end(intro_end), d)
+    for intro_end in (8.25, 8.5):
+        AE.alignment_from_decision(OUT, _in_with_intro_end(intro_end), d)
+        AE.fills_from_decision(OUT, _in_with_intro_end(intro_end), d)
+
+
+def test_d19_a_trim_is_not_judged_without_intro_length_data():
+    # No leading 'intro' section means there is no intro length to compare
+    # with (the planner skips its own cut in the same case), so the decision
+    # is left to the author exactly as before.
+    inc = _track(IN.name, 152, [
+        {"name": "drop_1", "label": "drop", "start_bar": 0.0, "end_bar": 32.0}])
+    d = _decision(entry_out_bar=180, intro_trim_bars=16, swap_in_bar=32)
+    assert AE.alignment_from_decision(OUT, inc, d).intro_cut_bars == 16
+    assert [f.kind for f in AE.fills_from_decision(OUT, inc, d)] == ["intro_cut"]
+
+
+def test_d19_no_trim_never_triggers_the_intro_guard():
+    inc = _in_with_intro_end(8.0018)
+    d = _decision(entry_out_bar=180, intro_trim_bars=0, swap_in_bar=16)
+    assert AE.alignment_from_decision(OUT, inc, d).intro_cut_bars == 0
+    assert AE.fills_from_decision(OUT, inc, d) == []

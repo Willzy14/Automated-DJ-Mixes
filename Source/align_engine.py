@@ -2727,6 +2727,33 @@ def _decision_bar(value, field_name: str, pair) -> float:
     return float(rounded)
 
 
+# Burn list D19: a decision may not trim away the incoming's whole leading
+# intro. The margin is the one plan_fill_or_cut applies to its own intro cut
+# (commit ae3cc35, `intro_end - cut_to >= 0.25`): at least one beat (0.25 bar)
+# of the intro must remain, or the front-trimmed intro clip comes out
+# zero-length and only the ALS validator, after the build, refuses it.
+_DECISION_INTRO_MIN_REMAINDER_BARS = 0.25
+
+
+def _check_decision_intro_trim(i: "Track", trim: float, pair) -> None:
+    """Refuse an intro_trim_bars that leaves less than 0.25 bar of the
+    incoming's intro. The intro value is plan_fill_or_cut's: the end of a
+    LEADING section labelled "intro". With no such section there is no intro
+    length to compare with, so the trim is left to the decision's author, as
+    the planner leaves its own cut."""
+    if trim <= 0:
+        return
+    intro_end = (i.sections[0]["end_bar"]
+                 if i.sections and i.sections[0]["label"] == "intro" else 0.0)
+    if intro_end <= 0:
+        return
+    if intro_end - trim < _DECISION_INTRO_MIN_REMAINDER_BARS:
+        raise ValueError(
+            f"decision for pair {pair}: intro_trim_bars {trim:g} would trim the "
+            f"whole intro of '{i.name}' (it ends at bar {intro_end:g}); at least "
+            f"{_DECISION_INTRO_MIN_REMAINDER_BARS:g} bar of it must remain")
+
+
 def alignment_from_decision(o: "Track", i: "Track", decision: dict,
                             policy=None) -> Alignment:
     """An Alignment built from a decision instead of the anchor search.
@@ -2763,6 +2790,7 @@ def alignment_from_decision(o: "Track", i: "Track", decision: dict,
         raise ValueError(
             f"decision for pair {decision.get('pair_index')}: swap_in_bar {swap_in:g} "
             f"must come after the intro trim ({trim:g} bars)")
+    _check_decision_intro_trim(i, trim, pair)
     if swap_in > i.n_bars + 1e-6:
         raise ValueError(
             f"decision for pair {decision.get('pair_index')}: swap_in_bar {swap_in:g} "
@@ -2846,6 +2874,7 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
             target_marker_name=f"decision:{loop.get('target') or 'tail'}", note="decision"))
     trim = _decision_bar(decision.get("intro_trim_bars") or 0.0, "intro_trim_bars", pair)
     if trim > 0:
+        _check_decision_intro_trim(i, trim, pair)
         specs.append(FillCutSpec(kind="intro_cut", cut_to_bar=trim,
                                  target_marker_bar=_decision_bar(
                                      decision["swap_in_bar"], "swap_in_bar", pair),
