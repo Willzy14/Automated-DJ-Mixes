@@ -3132,3 +3132,510 @@ def test_source_faithful_silence_downgrades_to_info(tmp_path):
     assert silent_hit.level == "INFO"
     assert "SOURCE-FAITHFUL" in silent_hit.msg
     assert loud_hit.level == "FAIL"
+
+
+# --------------------------------------------------------------------------- #
+# Burn list E1: boundary_click COVERAGE. The check only ever appends a Finding #
+# on FAIL, so on a flat render "ran on N boundaries and found nothing" and     #
+# "never really ran" read the same. The coverage record says how many          #
+# boundaries were really inspected. Reporting only: never a Finding, never the #
+# verdict.                                                                     #
+# --------------------------------------------------------------------------- #
+
+_COV_BPM = 128.0
+_COV_BPS = _COV_BPM / 60.0
+_COV_REASONS = {"window_unreadable", "null_set_too_small", "eof", "tempo_arc"}
+
+
+def _cov_clips():
+    """Three clips -> two boundaries (beat 10 and beat 40) on a 30 s render."""
+    return [
+        {"track": "A", "arr_start": 0, "arr_end": 10, "loop_on": False},
+        {"track": "B", "arr_start": 10, "arr_end": 40, "loop_on": False},
+        {"track": "C", "arr_start": 40, "arr_end": round(30.0 * _COV_BPS),
+         "loop_on": False},
+    ]
+
+
+def _cov_run(tmp_path, tag, *, click=False, render_seconds=30.0,
+             tempo_envelope=None, clips=None):
+    """ALS + report + synthetic render, then run_check. Returns (res, wav).
+    click=True injects one single-sample click at the beat-10 boundary."""
+    clips = _cov_clips() if clips is None else clips
+    als = tmp_path / f"{tag}.als"
+    wav = tmp_path / f"{tag}.wav"
+    rpt = tmp_path / f"{tag}.json"
+    _write_als(als, clips, bpm=_COV_BPM, tempo_envelope=tempo_envelope)
+    _write_report(rpt)
+
+    def click_at_beat10(t, L, R):
+        L = L.copy(); R = R.copy()
+        idx = int(round((10 / _COV_BPS) * 44100))
+        L[idx] = L[idx] + 0.7
+        R[idx] = R[idx] + 0.7
+        return L, R
+
+    _synth_render(wav, render_seconds, clips=clips,
+                  extra_process=click_at_beat10 if click else None)
+    return render_check.run_check(wav, rpt, als), wav
+
+
+def _cov_balanced(cov):
+    """Every boundary is inspected OR skipped for exactly one named reason."""
+    assert set(cov["skipped_by_reason"]) == _COV_REASONS, cov
+    assert cov["skipped"] == sum(cov["skipped_by_reason"].values()), cov
+    assert cov["boundaries"] == cov["inspected"] + cov["skipped"], cov
+    assert cov["failed"] <= cov["inspected"], cov
+
+
+def _cov_md_line(md_text):
+    lines = [ln for ln in md_text.splitlines()
+             if ln.startswith("boundary_click: inspected")]
+    assert len(lines) == 1, md_text
+    return lines[0]
+
+
+def test_boundary_click_coverage_flat_click_is_inspected_and_failed(tmp_path):
+    res, wav = _cov_run(tmp_path, "click", click=True)
+    cov = res.coverage["boundary_click"]
+    _cov_balanced(cov)
+    assert cov["boundaries"] == 2 == res.meta["n_boundaries"]
+    assert cov["inspected"] >= 1
+    assert cov["inspected"] == 2 and cov["skipped"] == 0
+    assert cov["failed"] == 1
+    # `failed` is exactly the boundary_click FAIL findings, nothing else.
+    assert cov["failed"] == sum(
+        1 for f in res.findings
+        if f.check == "boundary_click" and f.level == "FAIL")
+
+    # The function itself fills a caller-supplied dict in place, same numbers.
+    direct = {}
+    fs = render_check.check_boundary_click(
+        wav, [10 / _COV_BPS, 40 / _COV_BPS],
+        render_check.TempoMap.flat(_COV_BPM), coverage=direct)
+    assert direct == cov
+    assert [f.check for f in fs] == ["boundary_click"]
+
+
+def test_boundary_click_coverage_clean_pass_shows_how_much_it_covered(tmp_path):
+    res_click, _ = _cov_run(tmp_path, "click", click=True)
+    res, wav = _cov_run(tmp_path, "clean", click=False)
+    cov = res.coverage["boundary_click"]
+    _cov_balanced(cov)
+    assert cov["failed"] == 0
+    # Same render minus the click: the same boundaries were inspected.
+    assert cov["inspected"] == res_click.coverage["boundary_click"]["inspected"]
+    assert cov["inspected"] == 2
+    assert not any(f.check == "boundary_click" for f in res.findings)
+
+    # The ambiguity the card names, now resolved in the report itself: the
+    # check is listed clean AND the report says it really looked at 2 of 2.
+    md_path, _ = render_check.write_report(res, wav, tmp_path / "out.json")
+    text = md_path.read_text(encoding="utf-8")
+    assert "boundary_click" in text.split("## Checks run clean", 1)[1]
+    assert _cov_md_line(text) == (
+        "boundary_click: inspected 2 of 2 boundaries (skipped 0), 0 failed")
+
+
+def test_boundary_click_coverage_eof_boundary_is_counted_not_inspected(tmp_path):
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    wav = tmp_path / "long.wav"
+    _synth_render(wav, 30.0, clips=_cov_clips())
+    two = [10 / _COV_BPS, 40 / _COV_BPS]
+
+    control = {}
+    render_check.check_boundary_click(wav, two + [20 / _COV_BPS], tm,
+                                      coverage=control)
+    _cov_balanced(control)
+    assert (control["boundaries"], control["inspected"]) == (3, 3)
+
+    # A boundary whose own +/-2 ms window runs past the end of the file is
+    # skipped under `eof` and inspected drops by exactly one.
+    at_eof = {}
+    fs = render_check.check_boundary_click(wav, two + [30.0 - 0.001], tm,
+                                           coverage=at_eof)
+    _cov_balanced(at_eof)
+    assert at_eof["boundaries"] == 3
+    assert at_eof["inspected"] == control["inspected"] - 1 == 2
+    assert at_eof["skipped_by_reason"]["eof"] == 1
+    assert at_eof["skipped"] == 1 and at_eof["failed"] == 0
+    # The existing EOF FAIL is untouched alongside the new record.
+    assert [(f.check, f.level) for f in fs] == [("eof_truncated_reads", "FAIL")]
+
+    # A boundary a few beats before the end is NOT skipped on a long render:
+    # its 16 earlier null beats are enough, so it still gets a verdict.
+    near_end = {}
+    render_check.check_boundary_click(wav, two + [30.0 - 3 / _COV_BPS], tm,
+                                      coverage=near_end)
+    _cov_balanced(near_end)
+    assert (near_end["boundaries"], near_end["inspected"]) == (3, 3)
+
+
+def test_boundary_click_coverage_null_set_too_small_and_unreadable_window(tmp_path):
+    tm = render_check.TempoMap.flat(_COV_BPM)
+
+    # 3 s render (about 6.4 beats): the boundary window reads fine but fewer
+    # than 8 null beats fit in the file.
+    short = tmp_path / "short.wav"
+    _synth_render(short, 3.0)
+    cov = {}
+    render_check.check_boundary_click(short, [3 / _COV_BPS], tm, coverage=cov)
+    _cov_balanced(cov)
+    assert cov["boundaries"] == 1 and cov["inspected"] == 0
+    assert cov["skipped_by_reason"]["null_set_too_small"] == 1
+    assert cov["skipped"] == 1
+
+    # A boundary at a negative time cannot be read at all. run_check never
+    # hands one over (collect_boundaries drops t <= 0), so only a direct call
+    # reaches this reason.
+    wav = tmp_path / "long.wav"
+    _synth_render(wav, 30.0, clips=_cov_clips())
+    cov2 = {}
+    render_check.check_boundary_click(
+        wav, [10 / _COV_BPS, 40 / _COV_BPS, -1.0], tm, coverage=cov2)
+    _cov_balanced(cov2)
+    assert cov2["boundaries"] == 3 and cov2["inspected"] == 2
+    assert cov2["skipped_by_reason"]["window_unreadable"] == 1
+
+
+def test_boundary_click_coverage_truncated_render_counts_eof_via_run_check(tmp_path):
+    # Arrangement is 30 s, the render only 12 s: the beat-40 boundary (18.75 s)
+    # is past the end of the file.
+    res, wav = _cov_run(tmp_path, "trunc", render_seconds=12.0)
+    cov = res.coverage["boundary_click"]
+    _cov_balanced(cov)
+    assert cov["boundaries"] == 2 and cov["inspected"] == 1
+    assert cov["skipped_by_reason"]["eof"] == 1 and cov["failed"] == 0
+    md_path, _ = render_check.write_report(res, wav, tmp_path / "out.json")
+    assert _cov_md_line(md_path.read_text(encoding="utf-8")) == (
+        "boundary_click: inspected 1 of 2 boundaries (skipped 1: eof 1), "
+        "0 failed")
+
+
+def test_boundary_click_coverage_tempo_arc_inspects_nothing_skip_unchanged(tmp_path):
+    res, wav = _cov_run(tmp_path, "arc", render_seconds=30.3,
+                        tempo_envelope=[(0.0, 128.0), (64.0, 130.0)])
+    cov = res.coverage["boundary_click"]
+    _cov_balanced(cov)
+    assert cov["boundaries"] == 2 and cov["inspected"] == 0
+    assert cov["skipped"] == 2 and cov["skipped_by_reason"]["tempo_arc"] == 2
+    assert cov["failed"] == 0
+    assert not any(f.check == "boundary_click" for f in res.findings)
+
+    # The existing named SKIP finding is exactly what it was before E1
+    # (values captured from the unchanged code on this same fixture).
+    skips = [f for f in res.findings
+             if f.check == "boundary_click_skipped_tempo_arc"]
+    assert len(skips) == 1
+    sk = skips[0]
+    assert sk.level == "SKIP"
+    assert sk.msg == (
+        "boundary_click skipped for 2 of 2 boundaries: on a tempo arc the "
+        "map's timing uncertainty is not characterised and the fit scatter "
+        "alone exceeds the +/-2 ms click window")
+    assert set(sk.measured) == {"skipped_check", "skipped_boundaries",
+                                "inspected_boundaries", "from_sec",
+                                "click_half_window_sec"}
+    assert sk.measured["skipped_check"] == "boundary_click"
+    assert sk.measured["skipped_boundaries"] == 2
+    assert sk.measured["inspected_boundaries"] == 0
+    assert sk.measured["from_sec"] == pytest.approx(4.681787250307521)
+    assert sk.measured["click_half_window_sec"] == 0.002
+
+    md_path, _ = render_check.write_report(res, wav, tmp_path / "out.json")
+    text = md_path.read_text(encoding="utf-8")
+    assert _cov_md_line(text) == (
+        "boundary_click: inspected 0 of 2 boundaries (skipped 2: tempo_arc 2), "
+        "0 failed")
+    # Still never listed clean (existing guard, unaffected by the new line).
+    assert "boundary_click" not in text.split("## Checks run clean", 1)[1]
+
+
+def test_boundary_click_coverage_reaches_the_md_and_json_reports(tmp_path):
+    import re
+    res, wav = _cov_run(tmp_path, "click", click=True)
+    md_path, js_path = render_check.write_report(res, wav,
+                                                 tmp_path / "out.json")
+    text = md_path.read_text(encoding="utf-8")
+    payload = json.loads(js_path.read_text(encoding="utf-8"))
+
+    # .json: one additive top-level key, the old keys and findings untouched.
+    assert set(payload) == {"meta", "verdict", "exit_code", "findings",
+                            "coverage"}
+    assert payload["verdict"] == res.verdict == "FAIL"
+    assert payload["exit_code"] == res.exit_code == 2
+    assert [f["check"] for f in payload["findings"]] == [
+        f.check for f in res.findings]
+    jcov = payload["coverage"]["boundary_click"]
+    assert jcov == res.coverage["boundary_click"]
+
+    # .md: one plain line in its own section, ahead of "Checks run clean" so
+    # it can never be read as part of the clean list.
+    line = _cov_md_line(text)
+    assert line == ("boundary_click: inspected 2 of 2 boundaries "
+                    "(skipped 0), 1 failed")
+    assert "## Coverage" in text
+    assert text.index("## Coverage") < text.index(line) \
+        < text.index("## Checks run clean")
+    assert "boundary_click: inspected" not in text.split(
+        "## Checks run clean", 1)[1]
+
+    # md and json agree with each other and with the counts.
+    nums = [int(n) for n in re.findall(r"\d+", line.split("boundaries", 1)[0])]
+    assert nums == [jcov["inspected"], jcov["boundaries"]]
+    assert f"{jcov['failed']} failed" in line
+
+    # The coverage section adds no row to the findings table.
+    rows = [ln for ln in text.splitlines() if ln.startswith("| ")
+            and "| check |" not in ln]
+    assert len(rows) == len(res.findings)
+
+
+def test_boundary_click_coverage_empty_boundary_list_says_zero_of_zero(tmp_path):
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    wav = tmp_path / "e.wav"
+    _synth_render(wav, 10.0)
+    cov = {}
+    fs = render_check.check_boundary_click(wav, [], tm, coverage=cov)
+    assert fs == []
+    _cov_balanced(cov)
+    assert cov == {"boundaries": 0, "inspected": 0, "skipped": 0,
+                   "skipped_by_reason": {r: 0 for r in _COV_REASONS},
+                   "failed": 0}
+
+    # Through run_check: one clip covering everything has no boundary at all.
+    # The report still carries the line instead of leaving it out.
+    res, wav2 = _cov_run(tmp_path, "single",
+                         clips=_single_track_clips(30.0, bpm=_COV_BPM))
+    assert res.meta["n_boundaries"] == 0
+    assert res.coverage["boundary_click"]["boundaries"] == 0
+    _cov_balanced(res.coverage["boundary_click"])
+    md_path, js_path = render_check.write_report(res, wav2,
+                                                 tmp_path / "out.json")
+    assert _cov_md_line(md_path.read_text(encoding="utf-8")) == (
+        "boundary_click: inspected 0 of 0 boundaries (skipped 0), 0 failed")
+    assert json.loads(js_path.read_text(encoding="utf-8"))["coverage"][
+        "boundary_click"]["boundaries"] == 0
+
+
+def test_boundary_click_coverage_out_param_never_changes_the_findings(tmp_path):
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    wav = tmp_path / "c.wav"
+    clips = _cov_clips()
+
+    def click(t, L, R):
+        L = L.copy(); R = R.copy()
+        idx = int(round((10 / _COV_BPS) * 44100))
+        L[idx] += 0.7; R[idx] += 0.7
+        return L, R
+
+    _synth_render(wav, 30.0, clips=clips, extra_process=click)
+    ts = [10 / _COV_BPS, 40 / _COV_BPS, 30.0 - 0.001]
+
+    def shape(fs):
+        return [(f.check, f.level, f.t0, f.t1, f.beat0, f.beat1, f.measured,
+                 f.msg) for f in fs]
+
+    without = render_check.check_boundary_click(wav, ts, tm)
+    with_cov = render_check.check_boundary_click(wav, ts, tm, coverage={})
+    assert shape(without) == shape(with_cov)
+    # Reusing a dict does not mix two calls' counts together.
+    reused = {"inspected": 99, "junk": 1}
+    render_check.check_boundary_click(wav, ts[:2], tm, coverage=reused)
+    assert "junk" not in reused
+    assert reused["boundaries"] == 2 and reused["inspected"] == 2
+
+
+def test_run_check_findings_are_unchanged_by_the_coverage_record(tmp_path):
+    """PIN of existing behaviour. The (check, level, msg) lists below were
+    captured from the code as it stood BEFORE E1 on these two fixed synthetic
+    renders; they pass on the old code too, by design. A coverage record that
+    leaked into the findings, the verdict or any message would break them."""
+    res, _ = _cov_run(tmp_path, "click", click=True)
+    assert [(f.check, f.level, f.msg) for f in res.findings] == [
+        ("map_vs_render", "INFO",
+         "endpoint consistent (+0.00s; warns past 2.0s, fails past 30.0s)"),
+        ("boundary_click", "FAIL",
+         "click-shaped discontinuity at boundary "
+         "(z=638.3, 0.700 vs null max 0.006)"),
+        ("grid_fold", "INFO",
+         "grid_fold skipped (fewer than 2 solo regions >= 45 s)"),
+    ]
+    assert (res.verdict, res.exit_code) == ("FAIL", 2)
+
+    res2, _ = _cov_run(tmp_path, "clean", click=False)
+    assert [(f.check, f.level, f.msg) for f in res2.findings] == [
+        ("map_vs_render", "INFO",
+         "endpoint consistent (+0.00s; warns past 2.0s, fails past 30.0s)"),
+        ("grid_fold", "INFO",
+         "grid_fold skipped (fewer than 2 solo regions >= 45 s)"),
+    ]
+    assert (res2.verdict, res2.exit_code) == ("PASS", 0)
+    assert res2.meta["n_boundaries"] == 2
+
+
+def test_boundary_click_coverage_absent_on_the_bail_paths(tmp_path):
+    """The tempo bail reads no audio, so there is no coverage to report: the
+    record is empty, the .md has no Coverage section, the .json key is {} and
+    the existing 'nothing ran clean' answer is unchanged."""
+    als = tmp_path / "m.als"
+    wav = tmp_path / "m.wav"
+    rpt = tmp_path / "r.json"
+    clips = _single_track_clips(10.0)
+    _write_als(als, clips, bpm=0.0)
+    _synth_render(wav, 10.0, clips=clips)
+    _write_report(rpt)
+    res = render_check.run_check(wav, rpt, als)
+    assert res.meta["checks_ran"] is False
+    assert res.coverage == {}
+    md_path, js_path = render_check.write_report(res, wav, tmp_path / "o.json")
+    text = md_path.read_text(encoding="utf-8")
+    assert "## Coverage" not in text
+    assert "boundary_click: inspected" not in text
+    assert "(none)" in text.split("## Checks run clean", 1)[1]
+    assert json.loads(js_path.read_text(encoding="utf-8"))["coverage"] == {}
+
+
+# --- round 2: the shape gate and non-finite audio --------------------------
+
+def _cov_bump_render(path, *, half_ms=1.8, amp=0.9):
+    """Flat 30 s render with one smooth, loud Hann-shaped hit centred on the
+    beat-10 boundary and wholly INSIDE the +/-2 ms window: steeper than the
+    5 ms ramp, wide (not click-shaped), no abrupt edge."""
+    def bump(t, L, R):
+        L = L.copy(); R = R.copy()
+        c = int(round((10 / _COV_BPS) * 44100))
+        h = int(round(half_ms / 1000.0 * 44100))
+        shape = amp * np.hanning(2 * h)
+        L[c - h:c + h] += shape
+        R[c - h:c + h] += shape
+        return L, R
+    _synth_render(path, 30.0, clips=_cov_clips(), extra_process=bump)
+
+
+def _cov_float_render(path, mutate):
+    """The usual flat 30 s render, stored as a float WAV (PCM cannot hold
+    NaN or inf) after mutate(data, sr) has edited the samples in place."""
+    base = path.with_name(path.stem + "_pcm.wav")
+    _synth_render(base, 30.0, clips=_cov_clips())
+    data, sr = sf.read(str(base), dtype="float64", always_2d=True)
+    mutate(data, sr)
+    sf.write(str(path), data, sr, subtype="FLOAT")
+
+
+def test_boundary_click_coverage_wide_loud_hit_is_inspected_not_failed(
+        tmp_path, monkeypatch):
+    """`failed` must follow the click-SHAPE gate, not just the ratio and z
+    gates. A loud hit that is wide, not click-shaped, is inspected and passes."""
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    two = [10 / _COV_BPS, 40 / _COV_BPS]
+
+    # The existing 5 ms ramped-hit negative control, at the beat-10 boundary.
+    ramp = tmp_path / "ramp.wav"
+
+    def ramp_hit(t, L, R):
+        L = L.copy(); R = R.copy()
+        t_b = 10 / _COV_BPS
+        i0 = int(round((t_b - 0.003) * 44100))
+        i1 = int(round((t_b + 0.003) * 44100))
+        r = np.linspace(0, 0.9, i1 - i0)
+        L[i0:i1] += r
+        R[i0:i1] += r
+        return L, R
+
+    _synth_render(ramp, 30.0, clips=_cov_clips(), extra_process=ramp_hit)
+    cov = {}
+    fs = render_check.check_boundary_click(ramp, two, tm, coverage=cov)
+    _cov_balanced(cov)
+    assert fs == [] and cov["failed"] == 0
+    assert cov["inspected"] == 2 and cov["skipped"] == 0
+
+    # That ramp is gentle enough to miss the ratio gate on its own, so it
+    # cannot tell a shape-blind `failed` from a correct one. This smooth hit
+    # clears BOTH the ratio and z gates and only the shape gate stops it.
+    bump = tmp_path / "bump.wav"
+    _cov_bump_render(bump)
+    cov2 = {}
+    fs2 = render_check.check_boundary_click(bump, two, tm, coverage=cov2)
+    _cov_balanced(cov2)
+    assert not any(f.check == "boundary_click" for f in fs2), fs2
+    assert cov2["failed"] == 0
+    assert cov2["inspected"] == 2 and cov2["skipped"] == 0
+
+    # Prove the test: with the shape gate forced open the same render FAILs,
+    # so ratio and z really passed and the shape gate really did the work.
+    monkeypatch.setattr(render_check, "_click_shape", lambda y: True)
+    cov3 = {}
+    fs3 = render_check.check_boundary_click(bump, two, tm, coverage=cov3)
+    assert [f.check for f in fs3] == ["boundary_click"], fs3
+    assert cov3["failed"] == 1
+
+
+def test_boundary_click_coverage_nan_audio_is_not_inspected(tmp_path):
+    """NaN makes every comparison False, so it used to read as a clean pass
+    and count as inspected. No verdict was reached, so it is skipped."""
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    two = [10 / _COV_BPS, 40 / _COV_BPS]
+
+    # Control: the same float WAV with no NaN is inspected 2 of 2.
+    clean = tmp_path / "clean.wav"
+    _cov_float_render(clean, lambda data, sr: None)
+    ctl = {}
+    assert render_check.check_boundary_click(clean, two, tm, coverage=ctl) == []
+    _cov_balanced(ctl)
+    assert ctl["inspected"] == 2
+
+    # NaN across the boundary's own window: inspected drops by exactly one,
+    # the boundary is counted as window_unreadable, the findings are the same
+    # (none) as before the change.
+    def nan_at_boundary(data, sr):
+        c = int(round(two[0] * sr))
+        data[c - 220:c + 220, :] = np.nan
+
+    own = tmp_path / "nan_own.wav"
+    _cov_float_render(own, nan_at_boundary)
+    cov = {}
+    fs = render_check.check_boundary_click(own, two, tm, coverage=cov)
+    assert fs == []
+    _cov_balanced(cov)
+    assert cov["boundaries"] == 2
+    assert cov["inspected"] == ctl["inspected"] - 1 == 1
+    assert cov["skipped_by_reason"]["window_unreadable"] == 1
+    assert cov["skipped"] == 1 and cov["failed"] == 0
+
+    # NaN only in a NULL window (beat 5 is a null beat of the beat-10
+    # boundary): its own metric is finite but its z is not, so it is skipped
+    # too, while the beat-40 boundary (null beats 24..56) is untouched.
+    def nan_in_null_window(data, sr):
+        c = int(round((5 / _COV_BPS) * sr))
+        data[c - 220:c + 220, :] = np.nan
+
+    nul = tmp_path / "nan_null.wav"
+    _cov_float_render(nul, nan_in_null_window)
+    cov2 = {}
+    fs2 = render_check.check_boundary_click(nul, two, tm, coverage=cov2)
+    assert fs2 == []
+    _cov_balanced(cov2)
+    assert cov2["inspected"] == 1
+    assert cov2["skipped_by_reason"]["window_unreadable"] == 1
+
+
+def test_boundary_click_coverage_inf_click_still_fails_and_is_inspected(tmp_path):
+    """PIN. One +inf sample is a real click verdict (metric and z are inf and
+    the shape gate passes), and it FAILed before the NaN rule existed. A
+    boundary that produced a FAIL had a verdict, so it is inspected AND
+    failed, never skipped, and the finding is untouched."""
+    tm = render_check.TempoMap.flat(_COV_BPM)
+    two = [10 / _COV_BPS, 40 / _COV_BPS]
+
+    def inf_at_boundary(data, sr):
+        data[int(round(two[0] * sr)), :] = np.inf
+
+    wav = tmp_path / "inf.wav"
+    _cov_float_render(wav, inf_at_boundary)
+    cov = {}
+    fs = render_check.check_boundary_click(wav, two, tm, coverage=cov)
+    assert [(f.check, f.level) for f in fs] == [("boundary_click", "FAIL")]
+    _cov_balanced(cov)
+    assert cov["inspected"] == 2 and cov["failed"] == 1
+    assert cov["skipped_by_reason"]["window_unreadable"] == 0
