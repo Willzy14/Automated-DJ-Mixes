@@ -214,7 +214,9 @@ def test_track_number_prefixes_are_stripped_for_exact_matching(tmp_path, prefixe
     assert names(mod.resolve("Artist", "Better When"))[0] == prefixed
     assert names(mod.resolve("Artist", "Better When", None, "Better When")) == [prefixed]
     # the same prefix typed in the hint is stripped too
-    assert names(mod.resolve("Artist", "Better When", None, prefixed.replace(".wav", "").replace("02", "07")))[:1] == [prefixed]
+    other = prefixed.replace(".wav", "").replace("02", "07")
+    # a different number typed by the caller finds nothing (round 3); a name whose number did not change is the full stem
+    assert names(mod.resolve("Artist", "Better When", None, other)) == ([prefixed] if other + ".wav" == prefixed else [])
 
 
 def test_a_title_that_starts_with_a_number_is_not_mangled(tmp_path):
@@ -310,7 +312,8 @@ def test_at_most_three_results(tmp_path):
 # --- round 2: variants, the must hint, ties, track numbers, the exact selector -----------------------------------------
 
 @pytest.mark.parametrize("variant", ["(Someone Remix)", "(Someone Rework)", "(Someone Refix)", "(Someone Bootleg)",
-                                     "(Someone VIP)", "(VIP Mix)", "[Someone VIP]"])
+                                     "(Someone VIP)", "(VIP Mix)", "[Someone VIP]", "(Joe V.I.P.)", "(Joe V.I.P. Mix)",
+                                     "(Joe Re-Work)", "(Joe Re-Fix)", "(Joe Remode)"])
 def test_a_remix_like_variant_is_never_the_named_track(tmp_path, variant):
     # A remix and an original are different tracks: even with the newer version (A33) the variant does not win.
     files = ["Artist - Title (Extended Mix) SW V1.wav", f"Artist - Title {variant} (Extended Mix) SW V3.wav"]
@@ -429,6 +432,7 @@ def test_exact_selector_does_not_return_another_track_number(tmp_path):
     mod = one_folder(tmp_path, "Art - Night EP [Lab] Project", ["01 Intro.wav", "05 Night.wav", "12 Intro.wav"])
     assert names(mod.resolve("Art", "Night", None, "01 Intro")) == ["01 Intro.wav"]
     assert names(mod.resolve("Art", "Night", None, "12 Intro")) == ["12 Intro.wav"]
+    assert mod.resolve("Art", "Night", None, "07 Intro") == []            # a number of its own never falls back to another number
 
 
 @pytest.mark.parametrize("given", [" 02 Better When.wav ", "02 Better When.wav ", "MASTER RENDERS\\02 Better When.wav",
@@ -449,6 +453,115 @@ def test_exact_selector_does_not_fold_punctuation(tmp_path):
 def test_exact_selector_with_nothing_to_match_returns_nothing(tmp_path, given):
     mod = one_folder(tmp_path, EP_FOLDER, EP_FILES)
     assert mod.resolve("Artist", "Better When", None, given) == []
+
+
+# --- round 3: junk files, an exact name with its own number, remix spellings, a known limit ----------------------------
+
+CAFE = "Caf" + chr(233)          # the accented e is built here so that this file stays ASCII
+
+
+@pytest.mark.parametrize("artist,folder,title,files,first", [
+    pytest.param("B03", "B03 - Cafe [Lab] Project", "Cafe", [CAFE + " (Extended Mix) SW V2.wav", "Cafe (Acapella).wav"],
+                 CAFE + " (Extended Mix) SW V2.wav", id="B03-acapella-never-first"),
+    pytest.param("B04", "B04 - Love & Hate [Lab] Project", "Love & Hate",
+                 ["Love And Hate (Extended Mix) SW V3.wav", "Love & Hate (Dub).wav"],
+                 "Love And Hate (Extended Mix) SW V3.wav", id="B04-dub-never-first"),
+    pytest.param("B06", "B06 - Title [Lab] Project", "Title", ["Final Master SW V2.wav", "Title Stems.wav"],
+                 "Final Master SW V2.wav", id="B06-stems-never-first"),
+    pytest.param("B28", "B28 - Release Me [Lab] Project", "Release Me",
+                 ["Release (Extended Mix) SW V2.wav", "Release Me (Instrumental).wav"],
+                 "Release (Extended Mix) SW V2.wav", id="B28-instrumental-never-first"),
+    pytest.param("A21", "A21 - Title EP [Lab] Project", "Title", ["A21 - Title (Dub).wav", "A21 - Other (Extended Mix).wav"],
+                 "A21 - Other (Extended Mix).wav", id="A21-dub-of-the-title-is-not-the-pick"),
+])
+def test_a_junk_file_is_returned_only_when_nothing_else_is(tmp_path, artist, folder, title, files, first):
+    # Never acapella / instrumental / dub / stems: the old rank buried them and the named-track tier must not lift them back up.
+    mod = one_folder(tmp_path, folder, files)
+    r = names(mod.resolve(artist, title))
+    assert r[0] == first
+    assert len(r) == 2                                   # the junk file is still listed, last
+
+
+def test_a_folder_that_holds_only_junk_still_returns_it(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Better When [Label] Project", ["Better When (Dub).wav"])
+    assert names(mod.resolve("Artist", "Better When")) == ["Better When (Dub).wav"]
+    mod2 = one_folder(tmp_path / "b", "Artist - Title [Label] Project", ["Title (Instrumental).wav", "Title (Acapella).wav"])
+    assert sorted(names(mod2.resolve("Artist", "Title"))) == ["Title (Acapella).wav", "Title (Instrumental).wav"]
+
+
+def test_a_title_that_contains_a_junk_word_is_not_junk_for_that_word(tmp_path):
+    # "dub" is inside Dubai and "stems" inside Systems: asking for that title switches the word off, other junk words stay on.
+    files = ["Dubai Nights.wav", "Other (Extended Mix) SW V2.wav", "Dubai Nights (Instrumental).wav"]
+    mod = one_folder(tmp_path, "Artist - Dubai Nights EP [Label] Project", files)
+    assert names(mod.resolve("Artist", "Dubai Nights")) == ["Dubai Nights.wav", "Other (Extended Mix) SW V2.wav",
+                                                           "Dubai Nights (Instrumental).wav"]
+    mod2 = one_folder(tmp_path / "b", "Artist - Systems EP [Label] Project", ["Systems.wav", "Other (Extended Mix) SW V2.wav"])
+    assert names(mod2.resolve("Artist", "Systems"))[0] == "Systems.wav"
+
+
+def test_a_must_hint_that_names_the_junk_word_is_respected(tmp_path):
+    files = ["Artist - Title (Extended Mix) SW V2.wav", "Artist - Title (Dub Mix).wav"]
+    mod = one_folder(tmp_path, "Artist - Title Dub Mix [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title", "Dub Mix"))[0] == "Artist - Title (Dub Mix).wav"
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title (Extended Mix) SW V2.wav"
+
+
+def test_junk_is_judged_by_the_same_pattern_rank_uses(tmp_path):
+    mod, _ = load_resolver(tmp_path, [])
+    for junk in ("Title (Acapella).wav", "Title Instrumental.wav", "Title (Dub).wav", "Title Stems.wav", "Title.alp.wav",
+                 "Title (Dubstramental).wav", "Title vocal remix only.wav"):
+        assert mod.rank(junk) <= -100 + mod.rank("Title.wav") and mod.JUNK.search(junk.lower()), junk
+    assert not mod.JUNK.search("title (extended mix) sw v2.wav") and mod.rank("Title (Extended Mix) SW V2.wav") > 0
+
+
+def test_exact_selector_with_a_track_number_of_its_own_never_falls_back(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Dance [Label] Project", ["02 Dance (Extended Mix) SW V1.wav", "Dance (Extended Mix) SW V2.wav"])
+    assert mod.resolve("Artist", "Dance", None, "05 Dance (Extended Mix) SW V1") == []
+    assert names(mod.resolve("Artist", "Dance", None, "02 Dance (Extended Mix) SW V1")) == ["02 Dance (Extended Mix) SW V1.wav"]
+    # no number typed: the number-stripped fallback still finds the numbered file
+    assert names(mod.resolve("Artist", "Dance", None, "Dance (Extended Mix) SW V1")) == ["02 Dance (Extended Mix) SW V1.wav"]
+    assert names(mod.resolve("Artist", "Dance", None, "Dance (Extended Mix) SW V2")) == ["Dance (Extended Mix) SW V2.wav"]
+
+
+def test_exact_selector_name_with_its_own_number_does_not_match_a_double_numbered_file(tmp_path):
+    # "02 Name" against "02 02 Name.wav": one number stripped from the file would equal what was typed, but the typed name
+    # already has a number of its own, so there is no fallback.
+    mod = one_folder(tmp_path, "Artist - Name [Label] Project", ["02 02 Name.wav"])
+    assert mod.resolve("Artist", "Name", None, "02 Name") == []
+    assert names(mod.resolve("Artist", "Name", None, "02 02 Name")) == ["02 02 Name.wav"]
+
+
+@pytest.mark.parametrize("phrase", ["V.I.P.", "Re-Work", "Re-Fix", "Remode"])
+def test_a_title_that_has_the_spelling_names_the_variant(tmp_path, phrase):
+    files = [f"Artist - Title ({phrase}) SW V2.wav", "Artist - Title SW V3.wav"]
+    mod = one_folder(tmp_path, f"Artist - Title {phrase} [Label] Project", files)
+    assert names(mod.resolve("Artist", f"Title {phrase}"))[0] == files[0]
+
+
+def test_a_must_hint_with_the_spelling_picks_the_variant(tmp_path):
+    files = ["C02 - Title (Extended Mix) SW V1.wav", "C02 - Title (Joe Re-Work) (Extended Mix) SW V3.wav"]
+    mod = one_folder(tmp_path, "C02 - Title [Lab] Project", files)
+    assert names(mod.resolve("C02", "Title", "Re-Work")) == [files[1]]
+    assert names(mod.resolve("C02", "Title"))[0] == files[0]
+
+
+def test_extended_original_and_other_mix_names_are_not_remix_markers(tmp_path):
+    mod, _ = load_resolver(tmp_path, [])
+    for text in ("title extended mix", "title original mix", "title club mix", "title radio edit", "title joe mix",
+                 "title 24 bit master", "title sw v2", "title master amended v3"):
+        assert mod.variants(text) == set(), text
+    assert mod.variants("title joe v i p mix") == {"v i p"} and mod.variants("title re work") == {"re work"}
+    assert mod.variants("title re fix") == {"re fix"} and mod.variants("title joe remode") == {"remode"}
+    assert mod.variants("title vip room vipers") == {"vip"}
+
+
+def test_known_limit_the_newest_render_without_the_title_words_loses(tmp_path):
+    # B02 and B05, left as a judgement call for Sam (see the module docstring): no heuristic is added for them.
+    mod = one_folder(tmp_path, "B02 - Title [Lab] Project", ["MASTER AMENDED V3.wav", "B02 - Title 24 Bit MASTER.wav"])
+    assert names(mod.resolve("B02", "Title"))[0] == "B02 - Title 24 Bit MASTER.wav"
+    mod2 = one_folder(tmp_path / "b", "B05 - Better When [Lab] Project",
+                      ["Better Whn (Extended Mix) SW V3.wav", "Better When (Extended Mix) SW V1.wav"])
+    assert names(mod2.resolve("B05", "Better When"))[0] == "Better When (Extended Mix) SW V1.wav"
 
 
 # --- the command line ---------------------------------------------------------------------------------------------
@@ -481,3 +594,41 @@ def test_cli_three_element_form_still_works(tmp_path):
     first = out.index("Artist - Better When:")
     assert out.count("Artist - Better When:") == 2
     assert out[first:].splitlines()[1].endswith("02 Better When.wav")
+
+
+def _run_cli_raw(tools: Path, picks):
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    return subprocess.run([sys.executable, "-I", str(tools / "resolve_masters.py"), json.dumps(picks)],
+                          capture_output=True, text=True, encoding="utf-8", cwd=str(tools), env=env, timeout=60)
+
+
+def test_cli_converts_non_string_elements_with_str(tmp_path):
+    lib = tmp_path / "Library"
+    folder = make_folder(lib, "Artist - 7 [Label] Project", ["7.wav", "Other.wav"])
+    _, tools = load_resolver(tmp_path, [("Artist - 7 [Label] Project", folder)])
+    done = _run_cli_raw(tools, [["Artist", 7, None, 7]])                  # integer title and integer exact filename
+    assert done.returncode == 0, done.stderr
+    assert "Artist - 7:" in done.stdout and "7.wav" in done.stdout and "Other.wav" not in done.stdout
+    done = _run_cli_raw(tools, [["Artist", "7", 7]])                      # integer must
+    assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.parametrize("picks,needle", [
+    pytest.param([["Artist", "Better When", None, ""]], "exact filename", id="empty-exact"),
+    pytest.param([["Artist", "Better When", None, "  "]], "exact filename", id="blank-exact"),
+    pytest.param([["Artist", "Better When"], ["Artist", "Better When", None, ""]], "exact filename", id="second-pick-empty-exact"),
+    pytest.param([["Artist", "Better When", None, "02 Better When", "extra"]], "2 to 4 elements", id="fifth-element"),
+    pytest.param([["Artist"]], "2 to 4 elements", id="one-element"),
+    pytest.param([["Artist", None]], "must not be null", id="null-title"),
+    pytest.param(["Artist"], "must be a list", id="pick-is-a-string"),
+    pytest.param({"a": 1}, "list of picks", id="not-a-list"),
+])
+def test_cli_rejects_bad_input_with_one_line_and_a_non_zero_exit(tmp_path, picks, needle):
+    lib = tmp_path / "Library"
+    folder = make_folder(lib, EP_FOLDER, EP_FILES)
+    _, tools = load_resolver(tmp_path, [(EP_FOLDER, folder)])
+    done = _run_cli_raw(tools, picks)
+    assert done.returncode != 0
+    assert done.stdout == ""                                              # checked before anything is printed
+    err = done.stderr.strip()
+    assert len(err.splitlines()) == 1 and needle in err, err
