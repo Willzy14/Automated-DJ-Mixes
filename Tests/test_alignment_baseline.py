@@ -18,7 +18,18 @@ report names every pair whose decision moved and how, so the change can be inspe
 and attributed to one signal. When a diff is reviewed and accepted, refresh the
 baseline deliberately with:
 
-    PYTHONPATH=Source python Tests/test_alignment_baseline.py --refresh
+    PYTHONPATH=Source python Tests/test_alignment_baseline.py --refresh --reason "<why this diff is accepted, 15+ letters or digits>" [--reviewer "<name>"] [--accept-shift]
+
+--reason is REQUIRED: without it the command exits before anything is written. Each
+refresh writes baseline_alignments.refresh-<UTC time>.json beside the baseline FIRST
+(reason, reviewer, git commit, hashes of the corpus and code it was made from, old and
+new file hashes, a diff summary, the policy shift) and then replaces the baseline
+atomically. A refresh is REFUSED unless --accept-shift is given when 10+ pairs (or over
+10 percent) move between named_landmark_64 and standard_48, flip between align and raise,
+or change overlap_policy in any way; when 25+ pairs (or over 25 percent) change in any
+field or are newly added; or when over 5 percent of the pairs are dropped. A baseline
+with a duplicate (out, in) pair is refused outright: no flag overrides that.
+Details and the tunable limits: Tests/baseline_refresh.py.
 
 Never refresh to make a red test green without reading the diff.
 
@@ -270,7 +281,7 @@ def test_alignment_decisions_match_baseline():
     report = _failure_report(
         "alignment decisions moved against the frozen baseline",
         expected, actual, PINNED,
-        "Tests/test_alignment_baseline.py --refresh",
+        'Tests/test_alignment_baseline.py --refresh --reason "<why>"',
     )
     if report is not None:
         pytest.fail(report)
@@ -303,15 +314,21 @@ def test_baseline_is_self_consistent():
 
 if __name__ == "__main__":
     if "--refresh" in sys.argv:
-        rows = compute_rows()
-        ok = sum(1 for r in rows if r["status"] == "ok")
-        payload = {"corpus": "Test Project/14.08.26",
-                   "n_tracks": len(_load_tracks()), "n_pairs": len(rows),
-                   "ok": ok, "raised": len(rows) - ok,
-                   "rows": rows}
-        BASELINE.write_text(json.dumps(payload, sort_keys=True, indent=1),
-                            encoding="utf-8")
-        print(f"baseline refreshed: {len(rows)} pairs ({ok} align, "
-              f"{len(rows) - ok} raise)")
+        # Whether and how the baseline is replaced (reason required, shift guard,
+        # sidecar record, atomic write) lives in Tests/baseline_refresh.py; this
+        # branch only says how to regenerate the payload.
+        import baseline_refresh as BR
+
+        def _regenerate():
+            rows = compute_rows()
+            ok = sum(1 for r in rows if r["status"] == "ok")
+            return {"corpus": "Test Project/14.08.26",
+                    "n_tracks": len(_load_tracks()), "n_pairs": len(rows),
+                    "ok": ok, "raised": len(rows) - ok,
+                    "rows": rows}
+
+        raise SystemExit(BR.run_refresh_cli(
+            sys.argv[1:], BASELINE, _regenerate,
+            BR.generator_inputs(ROOT, STEM_DIR), root=ROOT))
     else:
         print(__doc__)
