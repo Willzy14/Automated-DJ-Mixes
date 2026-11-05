@@ -21,6 +21,10 @@ REAL_SOURCE = ROOT / "Tools" / "resolve_masters.py"
 EP_FOLDER = "Artist - Better When [Label] Project"
 EP_FILES = ["01 Change The Situation.wav", "02 Better When.wav", "03 Other Thing.wav"]
 
+# The resolver breaks ties by date modified (newer first). make_folder gives every file this one time, so the old path-order tests do
+# not depend on how quickly the files were written; the date tests below move single files with os.utime.
+BASE_TIME = 1_700_000_000
+
 
 def _write_wav(path: Path, ms: int = 100, rate: int = 8000) -> None:
     with wave.open(str(path), "wb") as w:
@@ -40,6 +44,7 @@ def make_folder(lib: Path, folder_name: str, files, subdir: str = "MASTER RENDER
             _write_wav(mr / name)
         else:
             (mr / name).write_bytes(b"not audio")
+        os.utime(mr / name, (BASE_TIME, BASE_TIME))
     return folder
 
 
@@ -555,10 +560,15 @@ def test_extended_original_and_other_mix_names_are_not_remix_markers(tmp_path):
     assert mod.variants("title vip room vipers") == {"vip"}
 
 
-def test_known_limit_the_newest_render_without_the_title_words_loses(tmp_path):
-    # B02 and B05, left as a judgement call for Sam (see the module docstring): no heuristic is added for them.
+def test_b02_the_newest_render_without_the_title_words_now_wins(tmp_path):
+    # B02 was a known limit, left as a judgement call for Sam. On 2026-11-05 he decided: the newest version always wins. The
+    # version-only MASTER AMENDED V3 is the newest version of the one track in this folder, so it beats the older titled file.
     mod = one_folder(tmp_path, "B02 - Title [Lab] Project", ["MASTER AMENDED V3.wav", "B02 - Title 24 Bit MASTER.wav"])
-    assert names(mod.resolve("B02", "Title"))[0] == "B02 - Title 24 Bit MASTER.wav"
+    assert names(mod.resolve("B02", "Title"))[0] == "MASTER AMENDED V3.wav"
+
+
+def test_known_limit_a_typo_in_the_title_still_loses_to_the_older_correct_name(tmp_path):
+    # B05: a misspelt title is not a version-only name (it has a word of its own), so no heuristic is added for it.
     mod2 = one_folder(tmp_path / "b", "B05 - Better When [Lab] Project",
                       ["Better Whn (Extended Mix) SW V3.wav", "Better When (Extended Mix) SW V1.wav"])
     assert names(mod2.resolve("B05", "Better When"))[0] == "Better When (Extended Mix) SW V1.wav"
@@ -632,3 +642,190 @@ def test_cli_rejects_bad_input_with_one_line_and_a_non_zero_exit(tmp_path, picks
     assert done.stdout == ""                                              # checked before anything is printed
     err = done.stderr.strip()
     assert len(err.splitlines()) == 1 and needle in err, err
+
+
+# --- the newest version always wins (Sam, 2026-11-05) ----------------------------------------------------------------
+
+def _age(path: Path, seconds: int) -> None:
+    """Set one file's modification time to BASE_TIME + seconds (a bigger number is newer)."""
+    os.utime(path, (BASE_TIME + seconds, BASE_TIME + seconds))
+
+
+def _folder_and_tools(tmp_path: Path, folder_name: str, files):
+    lib = tmp_path / "Library"
+    folder = make_folder(lib, folder_name, files)
+    mod, tools = load_resolver(tmp_path, [(folder_name, folder)])
+    return mod, tools, folder / "MASTER RENDERS"
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("MASTER AMENDED V3.wav", True), ("SW V3.wav", True), ("24 Bit MASTER.wav", True), ("Final Master SW V2.wav", True),
+    ("master.wav", True), ("02 - SW V2.wav", True), ("01 MASTER AMENDED.WAV", True), ("2) SW V1.wav", True),
+    ("Artist - Title SW V3.wav", False), ("Master A SW V1.wav", False), ("Artist - SW V3.wav", False), ("SW V3 Dub.wav", False),
+    ("MASTER AMENDED VERSION.wav", False), ("Mastering.wav", False), (".wav", False), ("02.wav", False), ("V3.wav", False),
+])
+def test_what_counts_as_a_version_only_name(tmp_path, name, expected):
+    # Nothing may be left of the name after the version words, a leading track number and .wav, and at least one version word is there.
+    mod, _ = load_resolver(tmp_path, [])
+    assert bool(mod.vonly(name)) is expected
+
+
+def test_a_version_only_file_beats_an_older_titled_version_in_a_one_track_folder(tmp_path):              # (a)
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", "MASTER AMENDED V3.wav"])
+    assert names(mod.resolve("Artist", "Title")) == ["MASTER AMENDED V3.wav", "Artist - Title SW V1.wav"]
+
+
+def test_sw_v3_alone_in_the_name_beats_sw_v1_with_the_title(tmp_path):                                    # (b)
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", "SW V3.wav"])
+    assert names(mod.resolve("Artist", "Title")) == ["SW V3.wav", "Artist - Title SW V1.wav"]
+    # the other way round the titled file is the newer version, so it keeps winning
+    mod2 = one_folder(tmp_path / "b", "Artist - Title [Label] Project", ["Artist - Title SW V3.wav", "SW V1.wav"])
+    assert names(mod2.resolve("Artist", "Title")) == ["Artist - Title SW V3.wav", "SW V1.wav"]
+
+
+def test_a_version_only_file_takes_the_best_mix_preference_of_its_folder(tmp_path):                       # (c)
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", ["Artist - Title (Extended Mix) SW V1.wav", "MASTER AMENDED V3.wav"])
+    r = mod.resolve("Artist", "Title")
+    assert names(r) == ["MASTER AMENDED V3.wav", "Artist - Title (Extended Mix) SW V1.wav"]
+    assert [s for s, _ in r] == [51, 41]            # the score shown: 40 (Extended) + 3 + 8 for AMENDED V3, and 40 + 1 for SW V1
+    # with an Extended and a Radio Edit in the folder it takes the Extended preference, so it also beats the Radio Edit at SW V5
+    files = ["Title (Radio Edit) SW V5.wav", "Title (Extended Mix) SW V1.wav", "MASTER AMENDED V3.wav"]
+    mod2 = one_folder(tmp_path / "b", "Artist - Title [Label] Project", files)
+    assert names(mod2.resolve("Artist", "Title")) == ["MASTER AMENDED V3.wav", "Title (Extended Mix) SW V1.wav", "Title (Radio Edit) SW V5.wav"]
+    # with only a Radio Edit it has that preference, and is still the newest version of the track
+    mod3 = one_folder(tmp_path / "c", "Artist - Title [Label] Project", ["Title (Radio Edit) SW V1.wav", "MASTER AMENDED V3.wav"])
+    assert names(mod3.resolve("Artist", "Title")) == ["MASTER AMENDED V3.wav", "Title (Radio Edit) SW V1.wav"]
+
+
+def test_version_only_names_keep_sams_order(tmp_path):
+    # 24 Bit MASTER < MASTER AMENDED < AMENDED V2 < AMENDED V3, and SW V1 < SW V2 < SW V3
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project",
+                     ["Artist - Title.wav", "24 Bit MASTER.wav", "MASTER AMENDED.wav", "MASTER AMENDED V2.wav"])
+    assert names(mod.resolve("Artist", "Title")) == ["MASTER AMENDED V2.wav", "MASTER AMENDED.wav", "24 Bit MASTER.wav"]
+    mod2 = one_folder(tmp_path / "b", "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", "SW V2.wav", "SW V3.wav"])
+    assert names(mod2.resolve("Artist", "Title")) == ["SW V3.wav", "SW V2.wav", "Artist - Title SW V1.wav"]
+    mod3 = one_folder(tmp_path / "c", "Artist - Title [Label] Project", ["Artist - Title.wav", "MASTER AMENDED V3.wav", "MASTER AMENDED V2.wav"])
+    assert names(mod3.resolve("Artist", "Title")) == ["MASTER AMENDED V3.wav", "MASTER AMENDED V2.wav", "Artist - Title.wav"]
+
+
+def test_in_an_ep_folder_a_version_only_file_does_not_win_but_the_command_line_says_so(tmp_path):         # (d)
+    files = ["Artist - Change The Situation (Extended Mix) SW V2.wav", "Artist - Better When (Extended Mix) SW V2.wav",
+             "Artist - Zebra Dance (Extended Mix) SW V2.wav", "MASTER AMENDED V3.wav"]
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Better When EP [Label] Project", files)
+    assert names(mod.resolve("Artist", "Better When"))[0] == "Artist - Better When (Extended Mix) SW V2.wav"
+    out = _run_cli(tools, [["Artist", "Better When"]])
+    lines = out.splitlines()
+    assert lines[0] == "Artist - Better When:" and lines[1].endswith("Artist - Better When (Extended Mix) SW V2.wav")
+    notes = [ln for ln in lines if ln.strip().startswith("NOTE")]
+    assert len(notes) == 1, out                                   # one plain line, not one per file
+    assert "MASTER AMENDED V3.wav" in notes[0] and "several tracks" in notes[0] and "not chosen" in notes[0]
+    assert lines.index(notes[0]) > 1                              # after the result lines
+
+
+def test_the_note_names_every_newer_version_only_file_once(tmp_path):
+    files = ["Artist - Change The Situation SW V1.wav", "Artist - Better When SW V1.wav", "MASTER AMENDED V3.wav", "SW V4.wav"]
+    _, tools, _ = _folder_and_tools(tmp_path, "Artist - Better When EP [Label] Project", files)
+    notes = [ln for ln in _run_cli(tools, [["Artist", "Better When"]]).splitlines() if "NOTE" in ln]
+    assert len(notes) == 1 and "MASTER AMENDED V3.wav" in notes[0] and "SW V4.wav" in notes[0], notes
+    assert notes[0].index("MASTER AMENDED V3.wav") < notes[0].index("SW V4.wav")        # the newest version (AMENDED V3 = 11) first
+
+
+def test_cli_note_only_when_a_newer_version_only_file_was_passed_over(tmp_path):
+    name = "Artist - Better When EP [Label] Project"
+    files = ["Artist - Change The Situation SW V2.wav", "Artist - Better When SW V2.wav", "SW V1.wav"]
+    _, tools, mr = _folder_and_tools(tmp_path, name, files)
+    pick = [["Artist", "Better When"]]
+    assert "NOTE" not in _run_cli(tools, pick)                    # SW V1 is older than the chosen SW V2
+    _write_wav(mr / "SW V2.wav")
+    _age(mr / "SW V2.wav", -100)
+    assert "NOTE" not in _run_cli(tools, pick)                    # the same version and an older date
+    _age(mr / "SW V2.wav", 100)
+    assert "NOTE: newer, not chosen: SW V2.wav (" in _run_cli(tools, pick)          # the same version and a newer date
+    assert "NOTE" not in _run_cli(tools, [["Artist", "Better When", None, "Artist - Better When SW V2"]])   # an exact name was asked for
+    assert "NOTE" not in _run_cli(tools, [["Artist", "Better When", None, "No Such File"]])
+
+
+def test_cli_prints_no_note_when_the_version_only_file_was_chosen(tmp_path):
+    _, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", "MASTER AMENDED V3.wav"])
+    out = _run_cli(tools, [["Artist", "Title"]])
+    assert out.splitlines()[1].endswith("MASTER AMENDED V3.wav") and "NOTE" not in out
+
+
+def test_at_the_same_version_the_newer_date_modified_wins(tmp_path):                                      # (e)
+    mod, _, mr = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Title A.wav", "Title B.wav"])
+    _age(mr / "Title A.wav", 100)
+    _age(mr / "Title B.wav", 0)
+    assert names(mod.resolve("Artist", "Title")) == ["Title A.wav", "Title B.wav"]
+    _age(mr / "Title A.wav", 0)
+    _age(mr / "Title B.wav", 100)                                 # the dates swapped: the other file wins (path order alone gave B always)
+    assert names(mod.resolve("Artist", "Title")) == ["Title B.wav", "Title A.wav"]
+    # a version-only file and a titled file at the same version are told apart by the date too
+    mod2, _, mr2 = _folder_and_tools(tmp_path / "b", "Artist - Title [Label] Project", ["Artist - Title SW V3.wav", "SW V3.wav"])
+    _age(mr2 / "SW V3.wav", 100)
+    assert names(mod2.resolve("Artist", "Title")) == ["SW V3.wav", "Artist - Title SW V3.wav"]
+    _age(mr2 / "SW V3.wav", -100)
+    assert names(mod2.resolve("Artist", "Title")) == ["Artist - Title SW V3.wav", "SW V3.wav"]
+
+
+def test_the_date_never_beats_a_higher_version_or_the_exact_name(tmp_path):
+    mod, _, mr = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V2.wav", "Artist - Title SW V1.wav"])
+    _age(mr / "Artist - Title SW V1.wav", 1000)                   # the older version was saved last: the newer version still wins
+    assert names(mod.resolve("Artist", "Title")) == ["Artist - Title SW V2.wav", "Artist - Title SW V1.wav"]
+    mod2, _, mr2 = _folder_and_tools(tmp_path / "b", "Artist - Title [Label] Project", ["Title.wav", "Title Remaster.wav"])
+    _age(mr2 / "Title Remaster.wav", 1000)                        # at one version the exact name is still ahead of the date
+    assert names(mod2.resolve("Artist", "Title")) == ["Title.wav", "Title Remaster.wav"]
+
+
+def test_radio_edit_at_a_newer_version_still_loses_to_the_extended_mix(tmp_path):                         # (f)
+    files = ["Title (Radio Edit) SW V5.wav", "Title (Extended Mix) SW V1.wav"]
+    mod, _, mr = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title")) == ["Title (Extended Mix) SW V1.wav", "Title (Radio Edit) SW V5.wav"]
+    _age(mr / files[0], 1000)
+    assert names(mod.resolve("Artist", "Title"))[0] == "Title (Extended Mix) SW V1.wav"        # and a newer date does not change it
+
+
+def test_a_big_version_number_cannot_outweigh_a_mix_preference(tmp_path):
+    # Extended (+40) and Original Mix (+30) are about which mix, not which version: the two are compared, never added.
+    files = ["Title (Original Mix) SW V15.wav", "Title (Extended Mix) SW V1.wav"]
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title")) == ["Title (Extended Mix) SW V1.wav", "Title (Original Mix) SW V15.wav"]
+    # inside one mix the higher version always wins
+    mod2 = one_folder(tmp_path / "b", "Artist - Title [Label] Project", ["Title (Extended Mix) SW V1.wav", "Title (Extended Mix) SW V2.wav"])
+    assert names(mod2.resolve("Artist", "Title")) == ["Title (Extended Mix) SW V2.wav", "Title (Extended Mix) SW V1.wav"]
+
+
+def test_an_unmarked_titled_file_has_no_mix_preference_as_before(tmp_path):
+    # Only a version-only file inherits a mix preference. A titled file without a mix marker keeps none, so it does not beat an Extended Mix.
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", ["Title SW V3.wav", "Title (Extended Mix) SW V1.wav"])
+    assert names(mod.resolve("Artist", "Title")) == ["Title (Extended Mix) SW V1.wav", "Title SW V3.wav"]
+
+
+def test_a_version_only_file_never_makes_the_remix_or_the_original_the_answer(tmp_path):                   # (g)
+    orig, remix, vonly_name = "Artist - Title SW V1.wav", "Artist - Title (Someone Remix) SW V2.wav", "MASTER AMENDED V3.wav"
+    mod = one_folder(tmp_path, "Artist - Title Someone Remix [Label] Project", [orig, remix, vonly_name])
+    assert names(mod.resolve("Artist", "Title"))[0] == orig                                 # the original, not the version-only file
+    assert names(mod.resolve("Artist", "Title (Someone Remix)"))[0] == remix                # the remix asked for in the title
+    # the remix asked for in the hint: both tracks are in the folder, so the version-only file is not placed ahead of the original
+    assert names(mod.resolve("Artist", "Title", "Someone Remix")) == [remix, orig, vonly_name]
+
+
+def test_junk_stays_last_even_when_it_is_the_newest_and_the_highest_version(tmp_path):                    # (h)
+    junk = "Artist - Title (Instrumental) SW V9.wav"
+    mod, _, mr = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", junk, "MASTER AMENDED V3.wav"])
+    _age(mr / junk, 1000)
+    r = names(mod.resolve("Artist", "Title"))
+    assert len(r) == 3 and r[-1] == junk
+    # Junk with the best marks (Extended + Original Mix, -100 for junk = -30) is still above a Radio Edit (-40) on the mix alone:
+    # only the junk tier itself keeps it last.
+    junk2 = "Title (Extended Original Mix) (Instrumental) SW V9.wav"
+    mod2, _, mr2 = _folder_and_tools(tmp_path / "b", "Artist - Title [Label] Project", ["Title (Radio Edit) SW V1.wav", junk2])
+    _age(mr2 / junk2, 1000)
+    assert names(mod2.resolve("Artist", "Title")) == ["Title (Radio Edit) SW V1.wav", junk2]
+
+
+def test_the_must_hint_and_the_exact_name_still_beat_a_version_only_file(tmp_path):
+    files = ["Artist - Title (Club Mix) SW V1.wav", "Artist - Title (Extended Mix) SW V2.wav", "MASTER AMENDED V3.wav"]
+    mod = one_folder(tmp_path, "Artist - Title Club Mix [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title", "Club Mix"))[0] == "Artist - Title (Club Mix) SW V1.wav"
+    assert names(mod.resolve("Artist", "Title", None, "Artist - Title (Extended Mix) SW V2")) == ["Artist - Title (Extended Mix) SW V2.wav"]
+    assert names(mod.resolve("Artist", "Title", None, "MASTER AMENDED V3")) == ["MASTER AMENDED V3.wav"]
