@@ -1538,6 +1538,9 @@ def test_cli_a_50_pair_shift_is_refused_then_accepted_with_the_flag(scratch):
     newest = [p for p in scratch.sidecars()
               if json.loads(p.read_bytes())["accepted_shift"]]
     assert len(newest) == 1
+    rec = json.loads(newest[0].read_bytes())          # (round 3, MiniMax: pin the exact guards, as the API twin does)
+    assert rec["guards_tripped_names"] == ["policy_shift", "overlap_policy_changes", "pairs_changed"]
+    assert rec["guards_accepted"] == rec["guards_tripped_names"]
 
 
 def test_cli_a_3_pair_shift_needs_no_flag(scratch):
