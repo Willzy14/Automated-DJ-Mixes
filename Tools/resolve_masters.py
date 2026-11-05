@@ -1,6 +1,6 @@
 """Find the best master WAV for a credit across the work folders and the G:/F: backup drives, using Tools/folder_index.json (build it with build_folder_index.py). Prefers Extended/Original, newest SW V / AMENDED, never acapella/instrumental/dub/stems. Usage: python Tools/resolve_masters.py [[\"Artist\",\"Title\",\"optional must-contain\",\"optional exact filename\"],...] (2 to 4 elements, null skips one). Order: files that are not acapella/instrumental/dub/stems first, then the named track (the title as whole words in the name; a remix, rework, refix, bootleg or VIP is never the named track unless the title or the hint says so), then the must hint, then the mix (Extended, Original Mix, Radio Edit), then the version (the latest SW V / AMENDED wins), then a file named exactly like the title, then the newest date modified, then path descending. A must hint matches the folder name or a filename. The exact filename (4th element) selects only the file whose full name matches (case-insensitive, no .wav, no folder part); only when none does, and the name you typed has no track number of its own, it ignores a leading track number. Always COPY, never move; use shutil.copyfile (os copy fails on online-only Dropbox files).
 
-The newest version always wins (Sam, 2026-11-05). For a DJ mix the Extended mix comes first, then the newest version of it; a newer plain version does not beat an older Extended. A file whose name says only a version (MASTER AMENDED V3, Artist - MASTER AMENDED V3, SW V3, 24 Bit MASTER, Extended SW V3) is a version of the searched track ONLY in an exact single-track folder: the folder is named exactly artist - title, and every file in it that is not junk is a titled file (its name, without the track number, the version tokens, the (..) groups of only mix words and the artist prefix, is exactly the title) or a version-only file, with at least one titled file; it then takes the folder's best mix, or keeps its own if its name has a mix word. Anywhere else it is never chosen, and the command line prints a NOTE with the whole path of every newer version-only file (or file with only versions and decorations in its name; in a folder named exactly artist - title also any other file with a version token in its name) that was not chosen, in every folder scanned, and says so when a must hint matched nothing. Known limits, older than this rule and Sam's to decide: the folder filter is a substring test; a titled file is matched as whole words, so Artist - Love Me Right can beat Artist - Love when searching Love; a remix-only folder still resolves when no original exists; a name with an SW number is decided by that number first and amended or 24 bit only break a tie at the same number (SW V10 < SW V11 AMENDED < SW V12 < SW V12 AMENDED), while a name with no SW number keeps its old score and is compared with an SW name by the old numbers (SW V12 beats MASTER AMENDED V3); resolve() returns only the ranked files, the NOTE is printed only by the command line. A NOTE compares a file with the best file of its own folder; a newer titled version that loses to an older Extended is not noted (the DJ rule); a title made only of version words (Master, Final) is never promoted, and its version-only files get a NOTE and are never the answer; when only junk is left and a version-only file was held there is no answer, only the NOTE. A hint or an exact filename that matches nothing is named on a NONE line: the hint first, never both.
+The newest version always wins (Sam, 2026-11-05). For a DJ mix the Extended mix comes first, then the newest version of it; a newer plain version does not beat an older Extended. A file whose name says only a version (MASTER AMENDED V3, Artist - MASTER AMENDED V3, SW V3, 24 Bit MASTER, Extended SW V3) is a version of the searched track ONLY in an exact single-track folder: the folder is named exactly artist - title, and every file in it that is not junk is a titled file (its name, without the track number, the version tokens, the (..) groups of only mix words and the artist prefix, is exactly the title) or a version-only file, with at least one titled file; it then takes the folder's best mix, or keeps its own if its name has a mix word. Anywhere else it is never chosen, and the command line prints a NOTE with the whole path of every newer version-only file (or file with only versions and decorations in its name; in a folder named exactly artist - title also any other file with a version token in its name) that was not chosen, in every folder scanned, and says so when a must hint matched nothing. Known limits, older than this rule and Sam's to decide: the folder filter is a substring test; a titled file is matched as whole words, so Artist - Love Me Right can beat Artist - Love when searching Love; a remix-only folder still resolves when no original exists; a name with an SW number is decided by that number first and amended or 24 bit only break a tie at the same number (SW V10 < SW V11 AMENDED < SW V12 < SW V12 AMENDED), while a name with no SW number keeps its old score and is compared with an SW name by the old numbers (SW V12 beats MASTER AMENDED V3); resolve() returns only the ranked files, the NOTE is printed only by the command line. A NOTE compares a file with the best file of its own folder; a newer titled version that loses to an older Extended is not noted (the DJ rule); a title made only of version words (Master, Final) is never promoted, and its version-only files get a NOTE and are never the answer; when the only answers of a folder are junk and a version-only file of that folder was held there is no answer from it, only the NOTE. A hint or an exact filename that matches nothing is named on a NONE line: the hint first, never both.
 """
 import json,os,re,sys
 sys.stdout.reconfigure(encoding='utf-8')
@@ -61,6 +61,7 @@ def scan(artist_key,title_key,must=None,exact=None):
     if not a or not t: raise ValueError('resolve_masters: the artist and the title need a letter or digit')
     want_t={t,at}-{''}; want_m=keys(must) if must else set()
     asked=variants(t+' '+nm); asked_junk=set(JUNK.findall(t+' '+nm)); out=[]; held=[]; pool=[]; seen=0; hit=False
+    vt=not VERS.sub(' ',t).split()      # a title made only of version words (Master, Final): the one case where a tokens-only name can be the title itself
     for name,p in idx:
         n=norm(name)
         if a in n and t in n and not name.endswith('.lnk'):
@@ -70,7 +71,7 @@ def scan(artist_key,title_key,must=None,exact=None):
             rows=[]
             for f in fs:
                 kn=norm(stem(f)); dc=deco(f,a,t)
-                tk=bool(VERS.search(kn)) and not VMIX.sub(' ',VERS.sub(' ',norm(strip_num(stem(f))))).split() and not kn.startswith(a+' ')     # a version token and only tokens, no artist: never "named" (a title that is a version word)
+                tk=vt and bool(VERS.search(kn)) and not VMIX.sub(' ',VERS.sub(' ',norm(strip_num(stem(f))))).split() and not kn.startswith(a+' ')     # a version-word title and a name of only tokens, no artist: never "named"
                 rows.append((f,kn,bool(t) and f' {t} ' in f' {kn} ' and not variants(kn)-asked and not tk,bool(set(JUNK.findall(f.lower()))-asked_junk),dc and bool(VERS.search(kn)),dc,tk))
             # A version-only file is a version of the searched track ONLY in an exact single-track folder: the folder name is exactly
             # artist - title (no brackets, parentheses, & or other words), every file that is not junk is either a titled file (its name,
@@ -83,9 +84,11 @@ def scan(artist_key,title_key,must=None,exact=None):
             whole=f' {a} ' in f' {norm(tail)} ' and f' {t} ' in f' {norm(tail)} '      # from the cut folder name: a title word in the label does not count
             why=('ranked lower on mix, hint or exact title' if one else 'the folder may hold other tracks' if fok else
                  'the folder name is not exactly artist and title' if whole else 'the folder name does not name this track')
+            start=len(out); gone=False; mine=[]
             for f,kn,named,junk,vo,dc,tk in rows:
                 k=keys(f); fp=os.path.join(mr,f); up=vo and one; seen+=1
-                ks=norm(strip_num(stem(f))); own=bool(VMIX.search(ks[len(a)+1:] if ks.startswith(a+' ') else ks))      # a mix word of its own: not the track number, not the artist
+                ks=norm(strip_num(stem(f))); ks=ks[len(a)+1:] if ks.startswith(a+' ') else ks      # the track number and the artist taken off once
+                own=bool(VMIX.search(ks)); cj=bool(set(JUNK.findall(ks))-asked_junk)               # a mix word of its own / junk for the clearance (not a junk word in the artist's name)
                 try: mt=os.path.getmtime(fp)
                 except OSError: mt=0.0
                 # Held for the NOTE (before the must filter, so a hint cannot silence it): a decoration-only file, and in a folder named exactly artist - title
@@ -96,9 +99,12 @@ def scan(artist_key,title_key,must=None,exact=None):
                 row=((not junk,named or up,bool(k&want_m),bool(nm) and nm in kn),pref if up and not own else mix(f),ver(f),bool(k&want_t),mt,fp)
                 if not junk: pool.append(row)
                 ok=not (nm and nm not in n and nm not in kn); hit=hit or ok
-                if (dc or tk) and not up and not exact or not ok: continue      # a decoration-only or tokens-only file that is not promoted is never an answer (unless asked for by name)
-                out.append(row)
-    if not exact and held and out and not any(o[0][0] for o in out): out=[]      # only junk is left and a master was held: no answer, the NOTE names it
+                if (dc or tk) and not up and not exact:      # a decoration-only or tokens-only file that is not promoted is never an answer (unless asked for by name)
+                    gone=gone or ok and not junk
+                    continue
+                if not ok: continue
+                out.append(row); mine.append(cj)
+            if gone and mine and all(mine): del out[start:]      # this folder has only junk left and the promotion rule held a master: no answer from it, the NOTE names it
     if exact:
         e=lit(exact); full=[o for o in out if lit(os.path.basename(o[-1]))==e]
         out=full or ([o for o in out if lit(strip_num(lit(os.path.basename(o[-1]))))==e] if strip_num(e)==e else [])

@@ -1697,3 +1697,74 @@ def test_s9b_a_float_score_that_adds_up_with_noise_is_printed_without_the_noise(
     name = "Artist - Title (Extended Mix) SW V10 AMENDED V2.wav"
     _, tools, _ = _folder_and_tools(tmp_path, FOLDER9, [name])
     assert _run_cli(tools, [["Artist", "Title"]]).splitlines()[1].startswith("   [50.52] ")
+
+
+# --- round 10: a mix-word title stays named, the junk clearance is per folder, a junk word in the artist's name is not junk for it ---
+
+def test_x1_codex_a_mix_word_title_with_a_version_token_stays_the_named_file(tmp_path):
+    # Artist / Main: Main SW V3 is the named file; the other track's file has a higher version but is not the title.
+    files = ["Main SW V3.wav", "Other (Radio Edit) SW V5.wav"]
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Main EP [Label] Project", files)
+    assert names(mod.resolve("Artist", "Main"))[0] == "Main SW V3.wav"
+    assert _note_block(_run_cli(tools, [["Artist", "Main"]])) == ([], [])
+
+
+@pytest.mark.parametrize("title,named", [("Original", "Original SW V3.wav"), ("Edit", "Edit SW V2.wav"), ("Mix", "Mix SW V1.wav"), ("Radio", "Radio SW V2.wav")])
+def test_x1b_a_mix_word_title_beats_another_tracks_higher_version_in_an_ep_folder(tmp_path, title, named):
+    mod, _, _ = _folder_and_tools(tmp_path, f"Artist - {title} EP [Label] Project", [named, "Other SW V5.wav"])
+    assert names(mod.resolve("Artist", title))[0] == named
+
+
+@pytest.mark.parametrize("title", ["Master", "Final", "Amended"])
+def test_x1c_a_version_word_title_still_never_chooses_the_master(tmp_path, title):
+    mod, _, _ = _folder_and_tools(tmp_path, f"Artist - {title} [Label] Project", ["MASTER AMENDED V3.wav"])
+    assert mod.resolve("Artist", title) == []                                              # no answer: the master is only noted
+
+
+def test_x2_codex_the_junk_clearance_ignores_a_master_the_hint_excluded(tmp_path):
+    # The master of folder Take A is not promoted away from Take B: the hint removes it, so the stems of Take B are still returned.
+    mod, _ = _library(tmp_path, {
+        "Artist - Title [Take A] Project": ["Artist - Title SW V12.wav", "MASTER AMENDED V3.wav"],
+        "Artist - Title [Take B] Project": ["Title Stems.wav"]})
+    assert names(mod.resolve("Artist", "Title", "Take B")) == ["Title Stems.wav"]
+
+
+@pytest.mark.parametrize("answer_first", [False, True])
+def test_x2b_the_clearance_is_per_folder(tmp_path, answer_first):
+    # Folder A holds a master that was not promoted and only junk: nothing from A. Folder B has a titled file and keeps it, whichever folder is scanned first.
+    spec = {"Artist - Title [Label A] Project": ["Title Stems.wav", "MASTER AMENDED V3.wav"],
+            "Artist - Title [Label B] Project": ["Artist - Title SW V1.wav"]}
+    mod, tools = _library(tmp_path, dict(reversed(list(spec.items()))) if answer_first else spec)
+    assert names(mod.resolve("Artist", "Title")) == ["Artist - Title SW V1.wav"]
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav") and "Label A" in listed[0]
+
+
+def test_x2c_a_master_the_hint_excluded_does_not_clear_the_stems_of_its_own_folder(tmp_path):
+    # The hint is in the stems file's name, not in the folder's name: it removes the master, so the master cannot be what clears the stems.
+    mod, _, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Title Stems Take B.wav", "MASTER AMENDED V3.wav"])
+    assert names(mod.resolve("Artist", "Title", "Take B")) == ["Title Stems Take B.wav"]
+
+
+def test_x2d_one_junk_file_does_not_clear_a_folder_that_also_has_a_titled_file(tmp_path):
+    # The "&" keeps the master from being promoted (it is held). The titled file is an answer and the stems file is junk: only an all-junk folder is cleared.
+    files = ["Artist - Title SW V2.wav", "Title Stems.wav", "MASTER AMENDED V3.wav"]
+    mod, _, _ = _folder_and_tools(tmp_path, "Artist - Title & Friends [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V2.wav"
+
+
+def test_x3_codex_a_junk_word_in_the_artists_name_does_not_clear_the_titled_file(tmp_path):
+    files = ["Dubfire - Title SW V2.wav", "MASTER AMENDED V3.wav"]
+    mod, tools, _ = _folder_and_tools(tmp_path, "Dubfire - Title [Label] Project", files)
+    assert names(mod.resolve("Dubfire", "Title")) == ["Dubfire - Title SW V2.wav"]
+    heads, listed = _note_block(_run_cli(tools, [["Dubfire", "Title"]]))                  # the master is noted, as in round 7
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
+
+
+def test_x3b_an_acapella_of_that_artist_is_still_junk_for_the_clearance(tmp_path):
+    mod, tools, _ = _folder_and_tools(tmp_path, "Dubfire - Title [Label] Project", ["Dubfire - Title (Acapella).wav", "MASTER AMENDED V3.wav"])
+    assert mod.resolve("Dubfire", "Title") == []
+    out = _run_cli(tools, [["Dubfire", "Title"]])
+    assert out.splitlines()[1].strip() == "NONE"
+    heads, listed = _note_block(out)
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
