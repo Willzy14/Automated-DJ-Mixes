@@ -962,7 +962,7 @@ def test_a_newer_file_with_a_typo_in_the_title_never_wins_and_is_named(tmp_path)
     assert any("cannot tell which track it belongs to" in h for h in heads) and any("may hold other tracks" in h for h in heads)
 
 
-@pytest.mark.parametrize("name,score", [("MASTER AMENDED VERSION.wav", 6), ("Title (Amended Vocal) SW V2.wav", 8), ("MASTER AMENDED V.wav", 6)])
+@pytest.mark.parametrize("name,score", [("MASTER AMENDED VERSION.wav", 6), ("Title (Amended Vocal) SW V2.wav", 2.5), ("MASTER AMENDED V.wav", 6)])
 def test_amended_without_digits_is_plain_amended_and_never_kills_the_lookup(tmp_path, name, score):
     mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", name])
     assert mod.ver(name) == score                                  # no digits after "amended v": plain amended (+6), not a crash
@@ -1601,3 +1601,99 @@ def test_n1_a_hint_that_matched_is_not_blamed_when_something_else_emptied_the_li
     assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
     real = _run_cli(tools, [["Artist", "Title", "No Such Hint"]])                         # a hint that really matches nothing is still named
     assert 'NONE: no file matched the hint "No Such Hint"' in real
+
+
+# --- round 9: an SW number decides first; amended and 24 bit only break a tie at the same number (Sam, 2026-11-05) ---
+
+FOLDER9 = "Artist - Title [Label] Project"
+
+
+def _sw(label: str) -> str:
+    return f"Artist - Title {label}.wav"
+
+
+def test_s1_sams_first_sentence_sw_v12_beats_sw_v11_amended_and_sw_v10(tmp_path):
+    # "if you have SWV10 and then SWV11 amended, and then SWV12, V12 will win" (dates must not matter: V12 is the oldest file here)
+    files = [_sw("SW V10"), _sw("SW V11 AMENDED"), _sw("SW V12")]
+    mod, _, mr = _folder_and_tools(tmp_path, FOLDER9, files)
+    _age(mr / _sw("SW V12"), -100)
+    _age(mr / _sw("SW V10"), 100)
+    assert names(mod.resolve("Artist", "Title")) == [_sw("SW V12"), _sw("SW V11 AMENDED"), _sw("SW V10")]
+
+
+def test_s2_sams_second_sentence_sw_v12_amended_beats_sw_v12_in_either_date_order(tmp_path):
+    # "If you have SWV12 and SWV12 amended, SWV12 amended will win"
+    mod, _, mr = _folder_and_tools(tmp_path, FOLDER9, [_sw("SW V12"), _sw("SW V12 AMENDED")])
+    _age(mr / _sw("SW V12 AMENDED"), 100)                                                   # the amended file is the newer one
+    assert names(mod.resolve("Artist", "Title")) == [_sw("SW V12 AMENDED"), _sw("SW V12")]
+    _age(mr / _sw("SW V12 AMENDED"), -100)                                                  # and the older one: the date does not matter
+    assert names(mod.resolve("Artist", "Title")) == [_sw("SW V12 AMENDED"), _sw("SW V12")]
+
+
+def test_s3_amended_beats_plain_and_a_lower_amended_and_the_amended_number_and_24_bit_break_ties_in_order(tmp_path):
+    files = [_sw("SW V11"), _sw("SW V10 AMENDED"), _sw("SW V11 AMENDED")]
+    mod = one_folder(tmp_path, FOLDER9, files)
+    assert names(mod.resolve("Artist", "Title")) == [_sw("SW V11 AMENDED"), _sw("SW V11"), _sw("SW V10 AMENDED")]       # SW V11 AMENDED > SW V11 > SW V10 AMENDED
+    tie = [_sw("SW V11"), _sw("SW V11 AMENDED"), _sw("SW V11 AMENDED V2")]
+    assert names(one_folder(tmp_path / "b", FOLDER9, tie).resolve("Artist", "Title")) == [_sw("SW V11 AMENDED V2"), _sw("SW V11 AMENDED"), _sw("SW V11")]
+    bit = [_sw("SW V11"), _sw("SW V11 24 Bit"), _sw("SW V11 AMENDED")]                      # 24 Bit breaks a tie, below amended
+    assert names(one_folder(tmp_path / "c", FOLDER9, bit).resolve("Artist", "Title")) == [_sw("SW V11 AMENDED"), _sw("SW V11 24 Bit"), _sw("SW V11")]
+
+
+def test_s4_a_name_with_no_sw_number_scores_exactly_as_before(tmp_path):
+    mod, _ = load_resolver(tmp_path, [])
+    old = {"AMENDED V2.wav": 10, "MASTER AMENDED V3.wav": 11, "MASTER AMENDED.wav": 6, "24 Bit MASTER.wav": 5, "Artist - Title.wav": 0,
+           "24 Bit MASTER AMENDED V3.wav": 16, "MASTER AMENDED VERSION.wav": 6, "MASTER AMENDED V.wav": 6}
+    for name, score in old.items():
+        assert mod.ver(name) == score, name
+    assert isinstance(mod.ver("SW V1.wav"), (int, float)) and mod.ver("SW V1.wav") == 1
+
+
+def test_s5_the_tie_break_is_always_below_one_so_the_sw_number_always_decides_first(tmp_path):
+    mod, _ = load_resolver(tmp_path, [])
+    worst = mod.ver("SW V11 24 Bit AMENDED V99.wav")                                         # amended, an amended number (capped) and 24 bit together
+    assert 11 < worst < 12 and worst < mod.ver("SW V12.wav")
+    assert mod.ver("SW V11 24 Bit.wav") < mod.ver("SW V11 AMENDED.wav") < mod.ver("SW V11 AMENDED V2.wav") < mod.ver("SW V12.wav")
+
+
+def test_s6_the_extended_kind_still_comes_first_then_the_newest_version_within_it(tmp_path):
+    files = ["Artist - Title (Extended Mix) SW V10.wav", _sw("SW V12")]                      # the older Extended beats the newer plain version
+    assert names(one_folder(tmp_path, FOLDER9, files).resolve("Artist", "Title"))[0] == files[0]
+    ext = ["Artist - Title (Extended Mix) SW V12.wav", "Artist - Title (Extended Mix) SW V11 AMENDED.wav"]
+    assert names(one_folder(tmp_path / "b", FOLDER9, ext).resolve("Artist", "Title"))[0] == ext[0]       # Extended SW V12 beats Extended SW V11 AMENDED
+    ext2 = ["Artist - Title (Extended Mix) SW V12.wav", "Artist - Title (Extended Mix) SW V12 AMENDED.wav"]
+    assert names(one_folder(tmp_path / "c", FOLDER9, ext2).resolve("Artist", "Title"))[0] == ext2[1]     # and the amended one wins at the same number
+
+
+def test_s7_the_two_series_are_still_compared_by_the_old_numbers(tmp_path):
+    # No order is invented between a name with an SW number and one without: SW V12 beats MASTER AMENDED V3, MASTER AMENDED V3 beats SW V2.
+    mod, _ = load_resolver(tmp_path, [])
+    assert mod.ver("SW V12.wav") > mod.ver("MASTER AMENDED V3.wav") > mod.ver("SW V2.wav")
+    assert mod.ver("SW V11 AMENDED.wav") > mod.ver("MASTER AMENDED V3.wav")
+    assert names(one_folder(tmp_path / "b", FOLDER9, [_sw("SW V12"), "MASTER AMENDED V3.wav"]).resolve("Artist", "Title"))[0] == _sw("SW V12")
+
+
+def test_s8_guard_a_promoted_master_still_beats_sw_v1_in_an_exact_folder(tmp_path):
+    mod = one_folder(tmp_path, FOLDER9, [_sw("SW V1"), "MASTER AMENDED V3.wav"])
+    assert names(mod.resolve("Artist", "Title")) == ["MASTER AMENDED V3.wav", _sw("SW V1")]
+
+
+def test_s9_a_score_with_a_tie_break_is_printed_readably(tmp_path):
+    _, tools, _ = _folder_and_tools(tmp_path, FOLDER9, [_sw("SW V12 AMENDED"), _sw("SW V10")])
+    out = _run_cli(tools, [["Artist", "Title"]]).splitlines()
+    assert out[1].startswith("   [12.5] ") and out[2].startswith("   [  10] "), out[:3]
+
+
+def test_s10_the_note_compares_a_float_version_correctly(tmp_path):
+    # In an EP folder a newer master at version 11 is noted against the chosen SW V10 AMENDED (10.5), and a master at version 6 is not.
+    files = ["Artist - Better When SW V10 AMENDED.wav", "Artist - Other SW V1.wav", "MASTER AMENDED V3.wav", "SW V2.wav"]
+    _, tools, _ = _folder_and_tools(tmp_path, "Artist - Better When EP [Label] Project", files)
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Better When"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")       # 11 > 10.5; SW V2 (2) is not newer
+
+
+def test_s9b_a_float_score_that_adds_up_with_noise_is_printed_without_the_noise(tmp_path):
+    # 40 (Extended) + 10.52 adds up to 50.519999999999996 as a float: the printed score is still 50.52.
+    name = "Artist - Title (Extended Mix) SW V10 AMENDED V2.wav"
+    _, tools, _ = _folder_and_tools(tmp_path, FOLDER9, [name])
+    assert _run_cli(tools, [["Artist", "Title"]]).splitlines()[1].startswith("   [50.52] ")
