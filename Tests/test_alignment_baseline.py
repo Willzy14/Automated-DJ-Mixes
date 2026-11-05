@@ -28,10 +28,11 @@ atomically. A refresh is REFUSED when 10+ pairs (or over 10 percent) move betwee
 named_landmark_64 and standard_48, flip between align and raise, or change
 overlap_policy in any way; when 25+ pairs (or over 25 percent) change in any field or
 are added between tracks the old baseline already had (the pairs of a new track are
-expected); or when over 5 percent of the pairs are dropped. --accept-shift NAMES (guard
-names, comma separated) accepts only those guards; --accept-shift all accepts every
-guard that fired; the bare flag works when exactly one guard fired. A baseline with a
-duplicate (out, in) pair is refused outright: no flag overrides that.
+expected, unless any old pair was removed; replacing a track always trips); or when
+over 5 percent of the pairs are dropped. --accept-shift NAMES (guard names, comma
+separated) accepts only those guards; --accept-shift all accepts every guard that
+fired; the bare flag works when exactly one guard fired. A baseline with a duplicate
+(out, in) pair is refused outright: no flag overrides that.
 Details and the tunable limits: Tests/baseline_refresh.py.
 
 Never refresh to make a red test green without reading the diff.

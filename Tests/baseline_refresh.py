@@ -30,16 +30,22 @@ This module is what makes a refresh a decision with a record:
     added, or too many pairs removed. The guard names are policy_shift, status_flips,
     overlap_policy_changes, pairs_changed, pairs_added and pairs_removed. The sidecar
     names each guard that fired in `guards_tripped_names`.
-  * Pairs added because of a new track are expected. An added pair is explained when
-    its out or its in is a new track, one that is in no row of the old baseline (as an
-    out or as an in). A remix is a different track from its original, so a remix added
-    next to its original is a new track. Only the unexplained pairs, between two tracks
-    the old baseline already had, count toward pairs_added. The diff summary keeps
-    `pairs_added` as the total and adds `pairs_added_new_track` and
-    `pairs_added_unexplained`. Replacing a track is not growth: when any old pair is
-    removed (a rename, a swap for a newer version, a half rename, a stale row of the old
-    name), no added pair is explained. `old_tracks_gone` counts the old tracks that are
-    in no new row.
+  * Pairs added because of a new track are expected, unless any old pair was removed.
+    An added pair is explained when its out or its in is a new track, one that is in no
+    row of the old baseline (as an out or as an in). A remix is a different track from
+    its original, so a remix added next to its original is a new track. Only the
+    unexplained pairs, between two tracks the old baseline already had, count toward
+    pairs_added. The diff summary keeps `pairs_added` as the total and adds
+    `pairs_added_new_track` and `pairs_added_unexplained`. Replacing a track is not
+    growth: when any old pair is removed (a rename, a swap for a newer version, a half
+    rename, a stale row of the old name), no added pair is explained.
+    `old_tracks_gone` counts the old tracks that are in no new row.
+  * Replacing a track always trips. When any old pair was removed and an added pair
+    carries a name that is not in the old baseline, `pairs_replaced` counts those pairs
+    and the pairs_added guard fires whatever its limits (a half rename of one track in a
+    21 track corpus is only 20 pairs, under every limit). It is the same guard name, so
+    `--accept-shift pairs_added` accepts it, and its line reads "N replaced pairs". Pure
+    growth (nothing removed) still passes, and pure removal follows pairs_removed only.
   * `--accept-shift` names what it accepts. `--accept-shift pairs_added,pairs_changed`
     accepts those guards only. Any other guard that fired still refuses, and the
     refusal says "not accepted:" and names them. `--accept-shift all` accepts every
@@ -187,8 +193,11 @@ def _ascii(text):
 
 
 def _shown(text, width=40):
-    """`text` as ASCII, cut to `width` characters, so one name cannot make a long line."""
-    text = _ascii(text)
+    """`text` as printable ASCII, cut to `width` characters, so one name cannot make a long
+    line or an extra one: every character that is not a printable ASCII character (a
+    newline, a tab, a terminal control character, a letter with an accent) becomes "?"
+    BEFORE the cut."""
+    text = "".join(ch if " " <= ch <= "~" else "?" for ch in str(text))
     return text if len(text) <= width else text[:width - 3] + "..."
 
 
@@ -460,7 +469,10 @@ def diff_summary(old, new):
     a different track from its original. With no old baseline every track is new.
     Replacing a track is not growth: when any old pair is removed (a track gone from the
     new rows, a half rename, a stale row of the old name), no added pair is explained.
-    `old_tracks_gone` counts the old tracks that are in no new row.
+    `old_tracks_gone` counts the old tracks that are in no new row. Such a refresh is a
+    replacement, and replacing a track always trips: `pairs_replaced` counts the added
+    pairs that carry a name that is not in the old baseline when an old pair was removed
+    (0 otherwise), and any of them trips the pairs_added guard whatever its limits.
     """
     o, n = _rows_by_key(old), _rows_by_key(new)
     added = sorted(set(n) - set(o))
@@ -469,9 +481,11 @@ def diff_summary(old, new):
     old_tracks = {track for key in o for track in key}
     new_tracks = {track for key in n for track in key}
     tracks_gone = len(old_tracks - new_tracks)
-    # an old pair that is gone means a rename or a swap, not growth: nothing is explained
-    added_new_track = [] if removed else [
-        k for k in added if k[0] not in old_tracks or k[1] not in old_tracks]
+    new_name_pairs = [k for k in added if k[0] not in old_tracks or k[1] not in old_tracks]
+    # an old pair that is gone means a rename or a swap, not growth: nothing is explained,
+    # and the added pairs that carry a new name are the replaced pairs
+    added_new_track = [] if removed else new_name_pairs
+    replaced = len(new_name_pairs) if removed else 0
     counters = {"alignment_policy": 0, "overlap_policy": 0, "swap_handoff": 0,
                 "spec": 0, "raise_type": 0, "status_flip": 0, "other": 0}
     changed = []
@@ -503,6 +517,7 @@ def diff_summary(old, new):
         "pairs_added_new_track": len(added_new_track),
         "pairs_added_unexplained": len(added) - len(added_new_track),
         "old_tracks_gone": tracks_gone,
+        "pairs_replaced": replaced,
         "pairs_removed": len(removed),
         "pairs_changed": len(changed),
         "pairs_unchanged": len(common) - len(changed),
@@ -549,10 +564,12 @@ def guard_trips(shift, summary):
     unexplained new pairs; not applied to the very first baseline) and pairs_removed
     (over 5 percent gone).
     A new pair is explained when its out or its in is a new track, one that is in no row
-    of the old baseline. Only unexplained pairs, between two tracks the old baseline
-    already had, count toward pairs_added. A summary without the split counts every
-    added pair as unexplained. Replacing a track is not growth: when any old pair is
-    removed, no added pair is explained.
+    of the old baseline, unless any old pair was removed. Only unexplained pairs count
+    toward pairs_added. A summary without the split counts every added pair as
+    unexplained. Replacing a track is not growth: when any old pair is removed, no added
+    pair is explained. Replacing a track always trips: when an old pair was removed and
+    an added pair carries a new name (`pairs_replaced`), pairs_added fires whatever its
+    limits, with the count shown as "replaced pairs".
     Each guard is checked on its own. `--accept-shift` names the guards it accepts (or
     `all`); a guard it does not name still refuses, and a bare `--accept-shift` works only
     when exactly one guard fired (see refresh_baseline).
@@ -600,12 +617,20 @@ def _guard_findings(shift, summary):
                       f"{changed} of {compared} pairs"))
     old_pairs = summary["pairs_old"]
     added = summary.get("pairs_added_unexplained", summary.get("pairs_added", 0))
+    replaced = summary.get("pairs_replaced", 0)
     if old_pairs and _over(added, old_pairs, ADDED_MAX_PAIRS, ADDED_MAX_FRACTION):
         found.append(("pairs_added",
                       f"pairs_added: {added} unexplained new pairs on top of {old_pairs} "
-                      f"(pairs of new tracks do not count; limits: under {ADDED_MAX_PAIRS} "
+                      f"(pairs of new tracks do not count, unless any old pair was "
+                      f"removed; limits: under {ADDED_MAX_PAIRS} "
                       f"pairs and under {ADDED_MAX_FRACTION:.0%} of the old baseline)",
                       f"{added} unexplained"))
+    elif replaced:
+        found.append(("pairs_added",
+                      f"pairs_added: {replaced} replaced pairs (an old pair was removed "
+                      f"and a new name appeared; replacing a track always trips, "
+                      f"whatever the limits)",
+                      f"{replaced} replaced pairs"))
     removed = summary["pairs_removed"]
     if old_pairs and removed / old_pairs > REMOVED_MAX_FRACTION:
         found.append(("pairs_removed",

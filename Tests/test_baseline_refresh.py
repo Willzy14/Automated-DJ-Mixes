@@ -1990,6 +1990,16 @@ def test_the_docs_describe_the_new_rules():
         assert "when any old pair is removed" in flat, doc
     assert "a few short lines" in BR.run_refresh_cli.__doc__
     assert "one plain line on stderr" not in BR.run_refresh_cli.__doc__
+    import test_alignment_baseline as TAB
+    for doc in (BR.__doc__, BR.guard_trips.__doc__, TAB.__doc__):
+        flat = " ".join(doc.split())
+        assert "unless any old pair was removed" in flat, doc
+        assert "replacing a track always trips" in flat.lower(), doc
+    assert "replacing a track always trips" in " ".join(BR.diff_summary.__doc__.split()).lower()
+    reason = BR.guard_trips({"total_moved": 0, "pairs_compared": 1000},
+                            {"pairs_old": 1000, "pairs_removed": 0, "pairs_changed": 0,
+                             "pairs_added": 30, "changed_by_field": {}})[0]
+    assert "unless any old pair was removed" in reason, reason
     assert "ONE plain line" not in BR.RefreshRefused.__doc__
     assert "70 characters" in BR.RefreshRefused.__doc__ and "70 characters" in BR.__doc__
     help_text = " ".join(BR._build_parser().format_help().split())
@@ -2278,6 +2288,145 @@ def test_the_api_type_error_is_a_few_short_lines():
     lines = _short_refusal(str(info.value).splitlines())
     assert lines[0] == "refresh refused: bad accept_shift value"
     assert len(lines) == 3
+
+
+# ---------------------------------------------------------------------------
+# Round 7: replacing a track always trips; odd names cannot break the refusal layout
+# ---------------------------------------------------------------------------
+def _half_rename(env, count):
+    """`count` tracks. The LAST one keeps its name as an out, but as an in it gains a
+    trailing space: its count-1 pairs as an in are re-keyed (all new, all raising) and
+    the old ones are gone. No whole track is gone."""
+    names = _track_names(count)
+    victim = names[-1]
+    old = env.write_old(_grid(_pairs_of(names), []))
+    new = _payload([_raise_row(a, victim + " ") if b == victim else _ok_row(a, b)
+                    for a, b in _pairs_of(names)])
+    return old, new
+
+
+@pytest.mark.parametrize("count,fact", [
+    (20, "19 replaced pairs"),     # 19 of 380 removed is exactly 5 percent: not over
+    (21, "20 replaced pairs"),     # 4.8 percent removed, 20 added: under every limit
+    (25, "24 replaced pairs"),
+    (41, "40 unexplained"),        # 40 added is over the 25 pair limit anyway
+])
+def test_a_half_rename_of_one_track_trips_pairs_added_at_any_corpus_size(
+        env, capsys, count, fact):
+    old, new = _half_rename(env, count)
+    summary = BR.diff_summary(old, new)
+    assert summary["pairs_added"] == summary["pairs_removed"] == count - 1
+    assert summary["pairs_added_new_track"] == 0 and summary["old_tracks_gone"] == 0
+    assert summary["pairs_replaced"] == count - 1
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == ["pairs_added"]
+    before = _snapshot(env.dir)
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert lines[0] == "refresh refused: 1 guard tripped", lines
+    assert f"  pairs_added: {fact}" in lines, lines
+    assert "--accept-shift pairs_added" in lines, lines
+    assert _snapshot(env.dir) == before and env.sidecars() == []
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
+                    "pairs_added"], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["guards_accepted"] == ["pairs_added"]
+    assert rec["diff_summary"]["pairs_replaced"] == count - 1
+    env.write_old(old)                                   # the bare flag works for one guard
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 0
+
+
+@pytest.mark.parametrize("count,expected", [
+    (20, ["pairs_added", "pairs_removed"]),
+    (21, ["pairs_added", "pairs_removed"]),
+    (25, ["pairs_added", "pairs_removed"]),
+    (41, ["pairs_added"]),         # 80 of 1640 removed is 4.9 percent: under the limit
+])
+def test_a_full_rename_of_one_track_trips_at_any_corpus_size(env, capsys, count, expected):
+    names = _track_names(count)
+    renamed = _track_names(count, replace=names[-1])
+    old = env.write_old(_grid(_pairs_of(names), []))
+    new = _payload([_raise_row(a, b) if renamed[-1] in (a, b) else _ok_row(a, b)
+                    for a, b in _pairs_of(renamed)])
+    summary = BR.diff_summary(old, new)
+    assert summary["pairs_added"] == summary["pairs_removed"] == 2 * (count - 1)
+    assert summary["old_tracks_gone"] == 1 and summary["pairs_replaced"] == 2 * (count - 1)
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == expected
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert f"  pairs_added: {2 * (count - 1)} unexplained" in lines, lines
+    assert "--accept-shift " + ",".join(expected) in lines, lines
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
+                    ",".join(expected)], new) == 0
+
+
+def test_a_replacement_of_one_track_in_a_100_track_corpus_trips(env, capsys):
+    old, new = _half_rename(env, 100)
+    summary = BR.diff_summary(old, new)
+    assert summary["pairs_replaced"] == 99 and summary["pairs_removed"] == 99
+    # 99 of 9900 pairs is 1 percent removed: only pairs_added notices
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == ["pairs_added"]
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert "  pairs_added: 99 unexplained" in lines, lines
+
+
+def test_pure_removal_follows_pairs_removed_only_and_is_not_a_replacement(env, capsys):
+    names = _track_names(20)
+    old = env.write_old(_grid(_pairs_of(names), []))
+    new = _grid(_pairs_of(names[:-1]), [])               # the last track is gone, nothing added
+    summary = BR.diff_summary(old, new)
+    assert summary["pairs_added"] == 0 and summary["pairs_replaced"] == 0
+    assert summary["pairs_removed"] == 38 and summary["old_tracks_gone"] == 1
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == ["pairs_removed"]
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert "  pairs_removed: 38 of 380 pairs" in lines, lines
+    assert not any(ln.startswith("  pairs_added") for ln in lines), lines
+
+
+def test_pairs_replaced_counts_added_pairs_with_a_new_name_only_beside_a_removal():
+    abc = ["a", "b", "c"]
+    old = _payload([_ok_row(a, b) for a, b in _pairs_of(abc)])
+    grown = _payload([_ok_row(a, b) for a, b in _pairs_of(abc + ["d"])])
+    s = BR.diff_summary(old, grown)                      # d is new and nothing is removed
+    assert s["pairs_replaced"] == 0 and _counts_of_added(s) == (6, 6, 0)
+    half = _payload([_ok_row(a, b) for a, b in _pairs_of(abc + ["d"]) if (a, b) != ("a", "b")])
+    s = BR.diff_summary(old, half)                       # d is new and ("a", "b") is gone
+    assert s["pairs_replaced"] == 6 and _counts_of_added(s) == (6, 0, 6)
+    has_ab = _payload([_ok_row(a, b) for a, b in _pairs_of(abc) if (a, b) != ("b", "a")])
+    has_ba = _payload([_ok_row(a, b) for a, b in _pairs_of(abc) if (a, b) != ("a", "b")])
+    s = BR.diff_summary(has_ab, has_ba)                  # a pair swaps places, no new name
+    assert s["pairs_removed"] == 1 and _counts_of_added(s) == (1, 0, 1)
+    assert s["pairs_replaced"] == 0
+    assert BR.diff_summary(None, grown)["pairs_replaced"] == 0
+
+
+@pytest.mark.parametrize("name,shown", [
+    ("bad" + chr(10) + "name", "bad?name"),
+    ("x" + chr(9) * 35 + "y", "x" + "?" * 35 + "y"),
+    ("x" + chr(9) * 60 + "y", "x" + "?" * 36 + "..."),
+    ("a" + chr(27) + "[31mb", "a?[31mb"),
+    ("caf" + chr(0xe9), "caf?"),
+], ids=["newline", "35-tabs", "60-tabs-cut", "escape", "accent"])
+def test_an_unknown_name_with_odd_characters_cannot_break_the_refusal_layout(
+        env, capsys, name, shown):
+    env.write_old(_grid(_pairs(5), []))
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift", name],
+                   _grid(_pairs(5), [])) == 2
+    got = capsys.readouterr()
+    text = got.err + got.out
+    assert all(ch == "\n" or " " <= ch <= "~" for ch in text), repr(text)
+    lines = _short_refusal([ln for ln in text.splitlines() if ln.strip()])
+    assert lines[1] == f"  unknown name '{shown}'", lines
+    assert lines[2] == "valid names:", lines
+    # the same through the API: _accept_plan and refresh_baseline
+    for call in (lambda: BR._accept_plan([name]),
+                 lambda: _refresh_api(env, _grid(_pairs(5), []), [name])):
+        with pytest.raises(BR.RefreshRefused) as info:
+            call()
+        api_lines = _short_refusal(str(info.value).splitlines())
+        assert api_lines[1] == f"  unknown name '{shown}'", api_lines
+    assert env.sidecars() == []
 
 
 # ---------------------------------------------------------------------------
