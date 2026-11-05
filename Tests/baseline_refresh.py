@@ -14,17 +14,29 @@ This module is what makes a refresh a decision with a record:
     reason, reviewer, time, git commit, schema marker, sha256 of every input the
     baseline generator reads, sha256 of the OLD and NEW baseline files, a diff
     summary and the policy shift. Two refreshes in one second get `-2`, `-3`, ...
-  * The baseline itself is written to a temp file and swapped in with os.replace, so
-    a failure leaves the old baseline intact. If the swap fails after the sidecar was
-    written, the sidecar is renamed `*.not-applied`; a sidecar whose
-    `new_baseline_sha256` differs from the baseline's current hash never landed.
+    The hashes are over the raw bytes as stored on this machine (a Windows checkout
+    has CRLF line endings, git stores LF), so they match another machine only when
+    its files have the same bytes; the sidecar says so in `hash_basis` and records
+    each input's line ending in `input_line_endings`.
+  * The baseline itself is written to a temp file `<baseline>.<pid>.tmp` and swapped
+    in with os.replace, so a failure leaves the old baseline intact. If the swap
+    fails after the sidecar was written, the sidecar is renamed `*.not-applied`. A
+    refresh that lands leaves no temp file behind, so a live record whose own temp
+    file still exists did not land.
   * A large change is refused unless `--accept-shift` is given (see the limits below):
     pairs moving between the two named policies, pairs flipping between align and
-    raise, pairs changing overlap policy in any way, or too many pairs removed. The
-    sidecar names each guard that fired in `guards_tripped_names`.
-  * The temp files carry the process id. A refresh killed between its writes leaves a
-    temp copy and a record with a live name; the next refresh deletes the stale temp
-    file, renames the record `*.not-applied` and says so in one line.
+    raise, pairs changing overlap policy in any way, too many pairs changed in any
+    field, too many pairs added, or too many pairs removed. The sidecar names each
+    guard that fired in `guards_tripped_names`. Duplicate (out, in) pairs are
+    refused outright; no flag overrides that.
+  * A refresh killed between its writes (power cut, taskkill) leaves its temp file
+    and a record with a live name. The record carries the process id and the temp
+    file's name (`pid`, `staged_temp`). A later refresh, once the guards have passed
+    and the leftovers are older than STALE_AFTER_SECONDS, renames such a record
+    `*.not-applied` ONLY when its own temp file still exists and hashes to the
+    record's `new_baseline_sha256`, then deletes the stale temp file, and says so in
+    one line. A record whose temp file was deleted by hand cannot be proved
+    unlanded and is left alone. A refused refresh touches nothing.
 
 Nothing here imports the alignment engine or needs the 14.08.26 corpus; the test file
 only supplies a function that regenerates the payload. Tests: Tests/test_baseline_refresh.py.
@@ -66,6 +78,16 @@ STATUS_FLIP_MAX_FRACTION = 0.10
 #: when MORE than this fraction of the compared pairs do. Same default numbers again.
 OVERLAP_CHANGE_MAX_PAIRS = 10
 OVERLAP_CHANGE_MAX_FRACTION = 0.10
+#: Refuse when this many pairs or MORE changed in ANY field (alignment_policy, a plan
+#: spec, swap_progress, cue provenance, ...), or MORE than this fraction of the
+#: compared pairs did. This is the broadest measure, and a rewiring step is SUPPOSED
+#: to move some decisions, so it is set looser than the narrow guards above.
+CHANGED_MAX_PAIRS = 25
+CHANGED_MAX_FRACTION = 0.25
+#: Refuse when this many pairs or MORE are new, or MORE than this fraction of the old
+#: baseline's pairs are (a corpus that grew). Not applied to the very first baseline.
+ADDED_MAX_PAIRS = 25
+ADDED_MAX_FRACTION = 0.25
 
 #: Letters or digits (str.isalnum) a --reason must have; spaces, punctuation and
 #: invisible characters do not count.
@@ -100,6 +122,10 @@ CODE_INPUTS = (
 )
 #: Optional per-corpus file align_engine.load_track reads from the stem directory.
 OVERRIDES_FILENAME = "loop_quality_overrides.json"
+#: What the recorded hashes are taken over; written into every sidecar.
+HASH_BASIS = "raw bytes as stored on this machine"
+#: Inputs with these extensions are text, so a line ending is detected for them.
+_TEXT_SUFFIXES = {".py", ".json", ".txt", ".md"}
 
 
 class RefreshRefused(Exception):
@@ -194,6 +220,35 @@ def input_hashes(paths, root=None):
     return dict(sorted(hashes.items()))
 
 
+def line_ending(data):
+    """"crlf", "lf", "mixed" or "none" for the bytes of a text file."""
+    crlf = data.count(b"\r\n")
+    bare_lf = data.count(b"\n") - crlf
+    if crlf == 0 and bare_lf == 0:
+        return "none"
+    if crlf and bare_lf:
+        return "mixed"
+    return "crlf" if crlf else "lf"
+
+
+def input_line_endings(paths, root=None):
+    """The detected line ending of every input, keyed like input_hashes: "crlf", "lf",
+    "mixed" or "none" for text files, "binary" for other extensions, "missing" for a
+    path that is not a file."""
+    root_path = Path(root).resolve() if root is not None else None
+    endings = {}
+    for p in paths:
+        p = Path(p)
+        if not p.is_file():
+            kind = "missing"
+        elif p.suffix.lower() not in _TEXT_SUFFIXES:
+            kind = "binary"
+        else:
+            kind = line_ending(p.read_bytes())
+        endings[_label(p, root_path)] = kind
+    return dict(sorted(endings.items()))
+
+
 def _track_name(stem_json):
     """The `track` field align_engine.load_track names the envelope cache from; the
     name in the file name when the JSON cannot be read (the generator will fail then)."""
@@ -243,13 +298,28 @@ def git_head(cwd):
 # Payload shape, diff, policy shift, guards
 # ---------------------------------------------------------------------------
 def check_payload(payload, label):
+    """Refuse anything that is not a baseline payload, and a payload that lists the same
+    (out, in) pair twice: the diff keeps only the last copy of a pair, so the rows
+    written would not be the rows that were checked. No flag overrides this."""
     ok = isinstance(payload, dict) and isinstance(payload.get("rows"), list) and all(
-        isinstance(r, dict) and "out" in r and "in" in r and "status" in r
+        isinstance(r, dict) and isinstance(r.get("out"), str) and isinstance(r.get("in"), str)
+        and "status" in r
         for r in payload["rows"])
     if not ok:
         raise RefreshRefused(
             f"refresh refused: {label} is not a baseline payload "
             "(a JSON object with a 'rows' list of out/in/status rows); nothing was written")
+    seen, repeated = set(), []
+    for r in payload["rows"]:
+        key = (r["out"], r["in"])
+        if key in seen:
+            repeated.append(key)
+        seen.add(key)
+    if repeated:
+        raise RefreshRefused(
+            f"refresh refused: {label} lists {len(set(repeated))} (out, in) pair(s) more "
+            f"than once (duplicate pairs), e.g. {_pair_id(repeated[0])[:90]}; "
+            "nothing was written")
 
 
 def _rows_by_key(payload):
@@ -368,7 +438,17 @@ def guard_trips(shift, summary):
         trips.append(f"overlap_policy_changes: {overlap} of {compared} pairs changed "
                      f"overlap policy in some way (limits: under {OVERLAP_CHANGE_MAX_PAIRS} "
                      f"pairs and under {OVERLAP_CHANGE_MAX_FRACTION:.0%})")
+    changed = summary.get("pairs_changed", 0)
+    if _over(changed, compared, CHANGED_MAX_PAIRS, CHANGED_MAX_FRACTION):
+        trips.append(f"pairs_changed: {changed} of {compared} pairs changed in some field "
+                     f"(limits: under {CHANGED_MAX_PAIRS} pairs and under "
+                     f"{CHANGED_MAX_FRACTION:.0%})")
     old_pairs = summary["pairs_old"]
+    added = summary.get("pairs_added", 0)
+    if old_pairs and _over(added, old_pairs, ADDED_MAX_PAIRS, ADDED_MAX_FRACTION):
+        trips.append(f"pairs_added: {added} new pairs on top of {old_pairs} "
+                     f"(limits: under {ADDED_MAX_PAIRS} pairs and under "
+                     f"{ADDED_MAX_FRACTION:.0%} of the old baseline)")
     removed = summary["pairs_removed"]
     if old_pairs and removed / old_pairs > REMOVED_MAX_FRACTION:
         trips.append(f"pairs_removed: {removed} of {old_pairs} pairs are gone from the new "
@@ -398,10 +478,15 @@ def _utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _staged_name(final):
+    """The temp file name for `final`: it carries the process id, so two refreshes at
+    once never share a temp file, and the refresh record can name its own temp file."""
+    return f"{final.name}.{os.getpid()}.tmp"
+
+
 def _stage_bytes(final, data):
-    """Write `data` to a temp file beside `final` and return the temp path (not live yet).
-    The name carries the process id, so two refreshes at once never share a temp file."""
-    staged = final.with_name(f"{final.name}.{os.getpid()}.tmp")
+    """Write `data` to a temp file beside `final` and return the temp path (not live yet)."""
+    staged = final.with_name(_staged_name(final))
     try:
         with open(staged, "wb") as fh:
             fh.write(data)
@@ -454,10 +539,16 @@ def _publish_sidecar(baseline, record, now):
                          "nothing was written")
 
 
-def _unlanded_record(path, current_sha):
-    """True for a refresh record that cannot belong to a refresh that landed: empty
-    (killed after the name was claimed), or one whose OLD hash is the baseline now on
-    disk while its NEW hash is not (killed before the swap)."""
+def _sha_or_missing(path):
+    return sha256_file(path) if path.is_file() else "missing"
+
+
+def _unlanded_record(path, baseline):
+    """True for a refresh record that did not land: an empty one (killed after its name
+    was claimed), or one whose OWN staged temp file (`staged_temp`, beside the baseline)
+    still exists and hashes to the record's `new_baseline_sha256`. A refresh that lands
+    moves its temp file onto the baseline, so a landed refresh has no temp file left,
+    whatever happens to the baseline afterwards (a revert, a later refresh)."""
     try:
         raw = path.read_bytes()
     except OSError:
@@ -470,19 +561,28 @@ def _unlanded_record(path, current_sha):
         return False
     if not isinstance(rec, dict):
         return False
-    new, old = rec.get("new_baseline_sha256"), rec.get("old_baseline_sha256")
-    return isinstance(new, str) and isinstance(old, str) and new != current_sha and old == current_sha
+    new, old, name = (rec.get("new_baseline_sha256"), rec.get("old_baseline_sha256"),
+                      rec.get("staged_temp"))
+    if not (isinstance(new, str) and isinstance(old, str) and isinstance(name, str)
+            and Path(name).name == name):
+        return False
+    staged = baseline.with_name(name)
+    try:
+        return _sha_or_missing(staged) == new
+    except OSError:
+        return False
 
 
 def cleanup_interrupted(baseline, stale_after=STALE_AFTER_SECONDS, now=None):
     """Tidy up after a refresh that was killed between its writes.
 
-    A hard kill (power cut, taskkill) skips every except/finally, so it can leave a
+    A hard kill (power cut, taskkill) skips every except/finally, so it can leave its
     full-size temp copy of the baseline and a refresh record under a normal live name
     for a baseline that never moved. Only files older than `stale_after` seconds are
-    touched, so a refresh running right now is safe. Temp files matching this
-    baseline's own patterns are deleted; a record whose OLD hash is the current
-    baseline's and whose NEW hash is not (or an empty one) is renamed `*.not-applied`.
+    touched, so a refresh running right now is safe. Records are judged FIRST, because
+    the proof that a record never landed is its own temp file (see _unlanded_record);
+    then the stale temp files matching this baseline's own patterns are deleted.
+    A record judged unlanded is renamed `*.not-applied`.
     Returns {"removed": [names], "marked": [names]}.
     """
     baseline = Path(baseline)
@@ -491,22 +591,28 @@ def cleanup_interrupted(baseline, stale_after=STALE_AFTER_SECONDS, now=None):
     stamp = r"\d{8}T\d{6}Z(?:-\d+)?"
     temp_re = re.compile(rf"^(?:{base}|{stem}\.refresh-{stamp}\.json)(?:\.\d+)?\.tmp$")
     record_re = re.compile(rf"^{stem}\.refresh-{stamp}\.json$")
-    current = sha256_file(baseline) if baseline.is_file() else "missing"
-    removed, marked = [], []
+    stale = []
     for path in sorted(baseline.parent.iterdir()):
-        if not path.is_file():
-            continue
         try:
-            if now - path.stat().st_mtime < stale_after:
-                continue
-            if temp_re.match(path.name):
-                path.unlink()
-                removed.append(path.name)
-            elif record_re.match(path.name) and _unlanded_record(path, current):
-                os.rename(path, path.with_name(path.name + ".not-applied"))
-                marked.append(path.name)
+            if path.is_file() and now - path.stat().st_mtime >= stale_after:
+                stale.append(path)
         except OSError:
             continue
+    removed, marked = [], []
+    for path in stale:                                      # 1. the records, while their temp files exist
+        if record_re.match(path.name) and _unlanded_record(path, baseline):
+            try:
+                os.rename(path, path.with_name(path.name + ".not-applied"))
+                marked.append(path.name)
+            except OSError:
+                continue
+    for path in stale:                                      # 2. then the stale temp files
+        if temp_re.match(path.name):
+            try:
+                path.unlink()
+                removed.append(path.name)
+            except OSError:
+                continue
     return {"removed": removed, "marked": marked}
 
 
@@ -526,12 +632,14 @@ def _read_old(baseline):
 
 
 def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=False,
-                     input_paths=(), root=None, clock=None, head=None):
+                     input_paths=(), root=None, clock=None, head=None, notify=None):
     """Replace `baseline` with `payload` if the reason and the guards allow it.
 
-    Order: validate -> diff and guard -> stage the new baseline as a temp file ->
-    write the sidecar -> os.replace the temp file over the baseline. Nothing live is
-    touched before the guards pass; the sidecar exists before the baseline moves.
+    Order: validate -> diff and guard -> clean up after a killed refresh (`notify`
+    gets one line if it found anything) -> stage the new baseline as a temp file ->
+    write the sidecar -> os.replace the temp file over the baseline. Nothing at all is
+    written or deleted before the guards pass, so a refused refresh changes no file;
+    the sidecar exists before the baseline moves.
     Returns a dict (sidecar path, diff summary, policy shift, accepted_shift, hashes).
     """
     baseline = Path(baseline)
@@ -545,6 +653,12 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
         raise RefreshRefused("refresh refused: " + "; ".join(trips)
                              + ". Read the diff, then add --accept-shift if it is "
                              "intended; nothing was written")
+
+    cleaned = cleanup_interrupted(baseline)
+    if notify is not None and (cleaned["removed"] or cleaned["marked"]):
+        notify(f"cleaned up after an interrupted refresh: removed "
+               f"{len(cleaned['removed'])} leftover temp file(s), marked "
+               f"{len(cleaned['marked'])} unfinished record(s) .not-applied")
 
     now = (clock or _utc_now)()
     data = _baseline_bytes(payload)
@@ -561,6 +675,11 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
         "schema_marker": schema["marker"],
         "schema_detail": schema,
         "input_hashes": input_hashes(input_paths, root),
+        "hash_basis": HASH_BASIS,
+        "input_line_endings": input_line_endings(input_paths, root),
+        "baseline_line_ending": line_ending(data),
+        "pid": os.getpid(),
+        "staged_temp": _staged_name(baseline),
         "old_baseline_sha256": old_sha,
         "new_baseline_sha256": new_sha,
         "old_counts": _counts(old_payload),
@@ -577,7 +696,11 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
                          "status_flip_max_pairs": STATUS_FLIP_MAX_PAIRS,
                          "status_flip_max_fraction": STATUS_FLIP_MAX_FRACTION,
                          "overlap_change_max_pairs": OVERLAP_CHANGE_MAX_PAIRS,
-                         "overlap_change_max_fraction": OVERLAP_CHANGE_MAX_FRACTION},
+                         "overlap_change_max_fraction": OVERLAP_CHANGE_MAX_FRACTION,
+                         "changed_max_pairs": CHANGED_MAX_PAIRS,
+                         "changed_max_fraction": CHANGED_MAX_FRACTION,
+                         "added_max_pairs": ADDED_MAX_PAIRS,
+                         "added_max_fraction": ADDED_MAX_FRACTION},
     }
 
     staged = _stage_bytes(baseline, data)
@@ -618,21 +741,20 @@ def run_refresh_cli(argv, baseline, build_payload, input_paths, root=None,
     try:
         args = parse_refresh_args(argv)
         _read_old(baseline)                       # cheap sanity check before the slow step
-        cleaned = cleanup_interrupted(baseline)
-        if cleaned["removed"] or cleaned["marked"]:
-            _say(f"cleaned up after an interrupted refresh: removed "
-                 f"{len(cleaned['removed'])} leftover temp file(s), marked "
-                 f"{len(cleaned['marked'])} unfinished record(s) .not-applied")
         payload = build_payload()
         result = refresh_baseline(
             baseline, payload, reason=args.reason, reviewer=args.reviewer,
             accept_shift=args.accept_shift, input_paths=input_paths, root=root,
-            clock=clock, head=head)
+            clock=clock, head=head, notify=_say)
     except RefreshRefused as exc:
         _say(str(exc), sys.stderr)
         return 2
     except OSError as exc:
-        _say(f"refresh failed, the old baseline is unchanged: {exc}", sys.stderr)
+        why = str(exc)
+        if baseline.exists() and not os.access(baseline, os.W_OK):
+            why = ("the baseline file is read-only (clear its read-only flag and run "
+                   "again); system error: " + why)
+        _say(f"refresh failed, the old baseline is unchanged: {why}", sys.stderr)
         return 1
     n = len(payload["rows"])
     ok = sum(1 for r in payload["rows"] if r["status"] == "ok")

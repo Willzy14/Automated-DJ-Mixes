@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -518,6 +519,265 @@ def test_cleanup_does_not_run_when_the_arguments_are_refused(env):
 
 
 # ---------------------------------------------------------------------------
+# Round 3: which leftovers are marked, and when
+# ---------------------------------------------------------------------------
+def _snapshot(directory):
+    return {p.name: BR.sha256_file(p) for p in sorted(directory.iterdir()) if p.is_file()}
+
+
+def _age_everything_but_the_baseline(env):
+    for p in list(env.dir.iterdir()):
+        if p != env.baseline:
+            _age(p)
+
+
+def _killed_records(env):
+    return [p for p in env.sidecars()
+            if json.loads(p.read_bytes())["reason"].startswith("killed on purpose")]
+
+
+def test_a_killed_refresh_is_still_marked_after_a_later_refresh_landed(env, tmp_path, capsys):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, [pairs[0]]), tmp_path)
+    killed = _killed_records(env)
+    assert len(killed) == 1
+    # a later refresh lands while the leftovers are still young, so it leaves them alone
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(pairs, pairs[:2])) == 0
+    assert not [ln for ln in _messages(capsys) if "interrupted" in ln]
+    assert killed[0].exists()
+    _age_everything_but_the_baseline(env)
+    # a third refresh, long after: the killed record is still caught
+    assert env.run(["--refresh", "--reason", "third refresh, long after the kill"],
+                   _grid(pairs, pairs[:3])) == 0
+    lines = [ln for ln in _messages(capsys) if "interrupted" in ln]
+    assert len(lines) == 1, lines
+    assert "removed 1 leftover temp file(s), marked 1 unfinished record(s)" in lines[0]
+    assert not killed[0].exists()
+    assert (env.dir / (killed[0].name + ".not-applied")).exists()
+    assert not any(n.endswith(".tmp") for n in env.files())
+    assert len(env.sidecars()) == 2 and not _killed_records(env)    # the two that landed stay live
+
+
+def test_a_refresh_that_landed_is_not_marked_after_the_baseline_is_put_back(env, capsys):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    old_bytes = env.baseline.read_bytes()
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(pairs, pairs[:1])) == 0
+    landed = env.sidecars()
+    assert len(landed) == 1
+    env.baseline.write_bytes(old_bytes)                  # git checkout -- baseline_alignments.json
+    _age_everything_but_the_baseline(env)
+    _messages(capsys)
+    assert env.run(["--refresh", "--reason", "a later refresh after the revert"],
+                   _grid(pairs, pairs[1:2])) == 0
+    assert landed[0].exists(), "the record of a refresh that landed was renamed"
+    assert not any(n.endswith(".not-applied") for n in env.files())
+    assert not [ln for ln in _messages(capsys) if "interrupted" in ln]
+
+
+def test_a_record_whose_temp_file_was_deleted_by_hand_cannot_be_proved_unlanded(env, tmp_path):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:1]), tmp_path)
+    for p in env.dir.glob("*.tmp"):
+        p.unlink()
+    _age_everything_but_the_baseline(env)
+    assert BR.cleanup_interrupted(env.baseline) == {"removed": [], "marked": []}
+    assert len(_killed_records(env)) == 1, "a record that cannot be proved unlanded stays as it is"
+
+
+def test_two_killed_refreshes_around_a_landed_one_are_both_marked(env, tmp_path):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:1]), tmp_path)
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(pairs, pairs[:2])) == 0
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:3]), tmp_path)
+    killed = _killed_records(env)
+    assert len(killed) == 2
+    _age_everything_but_the_baseline(env)
+    done = BR.cleanup_interrupted(env.baseline)
+    assert sorted(done["marked"]) == sorted(p.name for p in killed)
+    assert len(done["removed"]) == 2
+    assert not any(n.endswith(".tmp") for n in env.files())
+    assert len(env.sidecars()) == 1 and not _killed_records(env)    # only the one that landed
+
+
+def test_a_refresh_refused_by_a_guard_changes_no_file_even_with_stale_leftovers(env, tmp_path):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, pairs[:60]))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:59]), tmp_path)
+    _age_everything_but_the_baseline(env)
+    before = _snapshot(env.dir)
+    assert any(n.endswith(".tmp") for n in before) and len(_killed_records(env)) == 1
+    rc = env.run(["--refresh", "--reason", GOOD_REASON], _grid(pairs, pairs[:10]))   # 50 pairs move
+    assert rc == 2
+    assert _snapshot(env.dir) == before, "a refused refresh wrote or deleted something"
+
+
+def test_the_module_docstring_states_the_rule_that_is_actually_applied():
+    assert "differs from the baseline's current hash" not in BR.__doc__
+    assert "staged_temp" in BR.__doc__ and "raw bytes" in BR.__doc__
+
+
+# ---------------------------------------------------------------------------
+# Round 3: guards on changed and added pairs, duplicate pairs
+# ---------------------------------------------------------------------------
+SWEEPS = {
+    "alignment_policy": dict(alignment_policy="tail_anchor_rescue_v1"),
+    "plan_specs": dict(plan={"status": "ok", "specs": [{"kind": "outgoing_tail"}]}),
+    "swap_progress": dict(swap_progress=0.75),
+}
+
+
+@pytest.mark.parametrize("sweep", sorted(SWEEPS))
+def test_one_field_changed_on_every_pair_is_refused_then_accepted_and_recorded(env, capsys, sweep):
+    pairs = _pairs(15)[:200]
+    env.write_old(_grid(pairs, []))
+    new = _payload([_ok_row(a, b, **SWEEPS[sweep]) for a, b in pairs])
+    before = env.baseline.read_bytes()
+    rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
+    assert rc == 2 and env.baseline.read_bytes() == before and env.sidecars() == []
+    lines = _messages(capsys)
+    assert len(lines) == 1 and "pairs_changed" in lines[0] and "--accept-shift" in lines[0]
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["accepted_shift"] is True and rec["guards_tripped_names"] == ["pairs_changed"]
+    assert rec["diff_summary"]["pairs_changed"] == 200
+
+
+def test_a_baseline_that_grows_tenfold_is_refused_then_accepted_and_recorded(env, capsys):
+    env.write_old(_grid(_pairs(15)[:200], []))
+    new = _grid(_pairs(45), [])                                  # 1980 pairs, 1780 of them new
+    before = env.baseline.read_bytes()
+    rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
+    assert rc == 2 and env.baseline.read_bytes() == before and env.sidecars() == []
+    lines = _messages(capsys)
+    assert len(lines) == 1 and "pairs_added" in lines[0] and "--accept-shift" in lines[0]
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["accepted_shift"] is True and rec["guards_tripped_names"] == ["pairs_added"]
+    assert rec["diff_summary"]["pairs_added"] == 1780
+
+
+def test_the_very_first_baseline_is_not_held_back_by_the_added_pairs_guard(env):
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(_pairs(30), [])) == 0
+
+
+@pytest.mark.parametrize("count,compared,tripped", [
+    (24, 1000, False),    # under the pair count
+    (25, 1000, True),     # the pair count is reached
+    (10, 40, False),      # exactly 25 percent is not "more than 25 percent"
+    (11, 40, True),       # 27.5 percent
+    (0, 0, False),
+])
+@pytest.mark.parametrize("key,guard", [("pairs_changed", "pairs_changed"),
+                                       ("pairs_added", "pairs_added")])
+def test_changed_and_added_guard_edges(key, guard, count, compared, tripped):
+    shift = {"total_moved": 0, "pairs_compared": compared}
+    summary = {"pairs_old": compared, "pairs_removed": 0, "pairs_changed": 0,
+               "pairs_added": 0, "changed_by_field": {}}
+    summary[key] = count
+    names = _guard_names(BR.guard_trips(shift, summary))
+    assert names == ([guard] if tripped else [])
+
+
+def test_duplicate_pairs_are_refused_and_no_flag_overrides_that(env, capsys):
+    pairs = _pairs(15)[:200]
+    env.write_old(_grid(pairs, []))
+    before = env.baseline.read_bytes()
+    dup = _payload([_ok_row(a, b) for a, b in pairs] * 2)         # every (out, in) twice
+    for flags in ([], ["--accept-shift"]):
+        assert env.run(["--refresh", "--reason", GOOD_REASON, *flags], dup) == 2
+        lines = _messages(capsys)
+        assert len(lines) == 1 and "duplicate" in lines[0], lines
+    assert env.baseline.read_bytes() == before and env.sidecars() == []
+
+
+def test_an_existing_baseline_with_duplicate_pairs_is_refused_before_the_slow_step(env, capsys):
+    env.baseline.write_bytes(BR._baseline_bytes(
+        _payload([_ok_row("a", "b"), _ok_row("a", "b"), _ok_row("a", "c")])))
+    before = env.baseline.read_bytes()
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(_pairs(4), [])) == 2
+    assert env.called == [] and env.baseline.read_bytes() == before
+    lines = _messages(capsys)
+    assert len(lines) == 1 and "duplicate" in lines[0]
+
+
+TABLE = [
+    # kind, pairs in the old baseline, how many change, expected exit code
+    ("flips", 200, 9, 0), ("flips", 200, 10, 2),
+    ("overlap", 200, 9, 0), ("overlap", 200, 10, 2),
+    ("removed", 200, 10, 0), ("removed", 200, 11, 2),
+    ("removed", 140, 7, 0), ("removed", 20, 2, 2), ("removed", 19, 1, 2),
+]
+
+
+@pytest.mark.parametrize("kind,total,n,expected", TABLE)
+def test_the_boundary_table_keeps_its_exit_codes(env, kind, total, n, expected):
+    pairs = _pairs(15)[:total]
+    old = env.write_old(_grid(pairs, []))
+    rows = old["rows"]
+    if kind == "flips":
+        new = _payload([_raise_row(a, b) if i < n else rows[i] for i, (a, b) in enumerate(pairs)])
+    elif kind == "overlap":
+        new = _payload([dict(rows[i], overlap_policy="short_32") if i < n else rows[i]
+                        for i in range(total)])
+    else:
+        new = _grid(pairs[:total - n], [])
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == expected
+
+
+def test_reason_edge_cases_keep_their_exit_codes(env):
+    pairs = _pairs(5)
+    env.write_old(_grid(pairs, []))
+    new = _grid(pairs, [])
+    assert env.run(["--refresh", "--reason", " " * 15 + "a"], new) == 2
+    assert env.sidecars() == []
+    reason = "tab\tand newline\nin the middle of a reason"
+    assert env.run(["--refresh", "--reason", reason], new) == 0
+    assert json.loads(env.sidecars()[0].read_bytes())["reason"] == reason
+    assert env.run(["--refresh", "--reason", "-3 dB after the new bass cue weights"], new) == 0
+
+
+# ---------------------------------------------------------------------------
+# Round 3: the read-only baseline message and the hash basis
+# ---------------------------------------------------------------------------
+def test_a_read_only_baseline_is_named_in_the_failure_message(env, capsys):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    old_bytes = env.baseline.read_bytes()
+    os.chmod(env.baseline, stat.S_IREAD)
+    try:
+        rc = env.run(["--refresh", "--reason", GOOD_REASON], _grid(pairs, pairs[:1]))
+    finally:
+        os.chmod(env.baseline, stat.S_IREAD | stat.S_IWRITE)
+    assert rc == 1
+    lines = _messages(capsys)
+    assert len(lines) == 1 and "read-only" in lines[0], lines
+    assert env.baseline.read_bytes() == old_bytes
+    assert not any(n.endswith(".tmp") for n in env.files())
+
+
+def test_the_sidecar_says_what_the_hashes_are_taken_over(env, tmp_path):
+    files = {"crlf.py": b"a\r\nb\r\n", "lf.json": b"{}\n[]\n", "mixed.py": b"a\r\nb\n",
+             "none.json": b"{}", "cache.npz": b"npz-bytes"}
+    for name, data in files.items():
+        (tmp_path / name).write_bytes(data)
+    inputs = [tmp_path / n for n in files] + [tmp_path / "gone.py"]
+    env.write_old(_grid(_pairs(4), []))
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(_pairs(4), []),
+                   inputs=inputs, root=tmp_path) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["hash_basis"] == "raw bytes as stored on this machine"
+    assert rec["input_line_endings"] == {
+        "crlf.py": "crlf", "lf.json": "lf", "mixed.py": "mixed", "none.json": "none",
+        "cache.npz": "binary", "gone.py": "missing"}
+    assert rec["baseline_line_ending"] == BR.line_ending(env.baseline.read_bytes())
+    assert rec["baseline_line_ending"] in ("crlf", "lf")
+
+
+# ---------------------------------------------------------------------------
 # The large-shift guard
 # ---------------------------------------------------------------------------
 def test_a_50_pair_shift_to_standard_is_refused_without_accept_shift(env, capsys):
@@ -656,7 +916,7 @@ def test_overlap_policy_changes_of_any_kind_are_refused_then_accepted_and_record
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 0
     rec = json.loads(env.sidecars()[0].read_bytes())
     assert rec["accepted_shift"] is True
-    assert rec["guards_tripped_names"] == ["overlap_policy_changes"]
+    assert "overlap_policy_changes" in rec["guards_tripped_names"]    # (60 changed pairs trips pairs_changed too)
     assert rec["diff_summary"]["changed_by_field"]["overlap_policy"] == 60
 
 
@@ -861,6 +1121,8 @@ def test_the_guard_limits_are_named_constants_with_the_documented_values():
     assert BR.REMOVED_MAX_FRACTION == 0.05
     assert BR.STATUS_FLIP_MAX_PAIRS == 10 and BR.STATUS_FLIP_MAX_FRACTION == 0.10
     assert BR.OVERLAP_CHANGE_MAX_PAIRS == 10 and BR.OVERLAP_CHANGE_MAX_FRACTION == 0.10
+    assert BR.CHANGED_MAX_PAIRS == 25 and BR.CHANGED_MAX_FRACTION == 0.25
+    assert BR.ADDED_MAX_PAIRS == 25 and BR.ADDED_MAX_FRACTION == 0.25
     assert BR.MIN_REASON_CHARS == 15
     assert BR.STALE_AFTER_SECONDS == 120
 
