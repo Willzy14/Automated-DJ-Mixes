@@ -27,9 +27,9 @@ This module is what makes a refresh a decision with a record:
   * A large change is refused (see the limits below): pairs moving between the two
     named policies, pairs flipping between align and raise, pairs changing overlap
     policy in any way, too many pairs changed in any field, too many unexplained pairs
-    added, or too many pairs removed. The guard names are policy_shift, status_flips,
-    overlap_policy_changes, pairs_changed, pairs_added and pairs_removed. The sidecar
-    names each guard that fired in `guards_tripped_names`.
+    added, too many pairs removed, or any old track removed. The guard names are
+    policy_shift, status_flips, overlap_policy_changes, pairs_changed, pairs_added and
+    pairs_removed. The sidecar names each guard that fired in `guards_tripped_names`.
   * Pairs added because of a new track are expected, unless any old pair was removed.
     An added pair is explained when its out or its in is a new track, one that is in no
     row of the old baseline (as an out or as an in). A remix is a different track from
@@ -45,7 +45,17 @@ This module is what makes a refresh a decision with a record:
     and the pairs_added guard fires whatever its limits (a half rename of one track in a
     21 track corpus is only 20 pairs, under every limit). It is the same guard name, so
     `--accept-shift pairs_added` accepts it, and its line reads "N replaced pairs". Pure
-    growth (nothing removed) still passes, and pure removal follows pairs_removed only.
+    growth (nothing removed) still passes, and removing a track always trips pairs_removed.
+  * Removing a track always trips pairs_removed. When an old track is in no row of the new
+    baseline (`old_tracks_gone` above 0) the guard fires whatever the percentage, so
+    dropping one track from a 50 track set is refused. The 5 percent limit on removed
+    pairs stays as it was for pairs removed among the tracks that remain. When both are
+    true the guard fires once (one entry) and its lines name both: "1 old track is gone",
+    then the pairs removed and their share. It is the same guard name, so
+    `--accept-shift pairs_removed` accepts it. A track renamed everywhere, or swapped
+    for a newer version, is gone and new at once, so it trips pairs_added and pairs_removed.
+    A half rename leaves the track in a row, so it trips pairs_added (and pairs_removed
+    only past the 5 percent limit).
   * `--accept-shift` names what it accepts. `--accept-shift pairs_added,pairs_changed`
     accepts those guards only. Any other guard that fired still refuses, and the
     refusal says "not accepted:" and names them. `--accept-shift all` accepts every
@@ -473,6 +483,8 @@ def diff_summary(old, new):
     replacement, and replacing a track always trips: `pairs_replaced` counts the added
     pairs that carry a name that is not in the old baseline when an old pair was removed
     (0 otherwise), and any of them trips the pairs_added guard whatever its limits.
+    A track gone (`old_tracks_gone` above 0) also trips pairs_removed, whatever the
+    percentage: removing a track always trips.
     """
     o, n = _rows_by_key(old), _rows_by_key(new)
     added = sorted(set(n) - set(o))
@@ -562,7 +574,10 @@ def guard_trips(shift, summary):
     pairs_changed (25 pairs or more, or over 25 percent, changed in ANY field),
     pairs_added (25 pairs or more, or over 25 percent of the old baseline, are
     unexplained new pairs; not applied to the very first baseline) and pairs_removed
-    (over 5 percent gone).
+    (over 5 percent of the old pairs gone, or any old track gone). Removing a track
+    always trips pairs_removed, whatever the percentage: when `old_tracks_gone` is above
+    0 the guard fires, once, and says both facts when the 5 percent limit is also passed.
+    Neither applies to the very first baseline.
     A new pair is explained when its out or its in is a new track, one that is in no row
     of the old baseline, unless any old pair was removed. Only unexplained pairs count
     toward pairs_added. A summary without the split counts every added pair as
@@ -583,7 +598,10 @@ def guard_trips(shift, summary):
 def _guard_findings(shift, summary):
     """(name, text, fact) for every guard that fired, in report order. `text` is the full
     reason that guard_trips returns. `fact` is the short count a refusal prints on the
-    guard's own line, taken from the same numbers (for example "50 of 380 pairs")."""
+    guard's own line, taken from the same numbers (for example "50 of 380 pairs"). A fact
+    can hold a few short lines (separated by a newline): the first goes on the guard's
+    line, each other one is printed indented below it (pairs_removed does this when an
+    old track is gone: "1 old track is gone", then the pairs removed and their share)."""
     found = []
     compared = max(shift["pairs_compared"], 1)
     changes = summary.get("changed_by_field") or {}
@@ -632,7 +650,20 @@ def _guard_findings(shift, summary):
                       f"whatever the limits)",
                       f"{replaced} replaced pairs"))
     removed = summary["pairs_removed"]
-    if old_pairs and removed / old_pairs > REMOVED_MAX_FRACTION:
+    over = bool(old_pairs and removed / old_pairs > REMOVED_MAX_FRACTION)
+    # an old track that is in no new row trips this guard whatever the percentage
+    gone = summary.get("old_tracks_gone", 0) if old_pairs else 0
+    if gone:
+        # ONE entry, whichever of the two facts hold: the track count first, then the
+        # pairs removed with their share (and "over the limit" when that is also true)
+        tracks = _tracks_gone(gone)
+        share = f"{removed} of {old_pairs} pairs are gone ({removed / old_pairs:.1%}"
+        share += f", over the {REMOVED_MAX_FRACTION:.0%} limit)" if over else ")"
+        found.append(("pairs_removed",
+                      f"pairs_removed: {tracks}; {share}; removing a track always trips, "
+                      f"whatever the percentage",
+                      f"{tracks}\n{share}"))
+    elif over:
         found.append(("pairs_removed",
                       f"pairs_removed: {removed} of {old_pairs} pairs are gone from the new "
                       f"baseline (limit: {REMOVED_MAX_FRACTION:.0%})",
@@ -851,13 +882,21 @@ def _n_guards(count):
     return f"{count} guard" + ("" if count == 1 else "s")
 
 
+def _tracks_gone(count):
+    return f"{count} old track is gone" if count == 1 else f"{count} old tracks are gone"
+
+
 def _guard_refusal(first, shown, tripped, summary, note=None):
     """The short refusal for guards that fired: `first` after "refresh refused: ", the
-    guards in `shown` ((name, fact) pairs) one per line as "<name>: <count>", an optional
-    `note`, the diff counts, "nothing was written", then the exact flag to run (and `all`
-    when more than one guard fired). The counts are here because a refusal writes
-    nothing: this is the only place Sam can read why a guard fired."""
-    lines = [f"  {name}: {fact}" for name, fact in shown]
+    guards in `shown` ((name, fact) pairs) one per line as "<name>: <count>" (a fact of a
+    few lines puts the first on the guard's line and the others indented below it), an
+    optional `note`, the diff counts, "nothing was written", then the exact flag to run
+    (and `all` when more than one guard fired). The counts are here because a refusal
+    writes nothing: this is the only place Sam can read why a guard fired."""
+    lines = []
+    for name, fact in shown:
+        head, *below = fact.split("\n")              # a fact can be a few lines (pairs_removed)
+        lines += [f"  {name}: {head}", *[f"    {text}" for text in below]]
     if note:
         lines.append(note)
     if summary["pairs_added"] and summary["pairs_removed"]:
