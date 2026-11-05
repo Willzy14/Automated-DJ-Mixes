@@ -22,6 +22,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -379,6 +380,8 @@ import json, os, sys
 sys.path.insert(0, sys.argv[1])
 import baseline_refresh as BR
 baseline = os.path.abspath(sys.argv[2])
+if len(sys.argv) > 4:
+    os.getpid = lambda: int(sys.argv[4])   # a process id that the system has handed out before
 real_replace = os.replace
 
 
@@ -396,13 +399,15 @@ BR.refresh_baseline(baseline, payload, reason="killed on purpose just before the
 '''
 
 
-def _hard_kill_a_refresh(env, new_payload, tmp_path):
+def _hard_kill_a_refresh(env, new_payload, tmp_path, pid=None):
     payload_file = tmp_path / "payload.json"
     payload_file.write_text(json.dumps(new_payload), encoding="ascii")
     child_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    done = subprocess.run([sys.executable, "-c", KILL_AT_SWAP, str(TESTS_DIR),
-                           str(env.baseline), str(payload_file)],
-                          env=child_env, capture_output=True, text=True, timeout=120)
+    argv = [sys.executable, "-c", KILL_AT_SWAP, str(TESTS_DIR),
+            str(env.baseline), str(payload_file)]
+    if pid is not None:
+        argv.append(str(pid))
+    done = subprocess.run(argv, env=child_env, capture_output=True, text=True, timeout=120)
     assert done.returncode == 9, done.stderr + done.stdout
 
 
@@ -492,7 +497,9 @@ def test_an_empty_record_left_by_a_kill_before_its_content_was_written_is_marked
     assert (env.dir / (husk.name + ".not-applied")).exists()
 
 
-def test_the_temp_file_name_is_unique_to_the_process(env, monkeypatch):
+def test_the_temp_file_name_carries_the_process_id_and_a_random_token(env, monkeypatch):
+    # (round 4: the name used to end in .<pid>.tmp only; process ids are reused, so a
+    # random token was added and this test now pins the new shape)
     env.write_old(_grid(_pairs(5), []))
     seen = []
     real_replace = os.replace
@@ -503,10 +510,17 @@ def test_the_temp_file_name_is_unique_to_the_process(env, monkeypatch):
 
     monkeypatch.setattr(os, "replace", spy)
     assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(_pairs(5), [("T00", "T01")])) == 0
+    assert env.run(["--refresh", "--reason", "a second refresh, a different token"],
+                   _grid(_pairs(5), [("T00", "T01"), ("T01", "T02")])) == 0
     monkeypatch.undo()
-    assert f"baseline_alignments.json.{os.getpid()}.tmp" in seen
-    assert any(n.startswith("baseline_alignments.refresh-") and n.endswith(f".json.{os.getpid()}.tmp")
+    pid = os.getpid()
+    shape = re.compile(rf"^baseline_alignments\.json\.{pid}\.[0-9a-f]{{8}}\.tmp$")
+    baseline_temps = [n for n in seen if shape.match(n)]
+    assert len(baseline_temps) == 2 and baseline_temps[0] != baseline_temps[1], seen
+    assert any(re.match(rf"^baseline_alignments\.refresh-\S+\.json\.{pid}\.[0-9a-f]{{8}}\.tmp$", n)
                for n in seen)
+    recorded = [json.loads(p.read_bytes())["staged_temp"] for p in env.sidecars()]
+    assert sorted(recorded) == sorted(baseline_temps), "the record must name the temp file it really used"
 
 
 def test_cleanup_does_not_run_when_the_arguments_are_refused(env):
@@ -618,6 +632,183 @@ def test_a_refresh_refused_by_a_guard_changes_no_file_even_with_stale_leftovers(
 def test_the_module_docstring_states_the_rule_that_is_actually_applied():
     assert "differs from the baseline's current hash" not in BR.__doc__
     assert "staged_temp" in BR.__doc__ and "raw bytes" in BR.__doc__
+
+
+# ---------------------------------------------------------------------------
+# Round 4: a failed rename, reused process ids, records younger than their temp files
+# ---------------------------------------------------------------------------
+def _set_age(path, seconds):
+    stamp = time.time() - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def _the_temp_files(env):
+    return sorted(p for p in env.dir.iterdir() if p.name.endswith(".tmp"))
+
+
+def test_a_failed_rename_keeps_the_temp_file_that_proves_the_record_never_landed(
+        env, tmp_path, monkeypatch):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:1]), tmp_path)
+    _age_everything_but_the_baseline(env)
+    real_rename = os.rename
+
+    def locked(src, dst):                           # Dropbox or an editor holds the record open
+        if str(dst).endswith(".not-applied"):
+            raise PermissionError(32, "The process cannot access the file")
+        return real_rename(src, dst)
+
+    with monkeypatch.context() as m:
+        m.setattr(os, "rename", locked)
+        first = BR.cleanup_interrupted(env.baseline)
+    assert first == {"removed": [], "marked": []}
+    assert len(_the_temp_files(env)) == 1, "the only proof was deleted although the rename failed"
+    assert len(_killed_records(env)) == 1
+    second = BR.cleanup_interrupted(env.baseline)   # the rename works now
+    assert len(second["marked"]) == 1 and len(second["removed"]) == 1
+    assert _the_temp_files(env) == [] and _killed_records(env) == []
+
+
+def test_other_stale_temp_files_are_still_deleted_when_one_rename_fails(env, tmp_path, monkeypatch):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:1]), tmp_path)
+    junk = env.dir / "baseline_alignments.json.31337.tmp"
+    junk.write_bytes(b"junk with no record")
+    _age_everything_but_the_baseline(env)
+    real_rename = os.rename
+
+    def locked(src, dst):
+        if str(dst).endswith(".not-applied"):
+            raise PermissionError(32, "in use")
+        return real_rename(src, dst)
+
+    with monkeypatch.context() as m:
+        m.setattr(os, "rename", locked)
+        first = BR.cleanup_interrupted(env.baseline)
+    assert first == {"removed": [junk.name], "marked": []}
+    assert len(_the_temp_files(env)) == 1
+
+
+def _land_with_pid(env, monkeypatch, pid, payload, reason=GOOD_REASON):
+    with monkeypatch.context() as m:
+        m.setattr(os, "getpid", lambda: pid)
+        return env.run(["--refresh", "--reason", reason], payload)
+
+
+def test_a_reused_pid_cannot_destroy_the_proof_of_an_earlier_killed_refresh(
+        env, tmp_path, monkeypatch):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:1]), tmp_path, pid=4242)
+    killed = _killed_records(env)
+    assert len(killed) == 1
+    assert _land_with_pid(env, monkeypatch, 4242, _grid(pairs, pairs[:2])) == 0   # same pid lands
+    _age_everything_but_the_baseline(env)
+    done = BR.cleanup_interrupted(env.baseline)
+    assert done["marked"] == [killed[0].name] and len(done["removed"]) == 1
+    assert len(env.sidecars()) == 1 and not _killed_records(env)
+
+
+def test_two_killed_refreshes_with_the_same_pid_are_both_marked(env, tmp_path):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:1]), tmp_path, pid=4242)
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:2]), tmp_path, pid=4242)
+    killed = _killed_records(env)
+    assert len(killed) == 2 and len(_the_temp_files(env)) == 2
+    _age_everything_but_the_baseline(env)
+    done = BR.cleanup_interrupted(env.baseline)
+    assert sorted(done["marked"]) == sorted(p.name for p in killed)
+    assert len(done["removed"]) == 2 and _the_temp_files(env) == []
+
+
+def test_a_landed_record_is_not_marked_by_a_later_kill_with_the_same_pid_and_payload(
+        env, tmp_path, monkeypatch):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    payload = _grid(pairs, pairs[:1])
+    assert _land_with_pid(env, monkeypatch, 4242, payload) == 0
+    landed = env.sidecars()
+    assert len(landed) == 1
+    _hard_kill_a_refresh(env, payload, tmp_path, pid=4242)         # same pid, same bytes
+    killed = _killed_records(env)
+    assert len(killed) == 1
+    _age_everything_but_the_baseline(env)
+    done = BR.cleanup_interrupted(env.baseline)
+    assert done["marked"] == [killed[0].name], "the record of the refresh that landed was marked"
+    assert landed[0].exists() and len(env.sidecars()) == 1
+
+
+def test_new_format_temp_names_are_recognised_as_stale_leftovers(env):
+    env.write_old(_grid(_pairs(4), []))
+    stale = [env.dir / "baseline_alignments.json.4242.0123abcd.tmp",
+             env.dir / "baseline_alignments.refresh-20260101T000000Z.json.4242.89abcdef.tmp"]
+    keep = [env.dir / "baseline_alignments.json.4242.0123abcdeff.tmp",    # token of the wrong length
+            env.dir / "baseline_alignments.json.4242.FEDCBA98.tmp",        # not hex in lower case
+            env.dir / "baseline_alignments.json.notapid.0123abcd.tmp"]
+    for p in stale + keep:
+        p.write_bytes(b"x" * 10)
+        _age(p)
+    done = BR.cleanup_interrupted(env.baseline)
+    assert sorted(done["removed"]) == sorted(p.name for p in stale)
+    assert all(p.exists() for p in keep)
+
+
+def test_a_young_record_keeps_its_older_temp_file(env, tmp_path):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:1]), tmp_path)
+    record, temp = _killed_records(env)[0], _the_temp_files(env)[0]
+    _set_age(record, 60)
+    _set_age(temp, 200)                           # the temp is always older than its record
+    assert BR.cleanup_interrupted(env.baseline) == {"removed": [], "marked": []}
+    assert temp.exists() and record.exists(), "an unjudged record lost the temp file that proves it"
+    _set_age(record, 200)                         # now the record is stale too
+    done = BR.cleanup_interrupted(env.baseline)
+    assert done["marked"] == [record.name] and done["removed"] == [temp.name]
+
+
+def test_an_old_record_whose_temp_file_is_young_is_not_judged_yet(env, tmp_path):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    _hard_kill_a_refresh(env, _grid(pairs, pairs[:1]), tmp_path)
+    record, temp = _killed_records(env)[0], _the_temp_files(env)[0]
+    _set_age(record, 200)
+    _set_age(temp, 60)
+    assert BR.cleanup_interrupted(env.baseline) == {"removed": [], "marked": []}
+    assert temp.exists() and record.exists()
+
+
+# ---------------------------------------------------------------------------
+# Round 4: docstrings that list the guards, and the string check on out / in
+# ---------------------------------------------------------------------------
+def test_the_guard_docs_name_every_guard_and_the_duplicate_refusal():
+    import test_alignment_baseline as TAB
+    for guard in ("policy_shift", "status_flips", "overlap_policy_changes",
+                  "pairs_changed", "pairs_added", "pairs_removed"):
+        assert guard in BR.guard_trips.__doc__, guard
+    assert "middle two" not in BR.guard_trips.__doc__
+    assert "duplicate" in BR.guard_trips.__doc__
+    doc = TAB.__doc__
+    assert "25+ pairs" in doc and "duplicate" in doc, doc
+
+
+@pytest.mark.parametrize("bad_row", [
+    dict(out=7), dict(**{"in": None}),
+], ids=["out-is-an-int", "in-is-none"])
+def test_a_row_whose_out_or_in_is_not_a_string_is_refused_and_nothing_changes(env, capsys, bad_row):
+    pairs = _pairs(11)
+    env.write_old(_grid(pairs, []))
+    before = _snapshot(env.dir)
+    rows = _grid(pairs, [])["rows"]
+    rows[3] = dict(rows[3], **bad_row)
+    rc = env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], _payload(rows))
+    assert rc == 2
+    assert _snapshot(env.dir) == before
+    lines = _messages(capsys)
+    assert len(lines) == 1 and "not a baseline payload" in lines[0], lines
 
 
 # ---------------------------------------------------------------------------

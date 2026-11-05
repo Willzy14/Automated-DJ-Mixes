@@ -18,11 +18,12 @@ This module is what makes a refresh a decision with a record:
     has CRLF line endings, git stores LF), so they match another machine only when
     its files have the same bytes; the sidecar says so in `hash_basis` and records
     each input's line ending in `input_line_endings`.
-  * The baseline itself is written to a temp file `<baseline>.<pid>.tmp` and swapped
-    in with os.replace, so a failure leaves the old baseline intact. If the swap
-    fails after the sidecar was written, the sidecar is renamed `*.not-applied`. A
-    refresh that lands leaves no temp file behind, so a live record whose own temp
-    file still exists did not land.
+  * The baseline itself is written to a temp file `<baseline>.<pid>.<token>.tmp` (the
+    token is 8 random hex digits, so a process id the system hands out again can
+    never collide with an earlier run's temp file) and swapped in with os.replace, so
+    a failure leaves the old baseline intact. If the swap fails after the sidecar was
+    written, the sidecar is renamed `*.not-applied`. A refresh that lands leaves no
+    temp file behind, so a live record whose own temp file still exists did not land.
   * A large change is refused unless `--accept-shift` is given (see the limits below):
     pairs moving between the two named policies, pairs flipping between align and
     raise, pairs changing overlap policy in any way, too many pairs changed in any
@@ -32,11 +33,13 @@ This module is what makes a refresh a decision with a record:
   * A refresh killed between its writes (power cut, taskkill) leaves its temp file
     and a record with a live name. The record carries the process id and the temp
     file's name (`pid`, `staged_temp`). A later refresh, once the guards have passed
-    and the leftovers are older than STALE_AFTER_SECONDS, renames such a record
-    `*.not-applied` ONLY when its own temp file still exists and hashes to the
-    record's `new_baseline_sha256`, then deletes the stale temp file, and says so in
-    one line. A record whose temp file was deleted by hand cannot be proved
-    unlanded and is left alone. A refused refresh touches nothing.
+    and both the record and its temp file are older than STALE_AFTER_SECONDS, renames
+    such a record `*.not-applied` ONLY when its own temp file still exists and hashes
+    to the record's `new_baseline_sha256`, then deletes the stale temp file, and says
+    so in one line. A temp file that a record still points at is kept while that
+    record is not yet judged, and when the rename failed (the next cleanup tries
+    again). A record whose temp file was deleted by hand cannot be proved unlanded
+    and is left alone. A refused refresh touches nothing.
 
 Nothing here imports the alignment engine or needs the 14.08.26 corpus; the test file
 only supplies a function that regenerates the payload. Tests: Tests/test_baseline_refresh.py.
@@ -53,6 +56,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -417,9 +421,15 @@ def guard_trips(shift, summary):
     list means fine to refresh). The guards, in the order they are reported:
     policy_shift (pairs moving between named_landmark_64 and standard_48),
     status_flips (pairs whose ok/raise status changed), overlap_policy_changes
-    (pairs whose overlap_policy changed in ANY way, e.g. to or from None) and
-    pairs_removed. A sweeping change that is not a move between the two named
-    policies is caught by the middle two."""
+    (pairs whose overlap_policy changed in ANY way, e.g. to or from None),
+    pairs_changed (25 pairs or more, or over 25 percent, changed in ANY field),
+    pairs_added (25 pairs or more, or over 25 percent of the old baseline, are new;
+    not applied to the very first baseline) and pairs_removed (over 5 percent gone).
+    Each is checked on its own, and `--accept-shift` clears all of them at once.
+    A sweeping change that is not a move between the two named policies is caught by
+    status_flips, overlap_policy_changes or pairs_changed. Not a guard, and never
+    overridable: a payload that lists the same (out, in) pair twice is refused as a
+    duplicate by check_payload before any guard runs."""
     trips = []
     compared = max(shift["pairs_compared"], 1)
     changes = summary.get("changed_by_field") or {}
@@ -479,14 +489,17 @@ def _utc_now():
 
 
 def _staged_name(final):
-    """The temp file name for `final`: it carries the process id, so two refreshes at
-    once never share a temp file, and the refresh record can name its own temp file."""
-    return f"{final.name}.{os.getpid()}.tmp"
+    """A fresh temp file name for `final`: `<name>.<pid>.<8 random hex>.tmp`. The process
+    id keeps two refreshes at once apart, and the random token keeps apart two processes
+    that were handed the same id (Windows reuses them), so no temp file is ever
+    overwritten, consumed or mistaken for another run's."""
+    return f"{final.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
 
 
-def _stage_bytes(final, data):
-    """Write `data` to a temp file beside `final` and return the temp path (not live yet)."""
-    staged = final.with_name(_staged_name(final))
+def _stage_bytes(final, data, name=None):
+    """Write `data` to a temp file beside `final` and return the temp path (not live yet).
+    `name` is the temp file's name when the caller must record it first."""
+    staged = final.with_name(name or _staged_name(final))
     try:
         with open(staged, "wb") as fh:
             fh.write(data)
@@ -543,34 +556,45 @@ def _sha_or_missing(path):
     return sha256_file(path) if path.is_file() else "missing"
 
 
-def _unlanded_record(path, baseline):
-    """True for a refresh record that did not land: an empty one (killed after its name
-    was claimed), or one whose OWN staged temp file (`staged_temp`, beside the baseline)
-    still exists and hashes to the record's `new_baseline_sha256`. A refresh that lands
-    moves its temp file onto the baseline, so a landed refresh has no temp file left,
-    whatever happens to the baseline afterwards (a revert, a later refresh)."""
+def _read_record(path):
+    """(raw bytes, record dict or None) of a refresh record file."""
     try:
         raw = path.read_bytes()
     except OSError:
-        return False
-    if not raw:
-        return True
+        return None, None
     try:
         rec = json.loads(raw.decode("ascii"))
     except ValueError:
-        return False
-    if not isinstance(rec, dict):
-        return False
-    new, old, name = (rec.get("new_baseline_sha256"), rec.get("old_baseline_sha256"),
-                      rec.get("staged_temp"))
-    if not (isinstance(new, str) and isinstance(old, str) and isinstance(name, str)
-            and Path(name).name == name):
-        return False
-    staged = baseline.with_name(name)
+        return raw, None
+    return raw, rec if isinstance(rec, dict) else None
+
+
+def _record_temp_name(rec):
+    """The name of the temp file a record says it staged, or None if it names none."""
+    name = rec.get("staged_temp") if rec else None
+    return name if isinstance(name, str) and name and Path(name).name == name else None
+
+
+def _unlanded_record(path, baseline):
+    """None for a refresh record that is not proved unlanded. Otherwise the proof: the
+    name of the record's OWN staged temp file (`staged_temp`, beside the baseline) when
+    it still exists and hashes to the record's `new_baseline_sha256`, or "" for an empty
+    record (killed after its name was claimed). A refresh that lands moves its temp file
+    onto the baseline, so a landed refresh has no temp file left, whatever happens to
+    the baseline afterwards (a revert, a later refresh)."""
+    raw, rec = _read_record(path)
+    if raw is None:
+        return None
+    if not raw:
+        return ""
+    name = _record_temp_name(rec)
+    new = rec.get("new_baseline_sha256") if rec else None
+    if name is None or not isinstance(new, str):
+        return None
     try:
-        return _sha_or_missing(staged) == new
+        return name if _sha_or_missing(baseline.with_name(name)) == new else None
     except OSError:
-        return False
+        return None
 
 
 def cleanup_interrupted(baseline, stale_after=STALE_AFTER_SECONDS, now=None):
@@ -581,33 +605,51 @@ def cleanup_interrupted(baseline, stale_after=STALE_AFTER_SECONDS, now=None):
     for a baseline that never moved. Only files older than `stale_after` seconds are
     touched, so a refresh running right now is safe. Records are judged FIRST, because
     the proof that a record never landed is its own temp file (see _unlanded_record);
-    then the stale temp files matching this baseline's own patterns are deleted.
-    A record judged unlanded is renamed `*.not-applied`.
+    then the stale temp files matching this baseline's own patterns are deleted. A
+    record is judged only when BOTH it and its own temp file are stale (the temp file
+    is always the older of the two). A temp file that a record still points at is
+    never deleted while that record is unjudged, or when renaming it failed (Dropbox
+    or an editor holding it open): it is the record's only proof, and a later cleanup
+    gets another try. A record judged unlanded is renamed `*.not-applied`.
     Returns {"removed": [names], "marked": [names]}.
     """
     baseline = Path(baseline)
     now = time.time() if now is None else now
     base, stem = re.escape(baseline.name), re.escape(baseline.stem)
     stamp = r"\d{8}T\d{6}Z(?:-\d+)?"
-    temp_re = re.compile(rf"^(?:{base}|{stem}\.refresh-{stamp}\.json)(?:\.\d+)?\.tmp$")
+    # `<name>.tmp` (round 1), `<name>.<pid>.tmp` (rounds 2-3) and `<name>.<pid>.<token>.tmp`
+    temp_re = re.compile(
+        rf"^(?:{base}|{stem}\.refresh-{stamp}\.json)(?:\.\d+(?:\.[0-9a-f]{{8}})?)?\.tmp$")
     record_re = re.compile(rf"^{stem}\.refresh-{stamp}\.json$")
-    stale = []
+    ages = {}
     for path in sorted(baseline.parent.iterdir()):
         try:
-            if path.is_file() and now - path.stat().st_mtime >= stale_after:
-                stale.append(path)
+            if path.is_file():
+                ages[path] = now - path.stat().st_mtime
         except OSError:
             continue
-    removed, marked = [], []
-    for path in stale:                                      # 1. the records, while their temp files exist
-        if record_re.match(path.name) and _unlanded_record(path, baseline):
-            try:
-                os.rename(path, path.with_name(path.name + ".not-applied"))
-                marked.append(path.name)
-            except OSError:
-                continue
-    for path in stale:                                      # 2. then the stale temp files
-        if temp_re.match(path.name):
+    removed, marked, protected = [], [], set()
+    for path in ages:                                       # 1. the records, while their temp files exist
+        if not record_re.match(path.name):
+            continue
+        _, rec = _read_record(path)
+        name = _record_temp_name(rec)
+        temp_age = ages.get(baseline.with_name(name)) if name else None
+        if ages[path] < stale_after or (temp_age is not None and temp_age < stale_after):
+            if name:
+                protected.add(name)                         # unjudged: keep its proof
+            continue
+        proof = _unlanded_record(path, baseline)
+        if proof is None:
+            continue
+        try:
+            os.rename(path, path.with_name(path.name + ".not-applied"))
+            marked.append(path.name)
+        except OSError:
+            if proof:
+                protected.add(proof)                        # not renamed: keep the proof
+    for path, age in ages.items():                          # 2. then the stale temp files
+        if temp_re.match(path.name) and age >= stale_after and path.name not in protected:
             try:
                 path.unlink()
                 removed.append(path.name)
@@ -663,6 +705,7 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
     now = (clock or _utc_now)()
     data = _baseline_bytes(payload)
     new_sha = sha256_bytes(data)
+    staged_name = _staged_name(baseline)         # made once: the record names the file really used
     schema = schema_marker(payload)
     record = {
         "kind": "baseline_refresh_record",
@@ -679,7 +722,7 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
         "input_line_endings": input_line_endings(input_paths, root),
         "baseline_line_ending": line_ending(data),
         "pid": os.getpid(),
-        "staged_temp": _staged_name(baseline),
+        "staged_temp": staged_name,
         "old_baseline_sha256": old_sha,
         "new_baseline_sha256": new_sha,
         "old_counts": _counts(old_payload),
@@ -703,7 +746,7 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
                          "added_max_fraction": ADDED_MAX_FRACTION},
     }
 
-    staged = _stage_bytes(baseline, data)
+    staged = _stage_bytes(baseline, data, staged_name)
     sidecar = None
     try:
         sidecar = _publish_sidecar(baseline, record, now)

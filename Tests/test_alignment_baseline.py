@@ -26,7 +26,9 @@ refresh writes baseline_alignments.refresh-<UTC time>.json beside the baseline F
 new file hashes, a diff summary, the policy shift) and then replaces the baseline
 atomically. A refresh is REFUSED unless --accept-shift is given when 10+ pairs (or over
 10 percent) move between named_landmark_64 and standard_48, flip between align and raise,
-or change overlap_policy in any way, or when over 5 percent of the pairs are dropped.
+or change overlap_policy in any way; when 25+ pairs (or over 25 percent) change in any
+field or are newly added; or when over 5 percent of the pairs are dropped. A baseline
+with a duplicate (out, in) pair is refused outright: no flag overrides that.
 Details and the tunable limits: Tests/baseline_refresh.py.
 
 Never refresh to make a red test green without reading the diff.
