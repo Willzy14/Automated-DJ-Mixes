@@ -722,7 +722,7 @@ def test_in_an_ep_folder_a_version_only_file_does_not_win_but_the_command_line_s
     lines = out.splitlines()
     assert lines[0] == "Artist - Better When:" and lines[1].endswith("Artist - Better When (Extended Mix) SW V2.wav")
     notes = [ln for ln in lines if ln.strip().startswith("NOTE")]
-    assert len(notes) == 1 and "not chosen" in notes[0] and "cannot tell which track it belongs to" in notes[0], out
+    assert len(notes) == 1 and "not chosen" in notes[0] and "the folder name is not exactly artist and title" in notes[0], out
     assert "several tracks" not in out                            # the old wording said so even when the folder held one track
     at = lines.index(notes[0])
     assert at > 1 and lines[at + 1].strip().endswith("MASTER AMENDED V3.wav")        # the file on its own line, after the result lines
@@ -863,7 +863,9 @@ def test_r2_a_longer_title_folder_never_stands_in_for_the_shorter_title(tmp_path
         "Getto - Love [Label] Project": ["Getto - Love SW V2.wav"],
         "Getto - Love Me Right [Label] Project": ["Getto - Love Me Right SW V1.wav", "MASTER AMENDED V3.wav"]})
     assert names(mod.resolve("Getto", "Love"))[0] == "Getto - Love SW V2.wav"
-    assert _note_block(_run_cli(tools, [["Getto", "Love"]])) == ([], [])           # the Love Me Right folder is another track: no NOTE names its file
+    heads, listed = _note_block(_run_cli(tools, [["Getto", "Love"]]))              # nothing is promoted from the Love Me Right folder, and its newer file is named
+    assert len(heads) == 1 and "the folder name is not exactly artist and title" in heads[0]
+    assert len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav") and "Love Me Right" in listed[0]
 
 
 def test_r1b_a_remix_folder_with_only_version_only_files_never_stands_in_for_the_original(tmp_path):
@@ -871,7 +873,9 @@ def test_r1b_a_remix_folder_with_only_version_only_files_never_stands_in_for_the
         "Artist - Title [Label] Project": ["Artist - Title SW V1.wav"],
         "Artist - Title (Someone Remix) [Label] Project": ["MASTER AMENDED V3.wav", "24 Bit MASTER.wav"]})
     assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
-    assert _note_block(_run_cli(tools, [["Artist", "Title"]])) == ([], [])         # a remix folder is another track: no NOTE either
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))            # nothing is promoted from the remix folder, and its newer file is named
+    assert len(heads) == 1 and "the folder name is not exactly artist and title" in heads[0]
+    assert len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav") and "(Someone Remix)" in listed[0]
 
 
 def test_r3b_a_folder_for_a_longer_word_never_stands_in_for_the_title(tmp_path):
@@ -903,36 +907,50 @@ def test_two_different_titled_tracks_in_one_folder_are_not_one_track(tmp_path):
     assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
 
 
-@pytest.mark.parametrize("stray", ["Acapella.wav", "Instrumental SW V2.wav", "test bounce.wav"])
-def test_a_stray_junk_or_untitled_file_does_not_break_a_one_track_folder(tmp_path, stray):
+@pytest.mark.parametrize("stray", ["Acapella.wav", "Instrumental SW V2.wav"])
+def test_a_junk_file_is_ignored_and_does_not_break_an_exact_single_track_folder(tmp_path, stray):
     files = ["Artist - Title SW V1.wav", "MASTER AMENDED V3.wav", stray]
     mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", files)
     assert names(mod.resolve("Artist", "Title"))[0] == "MASTER AMENDED V3.wav"       # the newest version of the one track
     assert _note_block(_run_cli(tools, [["Artist", "Title"]])) == ([], [])             # nothing was passed over
 
 
-def test_r16_a_remix_folder_with_a_remix_and_a_junk_file_prints_no_note_for_the_original(tmp_path):
+def test_a_scratch_file_makes_the_folder_not_exact_so_nothing_is_promoted(tmp_path):
+    files = ["Artist - Title SW V1.wav", "MASTER AMENDED V3.wav", "test bounce.wav"]
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and "the folder holds other tracks" in heads[0] and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
+
+
+def test_r16_a_remix_folder_with_a_remix_and_a_junk_file_never_stands_in_for_the_original(tmp_path):
     mod, tools = _library(tmp_path, {
         "Artist - Title [Label] Project": ["Artist - Title SW V1.wav"],
         "Artist - Title (Someone Remix) [Label] Project": ["Artist - Title (Someone Remix) SW V2.wav", "Acapella.wav", "MASTER AMENDED V3.wav"]})
     assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
-    assert _note_block(_run_cli(tools, [["Artist", "Title"]])) == ([], [])
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))           # nothing is promoted from the remix folder, and its newer file is named
+    assert len(heads) == 1 and "the folder name is not exactly artist and title" in heads[0]
+    assert len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav") and "(Someone Remix)" in listed[0]
 
 
-def test_in_a_folder_named_for_the_remix_a_query_for_the_remix_gets_its_newest_version(tmp_path):
+def test_in_a_folder_named_for_the_remix_nothing_is_promoted_and_the_newer_file_is_named(tmp_path):
+    # The folder name has parentheses, so it is not exactly artist - title, even when the title asked for says the remix.
     files = ["Artist - Title (Someone Remix) SW V1.wav", "MASTER AMENDED V3.wav"]
-    mod = one_folder(tmp_path, "Artist - Title (Someone Remix) [Label] Project", files)
-    assert names(mod.resolve("Artist", "Title (Someone Remix)"))[0] == "MASTER AMENDED V3.wav"
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title (Someone Remix) [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title (Someone Remix)"))[0] == "Artist - Title (Someone Remix) SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title (Someone Remix)"]]))
+    assert len(heads) == 1 and "the folder name is not exactly artist and title" in heads[0]
+    assert len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
 
 
-def test_a_newer_file_with_a_typo_in_the_title_is_passed_over_with_a_note(tmp_path):
-    # The typo file is not the track (it has a word of its own), so it still loses; but the NOTE names it, once.
-    files = ["Artist - Title SW V1.wav", "Artist - Ttile SW V3.wav"]
+def test_a_newer_file_with_a_typo_in_the_title_never_wins(tmp_path):
+    # The typo file has a word of its own, so it is not version-only and the folder is not exact: the right track is chosen.
+    # Names that hold other words (a typo, a copy, a backup) are not listed in the NOTE: only names of versions and decorations are.
+    files = ["Artist - Title SW V1.wav", "Artist - Ttile SW V3.wav", "MASTER AMENDED V3.wav"]
     mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", files)
     assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
     heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
-    assert len(heads) == 1 and "cannot tell which track it belongs to" in heads[0]
-    assert len(listed) == 1 and listed[0].endswith("Artist - Ttile SW V3.wav")
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")        # the version-only file is named, the typo is not
 
 
 @pytest.mark.parametrize("name,score", [("MASTER AMENDED VERSION.wav", 6), ("Title (Amended Vocal) SW V2.wav", 8), ("MASTER AMENDED V.wav", 6)])
@@ -969,18 +987,6 @@ def test_an_ep_folder_still_gives_the_named_track_and_a_note_for_the_version_onl
     assert names(mod.resolve("Artist", "Better When"))[0] == "02 Better When.wav"
     heads, listed = _note_block(_run_cli(tools, [["Artist", "Better When"]]))
     assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
-
-
-# --- round 3: scratch names, the searched title, notes that never name another track, folder shapes, an empty title --------
-
-@pytest.mark.parametrize("name,expected", [
-    ("test bounce.wav", True), ("Copy of MASTER AMENDED V4.wav", True), ("SW V5 backup.wav", True),
-    ("Artist - Demo Days SW V1.wav", False), ("02 Artist - Rough Diamond.wav", False), ("Demolition.wav", False),
-    ("Artist - Ttile Rough SW V3.wav", False), ("Extended Mix.wav", False), ("Artist.wav", False), ("MASTER AMENDED V.wav", False),
-])
-def test_a_scratch_name_has_scratch_words_and_nothing_else_left(tmp_path, name, expected):
-    mod, _ = load_resolver(tmp_path, [])
-    assert bool(mod.stray(name, "artist")) is expected
 
 
 @pytest.mark.parametrize("files,first", [
@@ -1037,26 +1043,20 @@ def test_a_folder_with_only_version_only_files_is_never_one_track(tmp_path):
     assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")      # SW V2 is older than its own folder's best
 
 
-def test_d3a_a_remix_hint_never_lists_the_originals_file_in_a_note(tmp_path):
+def test_d3a_a_remix_hint_names_the_newer_file_of_every_folder_it_passed_over(tmp_path):
     mod, tools = _library(tmp_path, {
         "Artist - Title [Label] Project": ["Artist - Title SW V1.wav", "MASTER AMENDED V2.wav"],
         "Artist - Title (X Remix) [Label] Project": ["Artist - Title (X Remix) SW V1.wav", "MASTER AMENDED V3.wav"]})
     assert names(mod.resolve("Artist", "Title", "X Remix"))[0] == "Artist - Title (X Remix) SW V1.wav"
     heads, listed = _note_block(_run_cli(tools, [["Artist", "Title", "X Remix"]]))
-    assert len(heads) == 1 and len(listed) == 1, (heads, listed)
-    assert listed[0].endswith("MASTER AMENDED V3.wav") and "(X Remix)" in listed[0]       # the remix folder's file, not the original's V2
+    assert len(heads) == 2 and len(listed) == 2, (heads, listed)                  # two folders, two reasons, one file each
+    assert sorted(os.path.basename(x) for x in listed) == ["MASTER AMENDED V2.wav", "MASTER AMENDED V3.wav"]
 
 
-def test_d4c_scratch_and_backup_names_are_named_in_the_note_but_only_in_the_tracks_own_folder(tmp_path):
+def test_d4c_scratch_backup_and_typo_names_never_win(tmp_path):
     files = ["Artist - Title SW V1.wav", "Copy of MASTER AMENDED V4.wav", "SW V5 backup.wav", "Artist - Ttile Rough SW V3.wav"]
-    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", files)
-    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"          # they can never win
-    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
-    assert len(heads) == 1 and len(listed) == 3, (heads, listed)
-    assert [os.path.basename(ln) for ln in listed] == ["Copy of MASTER AMENDED V4.wav", "SW V5 backup.wav", "Artist - Ttile Rough SW V3.wav"]
-    # in an EP folder (not named for exactly this track) a backup copy is not listed
-    mod2, tools2, _ = _folder_and_tools(tmp_path / "b", "Artist - Better When EP [Label] Project", ["Artist - Better When SW V1.wav", "SW V5 backup.wav"])
-    assert _note_block(_run_cli(tools2, [["Artist", "Better When"]])) == ([], [])
+    mod, _, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", files)
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"          # names with other words in them can never win
 
 
 @pytest.mark.parametrize("folder", ["Artist - Title Project", "01 Artist - Title [Label] Project", "02. Artist - Title [Label] Project"])
@@ -1065,13 +1065,24 @@ def test_a_trailing_project_or_a_leading_track_number_in_the_folder_name_is_cut_
     assert names(mod.resolve("Artist", "Title"))[0] == "MASTER AMENDED V3.wav"
 
 
-@pytest.mark.parametrize("folder", ["Artist & Other - Title [Label] Project", "Artist - Title (Extended Mix) [Label] Project"])
-def test_folder_names_that_are_not_cut_stay_safe_and_still_get_a_note(tmp_path, folder):
-    # Not promoted (the folder is not named for exactly this track), and nothing is passed over in silence.
-    mod, tools, _ = _folder_and_tools(tmp_path, folder, ["Title SW V1.wav", "MASTER AMENDED V3.wav"])
-    assert names(mod.resolve("Artist", "Title"))[0] == "Title SW V1.wav"
+@pytest.mark.parametrize("folder,titled", [
+    ("Artist & Other - Title [Label] Project", "Artist - Title SW V1.wav"),
+    ("Artist feat. Other - Title [Label] Project", "Artist - Title SW V1.wav"),
+    ("Artist ft. Other - Title [Label] Project", "Artist - Title SW V1.wav"),
+    ("Artist feat. Other - Title [Label] Project", "Artist feat. Other - Title SW V1.wav"),
+    ("Artist ft. Other - Title [Label] Project", "Artist ft. Other - Title SW V1.wav"),
+    ("Artist (feat. Other) - Title [Label] Project", "Artist - Title SW V1.wav"),
+    ("Title - Artist [Label] Project", "Title - Artist SW V1.wav"),
+    ("Artist - (Title) [Label] Project", "Artist - Title SW V1.wav"),
+    ("Artist - Title (Extended Mix) [Label] Project", "Artist - Title SW V1.wav"),
+    ("Artist - Title (Short Mix) [Label] Project", "Artist - Title (Short Mix) SW V1.wav"),
+    ("Artist - Title [X Remix] [Label] Project", "Artist - Title SW V1.wav"),
+])
+def test_e1_a_folder_that_is_not_exactly_artist_and_title_promotes_nothing_and_says_so(tmp_path, folder, titled):
+    mod, tools, _ = _folder_and_tools(tmp_path, folder, [titled, "MASTER AMENDED V3.wav"])
+    assert names(mod.resolve("Artist", "Title"))[0] == titled
     heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
-    assert len(heads) == 1 and "cannot tell which track it belongs to" in heads[0]
+    assert len(heads) == 1 and "the folder name is not exactly artist and title" in heads[0]
     assert len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
 
 
@@ -1082,20 +1093,18 @@ def test_a_version_only_file_with_a_mix_word_keeps_its_own_mix(tmp_path):
     assert names(r) == ["Extended SW V3.wav", "Artist - Title (Radio Edit) SW V1.wav"] and [sc for sc, _ in r] == [43, -39]
 
 
-def test_master_amended_v_alone_is_not_version_only_so_it_is_noted_not_promoted(tmp_path):
-    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", "MASTER AMENDED V.wav"])
+def test_master_amended_v_alone_is_not_version_only_and_never_wins(tmp_path):
+    mod, _, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", "MASTER AMENDED V.wav"])
     assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
-    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
-    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V.wav")
 
 
-def test_a_remix_word_alone_as_the_hint_never_lists_the_originals_file_in_a_note(tmp_path):
-    # With the hint "Remix" the words after the artist match the original folder too: only the remix-type word the folder must carry keeps it out.
+def test_a_remix_word_alone_as_the_hint_still_names_the_originals_newer_file(tmp_path):
     mod, tools = _library(tmp_path, {
         "Artist - Title [Label] Project": ["Artist - Title SW V1.wav", "MASTER AMENDED V3.wav"],
         "Artist - Title (X Remix) [Label] Project": ["Artist - Title (X Remix) SW V1.wav"]})
     assert names(mod.resolve("Artist", "Title", "Remix"))[0] == "Artist - Title (X Remix) SW V1.wav"
-    assert _note_block(_run_cli(tools, [["Artist", "Title", "Remix"]])) == ([], [])
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title", "Remix"]]))      # the hint removed the original's files: its newer one is still named
+    assert len(heads) == 1 and "ranked lower" in heads[0] and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
 
 
 def test_the_note_prints_the_whole_path_on_its_own_line(tmp_path):
@@ -1107,13 +1116,6 @@ def test_the_note_prints_the_whole_path_on_its_own_line(tmp_path):
     assert len(at) == 1 and len(lines[at[0]]) <= 100 and not lines[at[0]].rstrip().endswith(".wav")      # one short plain line first
     assert lines[at[0] + 1] == "      " + str(mr / "MASTER AMENDED V3.wav")                            # then the whole path, nothing cut
     assert folder in lines[at[0] + 1] and len(lines[at[0] + 1].strip()) > 105
-
-
-def test_a_removal_never_empties_the_words(tmp_path):
-    mod, _ = load_resolver(tmp_path, [])
-    assert mod.clean("original", "main") == "original" and mod.clean("main original", "main") == "original"
-    assert mod.clean("main version", "main") == "version" and mod.clean("master amended v3", "") == "master amended v3"
-    assert mod.clean("artist title extended mix sw v2", "artist") == "title"            # words are still taken out when something is left
 
 
 def test_two_tracks_whose_names_are_mix_words_are_not_one_track(tmp_path):
@@ -1154,3 +1156,62 @@ def test_the_best_file_of_its_folder_is_not_listed_when_it_is_not_newer_than_the
         "Artist - Title [Label B] Project": ["Artist - Title (Extended Mix) SW V12.wav"]})
     assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title (Extended Mix) SW V12.wav"
     assert _note_block(_run_cli(tools, [["Artist", "Title"]])) == ([], [])
+
+
+# --- round 4: promote only in an exact single-track folder, and never pass a newer file over in silence ------------------
+
+@pytest.mark.parametrize("name", ["Original SW V3.wav", "Main SW V3.wav", "Edit SW V3.wav"])
+def test_e3_a_version_only_file_with_a_mix_word_keeps_its_own_score_and_loses_to_an_older_extended(tmp_path, name):
+    # mix() scores these three names 0: they must not borrow the Extended preference of the folder.
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title (Extended Mix) SW V1.wav", name])
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title (Extended Mix) SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))                # the newer plain version is named, not passed over in silence
+    assert len(heads) == 1 and "ranked lower" in heads[0] and len(listed) == 1 and listed[0].endswith(name)
+
+
+def test_an_exact_folder_promotes_an_extended_version_only_file_with_its_own_mix(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", ["Artist - Title (Extended Mix) SW V1.wav", "Extended SW V3.wav"])
+    r = mod.resolve("Artist", "Title")
+    assert names(r) == ["Extended SW V3.wav", "Artist - Title (Extended Mix) SW V1.wav"] and [sc for sc, _ in r] == [43, 41]
+
+
+def test_e9_a_title_that_is_a_version_word_never_makes_a_version_only_file_titled(tmp_path):
+    mod, tools = _library(tmp_path, {
+        "Artist - Mastermind [Label] Project": ["MASTER AMENDED V3.wav"],
+        "Artist - Master [Label] Project": ["Artist - Master SW V1.wav"]})
+    assert names(mod.resolve("Artist", "Master"))[0] == "Artist - Master SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Master"]]))
+    assert len(heads) == 1 and "the folder name does not name this track" in heads[0]
+    assert len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav") and "Mastermind" in listed[0]
+
+
+def test_e4_the_artist_word_inside_another_title_is_not_taken_out(tmp_path):
+    # Artist Main, title Version: "Main - Main Version" is another title, not Version.
+    mod, tools, _ = _folder_and_tools(tmp_path, "Main - Version [Label] Project", ["Main - Main Version SW V1.wav", "MASTER AMENDED V3.wav"])
+    assert names(mod.resolve("Main", "Version"))[0] == "Main - Main Version SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Main", "Version"]]))
+    assert len(heads) == 1 and "the folder holds other tracks" in heads[0] and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
+
+
+@pytest.mark.parametrize("other", ["Demo.wav", "Rough Copy.wav"])
+def test_e5_a_scratch_or_copy_name_makes_the_folder_not_exact(tmp_path, other):
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", other, "MASTER AMENDED V3.wav"])
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and "the folder holds other tracks" in heads[0] and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
+
+
+@pytest.mark.parametrize("name", ["Artist - SW V3.wav", "Artist - (Extended Mix) SW V3.wav", "01 Artist - MASTER AMENDED V3.wav"])
+def test_a_file_with_only_versions_and_decorations_is_named_in_the_note_and_never_promoted(tmp_path, name):
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", name])
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and "the folder holds other tracks" in heads[0] and len(listed) == 1 and listed[0].endswith(name)
+
+
+def test_a_must_hint_that_matches_nothing_says_so_and_still_prints_the_note(tmp_path):
+    _, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", "MASTER AMENDED V3.wav"])
+    out = _run_cli(tools, [["Artist", "Title", "No Such Hint"]])
+    assert 'NONE: no file matched the hint "No Such Hint"' in out
+    heads, listed = _note_block(out)
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")

@@ -1,6 +1,6 @@
 """Find the best master WAV for a credit across the work folders and the G:/F: backup drives, using Tools/folder_index.json (build it with build_folder_index.py). Prefers Extended/Original, newest SW V / AMENDED, never acapella/instrumental/dub/stems. Usage: python Tools/resolve_masters.py [[\"Artist\",\"Title\",\"optional must-contain\",\"optional exact filename\"],...] (2 to 4 elements, null skips one). Order: files that are not acapella/instrumental/dub/stems first, then the named track (the title as whole words in the name; a remix, rework, refix, bootleg or VIP is never the named track unless the title or the hint says so), then the must hint, then the mix (Extended, Original Mix, Radio Edit), then the version (the latest SW V / AMENDED wins), then a file named exactly like the title, then the newest date modified, then path descending. A must hint matches the folder name or a filename. The exact filename (4th element) selects only the file whose full name matches (case-insensitive, no .wav, no folder part); only when none does, and the name you typed has no track number of its own, it ignores a leading track number. Always COPY, never move; use shutil.copyfile (os copy fails on online-only Dropbox files).
 
-The newest version always wins (Sam, 2026-11-05). For a DJ mix the Extended mix comes first, then the newest version of it; a newer plain version does not beat an older Extended. A file whose name says only a version (MASTER AMENDED V3, SW V3, 24 Bit MASTER) is the newest version of the track only when its folder is named for exactly that track (Artist - Title [Label] Project) and every titled file in it is the searched track and nothing else (junk and scratch names such as test bounce do not count; any other name without the title is another track); it then takes the folder's best mix. Anywhere else (an EP folder, a remix folder, a folder for another track) it is never chosen. When the folder could be this track's, the command line prints a NOTE with the path of each newer file that was passed over, for any reason.
+The newest version always wins (Sam, 2026-11-05). For a DJ mix the Extended mix comes first, then the newest version of it; a newer plain version does not beat an older Extended. A file whose name says only a version (MASTER AMENDED V3, SW V3, 24 Bit MASTER, Extended SW V3) is a version of the searched track ONLY in an exact single-track folder: the folder is named exactly artist - title, and every file in it that is not junk is a titled file (its name, without the track number, the version tokens, the (..) groups and the artist prefix, is exactly the title) or a version-only file, with at least one titled file; it then takes the folder's best mix, or keeps its own if its name has a mix word. Anywhere else it is never chosen, and the command line prints a NOTE with the whole path of every newer version-only file (or file with only versions and decorations in its name) that was not chosen, in every folder scanned, and says so when a must hint matched nothing. Known limits, older than this rule and Sam's to decide: the folder filter is a substring test; a titled file is matched as whole words, so Artist - Love Me Right can beat Artist - Love when searching Love; a remix-only folder still resolves when no original exists.
 """
 import json,os,re,sys
 sys.stdout.reconfigure(encoding='utf-8')
@@ -38,100 +38,68 @@ def stem(f): return re.sub(r'\.wav$','',f,flags=re.I)
 def strip_num(s): return re.sub(r'^\s*(?:\d{1,3}\s*[-._)]\s*|0\d\s+)(?=\S)','',s)
 def keys(s):
     s=stem(s); return {norm(s),norm(strip_num(s))}-{''}
-# A version-only file (MASTER AMENDED V3, SW V3, 24 Bit MASTER, Final Master SW V2, Extended SW V3) names no track: nothing is left of its
-# name after the version words, the mix words, a leading track number and .wav. A word of its own (the artist, a title, a typo, Dub) makes it a named file.
+def variants(n): return {w for w in OTHER if f' {w} ' in f' {n} '}
+# A version-only file (MASTER AMENDED V3, SW V3, 24 Bit MASTER, Extended SW V3) names no track: nothing is left of its name after a leading
+# track number, the version tokens and the mix tokens, and at least one version token is there. VMIX also decides "has a mix word".
 VERS=re.compile(r'\b(?:sw v\d+|amended v\d+|amended|master|24 bit|final)\b')
 VMIX=re.compile(r'\b(?:extended|original|main|mix|radio|edit)\b')
 def vonly(f):
-    s=norm(strip_num(stem(f))); return bool(VERS.search(s)) and not VERS.sub(' ',VMIX.sub(' ',s)).split()
-# What is left of a name once the track number, the artist and the version, mix and variant words are taken out: the track's own words.
-MIXW=re.compile(r'\b(?:extended|original|main|mix|radio|edit|club|version|vocal)\b')
-VARW=re.compile(r'\b(?:'+'|'.join(OTHER)+r')\b')
-# A scratch name has scratch words and NOTHING else left (test bounce, Copy of ..., SW V5 backup). A word of its own (Demo Days, Rough Diamond)
-# makes it another track. CONT are the words an EP or single folder adds to the track name.
-STRAY=re.compile(r'\b(?:test|bounce|demo|preview|temp|tmp|backup|copy|of|draft|rough|scratch)\b')
-CONT=re.compile(r'\b(?:ep|lp|album|single|project)\b')
-def clean(s,a):
-    # Each removal is skipped when it would leave nothing: the title Original, or an artist called Main, is never emptied to the same blank as another track.
-    for rx in (VERS,MIXW,VARW,re.compile(r'\b'+re.escape(a)+r'\b') if a else None):
-        r=' '.join(rx.sub(' ',s).split()) if rx else ''
-        if r: s=r
-    return ' '.join(s.split())
-def residual(f,a): return clean(norm(strip_num(stem(f))),a)
-def stray(f,a):
-    r=residual(f,a); return bool(STRAY.search(r)) and not STRAY.sub(' ',r).split()
-# A project folder name as (the whole track part, the part after the first " - "): the [Label] tail (or a trailing Project) and a leading track number are cut off.
-def ftail(name):
-    s=re.sub(r'\s*\[.*$','',name) if '[' in name else re.sub(r'\s+project\s*$','',name,flags=re.I)
-    s=strip_num(s.strip()); return norm(s),norm(re.split(r'\s-\s',s,maxsplit=1)[-1])
-def variants(n): return {w for w in OTHER if f' {w} ' in f' {n} '}
+    s=norm(strip_num(stem(f))); return bool(VERS.search(s)) and not VMIX.sub(' ',VERS.sub(' ',s)).split()
+# A file name without its decorations: the track number, (..) and [..] groups that hold no remix word, the artist once at the front and the
+# version tokens. A nameless file has only versions and mix tokens left (Artist - SW V3, Artist - (Extended Mix) SW V3): it is listed in the NOTE.
+def bare(f,a):
+    s=norm(re.sub(r'\([^)]*\)|\[[^\]]*\]',lambda m:m.group() if variants(norm(m.group())) else ' ',strip_num(stem(f))))
+    return ' '.join(VERS.sub(' ',s[len(a)+1:] if a and s.startswith(a+' ') else s).split())
+def nameless(f,a): return bool(VERS.search(norm(f))) and not VMIX.sub(' ',bare(f,a)).split()
+# A project folder name without its trailing [Label] Project (or Project) and a leading track number.
+def ftail(name): return strip_num(re.sub(r'(\s*\[[^\]]*\])?\s*project\s*$','',name.strip(),flags=re.I).strip())
 def lit(s): return ' '.join(stem(re.split(r'[\\/]',s.strip())[-1].strip()).lower().split())
 def scan(artist_key,title_key,must=None,exact=None):
-    # Returns ([(score, path), ...] best 3, [(reason, path), ...] for the newer files that were passed over and could be this track's).
-    a=norm(artist_key); t=norm(title_key); nm=norm(stem(must)) if must else ''
-    want_t={t,(a+' '+t).strip()}-{''}; want_m=keys(must) if must else set()
+    # Returns ([(score, path), ...] best 3, [(reason, path), ...]: the newer version-only (or nameless) files that were not chosen).
+    a=norm(artist_key); t=norm(title_key); nm=norm(stem(must)) if must else ''; at=(a+' '+t).strip()
+    want_t={t,at}-{''}; want_m=keys(must) if must else set()
     asked=variants(t+' '+nm); asked_junk=set(JUNK.findall(t+' '+nm)); out=[]; held=[]
-    me=clean(t,a); hv=variants(nm); goal=clean(t+' '+nm,a) if hv else me
     for name,p in idx:
         n=norm(name)
         if a in n and t in n and not name.endswith('.lnk'):
             mr=os.path.join(p,'MASTER RENDERS')
             try: fs=[f for f in os.listdir(mr) if f.lower().endswith('.wav') and os.path.isfile(os.path.join(mr,f))]
             except Exception: continue
-            rows=[(f,kn,bool(t) and f' {t} ' in f' {kn} ' and not variants(kn)-asked,bool(set(JUNK.findall(f.lower()))-asked_junk),vonly(f))
-                  for f,kn in ((f,norm(stem(f))) for f in fs)]
-            # ONE TRACK is decided from the folder, never from the query alone. All of: the folder name is exactly this track (the
-            # title, or artist and title, once the [Label] Project tail and a track number are cut off); it holds at least one titled
-            # file; the titled files are the searched track and nothing else (their words, once the artist, track number, version, mix
-            # and variant words are taken out, equal the searched title's; none is a remix or other variant that was not asked for);
-            # and no other file names another track. Junk (Acapella.wav) and scratch names (test bounce.wav) are left out of the
-            # decision; any other name without the title is another track (an EP folder named for its lead single still holds the
-            # other tracks; so does a real track called Demo Days). Then a version-only file is the track: it counts as named and
-            # takes the best mix of the titled files (its own mix, if its name has one). Anywhere else (an EP folder, a remix folder,
-            # another track's folder) it is never chosen.
-            fol,part=ftail(name)
-            def tit(kn): return bool(t) and f' {t} ' in f' {kn} '
-            titled=[r for r in rows if not r[4] and not r[3] and tit(r[1])]
-            other=[r for r in rows if not r[4] and not r[3] and not tit(r[1]) and not stray(r[0],a)]
-            one=(fol in want_t and bool(titled) and not other and all(r[2] for r in titled)
-                 and all(residual(r[0],a)==me for r in titled) and len({frozenset(variants(r[1])) for r in titled})<=1)
-            pref=max([mix(r[0]) for r in titled] or [0])
-            # A folder could be this track's only if its name carries the artist and the title as whole words, no variant that was not
-            # asked for and every remix-type word of the hint, and the words after the artist are the searched title (an EP or single
-            # may add EP, Single...): a remix folder is another track, Brian is not Ian, Love Me Right is not Love. Only such folders get a NOTE.
+            rows=[]
+            for f in fs:
+                kn=norm(stem(f)); vo=vonly(f)
+                rows.append((f,kn,bool(t) and f' {t} ' in f' {kn} ' and not variants(kn)-asked and not vo,bool(set(JUNK.findall(f.lower()))-asked_junk),vo,nameless(f,a)))
+            # A version-only file is a version of the searched track ONLY in an exact single-track folder: the folder name is exactly
+            # artist - title (no brackets, parentheses, & or other words), every file that is not junk is either a titled file (its name,
+            # without the decorations in bare(), is exactly the title) or version-only, and at least one titled file exists. Anything
+            # else (another title, an extra word, a copy, a typo, a remix word) and no version-only file is promoted: it is held and noted.
+            tail=ftail(name); live=[r for r in rows if not r[3]]; same={r[0] for r in live if bare(r[0],a)==t}
+            fok=norm(tail)==at and not re.search(r'[()\[\]&]',tail)
+            one=fok and bool(same) and all(r[0] in same or r[4] for r in live)
+            pref=max([mix(f) for f in same] or [0])
             whole=f' {a} ' in f' {n} ' and f' {t} ' in f' {n} '
-            may=(whole and not variants(n)-asked and hv<=variants(n)
-                 and ' '.join(CONT.sub(' ',clean(part,a)).split())==goal)
-            for f,kn,named,junk,vo in rows:
-                k=keys(f); fp=os.path.join(mr,f); up=vo and one
+            why=('ranked lower on mix, hint or exact title' if one else 'the folder holds other tracks' if fok else
+                 'the folder name is not exactly artist and title' if whole else 'the folder name does not name this track')
+            for f,kn,named,junk,vo,nl in rows:
+                k=keys(f); fp=os.path.join(mr,f); up=vo and one; own=bool(VMIX.search(kn))
                 try: mt=os.path.getmtime(fp)
                 except OSError: mt=0.0
-                # Newer files that may be passed over are collected BEFORE the must filter, so the hint cannot silence the NOTE: a
-                # version-only file, or an untitled file (a typo in the title, a scratch or backup copy) in a folder named for exactly this track.
-                if may and not junk and (vo or (fol in want_t and not tit(kn))):
-                    held.append((ver(f),mt,fp,'ranked lower on mix, hint or exact title' if up else 'cannot tell which track it belongs to'))
-                # The folder matched the filter only by substring (Marky for Mark, Lovely Day for Love): it may be another artist's or
-                # track's, so say so. A folder that carries both words but is positively another track (a remix, Love Me Right) says nothing.
-                elif vo and not whole:
-                    held.append((ver(f),mt,fp,'the folder name does not name this track'))
+                if nl and not junk: held.append((ver(f),mt,fp,why))      # before the must filter, so a hint cannot silence the NOTE
                 if nm and nm not in n and nm not in kn: continue
-                # Exact title stays ahead of the date: a newer "Title Remaster.wav" must not beat "Title.wav".
-                out.append(((not junk,named or up,bool(k&want_m),bool(nm) and nm in kn),pref if up and not mix(f) else mix(f),ver(f),bool(k&want_t),mt,fp))
+                # A version-only file with no mix word takes the folder's best mix; one with a mix word keeps its own. Exact title stays ahead of the date.
+                out.append(((not junk,named or up,bool(k&want_m),bool(nm) and nm in kn),pref if up and not own else mix(f),ver(f),bool(k&want_t),mt,fp))
     if exact:
         e=lit(exact); full=[o for o in out if lit(os.path.basename(o[-1]))==e]
         out=full or ([o for o in out if lit(strip_num(lit(os.path.basename(o[-1]))))==e] if strip_num(e)==e else [])
     out.sort(reverse=True); notes=[]
-    if out and not exact:
-        top=out[0]; fbest={}
+    if not exact:
+        top=out[0] if out else None; fbest={}
         for o in out: fbest.setdefault(os.path.dirname(o[-1]),o)
-        # Each file is compared with the best file of ITS OWN folder. One that lost inside its folder although newer is listed. The
-        # best file of its folder is listed only when it matters: when it is newer than the chosen file (another folder's file
-        # ranks higher on mix, hint or exact title). A file older than its own folder's best is not listed, however it compares globally.
+        # Each file is compared with the best file of ITS OWN folder (the best file of a folder, or one whose folder has none left, with the
+        # chosen file): a newer one is listed, never passed over in silence. With nothing chosen (a hint that matched nothing) all are listed.
         for v,mt,fp,why in sorted(held,reverse=True):
-            fb=fbest.get(os.path.dirname(fp))
-            if fp==top[-1] or fp in [q for _,q in notes]: continue
-            ref=fb if fb is not None and fb[-1]!=fp else top
-            if (v,mt)>(ref[2],ref[4]): notes.append((why,fp))
+            fb=fbest.get(os.path.dirname(fp)); ref=fb if fb is not None and fb[-1]!=fp else top
+            if (top is None or fp!=top[-1]) and fp not in [q for _,q in notes] and (ref is None or (v,mt)>(ref[2],ref[4])): notes.append((why,fp))
     return [(o[1]+o[2],o[-1]) for o in out[:3]],notes
 def resolve(artist_key,title_key,must=None,exact=None): return scan(artist_key,title_key,must,exact)[0]
 if __name__=='__main__':
@@ -149,7 +117,7 @@ if __name__=='__main__':
         r,notes=scan(str(a),str(t),must,exact)
         print(f"{a} - {t}:")
         for s,p in r: print(f"   [{s:>4}] {p[:2]} ...{p[-105:]}")
-        if not r: print("   NONE")
+        if not r: print("   NONE"+(f': no file matched the hint "{must}"' if must else ""))
         for why in dict.fromkeys(w for w,_ in notes):
             print(f"   NOTE: newer file not chosen, {why}:")
             for w,q in notes:
