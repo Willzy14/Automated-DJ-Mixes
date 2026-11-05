@@ -134,6 +134,18 @@ def _messages(capsys):
     return [ln for ln in (got.err + got.out).splitlines() if ln.strip()]
 
 
+def _short_refusal(lines):
+    """Check the shape of a refusal about the guards or --accept-shift and return its
+    lines: the first is `refresh refused: <what is wrong>` of at most 70 characters,
+    every other line is at most 70 characters unless it is only a command, and one line
+    says nothing was written."""
+    assert lines and lines[0].startswith("refresh refused: ") and len(lines[0]) <= 70, lines
+    for ln in lines[1:]:
+        assert ln.startswith("--accept-shift ") or len(ln) <= 70, ln
+    assert "nothing was written" in lines, lines
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # --reason is required
 # ---------------------------------------------------------------------------
@@ -829,29 +841,45 @@ def test_one_field_changed_on_every_pair_is_refused_then_accepted_and_recorded(e
     before = env.baseline.read_bytes()
     rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
     assert rc == 2 and env.baseline.read_bytes() == before and env.sidecars() == []
-    lines = _messages(capsys)
-    assert len(lines) == 1 and "pairs_changed" in lines[0] and "--accept-shift" in lines[0]
+    text = "\n".join(_short_refusal(_messages(capsys)))
+    assert "pairs_changed" in text and "--accept-shift pairs_changed" in text
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 0
     rec = json.loads(env.sidecars()[0].read_bytes())
     assert rec["accepted_shift"] is True and rec["guards_tripped_names"] == ["pairs_changed"]
     assert rec["diff_summary"]["pairs_changed"] == 200
 
 
-def test_a_baseline_that_grows_tenfold_is_refused_then_accepted_and_recorded(env, capsys):
+def test_a_baseline_that_grows_tenfold_between_old_tracks_is_refused_then_accepted_and_recorded(
+        env, capsys):
     # (round 5: growth by NEW tracks is expected now, so this grows between the 15 tracks
-    # the old baseline already has: 21 of their 210 pairs become all 210)
+    # the old baseline already has: 21 of their 210 pairs become all 210. Round 6 renamed
+    # it: the name used to claim the refusal for any tenfold growth.)
     env.write_old(_grid(_pairs(15)[:21], []))
     new = _grid(_pairs(15), [])                                  # 210 pairs, 189 of them new
     before = env.baseline.read_bytes()
     rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
     assert rc == 2 and env.baseline.read_bytes() == before and env.sidecars() == []
-    lines = _messages(capsys)
-    assert len(lines) == 1 and "pairs_added" in lines[0] and "--accept-shift" in lines[0]
+    text = "\n".join(_short_refusal(_messages(capsys)))
+    assert "pairs_added" in text and "--accept-shift pairs_added" in text
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 0
     rec = json.loads(env.sidecars()[0].read_bytes())
     assert rec["accepted_shift"] is True and rec["guards_tripped_names"] == ["pairs_added"]
     assert rec["diff_summary"]["pairs_added"] == 189
     assert rec["diff_summary"]["pairs_added_unexplained"] == 189
+
+
+def test_a_baseline_that_grows_from_15_to_45_tracks_needs_no_flag(env):
+    # the original shape of the tenfold test: 30 new tracks, 210 pairs become 1980
+    env.write_old(_grid(_pairs(15), []))
+    new = _grid(_pairs(45), [])
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    summary = rec["diff_summary"]
+    assert summary["pairs_added"] == 1770 == summary["pairs_added_new_track"]
+    assert summary["pairs_added_unexplained"] == 0 and summary["old_tracks_gone"] == 0
+    assert rec["guards_tripped"] == [] and rec["guards_accepted"] == []
+    assert rec["accept_shift_flag"] is False
+    assert json.loads(env.baseline.read_bytes()) == new
 
 
 def test_the_very_first_baseline_is_not_held_back_by_the_added_pairs_guard(env):
@@ -983,8 +1011,8 @@ def test_a_50_pair_shift_to_standard_is_refused_without_accept_shift(env, capsys
     rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
     assert rc != 0
     assert env.baseline.read_bytes() == before_bytes and env.files() == before_files
-    lines = _messages(capsys)
-    assert len(lines) == 1 and "--accept-shift" in lines[0]
+    text = "\n".join(_short_refusal(_messages(capsys)))
+    assert "policy_shift" in text and "--accept-shift" in text
 
 
 def test_a_50_pair_shift_is_accepted_with_accept_shift_and_the_sidecar_says_so(env):
@@ -996,7 +1024,10 @@ def test_a_50_pair_shift_is_accepted_with_accept_shift_and_the_sidecar_says_so(e
                     "policy_shift,overlap_policy_changes,pairs_changed"], new) == 0
     rec = json.loads(env.sidecars()[0].read_bytes())
     assert rec["accepted_shift"] is True and rec["accept_shift_flag"] is True
-    assert len(rec["guards_tripped"]) >= 1
+    assert rec["guards_tripped_names"] == [
+        "policy_shift", "overlap_policy_changes", "pairs_changed"]
+    assert rec["guards_accepted"] == [
+        "policy_shift", "overlap_policy_changes", "pairs_changed"]
     assert rec["policy_shift"]["named_landmark_64_to_standard_48"] == 50
     assert json.loads(env.baseline.read_bytes()) == new
 
@@ -1085,14 +1116,17 @@ def test_all_ok_pairs_flipping_to_raise_is_refused_then_accepted_and_recorded(en
     rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
     assert rc != 0
     assert env.baseline.read_bytes() == before_bytes and env.files() == before_files
-    lines = _messages(capsys)
-    assert len(lines) == 1 and "status_flips" in lines[0] and "--accept-shift" in lines[0]
+    text = "\n".join(_short_refusal(_messages(capsys)))
+    assert "status_flips" in text and "--accept-shift" in text
     # (round 5: three guards trip here, so the bare flag is not enough; name them)
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
                     "status_flips,overlap_policy_changes,pairs_changed"], new) == 0
     rec = json.loads(env.sidecars()[0].read_bytes())
     assert rec["accepted_shift"] is True
-    assert "status_flips" in rec["guards_tripped_names"]
+    assert rec["guards_tripped_names"] == [
+        "status_flips", "overlap_policy_changes", "pairs_changed"]
+    assert rec["guards_accepted"] == [
+        "status_flips", "overlap_policy_changes", "pairs_changed"]
     assert rec["diff_summary"]["changed_by_field"]["status_flip"] == 110
     assert json.loads(env.baseline.read_bytes()) == new
 
@@ -1109,14 +1143,16 @@ def test_overlap_policy_changes_of_any_kind_are_refused_then_accepted_and_record
     before_bytes = env.baseline.read_bytes()
     rc = env.run(["--refresh", "--reason", GOOD_REASON], new)
     assert rc != 0 and env.baseline.read_bytes() == before_bytes and env.sidecars() == []
-    lines = _messages(capsys)
-    assert len(lines) == 1 and "overlap_policy_changes" in lines[0]
+    text = "\n".join(_short_refusal(_messages(capsys)))
+    assert "overlap_policy_changes" in text
     # (round 5: two guards trip here, so the bare flag is not enough; name them)
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
                     "overlap_policy_changes,pairs_changed"], new) == 0
     rec = json.loads(env.sidecars()[0].read_bytes())
     assert rec["accepted_shift"] is True
-    assert "overlap_policy_changes" in rec["guards_tripped_names"]    # (60 changed pairs trips pairs_changed too)
+    # (60 changed pairs trips pairs_changed too)
+    assert rec["guards_tripped_names"] == ["overlap_policy_changes", "pairs_changed"]
+    assert rec["guards_accepted"] == ["overlap_policy_changes", "pairs_changed"]
     assert rec["diff_summary"]["changed_by_field"]["overlap_policy"] == 60
 
 
@@ -1543,7 +1579,10 @@ def test_cli_every_pair_raising_is_refused_then_accepted_with_the_flag(scratch):
     assert accepted.returncode == 0, accepted.stderr + accepted.stdout
     recs = [json.loads(p.read_bytes()) for p in scratch.sidecars()]
     flagged = [r for r in recs if r["accepted_shift"]]
-    assert len(flagged) == 1 and "status_flips" in flagged[0]["guards_tripped_names"]
+    assert len(flagged) == 1
+    assert flagged[0]["guards_tripped_names"] == [
+        "status_flips", "overlap_policy_changes", "pairs_changed"]
+    assert flagged[0]["guards_accepted"] == flagged[0]["guards_tripped_names"]
 
 
 def test_cli_dropping_a_track_removes_more_than_5_percent_and_is_refused(scratch):
@@ -1577,6 +1616,12 @@ ALL_GUARDS = ("policy_shift", "status_flips", "overlap_policy_changes",
 
 
 def _refusal(capsys):
+    """The refusal text (its lines joined), after checking it is short (_short_refusal)."""
+    return "\n".join(_short_refusal(_messages(capsys)))
+
+
+def _plain_refusal(capsys):
+    """The one line of a refusal that is not about the guards or --accept-shift."""
     lines = _messages(capsys)
     assert len(lines) == 1, lines
     return lines[0]
@@ -1737,18 +1782,20 @@ def test_two_guards_and_the_bare_flag_are_refused_with_one_plain_line(env, capsy
 
 
 @pytest.mark.parametrize("given,missing", [
-    ("pairs_changed", "pairs_added"),
-    ("pairs_added", "pairs_changed"),
-    ("policy_shift", "pairs_changed, pairs_added"),
+    ("pairs_changed", ["pairs_added"]),
+    ("pairs_added", ["pairs_changed"]),
+    ("policy_shift", ["pairs_changed", "pairs_added"]),
 ])
 def test_accept_shift_with_names_refuses_every_guard_it_does_not_name(
         env, capsys, given, missing):
     old, new = _two_guards(env)
     before = _snapshot(env.dir)
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift", given], new) == 2
-    line = _refusal(capsys)
-    assert f"not accepted: {missing}" in line, line
-    assert "--accept-shift pairs_changed,pairs_added" in line, line
+    lines = _short_refusal(_messages(capsys))
+    count = f"{len(missing)} guard" + ("" if len(missing) == 1 else "s")
+    assert lines[0] == f"refresh refused: not accepted: {count}", lines
+    assert [ln for ln in lines if ln.startswith("  ")] == [f"  {g}" for g in missing]
+    assert "--accept-shift pairs_changed,pairs_added" in lines, lines
     assert _snapshot(env.dir) == before and env.sidecars() == []
 
 
@@ -1805,7 +1852,7 @@ def test_a_repeated_accept_shift_is_refused_before_anything_is_computed(env, cap
             "--accept-shift", "pairs_changed"]
     assert env.run(argv, _grid(_pairs(5), [])) == 2
     assert env.called == [] and env.sidecars() == []
-    line = _refusal(capsys)
+    line = _plain_refusal(capsys)
     assert "--accept-shift" in line and "more than once" in line, line
 
 
@@ -1847,6 +1894,21 @@ def test_the_bare_flag_still_works_when_exactly_one_guard_tripped(env):
     assert rec["accepted_shift"] is True and rec["accept_shift_flag"] is True
 
 
+@pytest.mark.parametrize("empty", [[], (), set()], ids=["list", "tuple", "set"])
+def test_an_empty_list_of_names_is_no_flag_even_when_exactly_one_guard_tripped(env, empty):
+    # (round 6) an empty iterable must not read as the bare flag, which WOULD pass here
+    old = env.write_old(_grid(_pairs(15)[:21], []))
+    new = _grid(_pairs(15), [])
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new),
+                                       BR.diff_summary(old, new))) == ["pairs_added"]
+    before = _snapshot(env.dir)
+    with pytest.raises(BR.RefreshRefused):
+        _refresh_api(env, new, empty)
+    assert _snapshot(env.dir) == before and env.sidecars() == []
+    done, rec = _refresh_api(env, new, True)             # the bare flag does pass
+    assert rec["guards_accepted"] == ["pairs_added"]
+
+
 def test_the_record_says_guards_accepted_is_empty_when_nothing_tripped(env):
     pairs = _pairs(11)
     for given in (False, True, "all", ["pairs_added"]):
@@ -1861,7 +1923,7 @@ def test_the_record_says_guards_accepted_is_empty_when_nothing_tripped(env):
 def test_an_api_refusal_for_a_missing_name_or_the_bare_flag_writes_nothing(env):
     old, new = _two_guards(env)
     before = _snapshot(env.dir)
-    with pytest.raises(BR.RefreshRefused, match="not accepted: pairs_added"):
+    with pytest.raises(BR.RefreshRefused, match="not accepted: 1 guard"):
         _refresh_api(env, new, ["pairs_changed"])
     with pytest.raises(BR.RefreshRefused, match="2 guards tripped"):
         _refresh_api(env, new, True)
@@ -1875,7 +1937,7 @@ def test_all_does_not_override_duplicate_pairs(env, capsys):
     dup = _payload([_ok_row(a, b) for a, b in pairs] * 2)
     for flag in ("all", "pairs_added,pairs_changed"):
         assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift", flag], dup) == 2
-        line = _refusal(capsys)
+        line = _plain_refusal(capsys)
         assert "duplicate" in line, line
     assert env.baseline.read_bytes() == before and env.sidecars() == []
 
@@ -1910,6 +1972,10 @@ def test_the_docs_describe_the_new_rules():
     assert "guards_accepted" in BR.__doc__ and "not accepted" in BR.__doc__
     assert "duplicate" in BR.__doc__
     assert "clears all of them at once" not in BR.guard_trips.__doc__
+    for doc in (BR.__doc__, BR.guard_trips.__doc__, BR.diff_summary.__doc__):
+        assert "replacing a track is not growth" in doc.lower(), doc
+    assert "ONE plain line" not in BR.RefreshRefused.__doc__
+    assert "70 characters" in BR.RefreshRefused.__doc__ and "70 characters" in BR.__doc__
     help_text = " ".join(BR._build_parser().format_help().split())
     assert "--accept-shift" in help_text and "pairs_added" in help_text, help_text
     assert "all" in help_text and "exactly one" in help_text, help_text
@@ -1932,7 +1998,7 @@ def test_cli_a_new_stem_needs_no_flag_and_a_second_guard_needs_its_name(tmp_path
     bare = s.refresh("--reason", "twelve pairs take a landmark, bare flag", "--accept-shift")
     assert bare.returncode == 2 and s.tree() == before
     lines = [ln for ln in (bare.stderr + bare.stdout).splitlines() if ln.strip()]
-    assert len(lines) == 1 and "2 guards tripped" in lines[0], lines
+    assert "2 guards tripped" in _short_refusal(lines)[0], lines
     named = s.refresh("--reason", "twelve pairs take a landmark, named guards",
                       "--accept-shift", "policy_shift,overlap_policy_changes")
     assert named.returncode == 0, named.stderr + named.stdout
@@ -1940,6 +2006,183 @@ def test_cli_a_new_stem_needs_no_flag_and_a_second_guard_needs_its_name(tmp_path
     accepted = [r for r in recs if r["guards_accepted"]]
     assert len(accepted) == 1
     assert accepted[0]["guards_accepted"] == ["policy_shift", "overlap_policy_changes"]
+
+
+# ---------------------------------------------------------------------------
+# Round 6: replacing a track is not growth; refusals are a few short lines
+# ---------------------------------------------------------------------------
+def _pairs_of(names):
+    return [(a, b) for a in names for b in names if a != b]
+
+
+def _track_names(count, replace=None):
+    """T00, T01, ... and, when `replace` names one of them, that track under a new name."""
+    names = [f"T{i:02d}" for i in range(count)]
+    return [f"{n} renamed" if n == replace else n for n in names]
+
+
+def test_renaming_1_of_41_tracks_is_not_growth_and_needs_a_flag(env, capsys):
+    old = env.write_old(_grid(_pairs_of(_track_names(41)), []))
+    new = _grid(_pairs_of(_track_names(41, replace="T20")), [])
+    summary = BR.diff_summary(old, new)
+    assert _counts_of_added(summary) == (80, 0, 80)
+    assert summary["pairs_removed"] == 80 and summary["old_tracks_gone"] == 1
+    shift = BR.policy_shift(old, new)
+    # 80 of 1640 is 4.9 percent removed: only the added pairs notice the rename
+    assert _guard_names(BR.guard_trips(shift, summary)) == ["pairs_added"]
+    before = _snapshot(env.dir)
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert lines[0] == "refresh refused: 1 guard tripped", lines
+    assert "  pairs_added" in lines and "--accept-shift pairs_added" in lines, lines
+    assert "a track is gone: replacing a track is not growth" in lines, lines
+    assert _snapshot(env.dir) == before
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
+                    "pairs_added"], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["guards_accepted"] == ["pairs_added"]
+    assert rec["diff_summary"]["old_tracks_gone"] == 1
+
+
+def test_renaming_1_of_50_tracks_whose_pairs_now_raise_is_not_growth(env, capsys):
+    old = env.write_old(_grid(_pairs_of(_track_names(50)), []))
+    renamed = _track_names(50, replace="T20")
+    new = _payload([_raise_row(a, b) if "T20 renamed" in (a, b) else _ok_row(a, b)
+                    for a, b in _pairs_of(renamed)])
+    summary = BR.diff_summary(old, new)
+    assert _counts_of_added(summary) == (98, 0, 98) and summary["old_tracks_gone"] == 1
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == ["pairs_added"]
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert "  pairs_added" in lines, lines
+    assert env.sidecars() == []
+
+
+def test_swapping_a_track_for_its_newer_version_trips_added_and_removed(env, capsys):
+    names = _track_names(20)
+    swapped = _track_names(20, replace="T05")
+    old = env.write_old(_grid(_pairs_of(names), []))
+    new = _grid(_pairs_of(swapped), [])
+    summary = BR.diff_summary(old, new)
+    assert _counts_of_added(summary) == (38, 0, 38) and summary["pairs_removed"] == 38
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == [
+        "pairs_added", "pairs_removed"]
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert lines[0] == "refresh refused: 2 guards tripped", lines
+    # naming only one of the two still refuses and says which is not accepted
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
+                    "pairs_added"], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert lines[0] == "refresh refused: not accepted: 1 guard", lines
+    assert [ln for ln in lines if ln.startswith("  ")] == ["  pairs_removed"], lines
+    assert env.sidecars() == []
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
+                    "pairs_added,pairs_removed"], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["guards_accepted"] == ["pairs_added", "pairs_removed"]
+    assert _counts_of_added(rec["diff_summary"]) == (38, 0, 38)
+    assert rec["diff_summary"]["old_tracks_gone"] == 1
+    assert json.loads(env.baseline.read_bytes()) == new
+
+
+def test_pure_growth_of_one_track_in_a_50_track_corpus_still_needs_no_flag(env):
+    old = env.write_old(_grid(_pairs_of(_track_names(50)), []))
+    new = _grid(_pairs_of(_track_names(51)), [])
+    summary = BR.diff_summary(old, new)
+    assert _counts_of_added(summary) == (100, 100, 0) and summary["old_tracks_gone"] == 0
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 0
+    rec = json.loads(env.sidecars()[0].read_bytes())
+    assert rec["guards_tripped"] == [] and rec["guards_accepted"] == []
+
+
+def test_a_track_that_is_gone_makes_every_added_pair_unexplained():
+    old = _payload([_ok_row(a, b) for a, b in _pairs_of(["a", "b", "c"])])
+    grown = _payload([_ok_row(a, b) for a, b in _pairs_of(["a", "b", "c", "d"])])
+    swapped = _payload([_ok_row(a, b) for a, b in _pairs_of(["a", "b", "d"])])
+    s = BR.diff_summary(old, grown)
+    assert _counts_of_added(s) == (6, 6, 0) and s["old_tracks_gone"] == 0
+    s = BR.diff_summary(old, swapped)
+    assert _counts_of_added(s) == (4, 0, 4) and s["old_tracks_gone"] == 1
+    assert BR.diff_summary(None, swapped)["old_tracks_gone"] == 0
+
+
+def _all_six(env):
+    """20 tracks. 350 old pairs: 12 of them move named -> standard, 12 flip to raise, 26
+    change a score; 30 pairs between the same tracks are added and 30 other pairs are
+    gone. All six guards trip."""
+    every = _pairs(20)
+    old_pairs = every[30:]
+    old_index = {pair: i for i, pair in enumerate(old_pairs)}
+    old = env.write_old(_grid(old_pairs, set(old_pairs[:12])))
+    rows = []
+    for a, b in every[:-30]:
+        i = old_index.get((a, b))                    # None: an added pair
+        if i is not None and 12 <= i < 24:
+            rows.append(_raise_row(a, b))
+        elif i is not None and 24 <= i < 50:
+            rows.append(_ok_row(a, b, score=99))
+        else:
+            rows.append(_ok_row(a, b))
+    return old, _payload(rows)
+
+
+def test_every_guard_refusal_is_a_few_short_lines_even_with_all_six_guards(env, capsys):
+    old, new = _all_six(env)
+    shift, summary = BR.policy_shift(old, new), BR.diff_summary(old, new)
+    assert _guard_names(BR.guard_trips(shift, summary)) == list(ALL_GUARDS)
+    before = _snapshot(env.dir)
+    cases = [
+        ([], "refresh refused: 6 guards tripped", ALL_GUARDS),
+        (["--accept-shift"], "refresh refused: bare --accept-shift, 6 guards tripped",
+         ALL_GUARDS),
+        (["--accept-shift", "policy_shift"], "refresh refused: not accepted: 5 guards",
+         ALL_GUARDS[1:]),
+    ]
+    for flag_args, first, listed in cases:
+        assert env.run(["--refresh", "--reason", GOOD_REASON, *flag_args], new) == 2
+        lines = _short_refusal(_messages(capsys))
+        assert lines[0] == first, lines
+        assert [ln for ln in lines if ln.startswith("  ")] == [f"  {g}" for g in listed]
+        assert "--accept-shift " + ",".join(ALL_GUARDS) in lines, lines
+        assert lines[-1] == "--accept-shift all", lines
+        assert any(ln.startswith("diff: ") and "30 added" in ln for ln in lines), lines
+        assert _snapshot(env.dir) == before and env.sidecars() == []
+
+
+def test_the_refusal_for_one_guard_is_short_and_names_the_exact_flag(env, capsys):
+    old = env.write_old(_grid(_pairs(15)[:21], []))
+    assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(_pairs(15), [])) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert lines[0] == "refresh refused: 1 guard tripped", lines
+    assert lines[1] == "  pairs_added" and lines[-1] == "--accept-shift pairs_added", lines
+    assert not any("every guard" in ln or ln == "--accept-shift all" for ln in lines)
+
+
+@pytest.mark.parametrize("value,facts", [
+    ("bogus", ["  unknown name 'bogus'"]),
+    ("x" * 100, ["  unknown name '" + "x" * 37 + "...'"]),
+    ("all,pairs_added", ["  all cannot be mixed with names"]),
+    ("", ["  an empty name"]),
+    ("a,,all", ["  unknown name 'a'", "  an empty name", "  all cannot be mixed with names"]),
+])
+def test_a_usage_error_is_a_few_short_lines_with_the_valid_names(env, capsys, value, facts):
+    env.write_old(_grid(_pairs(5), []))
+    assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift", value],
+                   _grid(_pairs(5), [])) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert lines[0] == "refresh refused: bad --accept-shift value", lines
+    assert lines[1:1 + len(facts)] == facts, lines
+    assert lines[1 + len(facts):] == ["valid names:", *[f"  {g}" for g in ALL_GUARDS],
+                                      "  all", "nothing was written"], lines
+
+
+def test_the_api_type_error_is_a_few_short_lines():
+    with pytest.raises(BR.RefreshRefused) as info:
+        BR._accept_plan(5)
+    lines = _short_refusal(str(info.value).splitlines())
+    assert lines[0] == "refresh refused: bad accept_shift value"
+    assert len(lines) == 3
 
 
 # ---------------------------------------------------------------------------
