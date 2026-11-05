@@ -1038,7 +1038,7 @@ def run_refresh_cli(argv, baseline, build_payload, input_paths, root=None,
     s, sh = result["summary"], result["shift"]
     _say(f"baseline refreshed: {n} pairs ({ok} align, {n - ok} raise)")
     _say(f"diff: {s['pairs_changed']} changed, {s['pairs_added']} added "
-         f"({s['pairs_added_new_track']} for new tracks, "
+         f"({s['pairs_added_new_track']} expected as growth, "
          f"{s['pairs_added_unexplained']} unexplained), "
          f"{s['pairs_removed']} removed; policy moves: "
          f"{sh['named_landmark_64_to_standard_48']} to {POLICY_STANDARD}, "

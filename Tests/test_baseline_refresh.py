@@ -1670,7 +1670,7 @@ def test_a_new_track_and_its_40_pairs_need_no_flag(env, capsys):
     assert rec["accepted_shift"] is False and rec["accept_shift_flag"] is False
     assert json.loads(env.baseline.read_bytes()) == new
     lines = _messages(capsys)
-    assert any("40 added (40 for new tracks, 0 unexplained)" in ln for ln in lines), lines
+    assert any("40 added (40 expected as growth, 0 unexplained)" in ln for ln in lines), lines
 
 
 def test_a_remix_next_to_its_original_is_a_new_track_so_its_pairs_are_explained(env):
@@ -2016,7 +2016,7 @@ def test_cli_a_new_stem_needs_no_flag_and_a_second_guard_needs_its_name(tmp_path
     (s.stems / "T13__stemenv.npz").write_bytes(b"npz T13")
     grown = s.refresh("--reason", "a 14th track joined the corpus, its pairs are new")
     assert grown.returncode == 0, grown.stderr + grown.stdout
-    assert "26 added (26 for new tracks, 0 unexplained)" in grown.stdout, grown.stdout
+    assert "26 added (26 expected as growth, 0 unexplained)" in grown.stdout, grown.stdout
     assert json.loads(s.baseline.read_bytes())["n_pairs"] == 182
     # 12 pairs among the old tracks now take a landmark: two guards trip
     s.control(named=s.pairs()[:12], raising=[])
