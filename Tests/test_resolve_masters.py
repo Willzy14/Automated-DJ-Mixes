@@ -725,10 +725,11 @@ def test_in_an_ep_folder_a_version_only_file_does_not_win_but_the_command_line_s
     lines = out.splitlines()
     assert lines[0] == "Artist - Better When:" and lines[1].endswith("Artist - Better When (Extended Mix) SW V2.wav")
     notes = [ln for ln in lines if ln.strip().startswith("NOTE")]
-    assert len(notes) == 1 and "not chosen" in notes[0] and "the folder name is not exactly artist and title" in notes[0], out
+    assert len(notes) == 1 and "not chosen" in notes[0], out
     assert "several tracks" not in out                            # the old wording said so even when the folder held one track
     at = lines.index(notes[0])
-    assert at > 1 and lines[at + 1].strip().endswith("MASTER AMENDED V3.wav")        # the file on its own line, after the result lines
+    assert lines[at + 1].strip() == "Why: the folder name is not exactly artist and title"            # one fact per line: the reason
+    assert at > 1 and lines[at + 2].strip().endswith("MASTER AMENDED V3.wav")        # then the file on its own line, after the result lines
 
 
 def test_the_note_names_every_newer_version_only_file_once(tmp_path):
@@ -856,9 +857,14 @@ def _library(tmp_path: Path, spec):
 
 
 def _note_block(out: str):
-    """From the command line output: the NOTE header lines, and the file lines (6 spaces in) listed under them."""
+    """From the command line output: the NOTE headers (each joined with its Why line), and the file lines (6 spaces in) listed under them."""
     lines = out.splitlines()
-    return [ln.strip() for ln in lines if ln.strip().startswith("NOTE")], [ln.strip() for ln in lines if ln.startswith("      ")]
+    heads = []
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith("NOTE"):
+            why = lines[i + 1].strip() if i + 1 < len(lines) and lines[i + 1].strip().startswith("Why:") else ""
+            heads.append((ln.strip() + " " + why).strip())
+    return heads, [ln.strip() for ln in lines if ln.startswith("      ")]
 
 
 def test_r2_a_longer_title_folder_never_stands_in_for_the_shorter_title(tmp_path):
@@ -1067,7 +1073,8 @@ def test_d4c_scratch_backup_and_typo_names_never_win_and_are_named(tmp_path):
     assert [os.path.basename(x) for x in listed] == ["Copy of MASTER AMENDED V4.wav", "SW V5 backup.wav", "Artist - Ttile Rough SW V3.wav"]
 
 
-@pytest.mark.parametrize("folder", ["Artist - Title Project", "01 Artist - Title [Label] Project", "02. Artist - Title [Label] Project"])
+@pytest.mark.parametrize("folder", ["Artist - Title Project", "01 Artist - Title [Label] Project", "02. Artist - Title [Label] Project",
+                                    "1 Artist - Title [Label] Project", "01 - Artist - Title [Label] Project"])
 def test_a_trailing_project_or_a_leading_track_number_in_the_folder_name_is_cut_off(tmp_path, folder):
     mod = one_folder(tmp_path, folder, ["Artist - Title SW V1.wav", "MASTER AMENDED V3.wav"])
     assert names(mod.resolve("Artist", "Title"))[0] == "MASTER AMENDED V3.wav"
@@ -1122,8 +1129,9 @@ def test_the_note_prints_the_whole_path_on_its_own_line(tmp_path):
     lines = _run_cli(tools, [["Artist", "Better When"]]).splitlines()
     at = [i for i, ln in enumerate(lines) if "NOTE" in ln]
     assert len(at) == 1 and len(lines[at[0]]) <= 100 and not lines[at[0]].rstrip().endswith(".wav")      # one short plain line first
-    assert lines[at[0] + 1] == "      " + str(mr / "MASTER AMENDED V3.wav")                            # then the whole path, nothing cut
-    assert folder in lines[at[0] + 1] and len(lines[at[0] + 1].strip()) > 105
+    assert lines[at[0] + 1].strip().startswith("Why:")                                                     # then the reason on its own line
+    assert lines[at[0] + 2] == "      " + str(mr / "MASTER AMENDED V3.wav")                            # then the whole path, nothing cut
+    assert folder in lines[at[0] + 2] and len(lines[at[0] + 2].strip()) > 105
 
 
 def test_two_tracks_whose_names_are_mix_words_are_not_one_track(tmp_path):
@@ -1209,12 +1217,47 @@ def test_e5_a_scratch_or_copy_name_makes_the_folder_not_exact(tmp_path, other):
     assert len(heads) == 1 and "the folder may hold other tracks" in heads[0] and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
 
 
-@pytest.mark.parametrize("name", ["Artist - SW V3.wav", "Artist - (Extended Mix) SW V3.wav", "01 Artist - MASTER AMENDED V3.wav"])
-def test_a_file_with_only_versions_and_decorations_is_named_in_the_note_and_never_promoted(tmp_path, name):
+@pytest.mark.parametrize("name", ["Artist - SW V3.wav", "Artist - (Extended Mix) SW V3.wav", "01 Artist - MASTER AMENDED V3.wav",
+                                  "Artist - MASTER AMENDED V3.wav", "01 - Artist - MASTER AMENDED V3.wav", "Artist - Extended SW V3.wav"])
+def test_an_artist_prefixed_version_only_file_is_promoted_in_an_exact_folder(tmp_path, name):
     mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav", name])
-    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
-    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
-    assert len(heads) == 1 and "the folder may hold other tracks" in heads[0] and len(listed) == 1 and listed[0].endswith(name)
+    assert names(mod.resolve("Artist", "Title"))[0] == name                              # the newest version of the one track
+    assert _note_block(_run_cli(tools, [["Artist", "Title"]])) == ([], [])
+
+
+@pytest.mark.parametrize("name", ["Artist - SW V3.wav", "Artist - (Extended Mix) SW V3.wav", "01 Artist - MASTER AMENDED V3.wav", "Artist - MASTER AMENDED V3.wav"])
+def test_an_artist_prefixed_version_only_file_in_an_ep_folder_is_held_and_noted(tmp_path, name):
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Better When EP [Label] Project", ["Artist - Better When SW V1.wav", name])
+    assert names(mod.resolve("Artist", "Better When"))[0] == "Artist - Better When SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Better When"]]))
+    assert len(heads) == 1 and "the folder name is not exactly artist and title" in heads[0]
+    assert len(listed) == 1 and listed[0].endswith(name)
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("Artist - MASTER AMENDED V3.wav", True), ("01 Artist - SW V2.wav", True), ("Artist - Extended SW V3.wav", True),
+    ("Artist - (Extended Mix) SW V3.wav", True), ("MASTER AMENDED V3.wav", True),
+    ("Artist - Title SW V3.wav", False), ("Artist - (Part 2) SW V3.wav", False), ("Artist - Club SW V3.wav", False), ("Artist - Artist SW V3.wav", False),
+])
+def test_version_only_is_one_rule_with_the_artist_prefix_taken_off_once(tmp_path, name, expected):
+    mod, _ = load_resolver(tmp_path, [])
+    assert bool(mod.vonly(name, "artist")) is expected                                   # one rule: the NOTE and the promotion use this same test
+
+
+def test_an_artist_prefixed_extended_file_keeps_its_own_mix(tmp_path):
+    mod = one_folder(tmp_path, "Artist - Title [Label] Project", ["Artist - Title (Extended Mix) SW V1.wav", "Artist - Extended SW V3.wav"])
+    r = mod.resolve("Artist", "Title")
+    assert names(r) == ["Artist - Extended SW V3.wav", "Artist - Title (Extended Mix) SW V1.wav"] and [sc for sc, _ in r] == [43, 41]
+
+
+def test_the_artist_word_inside_the_title_still_behaves(tmp_path):
+    # Artist Artist, title Artist Song: the prefix is taken off once, so the title keeps its own Artist word and the master is still promoted.
+    files = ["Artist - Artist Song SW V1.wav", "Artist - MASTER AMENDED V3.wav"]
+    mod = one_folder(tmp_path, "Artist - Artist Song [Label] Project", files)
+    assert names(mod.resolve("Artist", "Artist Song"))[0] == "Artist - MASTER AMENDED V3.wav"
+    # and a track called Artist Song is not the title Song
+    mod2 = one_folder(tmp_path / "b", "Artist - Song [Label] Project", ["Artist - Artist Song SW V1.wav", "Artist - MASTER AMENDED V3.wav"])
+    assert names(mod2.resolve("Artist", "Song"))[0] == "Artist - Artist Song SW V1.wav"
 
 
 def test_a_must_hint_that_matches_nothing_says_so_and_still_prints_the_note(tmp_path):
@@ -1295,9 +1338,59 @@ def test_the_library_refuses_an_empty_artist_or_title(tmp_path, artist, title):
 
 
 def test_a_folder_named_only_for_the_title_is_not_exact(tmp_path):
-    # The artist is in the label name so the folder is scanned, but the name is only the title: nothing is promoted and the file is named.
+    # The artist is in the label name so the folder is scanned, but the name is only the title (the artist is not in the cut name): nothing is promoted and the file is named.
     mod, tools, _ = _folder_and_tools(tmp_path, "Title [Artist Records] Project", ["Title SW V1.wav", "MASTER AMENDED V3.wav"])
     assert names(mod.resolve("Artist", "Title"))[0] == "Title SW V1.wav"
     heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
-    assert len(heads) == 1 and "the folder name is not exactly artist and title" in heads[0]
+    assert len(heads) == 1 and "the folder name does not name this track" in heads[0]
     assert len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
+
+
+# --- round 6: version-only from bare(), the NONE line, a bare track number in a folder name, whole from the cut name, short lines ---
+
+def test_a_number_in_the_title_or_in_a_numeric_artist_is_not_cut_from_the_folder_name(tmp_path):
+    mod = one_folder(tmp_path, "Artist - 7 Seconds [Label] Project", ["Artist - 7 Seconds SW V1.wav", "MASTER AMENDED V3.wav"])
+    assert names(mod.resolve("Artist", "7 Seconds"))[0] == "MASTER AMENDED V3.wav"
+    mod2 = one_folder(tmp_path / "b", "50 Cent - Title [Label] Project", ["50 Cent - Title SW V1.wav", "MASTER AMENDED V3.wav"])
+    assert names(mod2.resolve("50 Cent", "Title"))[0] == "MASTER AMENDED V3.wav"
+
+
+def test_the_none_line_names_what_matched_nothing(tmp_path):
+    _, tools, _ = _folder_and_tools(tmp_path, "Artist - Title [Label] Project", ["Artist - Title SW V1.wav"])
+    hint = _run_cli(tools, [["Artist", "Title", "No Such Hint"]])
+    assert 'NONE: no file matched the hint "No Such Hint"' in hint and "exact filename" not in hint
+    exact = _run_cli(tools, [["Artist", "Title", None, "No Such File"]])
+    assert 'NONE: no file matched the exact filename "No Such File"' in exact and "the hint" not in exact
+    both = _run_cli(tools, [["Artist", "Title", "No Such Hint", "No Such File"]])
+    assert 'NONE: no file matched the hint "No Such Hint"' in both and 'NONE: no file matched the exact filename "No Such File"' in both
+    one = _run_cli(tools, [["Artist", "Title", "Title", "No Such File"]])             # the hint matched, the exact filename emptied the list
+    assert 'NONE: no file matched the exact filename "No Such File"' in one and "the hint" not in one
+    none = _run_cli(tools, [["Nobody", "Title", "Some Hint"]])                         # no folder at all: nothing to say about the hint
+    assert "NONE" in none and "matched" not in none
+
+
+def test_whole_comes_from_the_cut_folder_name_so_a_title_word_in_the_label_does_not_count(tmp_path):
+    mod, tools = _library(tmp_path, {
+        "Artist - Title [Label] Project": ["Artist - Title SW V1.wav"],
+        "Artist - Song [Title Records] Project": ["MASTER AMENDED V3.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and "the folder name does not name this track" in heads[0]
+    assert len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav") and "Artist - Song" in listed[0]
+
+
+def test_every_note_line_that_is_not_a_path_is_short(tmp_path):
+    # One search that makes all five reasons: every NOTE and Why line has at most 70 characters.
+    mod, tools = _library(tmp_path, {
+        "Artist - Title [Label A] Project": ["Artist - Title (Radio Edit) SW V1.wav", "MASTER AMENDED V3.wav"],
+        "Artist - Title [Label B] Project": ["Artist - Title (Extended Mix) SW V1.wav"],
+        "Artist - Title EP [Label] Project": ["Artist - Title SW V1.wav", "MASTER AMENDED V3.wav"],
+        "Artist - Titlely [Label] Project": ["MASTER AMENDED V3.wav"],
+        "Artist - Title [Label E] Project": ["Artist - Title SW V1.wav", "Demo.wav", "MASTER AMENDED V3.wav", "Artist - Ttile SW V3.wav"]})
+    out = _run_cli(tools, [["Artist", "Title"]])
+    lines = [ln for ln in out.splitlines() if ln.strip().startswith(("NOTE", "Why:"))]
+    whys = {ln.strip()[len("Why: "):] for ln in lines if ln.strip().startswith("Why:")}
+    assert whys == {"ranked lower on mix, hint or exact title", "the folder name is not exactly artist and title",
+                    "the folder name does not name this track", "the folder may hold other tracks",
+                    "cannot tell which track it belongs to"}, whys
+    assert lines and all(len(ln) <= 70 for ln in lines), [ln for ln in lines if len(ln) > 70]
