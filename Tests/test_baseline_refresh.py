@@ -1761,14 +1761,19 @@ def test_pairs_changed_or_removed_among_old_tracks_still_trip_beside_a_new_track
         rows = rows[30:]
     extra = [_ok_row(a, b) for a, b in _pairs(21) if "T20" in (a, b)]
     new = _payload(rows + extra)
-    assert _counts_of_added(BR.diff_summary(old, new)) == (40, 40, 0)
+    # (round 7: a removed old pair means nothing is expected growth, so beside removed
+    # pairs the new track's 40 pairs count too and pairs_added trips with pairs_removed)
+    expected = (40, 40, 0) if kind == "changed" else (40, 0, 40)
+    assert _counts_of_added(BR.diff_summary(old, new)) == expected
     assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
     line = _refusal(capsys)
-    assert ("pairs_changed" if kind == "changed" else "pairs_removed") in line
-    assert "pairs_added" not in line, line
+    if kind == "changed":
+        assert "pairs_changed" in line and "pairs_added" not in line, line
+    else:
+        assert "pairs_removed" in line and "pairs_added" in line, line
 
 
-def test_two_guards_and_the_bare_flag_are_refused_with_one_plain_line(env, capsys):
+def test_two_guards_and_the_bare_flag_are_refused_with_a_few_short_lines(env, capsys):
     old, new = _two_guards(env)
     shift, summary = BR.policy_shift(old, new), BR.diff_summary(old, new)
     assert _guard_names(BR.guard_trips(shift, summary)) == ["pairs_changed", "pairs_added"]
@@ -1776,8 +1781,9 @@ def test_two_guards_and_the_bare_flag_are_refused_with_one_plain_line(env, capsy
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift"], new) == 2
     line = _refusal(capsys)
     assert "2 guards tripped" in line, line
-    assert "pairs_changed" in line and "pairs_added" in line, line
+    assert "pairs_changed: 26 of 80 pairs" in line and "pairs_added: 30 unexplained" in line
     assert "--accept-shift pairs_changed,pairs_added" in line and "all" in line, line
+    assert "a bare --accept-shift is for one guard only" in line, line
     assert _snapshot(env.dir) == before and env.sidecars() == []
 
 
@@ -1794,8 +1800,11 @@ def test_accept_shift_with_names_refuses_every_guard_it_does_not_name(
     lines = _short_refusal(_messages(capsys))
     count = f"{len(missing)} guard" + ("" if len(missing) == 1 else "s")
     assert lines[0] == f"refresh refused: not accepted: {count}", lines
-    assert [ln for ln in lines if ln.startswith("  ")] == [f"  {g}" for g in missing]
+    facts = {"pairs_changed": "26 of 80 pairs", "pairs_added": "30 unexplained"}
+    assert [ln for ln in lines if ln.startswith("  ")] == [
+        f"  {g}: {facts[g]}" for g in missing]
     assert "--accept-shift pairs_changed,pairs_added" in lines, lines
+    assert "To accept, run:" in lines and "Read the diff, then run:" not in lines
     assert _snapshot(env.dir) == before and env.sidecars() == []
 
 
@@ -1973,7 +1982,11 @@ def test_the_docs_describe_the_new_rules():
     assert "duplicate" in BR.__doc__
     assert "clears all of them at once" not in BR.guard_trips.__doc__
     for doc in (BR.__doc__, BR.guard_trips.__doc__, BR.diff_summary.__doc__):
-        assert "replacing a track is not growth" in doc.lower(), doc
+        flat = " ".join(doc.lower().split())
+        assert "replacing a track is not growth" in flat, doc
+        assert "when any old pair is removed" in flat, doc
+    assert "a few short lines" in BR.run_refresh_cli.__doc__
+    assert "one plain line on stderr" not in BR.run_refresh_cli.__doc__
     assert "ONE plain line" not in BR.RefreshRefused.__doc__
     assert "70 characters" in BR.RefreshRefused.__doc__ and "70 characters" in BR.__doc__
     help_text = " ".join(BR._build_parser().format_help().split())
@@ -2034,8 +2047,10 @@ def test_renaming_1_of_41_tracks_is_not_growth_and_needs_a_flag(env, capsys):
     assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
     lines = _short_refusal(_messages(capsys))
     assert lines[0] == "refresh refused: 1 guard tripped", lines
-    assert "  pairs_added" in lines and "--accept-shift pairs_added" in lines, lines
-    assert "a track is gone: replacing a track is not growth" in lines, lines
+    assert "  pairs_added: 80 unexplained" in lines, lines
+    assert "--accept-shift pairs_added" in lines, lines
+    assert "old pairs are gone: replacing a track is not growth" in lines, lines
+    assert "diff: 80 added (80 unexplained), 80 removed, 0 changed" in lines, lines
     assert _snapshot(env.dir) == before
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
                     "pairs_added"], new) == 0
@@ -2054,8 +2069,55 @@ def test_renaming_1_of_50_tracks_whose_pairs_now_raise_is_not_growth(env, capsys
     assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == ["pairs_added"]
     assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
     lines = _short_refusal(_messages(capsys))
-    assert "  pairs_added" in lines, lines
+    assert "  pairs_added: 98 unexplained" in lines, lines
     assert env.sidecars() == []
+
+
+def test_a_half_rename_where_only_the_in_name_changes_is_not_growth(env, capsys):
+    # (round 7) T20 keeps its name as an out, but as an in it gains a trailing space: 40
+    # old pairs are re-keyed and now raise. No whole track is gone, but 40 old pairs are.
+    names = _track_names(41)
+    old = env.write_old(_grid(_pairs_of(names), []))
+    new = _payload([_raise_row(a, "T20 ") if b == "T20" else _ok_row(a, b)
+                    for a, b in _pairs_of(names)])
+    summary = BR.diff_summary(old, new)
+    assert _counts_of_added(summary) == (40, 0, 40)
+    assert summary["pairs_removed"] == 40 and summary["old_tracks_gone"] == 0
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == ["pairs_added"]
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert "  pairs_added: 40 unexplained" in lines, lines
+    assert env.sidecars() == []
+
+
+def test_a_rename_that_keeps_one_stale_row_of_the_old_name_is_not_growth(env, capsys):
+    # (round 7) T20 is renamed in every pair but one stale row (T20 -> T00) is left, so no
+    # whole track is gone; 79 old pairs are, and the 80 pairs of the new name all raise.
+    names = _track_names(41)
+    renamed = _track_names(41, replace="T20")
+    old = env.write_old(_grid(_pairs_of(names), []))
+    rows = [_raise_row(a, b) if "T20 renamed" in (a, b) else _ok_row(a, b)
+            for a, b in _pairs_of(renamed)]
+    rows.append(_ok_row("T20", "T00"))
+    new = _payload(rows)
+    summary = BR.diff_summary(old, new)
+    assert _counts_of_added(summary) == (80, 0, 80)
+    assert summary["pairs_removed"] == 79 and summary["old_tracks_gone"] == 0
+    # 79 of 1640 is 4.8 percent removed: only the added pairs notice the rename
+    assert _guard_names(BR.guard_trips(BR.policy_shift(old, new), summary)) == ["pairs_added"]
+    assert env.run(["--refresh", "--reason", GOOD_REASON], new) == 2
+    lines = _short_refusal(_messages(capsys))
+    assert "  pairs_added: 80 unexplained" in lines, lines
+    assert env.sidecars() == []
+
+
+def test_a_removed_pair_makes_every_added_pair_unexplained_even_with_every_track_present():
+    old = _payload([_ok_row(a, b) for a, b in _pairs_of(["a", "b", "c"])])
+    rows = [_ok_row(a, b) for a, b in _pairs_of(["a", "b", "c", "d"])
+            if (a, b) != ("a", "b")]                       # d is new and one old pair is gone
+    s = BR.diff_summary(old, _payload(rows))
+    assert s["old_tracks_gone"] == 0 and s["pairs_removed"] == 1
+    assert _counts_of_added(s) == (6, 0, 6)
 
 
 def test_swapping_a_track_for_its_newer_version_trips_added_and_removed(env, capsys):
@@ -2075,7 +2137,8 @@ def test_swapping_a_track_for_its_newer_version_trips_added_and_removed(env, cap
                     "pairs_added"], new) == 2
     lines = _short_refusal(_messages(capsys))
     assert lines[0] == "refresh refused: not accepted: 1 guard", lines
-    assert [ln for ln in lines if ln.startswith("  ")] == ["  pairs_removed"], lines
+    assert [ln for ln in lines if ln.startswith("  ")] == [
+        "  pairs_removed: 38 of 380 pairs"], lines
     assert env.sidecars() == []
     assert env.run(["--refresh", "--reason", GOOD_REASON, "--accept-shift",
                     "pairs_added,pairs_removed"], new) == 0
@@ -2132,22 +2195,50 @@ def test_every_guard_refusal_is_a_few_short_lines_even_with_all_six_guards(env, 
     shift, summary = BR.policy_shift(old, new), BR.diff_summary(old, new)
     assert _guard_names(BR.guard_trips(shift, summary)) == list(ALL_GUARDS)
     before = _snapshot(env.dir)
+    facts = {"policy_shift": "12 of 320 pairs", "status_flips": "12 of 320 pairs",
+             "overlap_policy_changes": "24 of 320 pairs", "pairs_changed": "50 of 320 pairs",
+             "pairs_added": "30 unexplained", "pairs_removed": "30 of 350 pairs"}
+    note = "a bare --accept-shift is for one guard only"
     cases = [
-        ([], "refresh refused: 6 guards tripped", ALL_GUARDS),
+        ([], "refresh refused: 6 guards tripped", ALL_GUARDS, False),
         (["--accept-shift"], "refresh refused: bare --accept-shift, 6 guards tripped",
-         ALL_GUARDS),
+         ALL_GUARDS, True),
         (["--accept-shift", "policy_shift"], "refresh refused: not accepted: 5 guards",
-         ALL_GUARDS[1:]),
+         ALL_GUARDS[1:], False),
     ]
-    for flag_args, first, listed in cases:
+    for flag_args, first, listed, has_note in cases:
         assert env.run(["--refresh", "--reason", GOOD_REASON, *flag_args], new) == 2
         lines = _short_refusal(_messages(capsys))
         assert lines[0] == first, lines
-        assert [ln for ln in lines if ln.startswith("  ")] == [f"  {g}" for g in listed]
+        assert [ln for ln in lines if ln.startswith("  ")] == [
+            f"  {g}: {facts[g]}" for g in listed]
         assert "--accept-shift " + ",".join(ALL_GUARDS) in lines, lines
         assert lines[-1] == "--accept-shift all", lines
-        assert any(ln.startswith("diff: ") and "30 added" in ln for ln in lines), lines
+        # the exact diff line: "unexplained" is pairs_added_unexplained (30), not the
+        # new-track count (0, because old pairs are gone)
+        assert "diff: 30 added (30 unexplained), 30 removed, 50 changed" in lines, lines
+        assert (note in lines) is has_note, lines
+        assert "To accept, run:" in lines and "Read the diff, then run:" not in lines
         assert _snapshot(env.dir) == before and env.sidecars() == []
+
+
+def test_guard_lines_stay_short_with_all_six_names_and_5_digit_counts():
+    shift = {"total_moved": 12345, "pairs_compared": 99999}
+    summary = {"pairs_old": 99999, "pairs_new": 99999, "pairs_added": 55555,
+               "pairs_added_new_track": 0, "pairs_added_unexplained": 55555,
+               "pairs_removed": 44444, "pairs_changed": 33333,
+               "changed_by_field": {"status_flip": 22222, "overlap_policy": 11111}}
+    found = BR._guard_findings(shift, summary)
+    assert [name for name, _, _ in found] == list(ALL_GUARDS)
+    for name, text, fact in found:
+        assert fact in text, "the short count must come from the same numbers as the reason"
+    for plan in (("none", ()), ("bare", ()), ("names", ("policy_shift",))):
+        with pytest.raises(BR.RefreshRefused) as info:
+            BR._accepted_guards(plan, found, summary)
+        lines = _short_refusal(str(info.value).splitlines())
+        assert "  overlap_policy_changes: 11111 of 99999 pairs" in lines, lines
+        assert "  pairs_added: 55555 unexplained" in lines, lines
+        assert max(len(ln) for ln in lines if not ln.startswith("--accept-shift ")) <= 70
 
 
 def test_the_refusal_for_one_guard_is_short_and_names_the_exact_flag(env, capsys):
@@ -2155,7 +2246,8 @@ def test_the_refusal_for_one_guard_is_short_and_names_the_exact_flag(env, capsys
     assert env.run(["--refresh", "--reason", GOOD_REASON], _grid(_pairs(15), [])) == 2
     lines = _short_refusal(_messages(capsys))
     assert lines[0] == "refresh refused: 1 guard tripped", lines
-    assert lines[1] == "  pairs_added" and lines[-1] == "--accept-shift pairs_added", lines
+    assert lines[1] == "  pairs_added: 189 unexplained", lines
+    assert lines[-1] == "--accept-shift pairs_added" and "To accept, run:" in lines, lines
     assert not any("every guard" in ln or ln == "--accept-shift all" for ln in lines)
 
 
