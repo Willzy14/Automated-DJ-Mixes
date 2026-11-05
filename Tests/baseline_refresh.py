@@ -24,12 +24,42 @@ This module is what makes a refresh a decision with a record:
     a failure leaves the old baseline intact. If the swap fails after the sidecar was
     written, the sidecar is renamed `*.not-applied`. A refresh that lands leaves no
     temp file behind, so a live record whose own temp file still exists did not land.
-  * A large change is refused unless `--accept-shift` is given (see the limits below):
-    pairs moving between the two named policies, pairs flipping between align and
-    raise, pairs changing overlap policy in any way, too many pairs changed in any
-    field, too many pairs added, or too many pairs removed. The sidecar names each
-    guard that fired in `guards_tripped_names`. Duplicate (out, in) pairs are
-    refused outright; no flag overrides that.
+  * A large change is refused (see the limits below): pairs moving between the two
+    named policies, pairs flipping between align and raise, pairs changing overlap
+    policy in any way, too many pairs changed in any field, too many unexplained pairs
+    added, or too many pairs removed. The guard names are policy_shift, status_flips,
+    overlap_policy_changes, pairs_changed, pairs_added and pairs_removed. The sidecar
+    names each guard that fired in `guards_tripped_names`.
+  * Pairs added because of a new track are expected, unless any old pair was removed.
+    An added pair is explained when its out or its in is a new track, one that is in no
+    row of the old baseline (as an out or as an in). A remix is a different track from
+    its original, so a remix added next to its original is a new track. Only the
+    unexplained pairs, between two tracks the old baseline already had, count toward
+    pairs_added. The diff summary keeps `pairs_added` as the total and adds
+    `pairs_added_new_track` and `pairs_added_unexplained`. Replacing a track is not
+    growth: when any old pair is removed (a rename, a swap for a newer version, a half
+    rename, a stale row of the old name), no added pair is explained.
+    `old_tracks_gone` counts the old tracks that are in no new row.
+  * Replacing a track always trips. When any old pair was removed and an added pair
+    carries a name that is not in the old baseline, `pairs_replaced` counts those pairs
+    and the pairs_added guard fires whatever its limits (a half rename of one track in a
+    21 track corpus is only 20 pairs, under every limit). It is the same guard name, so
+    `--accept-shift pairs_added` accepts it, and its line reads "N replaced pairs". Pure
+    growth (nothing removed) still passes, and pure removal follows pairs_removed only.
+  * `--accept-shift` names what it accepts. `--accept-shift pairs_added,pairs_changed`
+    accepts those guards only. Any other guard that fired still refuses, and the
+    refusal says "not accepted:" and names them. `--accept-shift all` accepts every
+    guard that fired. The bare `--accept-shift` works only when exactly one guard fired.
+    With two or more it is refused. An unknown guard name is a usage error. When no
+    guard fired the flag changes nothing. The sidecar records `guards_accepted` (the
+    names, or ["all"], empty when nothing fired).
+  * A refusal about the guards or the flag is a few short lines: the first is
+    `refresh refused: <what is wrong>` (at most 70 characters), then one fact per line
+    (each guard on its own line with its count, for example "pairs_added: 38 unexplained",
+    then "nothing was written"), then the exact flag to run on a line of its own. A
+    refusal writes nothing, so these counts are the only place to read why a guard fired.
+  * A payload with a duplicate (out, in) pair is refused outright; no flag overrides
+    that.
   * A refresh killed between its writes (power cut, taskkill) leaves its temp file
     and a record with a live name. The record carries the process id and the temp
     file's name (`pid`, `staged_temp`). A later refresh, once the guards have passed
@@ -106,6 +136,11 @@ MAX_LISTED_PAIRS = 20
 POLICY_NAMED = "named_landmark_64"
 POLICY_STANDARD = "standard_48"
 
+#: The guard names: the words before the colon in each `guard_trips` line, in the order
+#: they are reported. `--accept-shift` takes these (or `all`).
+GUARD_NAMES = ("policy_shift", "status_flips", "overlap_policy_changes",
+               "pairs_changed", "pairs_added", "pairs_removed")
+
 #: Fields grouped as "swap / handoff" in the diff summary.
 SWAP_HANDOFF_FIELDS = ("swap_progress", "handoff_kind", "handoff_bar_out",
                        "arr_offset_bars", "overlap_bars")
@@ -133,18 +168,83 @@ _TEXT_SUFFIXES = {".py", ".json", ".txt", ".md"}
 
 
 class RefreshRefused(Exception):
-    """A refresh that must not go ahead. str(exc) is ONE plain line for the console."""
+    """A refresh that must not go ahead. str(exc) is what the console shows. Most
+    refusals are one plain line. The refusals about the large-change guards and about
+    `--accept-shift` are a few short lines: the first is `refresh refused: <what is
+    wrong>` (at most 70 characters), then one fact per line, then the exact flag to run
+    on a line of its own."""
+
+
+def _refused(first, *lines):
+    """A RefreshRefused whose text is `refresh refused: <first>` and then `lines`."""
+    return RefreshRefused("\n".join(["refresh refused: " + first, *lines]))
 
 
 @dataclasses.dataclass(frozen=True)
 class RefreshArgs:
     reason: str
     reviewer: str | None
-    accept_shift: bool
+    #: False (no flag), True (the bare flag), "all", or a tuple of guard names.
+    accept_shift: object
 
 
 def _ascii(text):
     return str(text).encode("ascii", "replace").decode("ascii")
+
+
+def _shown(text, width=40):
+    """`text` as printable ASCII, cut to `width` characters, so one name cannot make a long
+    line or an extra one: every character that is not a printable ASCII character (a
+    newline, a tab, a terminal control character, a letter with an accent) becomes "?"
+    BEFORE the cut."""
+    text = "".join(ch if " " <= ch <= "~" else "?" for ch in str(text))
+    return text if len(text) <= width else text[:width - 3] + "..."
+
+
+def _accept_plan(accept_shift):
+    """Read what `--accept-shift` / `accept_shift=` asks for: ("none", ()), ("bare", ()),
+    ("all", ()) or ("names", <the named guards, in guard order>).
+
+    Takes False or None (no flag), True (the bare flag), the string "all", a comma
+    separated string of guard names, or an iterable of guard names (an empty one is no
+    flag). An unknown name, an empty name, or "all" mixed with names raises
+    RefreshRefused, even when no guard fired, so a typo is never silently harmless."""
+    if accept_shift is None or accept_shift is False:
+        return "none", ()
+    if accept_shift is True:
+        return "bare", ()
+    if isinstance(accept_shift, str):
+        parts = accept_shift.split(",")
+    else:
+        try:
+            parts = list(accept_shift)
+        except TypeError:
+            raise _refused("bad accept_shift value",
+                           "it must be False, True, all or guard names",
+                           "nothing was written") from None
+        if not parts:
+            return "none", ()
+    parts = [p.strip() if isinstance(p, str) else str(p) for p in parts]
+    unknown = [p for p in dict.fromkeys(parts) if p and p != "all" and p not in GUARD_NAMES]
+    problems = [f"unknown name '{_shown(p)}'" for p in unknown]
+    if "" in parts:
+        problems.append("an empty name")
+    if "all" in parts and len(set(parts)) > 1:
+        problems.append("all cannot be mixed with names")
+    if problems:
+        raise _refused("bad --accept-shift value",
+                       *[f"  {p}" for p in problems],
+                       "valid names:", *[f"  {g}" for g in (*GUARD_NAMES, "all")],
+                       "nothing was written")
+    if set(parts) == {"all"}:
+        return "all", ()
+    return "names", tuple(g for g in GUARD_NAMES if g in parts)
+
+
+def _plan_value(plan):
+    """The RefreshArgs.accept_shift value for a plan from _accept_plan."""
+    kind, names = plan
+    return {"none": False, "bare": True, "all": "all"}.get(kind, names)
 
 
 # ---------------------------------------------------------------------------
@@ -174,19 +274,32 @@ class _Once(argparse.Action):
         setattr(namespace, self.dest, values)
 
 
-def parse_refresh_args(argv):
-    """Parse the arguments after the script name. Raises RefreshRefused on any problem."""
+_ACCEPT_SHIFT_HELP = (
+    "Accept guards that fired. NAMES is a comma-separated list of guard names ("
+    + ", ".join(GUARD_NAMES) + ") or the word all. "
+    "Only the named guards are accepted; any other guard that fired still refuses. "
+    "The bare flag works only when exactly one guard fired.")
+
+
+def _build_parser():
     parser = _Parser(prog="test_alignment_baseline.py", add_help=False,
                      allow_abbrev=False)
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--reason", default=None, action=_Once)
     parser.add_argument("--reviewer", default=None, action=_Once)
-    parser.add_argument("--accept-shift", action="store_true", dest="accept_shift")
-    ns = parser.parse_args(list(argv))
+    parser.add_argument("--accept-shift", nargs="?", const=True, default=None,
+                        action=_Once, dest="accept_shift", metavar="NAMES",
+                        help=_ACCEPT_SHIFT_HELP)
+    return parser
+
+
+def parse_refresh_args(argv):
+    """Parse the arguments after the script name. Raises RefreshRefused on any problem."""
+    ns = _build_parser().parse_args(list(argv))
     reason = validate_reason(ns.reason)
     reviewer = (ns.reviewer or "").strip() or None
     return RefreshArgs(reason=reason, reviewer=reviewer,
-                       accept_shift=bool(ns.accept_shift))
+                       accept_shift=_plan_value(_accept_plan(ns.accept_shift)))
 
 
 # ---------------------------------------------------------------------------
@@ -348,11 +461,31 @@ def diff_summary(old, new):
     output), raise_type (a pair that raised both times with a different exception
     type), status_flip (ok <-> raise), other (any remaining field, e.g. cue
     provenance, score, notes, a raise message).
+
+    `pairs_added` counts every new pair. It is split in two: `pairs_added_new_track`
+    (the pair's out or in is a track that is in no row of the old baseline, so the pair
+    is expected) and `pairs_added_unexplained` (both tracks were already in the old
+    baseline). A track counts as old if it is an out or an in in any old row. A remix is
+    a different track from its original. With no old baseline every track is new.
+    Replacing a track is not growth: when any old pair is removed (a track gone from the
+    new rows, a half rename, a stale row of the old name), no added pair is explained.
+    `old_tracks_gone` counts the old tracks that are in no new row. Such a refresh is a
+    replacement, and replacing a track always trips: `pairs_replaced` counts the added
+    pairs that carry a name that is not in the old baseline when an old pair was removed
+    (0 otherwise), and any of them trips the pairs_added guard whatever its limits.
     """
     o, n = _rows_by_key(old), _rows_by_key(new)
     added = sorted(set(n) - set(o))
     removed = sorted(set(o) - set(n))
     common = sorted(set(o) & set(n))
+    old_tracks = {track for key in o for track in key}
+    new_tracks = {track for key in n for track in key}
+    tracks_gone = len(old_tracks - new_tracks)
+    new_name_pairs = [k for k in added if k[0] not in old_tracks or k[1] not in old_tracks]
+    # an old pair that is gone means a rename or a swap, not growth: nothing is explained,
+    # and the added pairs that carry a new name are the replaced pairs
+    added_new_track = [] if removed else new_name_pairs
+    replaced = len(new_name_pairs) if removed else 0
     counters = {"alignment_policy": 0, "overlap_policy": 0, "swap_handoff": 0,
                 "spec": 0, "raise_type": 0, "status_flip": 0, "other": 0}
     changed = []
@@ -381,6 +514,10 @@ def diff_summary(old, new):
         "pairs_old": len(o),
         "pairs_new": len(n),
         "pairs_added": len(added),
+        "pairs_added_new_track": len(added_new_track),
+        "pairs_added_unexplained": len(added) - len(added_new_track),
+        "old_tracks_gone": tracks_gone,
+        "pairs_replaced": replaced,
         "pairs_removed": len(removed),
         "pairs_changed": len(changed),
         "pairs_unchanged": len(common) - len(changed),
@@ -423,47 +560,84 @@ def guard_trips(shift, summary):
     status_flips (pairs whose ok/raise status changed), overlap_policy_changes
     (pairs whose overlap_policy changed in ANY way, e.g. to or from None),
     pairs_changed (25 pairs or more, or over 25 percent, changed in ANY field),
-    pairs_added (25 pairs or more, or over 25 percent of the old baseline, are new;
-    not applied to the very first baseline) and pairs_removed (over 5 percent gone).
-    Each is checked on its own, and `--accept-shift` clears all of them at once.
+    pairs_added (25 pairs or more, or over 25 percent of the old baseline, are
+    unexplained new pairs; not applied to the very first baseline) and pairs_removed
+    (over 5 percent gone).
+    A new pair is explained when its out or its in is a new track, one that is in no row
+    of the old baseline, unless any old pair was removed. Only unexplained pairs count
+    toward pairs_added. A summary without the split counts every added pair as
+    unexplained. Replacing a track is not growth: when any old pair is removed, no added
+    pair is explained. Replacing a track always trips: when an old pair was removed and
+    an added pair carries a new name (`pairs_replaced`), pairs_added fires whatever its
+    limits, with the count shown as "replaced pairs".
+    Each guard is checked on its own. `--accept-shift` names the guards it accepts (or
+    `all`); a guard it does not name still refuses, and a bare `--accept-shift` works only
+    when exactly one guard fired (see refresh_baseline).
     A sweeping change that is not a move between the two named policies is caught by
     status_flips, overlap_policy_changes or pairs_changed. Not a guard, and never
     overridable: a payload that lists the same (out, in) pair twice is refused as a
     duplicate by check_payload before any guard runs."""
-    trips = []
+    return [text for _, text, _ in _guard_findings(shift, summary)]
+
+
+def _guard_findings(shift, summary):
+    """(name, text, fact) for every guard that fired, in report order. `text` is the full
+    reason that guard_trips returns. `fact` is the short count a refusal prints on the
+    guard's own line, taken from the same numbers (for example "50 of 380 pairs")."""
+    found = []
     compared = max(shift["pairs_compared"], 1)
     changes = summary.get("changed_by_field") or {}
     moved = shift["total_moved"]
     if _over(moved, compared, SHIFT_MAX_PAIRS, SHIFT_MAX_FRACTION):
-        trips.append(f"policy_shift: {moved} of {compared} pairs moved between "
-                     f"{POLICY_NAMED} and {POLICY_STANDARD} (limits: under "
-                     f"{SHIFT_MAX_PAIRS} pairs and under {SHIFT_MAX_FRACTION:.0%})")
+        found.append(("policy_shift",
+                      f"policy_shift: {moved} of {compared} pairs moved between "
+                      f"{POLICY_NAMED} and {POLICY_STANDARD} (limits: under "
+                      f"{SHIFT_MAX_PAIRS} pairs and under {SHIFT_MAX_FRACTION:.0%})",
+                      f"{moved} of {compared} pairs"))
     flips = changes.get("status_flip", 0)
     if _over(flips, compared, STATUS_FLIP_MAX_PAIRS, STATUS_FLIP_MAX_FRACTION):
-        trips.append(f"status_flips: {flips} of {compared} pairs changed between align "
-                     f"and raise (limits: under {STATUS_FLIP_MAX_PAIRS} pairs and under "
-                     f"{STATUS_FLIP_MAX_FRACTION:.0%})")
+        found.append(("status_flips",
+                      f"status_flips: {flips} of {compared} pairs changed between align "
+                      f"and raise (limits: under {STATUS_FLIP_MAX_PAIRS} pairs and under "
+                      f"{STATUS_FLIP_MAX_FRACTION:.0%})",
+                      f"{flips} of {compared} pairs"))
     overlap = changes.get("overlap_policy", 0)
     if _over(overlap, compared, OVERLAP_CHANGE_MAX_PAIRS, OVERLAP_CHANGE_MAX_FRACTION):
-        trips.append(f"overlap_policy_changes: {overlap} of {compared} pairs changed "
-                     f"overlap policy in some way (limits: under {OVERLAP_CHANGE_MAX_PAIRS} "
-                     f"pairs and under {OVERLAP_CHANGE_MAX_FRACTION:.0%})")
+        found.append(("overlap_policy_changes",
+                      f"overlap_policy_changes: {overlap} of {compared} pairs changed "
+                      f"overlap policy in some way (limits: under {OVERLAP_CHANGE_MAX_PAIRS} "
+                      f"pairs and under {OVERLAP_CHANGE_MAX_FRACTION:.0%})",
+                      f"{overlap} of {compared} pairs"))
     changed = summary.get("pairs_changed", 0)
     if _over(changed, compared, CHANGED_MAX_PAIRS, CHANGED_MAX_FRACTION):
-        trips.append(f"pairs_changed: {changed} of {compared} pairs changed in some field "
-                     f"(limits: under {CHANGED_MAX_PAIRS} pairs and under "
-                     f"{CHANGED_MAX_FRACTION:.0%})")
+        found.append(("pairs_changed",
+                      f"pairs_changed: {changed} of {compared} pairs changed in some field "
+                      f"(limits: under {CHANGED_MAX_PAIRS} pairs and under "
+                      f"{CHANGED_MAX_FRACTION:.0%})",
+                      f"{changed} of {compared} pairs"))
     old_pairs = summary["pairs_old"]
-    added = summary.get("pairs_added", 0)
+    added = summary.get("pairs_added_unexplained", summary.get("pairs_added", 0))
+    replaced = summary.get("pairs_replaced", 0)
     if old_pairs and _over(added, old_pairs, ADDED_MAX_PAIRS, ADDED_MAX_FRACTION):
-        trips.append(f"pairs_added: {added} new pairs on top of {old_pairs} "
-                     f"(limits: under {ADDED_MAX_PAIRS} pairs and under "
-                     f"{ADDED_MAX_FRACTION:.0%} of the old baseline)")
+        found.append(("pairs_added",
+                      f"pairs_added: {added} unexplained new pairs on top of {old_pairs} "
+                      f"(pairs of new tracks do not count, unless any old pair was "
+                      f"removed; limits: under {ADDED_MAX_PAIRS} "
+                      f"pairs and under {ADDED_MAX_FRACTION:.0%} of the old baseline)",
+                      f"{added} unexplained"))
+    elif replaced:
+        found.append(("pairs_added",
+                      f"pairs_added: {replaced} replaced pairs (an old pair was removed "
+                      f"and a new name appeared; replacing a track always trips, "
+                      f"whatever the limits)",
+                      f"{replaced} replaced pairs"))
     removed = summary["pairs_removed"]
     if old_pairs and removed / old_pairs > REMOVED_MAX_FRACTION:
-        trips.append(f"pairs_removed: {removed} of {old_pairs} pairs are gone from the new "
-                     f"baseline (limit: {REMOVED_MAX_FRACTION:.0%})")
-    return trips
+        found.append(("pairs_removed",
+                      f"pairs_removed: {removed} of {old_pairs} pairs are gone from the new "
+                      f"baseline (limit: {REMOVED_MAX_FRACTION:.0%})",
+                      f"{removed} of {old_pairs} pairs"))
+    return found
 
 
 def schema_marker(payload):
@@ -673,28 +847,87 @@ def _read_old(baseline):
     return payload, sha256_bytes(raw)
 
 
+def _n_guards(count):
+    return f"{count} guard" + ("" if count == 1 else "s")
+
+
+def _guard_refusal(first, shown, tripped, summary, note=None):
+    """The short refusal for guards that fired: `first` after "refresh refused: ", the
+    guards in `shown` ((name, fact) pairs) one per line as "<name>: <count>", an optional
+    `note`, the diff counts, "nothing was written", then the exact flag to run (and `all`
+    when more than one guard fired). The counts are here because a refusal writes
+    nothing: this is the only place Sam can read why a guard fired."""
+    lines = [f"  {name}: {fact}" for name, fact in shown]
+    if note:
+        lines.append(note)
+    if summary["pairs_added"] and summary["pairs_removed"]:
+        lines.append("old pairs are gone: replacing a track is not growth")
+    lines.append(f"diff: {summary['pairs_added']} added "
+                 f"({summary['pairs_added_unexplained']} unexplained), "
+                 f"{summary['pairs_removed']} removed, {summary['pairs_changed']} changed")
+    lines += ["nothing was written", "To accept, run:",
+              "--accept-shift " + ",".join(tripped)]
+    if len(tripped) > 1:
+        lines += ["Or accept every guard:", "--accept-shift all"]
+    return _refused(first, *lines)
+
+
+def _accepted_guards(plan, found, summary):
+    """The guard names a refresh accepts, given the plan from _accept_plan, the
+    (name, text, fact) tuples from _guard_findings and the diff summary. Raises
+    RefreshRefused (a few short lines, see _guard_refusal) when a guard that fired is not
+    covered. [] when nothing fired; ["all"] for `all`; otherwise the guards that fired,
+    in guard order."""
+    kind, names = plan
+    if not found:
+        return []
+    tripped = [name for name, _, _ in found]
+    facts = [(name, fact) for name, _, fact in found]
+    if kind == "all":
+        return ["all"]
+    if kind == "none":
+        raise _guard_refusal(f"{_n_guards(len(tripped))} tripped", facts, tripped, summary)
+    if kind == "bare":
+        if len(tripped) == 1:
+            return tripped
+        raise _guard_refusal(f"bare --accept-shift, {_n_guards(len(tripped))} tripped",
+                             facts, tripped, summary,
+                             note="a bare --accept-shift is for one guard only")
+    missing = [pair for pair in facts if pair[0] not in names]
+    if missing:
+        raise _guard_refusal(f"not accepted: {_n_guards(len(missing))}", missing, tripped,
+                             summary)
+    return tripped
+
+
 def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=False,
                      input_paths=(), root=None, clock=None, head=None, notify=None):
     """Replace `baseline` with `payload` if the reason and the guards allow it.
+
+    `accept_shift` says which guards that fired are accepted: False (none), True (the
+    bare flag: only when exactly one guard fired), "all", or an iterable of guard names
+    (GUARD_NAMES; a comma-separated string works too). A guard that fired and is not
+    covered refuses the refresh ("not accepted"). An unknown name refuses it even when
+    no guard fired. Duplicate pairs are never overridable.
 
     Order: validate -> diff and guard -> clean up after a killed refresh (`notify`
     gets one line if it found anything) -> stage the new baseline as a temp file ->
     write the sidecar -> os.replace the temp file over the baseline. Nothing at all is
     written or deleted before the guards pass, so a refused refresh changes no file;
     the sidecar exists before the baseline moves.
-    Returns a dict (sidecar path, diff summary, policy shift, accepted_shift, hashes).
+    Returns a dict (sidecar path, diff summary, policy shift, accepted_shift,
+    guards_accepted, hashes).
     """
+    plan = _accept_plan(accept_shift)
     baseline = Path(baseline)
     reason = validate_reason(reason)
     check_payload(payload, "the new baseline")
     old_payload, old_sha = _read_old(baseline)
     summary = diff_summary(old_payload, payload)
     shift = policy_shift(old_payload, payload)
-    trips = guard_trips(shift, summary)
-    if trips and not accept_shift:
-        raise RefreshRefused("refresh refused: " + "; ".join(trips)
-                             + ". Read the diff, then add --accept-shift if it is "
-                             "intended; nothing was written")
+    found = _guard_findings(shift, summary)
+    trips = [text for _, text, _ in found]
+    accepted = _accepted_guards(plan, found, summary)
 
     cleaned = cleanup_interrupted(baseline)
     if notify is not None and (cleaned["removed"] or cleaned["marked"]):
@@ -731,8 +964,9 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
         "policy_shift": shift,
         "guards_tripped": trips,
         "guards_tripped_names": [t.split(":", 1)[0] for t in trips],
-        "accept_shift_flag": bool(accept_shift),
-        "accepted_shift": bool(trips) and bool(accept_shift),
+        "accept_shift_flag": plan[0] != "none",
+        "accepted_shift": bool(trips),
+        "guards_accepted": accepted,
         "guard_limits": {"shift_max_pairs": SHIFT_MAX_PAIRS,
                          "shift_max_fraction": SHIFT_MAX_FRACTION,
                          "removed_max_fraction": REMOVED_MAX_FRACTION,
@@ -761,7 +995,7 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
         raise
     return {"sidecar": sidecar, "summary": summary, "shift": shift,
             "accepted_shift": record["accepted_shift"], "guards_tripped": trips,
-            "old_sha256": old_sha, "new_sha256": new_sha}
+            "guards_accepted": accepted, "old_sha256": old_sha, "new_sha256": new_sha}
 
 
 def _counts(payload):
@@ -778,7 +1012,7 @@ def run_refresh_cli(argv, baseline, build_payload, input_paths, root=None,
                     clock=None, head=None):
     """The whole `--refresh` command. `argv` is sys.argv[1:]; `build_payload()` returns
     the freshly generated payload (the slow, corpus-dependent step). Returns the exit
-    code: 0 refreshed, 2 refused (one plain line on stderr), 1 failed with the old
+    code: 0 refreshed, 2 refused (a few short lines on stderr), 1 failed with the old
     baseline left in place."""
     baseline = Path(baseline)
     try:
@@ -803,11 +1037,18 @@ def run_refresh_cli(argv, baseline, build_payload, input_paths, root=None,
     ok = sum(1 for r in payload["rows"] if r["status"] == "ok")
     s, sh = result["summary"], result["shift"]
     _say(f"baseline refreshed: {n} pairs ({ok} align, {n - ok} raise)")
-    _say(f"diff: {s['pairs_changed']} changed, {s['pairs_added']} added, "
+    _say(f"diff: {s['pairs_changed']} changed, {s['pairs_added']} added "
+         f"({s['pairs_added_new_track']} expected as growth, "
+         f"{s['pairs_added_unexplained']} unexplained), "
          f"{s['pairs_removed']} removed; policy moves: "
          f"{sh['named_landmark_64_to_standard_48']} to {POLICY_STANDARD}, "
          f"{sh['standard_48_to_named_landmark_64']} to {POLICY_NAMED}")
     if result["accepted_shift"]:
-        _say("large shift accepted with --accept-shift: " + "; ".join(result["guards_tripped"]))
+        if result["guards_accepted"] == ["all"]:
+            _say("all guards accepted (--accept-shift all)")
+        else:
+            _say("guards accepted: " + ", ".join(result["guards_accepted"]))
+        for trip in result["guards_tripped"]:
+            _say("  " + trip)
     _say(f"refresh record: {result['sidecar'].name}")
     return 0
