@@ -1768,3 +1768,131 @@ def test_x3b_an_acapella_of_that_artist_is_still_junk_for_the_clearance(tmp_path
     assert out.splitlines()[1].strip() == "NONE"
     heads, listed = _note_block(out)
     assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
+
+
+# --- round 11: the artist prefix is tested after the track number is cut; an unnamed fallback never silences the NOTE of a held file ---
+
+@pytest.mark.parametrize("named", ["01 Main - Master SW V3.wav", "01 - Main - Master SW V3.wav", "Main - Master SW V3.wav", "03_Main - Master SW V3.wav"])
+def test_y1_codex_a_numbered_titled_file_of_a_version_word_title_stays_the_named_file(tmp_path, named):
+    # Artist "Main" (a mix word), title "Master" (a version word): the track number must not hide the artist prefix.
+    mod, tools, _ = _folder_and_tools(tmp_path, "Main - Master EP [Label] Project", [named, "Other SW V5.wav"])
+    assert names(mod.resolve("Main", "Master"))[0] == named
+    assert _note_block(_run_cli(tools, [["Main", "Master"]])) == ([], [])
+
+
+@pytest.mark.parametrize("master", ["MASTER AMENDED V3.wav", "01 MASTER AMENDED V3.wav", "01 - MASTER AMENDED V3.wav"])
+def test_y1b_a_version_word_title_without_the_artist_prefix_still_never_wins(tmp_path, master):
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Master EP [Label] Project", [master, "Other SW V5.wav"])
+    assert names(mod.resolve("Artist", "Master"))[0] == "Other SW V5.wav"                 # the unnamed fallback, as before; the master is never the answer
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Master"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith(master)            # and it is noted
+
+
+@pytest.mark.parametrize("fallback_first", [False, True])
+def test_y2_codex_a_held_master_is_noted_when_the_answer_is_an_unnamed_fallback(tmp_path, fallback_first):
+    spec = {"Artist - Title [Label] Project": ["Extended SW V2.wav", "Title Stems SW V3.wav"],
+            "Artist - Title EP [Label] Project": ["Other SW V5.wav"]}
+    mod, tools = _library(tmp_path, dict(reversed(list(spec.items()))) if fallback_first else spec)
+    assert names(mod.resolve("Artist", "Title"))[0] == "Other SW V5.wav"                  # the unnamed fallback is still the answer (nothing is promoted)
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("Extended SW V2.wav") and "Title [Label] Project" in listed[0]
+
+
+def test_y2b_the_master_is_noted_when_the_fallback_is_older(tmp_path):
+    mod, tools = _library(tmp_path, {"Artist - Title [Label] Project": ["Extended SW V2.wav", "Title Stems SW V3.wav"],
+                                     "Artist - Title EP [Label] Project": ["Other SW V1.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Other SW V1.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("Extended SW V2.wav")
+
+
+def test_y2c_an_unnamed_fallback_in_the_masters_own_folder_does_not_silence_it_either(tmp_path):
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title EP [Label] Project", ["Other SW V12.wav", "MASTER AMENDED V3.wav"])
+    assert names(mod.resolve("Artist", "Title"))[0] == "Other SW V12.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
+
+
+def test_y2e_an_unnamed_best_file_of_the_masters_own_folder_does_not_silence_it_when_the_answer_is_elsewhere(tmp_path):
+    # Folder A: an unnamed file with a higher version than the master (V12 over V11 AMENDED); folder B holds the answer, an unnamed fallback with V20.
+    mod, tools = _library(tmp_path, {"Artist - Title EP [Label A] Project": ["Other SW V12.wav", "MASTER AMENDED V3.wav"],
+                                     "Artist - Title EP [Label B] Project": ["Another SW V20.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Another SW V20.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav") and "Label A" in listed[0]
+
+
+def test_y2f_a_held_file_of_a_folder_is_not_silenced_by_the_folders_other_held_file_when_the_answer_is_a_fallback(tmp_path):
+    # Two held files in one non-exact folder and an unnamed fallback elsewhere: nothing named or promoted stands in the way, so both are listed.
+    mod, tools = _library(tmp_path, {"Artist - Title & Friends [Take A] Project": ["MASTER AMENDED V3.wav", "SW V2.wav"],
+                                     "Artist - Title EP [Take B] Project": ["Other SW V20.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Other SW V20.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 2 and any(x.endswith("MASTER AMENDED V3.wav") for x in listed) and any(x.endswith("SW V2.wav") for x in listed)
+
+
+def test_y2d_a_named_answer_still_silences_an_older_held_file(tmp_path):
+    # The answer is a named file: the existing rule holds, a held master (a plain one) that is not newer than it is not listed.
+    mod, tools = _library(tmp_path, {"Artist - Title [Label] Project": ["SW V2.wav", "Title Stems SW V3.wav"],
+                                     "Artist - Title EP [Label] Project": ["Artist - Title SW V4.wav", "Other SW V5.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V4.wav"
+    assert _note_block(_run_cli(tools, [["Artist", "Title"]])) == ([], [])
+
+
+# --- round 11, from the random library oracle: a held file with a better mix is noted; a junk answer silences nothing ---
+
+def test_y3_a_held_extended_master_is_noted_when_the_answer_has_a_higher_version_but_a_worse_mix(tmp_path):
+    mod, tools = _library(tmp_path, {"Artist - Title [Take A] Project": ["Extended SW V4.wav", "Acapella.wav"],
+                                     "Artist - Title [Take B] Project": ["Artist - Title SW V11.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V11.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("Extended SW V4.wav") and "Take A" in listed[0]
+
+
+def test_y3b_a_held_plain_master_with_a_lower_version_is_still_not_noted(tmp_path):
+    mod, tools = _library(tmp_path, {"Artist - Title [Take A] Project": ["MASTER AMENDED V3.wav", "Acapella.wav"],
+                                     "Artist - Title [Take B] Project": ["Artist - Title SW V12.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V12.wav"
+    assert _note_block(_run_cli(tools, [["Artist", "Title"]])) == ([], [])
+
+
+def test_y3c_a_held_extended_file_is_noted_against_the_best_plain_file_of_its_own_folder(tmp_path):
+    # The "&" keeps the folder from being a single-track folder, so nothing is promoted: the Extended file is held and its folder's best is a plain V12.
+    mod, tools, _ = _folder_and_tools(tmp_path, "Artist - Title & Friends [Label] Project", ["Artist - Title SW V12.wav", "Extended SW V4.wav"])
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V12.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("Extended SW V4.wav")
+
+
+def test_y3d_a_held_plain_master_is_noted_when_the_answer_is_a_radio_edit_with_a_higher_version(tmp_path):
+    mod, tools = _library(tmp_path, {"Artist - Title [Take A] Project": ["Artist - Title (Radio Edit) SW V6.wav"],
+                                     "Artist - Title Project": ["SW V3.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title (Radio Edit) SW V6.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("SW V3.wav") and "Artist - Title Project" in listed[0]
+
+
+def test_y4_a_junk_answer_never_silences_the_note_of_a_held_master(tmp_path):
+    # Nothing but junk is left to answer with; the held master of the other folder must still be named.
+    mod, tools = _library(tmp_path, {"Artist - Title Project": ["SW V3.wav"],
+                                     "Artist - Title [Take B] Project": ["Artist - Title (Instrumental) SW V12.wav", "Acapella.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title (Instrumental) SW V12.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("SW V3.wav")
+
+
+def test_y5_another_tracks_file_in_the_same_folder_does_not_silence_the_note_of_a_held_master(tmp_path):
+    # The EP folder holds another track with a higher version (V12) than the held master (V3 AMENDED is 11); that file is no answer and is not listed, so it must not stand in the way.
+    mod, tools = _library(tmp_path, {"Artist - Title EP [Take A] Project": ["MASTER AMENDED V3.wav", "Artist - Other0 SW V12.wav"],
+                                     "Artist - Title [Take B] Project": ["Artist - Title SW V4.wav"]})
+    assert names(mod.resolve("Artist", "Title"))[0] == "Artist - Title SW V4.wav"
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav") and "Take A" in listed[0]
+
+
+def test_y5b_a_newer_held_file_of_the_same_folder_still_stands_in_for_an_older_one(tmp_path):
+    # Two held files in one folder: only the best of the folder is listed (the older one is below its own folder's best).
+    mod, tools = _library(tmp_path, {"Artist - Title & Friends [Take A] Project": ["MASTER AMENDED V3.wav", "SW V2.wav"],
+                                     "Artist - Title [Take B] Project": ["Artist - Title SW V4.wav"]})
+    heads, listed = _note_block(_run_cli(tools, [["Artist", "Title"]]))
+    assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith("MASTER AMENDED V3.wav")
