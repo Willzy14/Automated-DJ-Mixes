@@ -18,17 +18,20 @@ report names every pair whose decision moved and how, so the change can be inspe
 and attributed to one signal. When a diff is reviewed and accepted, refresh the
 baseline deliberately with:
 
-    PYTHONPATH=Source python Tests/test_alignment_baseline.py --refresh --reason "<why this diff is accepted, 15+ letters or digits>" [--reviewer "<name>"] [--accept-shift]
+    PYTHONPATH=Source python Tests/test_alignment_baseline.py --refresh --reason "<why this diff is accepted, 15+ letters or digits>" [--reviewer "<name>"] [--accept-shift [NAMES]]
 
 --reason is REQUIRED: without it the command exits before anything is written. Each
 refresh writes baseline_alignments.refresh-<UTC time>.json beside the baseline FIRST
 (reason, reviewer, git commit, hashes of the corpus and code it was made from, old and
 new file hashes, a diff summary, the policy shift) and then replaces the baseline
-atomically. A refresh is REFUSED unless --accept-shift is given when 10+ pairs (or over
-10 percent) move between named_landmark_64 and standard_48, flip between align and raise,
-or change overlap_policy in any way; when 25+ pairs (or over 25 percent) change in any
-field or are newly added; or when over 5 percent of the pairs are dropped. A baseline
-with a duplicate (out, in) pair is refused outright: no flag overrides that.
+atomically. A refresh is REFUSED when 10+ pairs (or over 10 percent) move between
+named_landmark_64 and standard_48, flip between align and raise, or change
+overlap_policy in any way; when 25+ pairs (or over 25 percent) change in any field or
+are added between tracks the old baseline already had (the pairs of a new track are
+expected); or when over 5 percent of the pairs are dropped. --accept-shift NAMES (guard
+names, comma separated) accepts only those guards; --accept-shift all accepts every
+guard that fired; the bare flag works when exactly one guard fired. A baseline with a
+duplicate (out, in) pair is refused outright: no flag overrides that.
 Details and the tunable limits: Tests/baseline_refresh.py.
 
 Never refresh to make a red test green without reading the diff.

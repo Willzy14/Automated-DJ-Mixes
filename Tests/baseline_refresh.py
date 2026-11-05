@@ -24,12 +24,29 @@ This module is what makes a refresh a decision with a record:
     a failure leaves the old baseline intact. If the swap fails after the sidecar was
     written, the sidecar is renamed `*.not-applied`. A refresh that lands leaves no
     temp file behind, so a live record whose own temp file still exists did not land.
-  * A large change is refused unless `--accept-shift` is given (see the limits below):
-    pairs moving between the two named policies, pairs flipping between align and
-    raise, pairs changing overlap policy in any way, too many pairs changed in any
-    field, too many pairs added, or too many pairs removed. The sidecar names each
-    guard that fired in `guards_tripped_names`. Duplicate (out, in) pairs are
-    refused outright; no flag overrides that.
+  * A large change is refused (see the limits below): pairs moving between the two
+    named policies, pairs flipping between align and raise, pairs changing overlap
+    policy in any way, too many pairs changed in any field, too many unexplained pairs
+    added, or too many pairs removed. The guard names are policy_shift, status_flips,
+    overlap_policy_changes, pairs_changed, pairs_added and pairs_removed. The sidecar
+    names each guard that fired in `guards_tripped_names`.
+  * Pairs added because of a new track are expected. An added pair is explained when
+    its out or its in is a new track, one that is in no row of the old baseline (as an
+    out or as an in). A remix is a different track from its original, so a remix added
+    next to its original is a new track. Only the unexplained pairs, between two tracks
+    the old baseline already had, count toward pairs_added. The diff summary keeps
+    `pairs_added` as the total and adds `pairs_added_new_track` and
+    `pairs_added_unexplained`.
+  * `--accept-shift` names what it accepts. `--accept-shift pairs_added,pairs_changed`
+    accepts those guards only. Any other guard that fired still refuses, and the
+    refusal says "not accepted: <names>". `--accept-shift all` accepts every guard that
+    fired. The bare `--accept-shift` works only when exactly one guard fired. With two
+    or more it is refused, and the one-line refusal gives the exact flag to pass. An
+    unknown guard name is a usage error. When no guard fired the flag changes nothing.
+    The sidecar records `guards_accepted` (the names, or ["all"], empty when nothing
+    fired).
+  * A payload with a duplicate (out, in) pair is refused outright; no flag overrides
+    that.
   * A refresh killed between its writes (power cut, taskkill) leaves its temp file
     and a record with a live name. The record carries the process id and the temp
     file's name (`pid`, `staged_temp`). A later refresh, once the guards have passed
@@ -106,6 +123,11 @@ MAX_LISTED_PAIRS = 20
 POLICY_NAMED = "named_landmark_64"
 POLICY_STANDARD = "standard_48"
 
+#: The guard names: the words before the colon in each `guard_trips` line, in the order
+#: they are reported. `--accept-shift` takes these (or `all`).
+GUARD_NAMES = ("policy_shift", "status_flips", "overlap_policy_changes",
+               "pairs_changed", "pairs_added", "pairs_removed")
+
 #: Fields grouped as "swap / handoff" in the diff summary.
 SWAP_HANDOFF_FIELDS = ("swap_progress", "handoff_kind", "handoff_bar_out",
                        "arr_offset_bars", "overlap_bars")
@@ -140,11 +162,60 @@ class RefreshRefused(Exception):
 class RefreshArgs:
     reason: str
     reviewer: str | None
-    accept_shift: bool
+    #: False (no flag), True (the bare flag), "all", or a tuple of guard names.
+    accept_shift: object
 
 
 def _ascii(text):
     return str(text).encode("ascii", "replace").decode("ascii")
+
+
+def _accept_plan(accept_shift):
+    """Read what `--accept-shift` / `accept_shift=` asks for: ("none", ()), ("bare", ()),
+    ("all", ()) or ("names", <the named guards, in guard order>).
+
+    Takes False or None (no flag), True (the bare flag), the string "all", a comma
+    separated string of guard names, or an iterable of guard names (an empty one is no
+    flag). An unknown name, an empty name, or "all" mixed with names raises
+    RefreshRefused, even when no guard fired, so a typo is never silently harmless."""
+    if accept_shift is None or accept_shift is False:
+        return "none", ()
+    if accept_shift is True:
+        return "bare", ()
+    if isinstance(accept_shift, str):
+        parts = accept_shift.split(",")
+    else:
+        try:
+            parts = list(accept_shift)
+        except TypeError:
+            raise RefreshRefused(
+                "refresh refused: accept_shift must be False, True, 'all' or guard "
+                "names; nothing was written") from None
+        if not parts:
+            return "none", ()
+    parts = [p.strip() if isinstance(p, str) else str(p) for p in parts]
+    unknown = [p for p in dict.fromkeys(parts) if p and p != "all" and p not in GUARD_NAMES]
+    problems = []
+    if unknown:
+        problems.append("unknown name " + ", ".join(f"'{_ascii(p)}'" for p in unknown))
+    if "" in parts:
+        problems.append("an empty name")
+    if "all" in parts and len(set(parts)) > 1:
+        problems.append("'all' cannot be mixed with names")
+    if problems:
+        raise RefreshRefused(
+            "refresh refused: --accept-shift takes guard names or all ("
+            + "; ".join(problems) + "); valid names: " + ", ".join(GUARD_NAMES)
+            + ", all; nothing was written")
+    if set(parts) == {"all"}:
+        return "all", ()
+    return "names", tuple(g for g in GUARD_NAMES if g in parts)
+
+
+def _plan_value(plan):
+    """The RefreshArgs.accept_shift value for a plan from _accept_plan."""
+    kind, names = plan
+    return {"none": False, "bare": True, "all": "all"}.get(kind, names)
 
 
 # ---------------------------------------------------------------------------
@@ -174,19 +245,32 @@ class _Once(argparse.Action):
         setattr(namespace, self.dest, values)
 
 
-def parse_refresh_args(argv):
-    """Parse the arguments after the script name. Raises RefreshRefused on any problem."""
+_ACCEPT_SHIFT_HELP = (
+    "Accept guards that fired. NAMES is a comma-separated list of guard names ("
+    + ", ".join(GUARD_NAMES) + ") or the word all. "
+    "Only the named guards are accepted; any other guard that fired still refuses. "
+    "The bare flag works only when exactly one guard fired.")
+
+
+def _build_parser():
     parser = _Parser(prog="test_alignment_baseline.py", add_help=False,
                      allow_abbrev=False)
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--reason", default=None, action=_Once)
     parser.add_argument("--reviewer", default=None, action=_Once)
-    parser.add_argument("--accept-shift", action="store_true", dest="accept_shift")
-    ns = parser.parse_args(list(argv))
+    parser.add_argument("--accept-shift", nargs="?", const=True, default=None,
+                        action=_Once, dest="accept_shift", metavar="NAMES",
+                        help=_ACCEPT_SHIFT_HELP)
+    return parser
+
+
+def parse_refresh_args(argv):
+    """Parse the arguments after the script name. Raises RefreshRefused on any problem."""
+    ns = _build_parser().parse_args(list(argv))
     reason = validate_reason(ns.reason)
     reviewer = (ns.reviewer or "").strip() or None
     return RefreshArgs(reason=reason, reviewer=reviewer,
-                       accept_shift=bool(ns.accept_shift))
+                       accept_shift=_plan_value(_accept_plan(ns.accept_shift)))
 
 
 # ---------------------------------------------------------------------------
@@ -348,11 +432,19 @@ def diff_summary(old, new):
     output), raise_type (a pair that raised both times with a different exception
     type), status_flip (ok <-> raise), other (any remaining field, e.g. cue
     provenance, score, notes, a raise message).
+
+    `pairs_added` counts every new pair. It is split in two: `pairs_added_new_track`
+    (the pair's out or in is a track that is in no row of the old baseline, so the pair
+    is expected) and `pairs_added_unexplained` (both tracks were already in the old
+    baseline). A track counts as old if it is an out or an in in any old row. A remix is
+    a different track from its original. With no old baseline every track is new.
     """
     o, n = _rows_by_key(old), _rows_by_key(new)
     added = sorted(set(n) - set(o))
     removed = sorted(set(o) - set(n))
     common = sorted(set(o) & set(n))
+    old_tracks = {track for key in o for track in key}
+    added_new_track = [k for k in added if k[0] not in old_tracks or k[1] not in old_tracks]
     counters = {"alignment_policy": 0, "overlap_policy": 0, "swap_handoff": 0,
                 "spec": 0, "raise_type": 0, "status_flip": 0, "other": 0}
     changed = []
@@ -381,6 +473,8 @@ def diff_summary(old, new):
         "pairs_old": len(o),
         "pairs_new": len(n),
         "pairs_added": len(added),
+        "pairs_added_new_track": len(added_new_track),
+        "pairs_added_unexplained": len(added) - len(added_new_track),
         "pairs_removed": len(removed),
         "pairs_changed": len(changed),
         "pairs_unchanged": len(common) - len(changed),
@@ -423,9 +517,16 @@ def guard_trips(shift, summary):
     status_flips (pairs whose ok/raise status changed), overlap_policy_changes
     (pairs whose overlap_policy changed in ANY way, e.g. to or from None),
     pairs_changed (25 pairs or more, or over 25 percent, changed in ANY field),
-    pairs_added (25 pairs or more, or over 25 percent of the old baseline, are new;
-    not applied to the very first baseline) and pairs_removed (over 5 percent gone).
-    Each is checked on its own, and `--accept-shift` clears all of them at once.
+    pairs_added (25 pairs or more, or over 25 percent of the old baseline, are
+    unexplained new pairs; not applied to the very first baseline) and pairs_removed
+    (over 5 percent gone).
+    A new pair is explained when its out or its in is a new track, one that is in no row
+    of the old baseline. Only unexplained pairs, between two tracks the old baseline
+    already had, count toward pairs_added. A summary without the split counts every
+    added pair as unexplained.
+    Each guard is checked on its own. `--accept-shift` names the guards it accepts (or
+    `all`); a guard it does not name still refuses, and a bare `--accept-shift` works only
+    when exactly one guard fired (see refresh_baseline).
     A sweeping change that is not a move between the two named policies is caught by
     status_flips, overlap_policy_changes or pairs_changed. Not a guard, and never
     overridable: a payload that lists the same (out, in) pair twice is refused as a
@@ -454,11 +555,11 @@ def guard_trips(shift, summary):
                      f"(limits: under {CHANGED_MAX_PAIRS} pairs and under "
                      f"{CHANGED_MAX_FRACTION:.0%})")
     old_pairs = summary["pairs_old"]
-    added = summary.get("pairs_added", 0)
+    added = summary.get("pairs_added_unexplained", summary.get("pairs_added", 0))
     if old_pairs and _over(added, old_pairs, ADDED_MAX_PAIRS, ADDED_MAX_FRACTION):
-        trips.append(f"pairs_added: {added} new pairs on top of {old_pairs} "
-                     f"(limits: under {ADDED_MAX_PAIRS} pairs and under "
-                     f"{ADDED_MAX_FRACTION:.0%} of the old baseline)")
+        trips.append(f"pairs_added: {added} unexplained new pairs on top of {old_pairs} "
+                     f"(pairs of new tracks do not count; limits: under {ADDED_MAX_PAIRS} "
+                     f"pairs and under {ADDED_MAX_FRACTION:.0%} of the old baseline)")
     removed = summary["pairs_removed"]
     if old_pairs and removed / old_pairs > REMOVED_MAX_FRACTION:
         trips.append(f"pairs_removed: {removed} of {old_pairs} pairs are gone from the new "
@@ -673,17 +774,56 @@ def _read_old(baseline):
     return payload, sha256_bytes(raw)
 
 
+def _accepted_guards(plan, trips):
+    """The guard names a refresh accepts, given the plan from _accept_plan and the lines
+    from guard_trips. Raises RefreshRefused (one plain line) when a guard that fired is
+    not covered. [] when nothing fired; ["all"] for `all`; otherwise the guards that
+    fired, in guard order."""
+    kind, names = plan
+    if not trips:
+        return []
+    tripped = [t.split(":", 1)[0] for t in trips]
+    flag = "--accept-shift " + ",".join(tripped)
+    if kind == "all":
+        return ["all"]
+    if kind == "none":
+        raise RefreshRefused("refresh refused: " + "; ".join(trips)
+                             + f". Read the diff, then add {flag} if it is "
+                             "intended; nothing was written")
+    if kind == "bare":
+        if len(tripped) == 1:
+            return tripped
+        raise RefreshRefused(
+            f"refresh refused: {len(tripped)} guards tripped ({', '.join(tripped)}); "
+            f"a bare --accept-shift is not enough; pass {flag} or --accept-shift all; "
+            "nothing was written")
+    missing = [g for g in tripped if g not in names]
+    if missing:
+        raise RefreshRefused(
+            f"refresh refused: not accepted: {', '.join(missing)}; to accept, pass "
+            f"{flag} (or all); nothing was written")
+    return tripped
+
+
 def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=False,
                      input_paths=(), root=None, clock=None, head=None, notify=None):
     """Replace `baseline` with `payload` if the reason and the guards allow it.
+
+    `accept_shift` says which guards that fired are accepted: False (none), True (the
+    bare flag: only when exactly one guard fired), "all", or an iterable of guard names
+    (GUARD_NAMES; a comma-separated string works too). A guard that fired and is not
+    covered refuses the refresh ("not accepted"). An unknown name refuses it even when
+    no guard fired. Duplicate pairs are never overridable.
 
     Order: validate -> diff and guard -> clean up after a killed refresh (`notify`
     gets one line if it found anything) -> stage the new baseline as a temp file ->
     write the sidecar -> os.replace the temp file over the baseline. Nothing at all is
     written or deleted before the guards pass, so a refused refresh changes no file;
     the sidecar exists before the baseline moves.
-    Returns a dict (sidecar path, diff summary, policy shift, accepted_shift, hashes).
+    Returns a dict (sidecar path, diff summary, policy shift, accepted_shift,
+    guards_accepted, hashes).
     """
+    plan = _accept_plan(accept_shift)
     baseline = Path(baseline)
     reason = validate_reason(reason)
     check_payload(payload, "the new baseline")
@@ -691,10 +831,7 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
     summary = diff_summary(old_payload, payload)
     shift = policy_shift(old_payload, payload)
     trips = guard_trips(shift, summary)
-    if trips and not accept_shift:
-        raise RefreshRefused("refresh refused: " + "; ".join(trips)
-                             + ". Read the diff, then add --accept-shift if it is "
-                             "intended; nothing was written")
+    accepted = _accepted_guards(plan, trips)
 
     cleaned = cleanup_interrupted(baseline)
     if notify is not None and (cleaned["removed"] or cleaned["marked"]):
@@ -731,8 +868,9 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
         "policy_shift": shift,
         "guards_tripped": trips,
         "guards_tripped_names": [t.split(":", 1)[0] for t in trips],
-        "accept_shift_flag": bool(accept_shift),
-        "accepted_shift": bool(trips) and bool(accept_shift),
+        "accept_shift_flag": plan[0] != "none",
+        "accepted_shift": bool(trips),
+        "guards_accepted": accepted,
         "guard_limits": {"shift_max_pairs": SHIFT_MAX_PAIRS,
                          "shift_max_fraction": SHIFT_MAX_FRACTION,
                          "removed_max_fraction": REMOVED_MAX_FRACTION,
@@ -761,7 +899,7 @@ def refresh_baseline(baseline, payload, *, reason, reviewer=None, accept_shift=F
         raise
     return {"sidecar": sidecar, "summary": summary, "shift": shift,
             "accepted_shift": record["accepted_shift"], "guards_tripped": trips,
-            "old_sha256": old_sha, "new_sha256": new_sha}
+            "guards_accepted": accepted, "old_sha256": old_sha, "new_sha256": new_sha}
 
 
 def _counts(payload):
@@ -803,11 +941,18 @@ def run_refresh_cli(argv, baseline, build_payload, input_paths, root=None,
     ok = sum(1 for r in payload["rows"] if r["status"] == "ok")
     s, sh = result["summary"], result["shift"]
     _say(f"baseline refreshed: {n} pairs ({ok} align, {n - ok} raise)")
-    _say(f"diff: {s['pairs_changed']} changed, {s['pairs_added']} added, "
+    _say(f"diff: {s['pairs_changed']} changed, {s['pairs_added']} added "
+         f"({s['pairs_added_new_track']} for new tracks, "
+         f"{s['pairs_added_unexplained']} unexplained), "
          f"{s['pairs_removed']} removed; policy moves: "
          f"{sh['named_landmark_64_to_standard_48']} to {POLICY_STANDARD}, "
          f"{sh['standard_48_to_named_landmark_64']} to {POLICY_NAMED}")
     if result["accepted_shift"]:
-        _say("large shift accepted with --accept-shift: " + "; ".join(result["guards_tripped"]))
+        if result["guards_accepted"] == ["all"]:
+            _say("all guards accepted (--accept-shift all)")
+        else:
+            _say("guards accepted: " + ", ".join(result["guards_accepted"]))
+        for trip in result["guards_tripped"]:
+            _say("  " + trip)
     _say(f"refresh record: {result['sidecar'].name}")
     return 0
