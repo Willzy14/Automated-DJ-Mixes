@@ -1788,6 +1788,13 @@ def test_y1b_a_version_word_title_without_the_artist_prefix_still_never_wins(tmp
     assert len(heads) == 1 and len(listed) == 1 and listed[0].endswith(master)            # and it is noted
 
 
+@pytest.mark.parametrize("second", ["01 Main - Master SW V3 (Part 2).wav", "01 Main - Master SW V3 (Club Mix) AMENDED.wav"])
+def test_y6_codex7_an_artist_whose_own_name_starts_with_a_number_keeps_the_named_file(tmp_path, second):
+    # The artist is literally "01 Main": the number belongs to the artist, so the artist prefix must be accepted in the raw name too (round 11 cut it first).
+    mod, tools, _ = _folder_and_tools(tmp_path, "01 Main - Master EP [Label] Project", ["01 Main - Master SW V3.wav", second])
+    assert names(mod.resolve("01 Main", "Master", "01 Main - Master SW V3"))[0] == "01 Main - Master SW V3.wav"
+
+
 @pytest.mark.parametrize("fallback_first", [False, True])
 def test_y2_codex_a_held_master_is_noted_when_the_answer_is_an_unnamed_fallback(tmp_path, fallback_first):
     spec = {"Artist - Title [Label] Project": ["Extended SW V2.wav", "Title Stems SW V3.wav"],

@@ -71,7 +71,7 @@ def scan(artist_key,title_key,must=None,exact=None):
             rows=[]
             for f in fs:
                 kn=norm(stem(f)); kt=norm(strip_num(stem(f))); dc=deco(f,a,t)      # kt: the name without its track number
-                tk=vt and bool(VERS.search(kn)) and not VMIX.sub(' ',VERS.sub(' ',kt)).split() and not kt.startswith(a+' ')     # a version-word title and a name of only tokens, no artist: never "named"
+                tk=vt and bool(VERS.search(kn)) and not VMIX.sub(' ',VERS.sub(' ',kt)).split() and not (kn.startswith(a+' ') or kt.startswith(a+' '))     # a version-word title and a name of only tokens, no artist: never "named"
                 rows.append((f,kn,bool(t) and f' {t} ' in f' {kn} ' and not variants(kn)-asked and not tk,bool(set(JUNK.findall(f.lower()))-asked_junk),dc and bool(VERS.search(kn)),dc,tk))
             # A version-only file is a version of the searched track ONLY in an exact single-track folder: the folder name is exactly
             # artist - title (no brackets, parentheses, & or other words), every file that is not junk is either a titled file (its name,
