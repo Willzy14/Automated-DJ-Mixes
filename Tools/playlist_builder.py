@@ -7,9 +7,10 @@ Usage:
   python Tools/playlist_builder.py sql   --label Defected --label DFTD            # print the SELECT (run it yourself)
   python Tools/playlist_builder.py build --label Defected --arc rise --n 12       # live: uses the read-only mix_planner_ro Neon role
   python Tools/playlist_builder.py build --rows rows.json --arc rise --n 12       # offline: rows = JSON list from the SELECT
+Add --resolve to build to print paths to matching master WAVs.
 Selection presets (--preset): hits | cool | cult | any.  Arcs (--arc): rise | wave | flat.
 Read-only: only SELECT is ever sent, and the live session is set read-only."""
-import argparse, json, math, os, re, sys
+import argparse, importlib.util, json, math, os, re, sys
 sys.stdout.reconfigure(encoding='utf-8')
 
 # Genre -> heat 0..10 (how housey -> how hard). DB genre tags are unapproved enrichment drafts: this is a coarse ladder
@@ -114,15 +115,94 @@ def build(rows, a):
     if a.arc == 'rise': picked.sort(key=lambda r: r['heat'])                # slots chose WHO; a rise is then ordered by heat
     return picked
 
-def report(picked, a):
+def load_resolver():
+    path = os.path.join(os.path.dirname(__file__), 'resolve_masters.py')
+    spec = importlib.util.spec_from_file_location('resolve_masters', path)
+    resolver = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(resolver)
+        if not isinstance(resolver.idx, list) or not all(
+                isinstance(entry, list) and len(entry) == 2 and all(isinstance(s, str) and s.strip() for s in entry)
+                for entry in resolver.idx):
+            raise ValueError('expected a list of folder names and paths')
+    except (OSError, ValueError):
+        sys.exit('Cannot read Tools/folder_index.json. Run python Tools/build_folder_index.py.')
+    return resolver
+
+ORIGINAL_MIXES = ('', 'original', 'original mix', 'main', 'main mix', 'main original', 'main original mix',
+                  'extended', 'extended mix')
+
+def master_name_matches(resolver, filename, versions, *bases):
+    name = resolver.norm(resolver.strip_num(resolver.stem(filename)))
+    for base in bases:
+        if base and name != base and not name.startswith(base + ' '): continue
+        tail = name[len(base):].strip()
+        for version in versions:
+            if version and tail != version and not tail.startswith(version + ' '): continue
+            if not resolver.VERS.sub(' ', tail[len(version):]).strip(): return True
+    return False
+
+def master_matches(resolver, path, artist, title, versions):
+    name = os.path.basename(path)
+    full_title = artist + ' ' + title
+    if master_name_matches(resolver, name, versions, full_title): return True
+    folder = resolver.ftail(os.path.basename(os.path.dirname(os.path.dirname(path))))
+    folder_artist, sep, _ = folder.partition(' - ')
+    if not sep or resolver.norm(folder_artist) != artist: return False
+    if master_name_matches(resolver, name, versions, title): return True
+    # scan() can promote an untitled delivery in an exact folder, even when its named anchor is a radio edit.
+    if not resolver.vonly(name, artist, title) or not master_name_matches(resolver, name, versions, artist, ''):
+        return False
+    try:
+        with os.scandir(os.path.dirname(path)) as entries:
+            files = [e.name for e in entries if e.name.lower().endswith('.wav') and e.is_file()]
+    except OSError:
+        return False
+    named = {f for f in files if master_name_matches(resolver, f, versions, full_title, title)}
+    return bool(named) and all(f in named or (resolver.vonly(f, artist, title)
+                                             and master_name_matches(resolver, f, versions, artist, '')) for f in files)
+
+def resolve_pick(resolver, r):
+    artist, title = r['artist'], r['title']
+    a, t = resolver.norm(artist or ''), resolver.norm(title or '')
+    if not a or not t: return None, [], 'artist and title need a letter or digit'
+    remixer, mix_name = ((r.get(k) or '').strip() for k in ('remixer', 'mix_name'))
+    rm, mix = resolver.norm(remixer), resolver.norm(mix_name)
+    if (remixer and not rm) or (mix_name and not mix): return None, [], 'release version needs a letter or digit'
+    version = mix or (rm + ' remix' if rm else '')
+    if rm and f' {rm} ' not in f' {version} ': version = rm + ' ' + version
+    if version and not resolver.VERS.sub(' ', version).strip(): return None, [], 'release version is a delivery label'
+    versions = (version,) if version else ORIGINAL_MIXES
+    candidates, notes, miss = resolver.scan(artist, title, must=version or None)
+    # The hint may match only the folder, and scan() can return unrelated or alternate files as fallbacks.
+    for _, path in candidates:
+        if master_matches(resolver, path, a, t, versions): return os.path.abspath(path), notes, None
+    if miss:
+        kind, value = miss[0]
+        return None, notes, f'no file matched the {kind} "{value}"'
+    return None, notes, "no candidate matches the credit's title and version"
+
+def report(picked, a, resolver=None):
+    resolved = with_notes = 0
     print(f"# Playlist draft: arc={a.arc} preset={a.preset} n={len(picked)}  (source: Neon credits ledger)\n")
     print("Each row is one VERSION with its own streams (a remix and an original are different tracks). Genre is a DB DRAFT tag.\n")
     for i, r in enumerate(picked, 1):
         ver = r.get('mix_name') or (f"{r['remixer']} remix" if r.get('remixer') else 'original/unspecified')
         print(f"{i:>2}. [{r['heat']}] {r['artist']} - {r['title']}  ({ver}) | {r['label']} {year(r) or '?'} | {r['genre']} | "
               f"{r['streams_plays']:,} streams | bpm {r.get('bpm') or '-'} | key {r.get('musical_key') or '-'} | tier {r.get('display_tier')}")
+        if resolver is not None:
+            path, notes, reason = resolve_pick(resolver, r)
+            if path:
+                print(f"   MASTER: {path}")
+                resolved += 1
+            else: print(f"   NONE: {reason}")
+            for why, note_path in notes: print(f"   NOTE: {why}: {note_path}")
+            with_notes += bool(notes)
     print("\nHeat curve:", ' '.join(str(r['heat']) for r in picked))
-    print("Next: Tools/resolve_masters.py to find audio + confirm Sam's version; BPM/key are measured by the pipeline.")
+    if resolver is None:
+        print("Next: Tools/resolve_masters.py to find audio + confirm Sam's version; BPM/key are measured by the pipeline.")
+    else:
+        print(f"Resolved {resolved} of {len(picked)}; {with_notes} with notes; {len(picked) - resolved} not found")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -133,8 +213,12 @@ def main():
     ap.add_argument('--n', type=int, default=12); ap.add_argument('--max-per-artist', type=int, default=1)
     ap.add_argument('--heat-min', type=int, default=0); ap.add_argument('--heat-max', type=int, default=10)
     ap.add_argument('--rows')
+    ap.add_argument('--resolve', action='store_true', help='print matching master WAV paths for build')
     a = ap.parse_args()
-    if a.cmd == 'sql': print(SELECT.format(where=where_clause(a))); return
-    report(build(fetch(a), a), a)
+    if a.cmd == 'sql':
+        if a.resolve: ap.error('--resolve requires build')
+        print(SELECT.format(where=where_clause(a))); return
+    resolver = load_resolver() if a.resolve else None
+    report(build(fetch(a), a), a, resolver)
 
 if __name__ == '__main__': main()
