@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Source"))
 
 import stem_detector as sd  # noqa: E402
 import kick_model_adapter as kma  # noqa: E402
+from section_format import SectionFormatError, cached_section_mode  # noqa: E402
 
 
 def load_drums_any_version(wav_path: Path, cache_dir: Path):
@@ -164,12 +165,22 @@ def main(argv=None) -> int:
     ap.add_argument("--downbeat", type=float, default=None,
                     help="force one downbeat for every track (default: each cached analysis's own)")
     ap.add_argument("--kick-model-path", type=Path, default=None)
-    ap.add_argument("--section-mode", choices=sd.SECTION_MODES, default=sd.SECTION_MODE_LEGACY)
+    ap.add_argument("--section-mode", choices=sd.SECTION_MODES,
+                    help="Default: use the cached format, or legacy if no format is available.")
     ap.add_argument("--bar-one-adjust", action="store_true")
     ap.add_argument("--exact", action="store_true", help="--match names are exact wav stems")
     args = ap.parse_args(argv)
+    section_mode = args.section_mode
+    if section_mode is None:
+        try:
+            cached_mode = cached_section_mode(args.project / "_Stem Analysis", "section_key_replay")
+        except SectionFormatError as exc:
+            ap.exit(2, f"ERROR: {exc}\n")
+        section_mode = cached_mode or sd.SECTION_MODE_LEGACY
+        reason = "cached section analysis" if cached_mode else "no cached section analysis"
+        print(f"[section-mode] AUTO chose {section_mode}: {reason}.")
     done = run(args.project, args.audio, args.out, args.match, args.downbeat, args.kick_model_path,
-               args.section_mode, args.bar_one_adjust, args.exact)
+               section_mode, args.bar_one_adjust, args.exact)
     print(f"replayed {len(done)} track(s) -> {args.out}")
     return 0 if done else 1
 

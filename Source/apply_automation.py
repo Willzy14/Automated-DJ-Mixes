@@ -32,7 +32,9 @@ from pathlib import Path
 
 from align_engine import LANDMARK_POLICIES
 from automated_dj_mixes.als_generator import split_audio_clips_at_beats
-from section_format import GROOVE, LEGACY, SECTION_MODES, SectionFormatError, track_section_mode
+from section_format import (
+    GROOVE, LEGACY, SECTION_MODES, SectionFormatError, cached_section_mode, track_section_mode,
+)
 
 
 class TransitionStyle(Enum):
@@ -1548,6 +1550,8 @@ def _requires_report_swaps(als_path: Path, tracks: list[TrackInfo],
                                      f"directory beside {als_path} or its Output folder")
         return False
 
+    if section_mode is None:
+        cached_section_mode(stem_dir, "apply_automation")
     modes = {}
     errors = []
     for track in tracks:

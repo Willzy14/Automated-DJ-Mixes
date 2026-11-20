@@ -22,7 +22,10 @@ import json
 import re
 import sys
 from pathlib import Path
-from section_format import GROOVE, GROOVE_DETECTOR, section_detector_of, section_mode_of
+from section_format import (
+    GROOVE, GROOVE_DETECTOR, SectionFormatError, cached_section_mode,
+    section_detector_of, section_mode_of,
+)
 
 
 def _label(sec: dict) -> str:
@@ -289,7 +292,11 @@ def main() -> int:
     parser.add_argument("--version", type=int, default=None)
     args = parser.parse_args()
 
-    code, errors, report = validate(args.project_dir, args.version)
+    try:
+        cached_section_mode(args.project_dir / "_Stem Analysis", "validate_hints_vs_sections")
+        code, errors, report = validate(args.project_dir, args.version)
+    except SectionFormatError as exc:
+        parser.exit(2, f"ERROR: {exc}\n")
     if code == 1:
         for e in errors:
             print(f"ERROR: {e}", file=sys.stderr)

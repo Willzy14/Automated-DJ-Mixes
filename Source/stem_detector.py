@@ -48,7 +48,7 @@ import numpy as np
 from stem_section_probe import _separate_envelopes, _load_stats, _seccol
 from section_format import (
     GROOVE as SECTION_MODE_GROOVE, LEGACY as SECTION_MODE_LEGACY, SECTION_MODES,
-    SectionFormatError, groove_fills, require_section_mode, section_mode_of,
+    SectionFormatError, cached_section_mode, groove_fills, require_section_mode, section_mode_of,
 )
 from _tier_a_features import (
     TIERA_KEYS as _TIERA_KEYS,
@@ -1682,8 +1682,9 @@ def main():
                     help="With --write-hints: also accept a cached SECTIONS_STEM json that is "
                          "otherwise valid but not known to come from the kick detector (WARN per "
                          "track). Never accepts a missing, wrong-track, empty or bpm<=0 file.")
-    ap.add_argument("--section-mode", choices=SECTION_MODES, default=SECTION_MODE_LEGACY,
-                    help="legacy (default) or groove (the answer-key detector, groove_sections.py)")
+    ap.add_argument("--section-mode", choices=SECTION_MODES,
+                    help="Default: use the cached format. For fresh detection, use groove "
+                         "with --kick-model, legacy otherwise.")
     ap.add_argument("--kick-model", action="store_true",
                     help="Use Kick Detector V3 for kick IN/OUT presence. Default is off. "
                          "Does NOT affect --write-hints (which only reads the cached analysis).")
@@ -1694,29 +1695,47 @@ def main():
                     help="Torch device for Kick Detector and its Demucs pass: auto, cpu, or cuda.")
     args = ap.parse_args()
     audio = args.project / "Audio"
+    stem_dir = args.project / "_Stem Analysis"
     wavs = [audio / args.track] if args.track else sorted(audio.glob("*.wav"))
+    if args.write_hints and args.track is not None:
+        want = args.track
+        hits = ([e for e in audio.iterdir()
+                 if e.is_file() and e.suffix.lower() == ".wav"
+                 and e.name.lower() == want.lower()]
+                if want and Path(want).name == want and audio.is_dir() else [])
+        if len(hits) != 1:
+            why = ("matches more than one file differing only by case" if len(hits) > 1
+                   else "is not a .wav file in")
+            print(f"  [REFUSED] --track {_ascii(want)} {why} {_ascii(audio)}")
+            sys.exit(2)
+        wavs = [hits[0]]
+
+    section_mode = args.section_mode
+    if section_mode is None:
+        try:
+            section_mode = cached_section_mode(stem_dir, "stem_detector")
+        except SectionFormatError as exc:
+            ap.exit(2, f"ERROR: {exc}\n")
+        if section_mode is not None:
+            reason = "cached section analysis"
+        elif args.kick_model and not args.write_hints:
+            section_mode = SECTION_MODE_GROOVE
+            reason = "fresh stem detection with --kick-model"
+        else:
+            section_mode = SECTION_MODE_LEGACY
+            reason = ("no cached section analysis" if args.write_hints
+                      else "fresh stem detection without --kick-model")
+        print(f"[section-mode] AUTO chose {section_mode}: {reason}.")
 
     if args.write_hints:
-        if args.track is not None:
-            want = args.track
-            hits = ([e for e in audio.iterdir()
-                     if e.is_file() and e.suffix.lower() == ".wav"
-                     and e.name.lower() == want.lower()]
-                    if want and Path(want).name == want and audio.is_dir() else [])
-            if len(hits) != 1:
-                why = ("matches more than one file differing only by case" if len(hits) > 1
-                       else "is not a .wav file in")
-                print(f"  [REFUSED] --track {_ascii(want)} {why} {_ascii(audio)}")
-                sys.exit(2)
-            wavs = [hits[0]]
         # Pure read of the Phase 1a analysis: never runs detect(), never writes
         # a SECTIONS_STEM json. All tracks must be usable or nothing is written.
         hints, bad = {}, []
         print(f"Deriving hints from the cached stem analysis for {len(wavs)} track(s):")
         for w in wavs:
-            cached = args.project / "_Stem Analysis" / f"SECTIONS_STEM_{w.stem}.json"
+            cached = stem_dir / f"SECTIONS_STEM_{w.stem}.json"
             res, note = _check_cached_sections(
-                cached, w.stem, args.allow_unverified_cache, args.section_mode)
+                cached, w.stem, args.allow_unverified_cache, section_mode)
             if res is None:
                 bad.append(f"  [REFUSED] {_ascii(w.stem[:60])}: {_ascii(note)}")
                 continue
@@ -1750,7 +1769,7 @@ def main():
             kick_model=args.kick_model,
             kick_model_path=args.kick_model_path,
             kick_model_device=args.kick_model_device,
-            section_mode=args.section_mode,
+            section_mode=section_mode,
         )
 
 
