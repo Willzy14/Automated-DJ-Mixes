@@ -4,6 +4,12 @@ Module reference for all pipeline components.
 
 ## Modules
 
+### Groove sections and the answer key (2026-11-20, Claude with Codex and Kimi)
+- `Source/groove_sections.py`: section lines from kick and bass state, fills first-class (`signals.fill_sections`), cue points; `Source/section_format.py`: format marker (`groove-1`, schema 2) and `SectionFormatError`. Default for the production chain; `--section-mode legacy|groove` overrides; commands auto-detect the format from the files they read.
+- `Tools/score_sections.py` (honest scorer against the key), `Tools/section_key_replay.py` (re-run the detector from cached stems), `Tools/section_key_picture.py` (the pictures Sam judges), `Tools/legacy_identity.py` (legacy reader output versus main).
+- `Source/phrase_blend.py`, `Tools/score_blends.py`, `Tools/blend_candidates.py`, `Tools/blend_sensitivity.py`, `Tools/measure_section_content.py`: the cue-point blend planner and its checks (opt-in, wired by `Tools/plan_mix_decisions.py`).
+- `Documentation/Golden Sections/Answer Key 2026-11-20 DFTD.json`: the truth these are measured against.
+
 ### `Tools/plan_mix_decisions.py` (2026-11-20, Codex)
 
 The planner publishes decisions with a same-directory atomic rename. Phase 2 verifies exact exit bars against the ALS clip and warp geometry with a one-beat detector tolerance. Use `--decisions-drop-rejected-loops` with `--decisions` to remove repeats rejected by the production loop-quality gate. Each drop and any resulting entry or exit change appears in the arrangement report. The original proposal stays on disk.

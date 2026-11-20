@@ -231,6 +231,26 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
+### 2026-11-20 (Latest Session) - Section answer key, groove detector ON, blend planner built and wired (opt-in)
+
+**Brain:** Claude (Fable 5.2, then Sonnet 5.5) with Codex, Kimi and MiniMax builds and reviews
+
+**Focus:** Sam confirmed section lines, fills and blends from pictures (7 tracks, 7 blends, 4 unseen holdout tracks, 3 older-mix tracks); the detector and the blend planner were built and corrected against that truth.
+
+**Completed:**
+- `Documentation/Golden Sections/` holds the answer key (47 section lines, 53 fills, 7 blends with also-acceptable alternatives), holdout verdicts, pair JSONs and pictures; `Tools/section_key_picture.py`, `Tools/score_sections.py`, `Tools/section_key_replay.py`.
+- **Groove section detector** (`Source/groove_sections.py`, `Source/section_format.py`) is the DEFAULT for the production chain (merge 6eaa574; library `detect()` and `run_pipeline()` stay legacy; `SECTION_MODE=legacy` or `--section-mode legacy` reverts). 46 of 47 key lines, 53 of 53 fills, 28 of 28 on four unseen tracks; legacy path byte-identical to main. Every reader understands both formats; mixed folders stop loudly. Untested live: a fresh Phase 1a with new separation.
+- **Blend planner** (`Source/phrase_blend.py`, `Tools/score_blends.py`, `Tools/blend_candidates.py`, `Tools/measure_section_content.py`) built from Sam's cue-point rules; opt-in wiring `Tools/plan_mix_decisions.py` feeds `propose_arrangement.py --decisions` (exits from real clips, atomic write, `--decisions-drop-rejected-loops`). Unaided it reproduces all seven owner blends (in-sample; the bottom-end rule is inert on them, measured content is not).
+- `Listening Sets/Fresh Mix Planned.als` (8 never-mixed tracks, planner-chosen); Sam bounced it.
+- Parked with reasons (burn list D4, D21, E1, bar one; tags `archive/e1-arc-click`, `archive/item8-key`, toolkit `archive/d21-robust-period`, `archive/bar-one`): key estimator (47 percent exact), grid-period rescue, arc click locator, bar-one correction.
+
+**Key Learnings:**
+- Sam's rules are in memory `fills-are-phrase-points` and the answer key: a SECTION changes only when kick or bass changes; a CUE POINT is any fill end, section start or one-minute mark; a swap lines up a cue point of BOTH tracks; loops (outgoing and intro) lengthen a blend and are free when they reach a cue point; at every moment one track must give kick or bass; the incoming enters with lows cut; the outgoing still needs its bass at the swap; picture answers are provisional until heard.
+- Call 911 was not a grid fault (my replay discarded the grid's bar one); Kyle Watson bar one is unproven.
+- Kimi login: approve on kimi.ai, not kimi.com (Known Workarounds).
+
+**Next:** Sam listens to `Fresh Mix Planned`; first real mix is the first live run of the groove default; wire the planner as the default arranger after that; two more tricky pairs from `Tools/blend_candidates.py --scan`; Kyle Watson bar one by ear.
+
 ### 2026-11-20 - Phrase-blend decisions replay
 
 **Brain:** Codex
