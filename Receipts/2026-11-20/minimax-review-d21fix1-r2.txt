@@ -1,0 +1,246 @@
+﻿The diff's version of the test file matches the standalone copy exactly (the standalone file has `def test_every_apply_model_use_under_source_and_tools_passes_shifts_zero():` at line 119 and `for root in (SOURCE, SOURCE.parent / "Tools"):` at line 122, and the diff shows the same at its corresponding positions). Confirmed consistent.
+
+I now have a complete picture. Let me write my review.
+
+---
+
+VERDICT: CORRECTION
+
+## 1. Round 1 correction: fully applied on the comment, not on the guard
+
+**The comment is now correctly scoped.** The round 1 text was:
+
+> "Since 2026-11-20 both separation call sites pass shifts=0, so the same model and file give a bit-identical stem on every run"
+
+The round 2 text in `Source/automated_dj_mixes/stem_grid.py`:
+
+> "Both separation call sites pass shifts=0, so Demucs applies no random time shift. On the one machine measured (RTX 3050) repeated separations of one file were bit-identical; identity across machines, devices (CPU vs GPU) or sample-rate paths is not established."
+
+That is what was measured and no more. Every clause is checkable against the installed `demucs/apply.py`:
+
+- "Both separation call sites pass shifts=0" — the diff touches three `apply_model` call sites (`kick_model_adapter.py`, `probe_stem_kick_grid.py`, `stem_section_probe.py`), all now `shifts=0`. The comment's "both" refers to the two *separation paths* into the grid flow (adapter + grid hook), which is consistent with the round 1 excerpt at `kick_model_adapter_separation_lines700-800.txt` and `probe_stem_kick_grid_lines20-60.txt`. Both of those excerpts now show `shifts=0`. Correct.
+- "so Demucs applies no random time shift" — confirmed against the installed `apply_model`: `if shifts:` guards the entire shift-trick block, and `random.randint(0, max_shift)` lives only inside it. With `shifts=0` the branch is skipped, so no RNG call happens. Confirmed, not overstated.
+- "On the one machine measured (RTX 3050) repeated separations of one file were bit-identical" — scoped to one machine, one file, repeat runs. Matches the round 1 finding.
+- "identity across machines, devices (CPU vs GPU) or sample-rate paths is not established" — an explicit non-claim. Good.
+
+The one thing I want to flag as *not* an overstatement but worth a reader's attention: the phrase "repeated separations of one file" still silently implies the separations were of the *same path*. Per the round 1 analysis, the adapter resamples 48 kHz input to 44.1 kHz while the direct probe feeds native rate, so the same *file* through two paths yields different signals. The comment's disclaimer covers "sample-rate paths", so it is not wrong, but "repeated separations of one file" is the loosest phrase in the paragraph. This is a documentation nit, not a correctness problem, and it is already inside the recorded follow-up on sample rates. I am not re-raising it.
+
+**The round 1 blind spot on the alias case IS closed.** The round 1 review said a new module could do `from demucs.apply import apply_model as separate` followed by `separate(model, x)` and keep `shifts=1`. The round 2 checker resolves `func_names` from `from demucs.apply import apply_model` including `a.asname or a.name`, so the alias is tracked, and the alias call is a `ast.Call` whose `func` is a `Name` in `func_names`, so it is reported unless it carries the literal `shifts=0`. The round 1 example is now caught. Confirmed by the `"aliased no shifts"` bad-case in the test file.
+
+**The round 1 blind spots that are NOT closed:** round 1 also named `getattr`, `functools.partial`, and "calls under `Tools/`" as evasions. `getattr` and `partial` are now handled (see section 2 and 3), and `Tools/` is now scanned. But the guard's binding model is still single-file, which leaves the re-export hole in section 2.
+
+## 2. Uses the checker accepts that do NOT pass shifts=0 at run time
+
+I traced each candidate against the checker source and against the installed `apply_model` signature (`apply_model(model, mix, shifts: int = 1, split: bool = True, overlap: float = 0.25, transition_power: float = 1., progress: bool = False, device=None, num_workers: int = 0, segment=None, pool=None)`).
+
+### (a) Cross-module re-export — ACCEPTED BY CHECKER, RUNS WITH shifts=1. REALISTIC.
+
+```python
+# Source/backend.py
+from demucs.apply import apply_model as separate
+def separate_stems(model, mix):
+    return separate(model, mix)          # checker: flagged (direct call, no shifts=0)
+```
+The above *is* flagged. The real bypass needs the re-export to not contain a call:
+
+```python
+# Source/backend.py
+from demucs.apply import apply_model as separate      # import only, never called here
+```
+Checker on backend.py: `func_names = {"separate"}`. The Name `separate` is a Load but is never the func of a Call, so the second loop's `is_ref(node) and id(node) not in allowed` fires -> "apply_model used other than a direct call" -> **backend.py is flagged too**.
+
+Wait. Let me re-check that. `is_ref` on the `ast.Name` node `separate` (in `from demucs.apply import apply_model as separate`) — the `ast.alias` in an `ImportFrom` is not an `ast.Name` node. `a.asname` is a plain string. So the ImportFrom's alias is NOT an `ast.Name` node and is not walked as such. The only `ast.Name` node with id `"separate"` would be a *use*.
+
+So if backend.py imports it and never uses it, there is no `ast.Name` node with id "separate" at all -> backend.py passes clean. Then:
+
+```python
+# Source/caller.py
+from backend import separate
+out = separate(model, t)                # checker: NOT flagged
+```
+In caller.py, `node.module` is `"backend"`, not `"demucs.apply"`, so `func_names` stays empty. `is_ref(Name "separate")` -> `n.id in func_names` -> False. `is_ref` on Attribute -> it's a Name, not an Attribute. So the call is completely invisible. **caller.py passes clean. Runtime: `separate` is `demucs.apply.apply_model` called with the default `shifts=1`.**
+
+This is a genuine, unguarded, runtime-relevant bypass. Whether it is realistic: this codebase already has a de-facto "backend" module (`kick_model_adapter.py`) and the round 1 excerpts show a lazy-import pattern with helper functions (`_run_demucs_separation`, `_demucs_model`, `_device`) that are already imported across modules (`probe_stem_kick_grid.py` does `from stem_section_probe import _device, _model`). So the pattern "one module owns the Demucs import, another module calls the helper" **is already the house style**. A future refactor that exposes `apply_model` (or a separation helper) through a module and calls it from elsewhere is entirely plausible, and that refactor would silently restore `shifts=1`.
+
+That said, I want to be precise about the severity: a *wrapper function* that calls `apply_model` inside itself is caught (the direct call inside the wrapper body must carry `shifts=0`). The gap is specifically "re-export the raw symbol, call it elsewhere without the keyword". That is a narrower hole than "any cross-module call", but it is a hole, and it is the one pattern the house style makes plausible.
+
+### (b) functools.partial with forwarded options — ACCEPTED BY CHECKER, RUNS WITH shifts=1. ADVERSARIAL.
+
+```python
+from demucs.apply import apply_model
+import functools
+sep = functools.partial(apply_model, shifts=0)
+out = sep(model, t, **{"shifts": 1})      # checker: clean; runtime: shifts=1
+```
+Checker: the `partial` branch fires (`fname == "partial"`, `node.args[0]` is a Name in `func_names`), `_has_shifts_zero` on the *partial call* is True because the partial call itself carries `shifts=0` as a keyword. The bare `apply_model` Name is added to `allowed`. So the file passes.
+
+Runtime: `functools.partial.__call__` computes `newkeywords = {**self.keywords, **kwargs}`, so the caller's `**{"shifts": 1}` **overrides** the bound `shifts=0`. `apply_model` then runs its shift trick. This is a true bypass.
+
+Realistic? No. Nobody writes `sep(model, t, **{"shifts": 1})` to turn the shift trick back on. If someone wanted `shifts=1` they would just write `shifts=1` and the checker would catch it. This is adversarial only. The `partial` support in the checker is itself a nicety (it lets you bind `shifts=0` once and reuse), and I would not ask for it to be removed on the strength of this. But it *is* worth noting that the checker's own "good" test case `"partial": _src(_FROM, _FUNCTOOLS, "f = functools.partial(apply_model, shifts=0)")` is a case where the guard's protection is only as strong as the caller's discipline.
+
+By contrast the brief's own suggested form, `apply_model(m, t, shifts=0, **{"shifts": 1})`, is **not** a runtime bypass at all: Python raises `TypeError: apply_model() got multiple values for keyword argument 'shifts'` before Demucs runs. The checker accepts it, but the code cannot run. So that particular suggestion from the brief does not work.
+
+### (c) shifts=0 keyword plus **kwargs overriding it, direct call — NOT a bypass.
+
+As above: `TypeError` at call time. The checker accepting it is leniency, not a hole.
+
+### (d) lambda — CAUGHT. Not a bypass.
+
+```python
+sep = lambda m, t: apply_model(m, t)
+```
+The lambda body is an `ast.Call` whose func is the Name `apply_model` in `func_names` -> "call without literal shifts=0". Flagged. And `sep = lambda m, t: apply_model(m, t, shifts=0)` is accepted and is genuinely correct. So the lambda case is handled properly. It is worth saying explicitly because the round 1 review did not test it.
+
+### (e) class attribute — CAUGHT. Not a bypass.
+
+```python
+class B:
+    sep = apply_model                       # flagged: "used other than a direct call"
+    sep2 = staticmethod(apply_model)       # flagged: "used other than a direct call"
+```
+Neither `class B: sep = apply_model` nor `staticmethod(apply_model)` appears in the test file, so I verified by reading the checker logic: in both cases the `apply_model` Name is an `ast.Name` Load, `is_ref` is True, and it is never the `func` of a Call that was allowed, so the final loop flags it. Good.
+
+A class body that *imports* and exposes is also caught: `from demucs.apply import apply_model as separate` inside a class body puts `"separate"` in `func_names`, and `Backend.separate(...)` is an `ast.Attribute` with `attr == "separate"` -- not `"apply_model"` -- so `is_ref` is False and it is NOT flagged by the attribute rule. However `separate` as an `ast.Name` inside the class body *is* `is_ref` True, and it is never an allowed call func -> "used other than a direct call" -> **flagged**. So the class-body import is caught. Good.
+
+### (f) importlib.import_module — CAUGHT (literal form) / adversarial bypass (computed form).
+
+```python
+import importlib
+mod = importlib.import_module("demucs.apply")
+f = getattr(mod, "apply_model")            # checker: FLAGGED (literal string branch)
+f(model, t)                               # and f is a Name not in func_names -> invisible
+```
+The literal form is flagged by the `getattr` branch. The computed form `name = "apply_model"; f = getattr(mod, name)` slips through, but that is pure adversarial obfuscation. Nobody writes that to add a Demucs call. Also `mod.apply_model(model, t)` after `importlib.import_module` IS caught (Attribute spelling match). Not worth raising.
+
+### (g) A wrapper function in another module calling the wrapper — CAUGHT.
+
+```python
+# Source/wrapper.py
+from demucs.apply import apply_model
+def separate(model, mix):
+    return apply_model(model, mix, shifts=0)
+```
+Caught if the keyword is missing (the direct call inside the wrapper body must carry it). The round 1 / prior codex claim that "the checker flags an omitted keyword there even if the wrapper is called from another module" is correct and desirable. The gap is only (a), where the raw symbol is re-exported rather than wrapped.
+
+### Summary of section 2
+
+| Construction | Checker result | Runtime result | Realistic in this codebase? |
+|---|---|---|---|
+| Re-export raw symbol, call from another module | accepted | `shifts=1` | **Yes**, the house style already separates the Demucs import from the caller |
+| `partial(apply_model, shifts=0)` then `sep(m, t, **{"shifts":1})` | accepted | `shifts=1` | No, adversarial |
+| `apply_model(m, t, shifts=0, **{"shifts":1})` | accepted | `TypeError`, never runs | n/a |
+| lambda wrapper | flagged | n/a | n/a, handled |
+| class attribute / staticmethod / class-body import | flagged | n/a | n/a, handled |
+| `importlib` + literal `getattr` | flagged | n/a | n/a, handled |
+| `importlib` + computed getattr name | accepted | `shifts=1` | No, adversarial |
+
+## 3. FALSE ALARMS: yes, there is one, and it is a real one
+
+**The attribute match is spelling-only.** `is_ref` returns True for *any* `ast.Attribute` whose `attr == "apply_model"`, regardless of the object it is an attribute of, and regardless of whether the file imports Demucs at all. The `getattr` branch is the same: any `getattr(x, "apply_model")` anywhere in `Source/` or `Tools/` is reported, even if `x` is a local object.
+
+So a legitimate call such as `editor.apply_model(preset)` or `self.pipeline.apply_model(cfg)` in a module that has nothing to do with Demucs produces:
+
+- "call without literal shifts=0" (from the Call branch), and
+- "apply_model used other than a direct call" (from the final loop, because the Attribute node's `id` was added to `allowed` as the call's func... wait, let me re-check).
+
+Actually for a Call `editor.apply_model(preset)`: `fn` is the Attribute node, `is_ref(fn)` is True, so `allowed.add(id(fn))` and `_has_shifts_zero(node)` is False -> one problem: "call without literal shifts=0". The final loop then finds the same Attribute node, whose id IS in `allowed`, so no second problem. One problem reported. Correct as I described.
+
+And a *non-call* attribute read `x = editor.apply_model` -> the Attribute is a Load, `is_ref` True, id not in `allowed` -> "apply_model used other than a direct call".
+
+Is this a realistic false alarm here? `apply_model` is an unusual name for a non-Demucs API; it is Demucs-specific vocabulary. The probability that `Source/` or `Tools/` contains some unrelated object with an `apply_model` method is low. But the cost of the false alarm is high in this workflow, because the guard is a **repo-wide sweep**: it runs over every `.py` file under `Source/` and `Tools/` on every test run, and any new file with an `apply_model` attribute, in any domain, blocks the whole suite.
+
+**The narrower and more likely false alarm: shadowing.** `func_names` is collected per-file from `from demucs.apply import apply_model`. If a file both imports Demucs' `apply_model` and separately defines or receives a *different* callable with that name, every reference to the local one is treated as the Demucs function. The test file's `"unrelated name"` good-case only exercises a file with **no** Demucs import (`func_names` empty), so it does not cover the shadowing case at all. A file that does `from demucs.apply import apply_model` and also has `def apply_model(x): ...` (a local convenience wrapper of the same name) would have all its local calls flagged as "call without literal shifts=0". That is a false positive on a plausible file layout.
+
+**A second, more concrete false-alarm source that the round 2 code introduced:** the `getattr` branch fires on `getattr(x, "apply_model")` *anywhere*, including in a file with no Demucs import at all. The `getattr` branch does not consult `func_names` or check whether the module imports Demucs. This is a strict superset of the attribute problem and is the same shape of false alarm, one call spelling wider.
+
+**A third: the per-module tests pin the call count.** `test_probe_stem_kick_grid_separation_passes_shifts_zero`, `test_kick_model_adapter_separation_passes_shifts_zero` and `test_stem_section_probe_separation_passes_shifts_zero` all assert `len(calls) == 1`. `_apply_model_calls` matches on `fn.id`/`fn.attr == "apply_model"`. If anyone adds a *second* legitimate `apply_model` call to any of those three modules, with a correct `shifts=0`, the test fails on the count assertion alone. The intent (pin the call) is defensible, but the failure message will be an opaque `assert 2 == 1` rather than "this call is missing shifts=0", and it blocks a correct change.
+
+**Net assessment on false alarms:** the guard is repo-wide and its attribute/getattr matching is spelling-only with no Demucs-import scoping. In the current tree the risk is low, since `apply_model` is Demucs-specific vocabulary and I confirmed `stem_grid.py` (the one file I could read in full) contains no `apply_model` identifier. But the mechanism will produce a false alarm the first time any non-Demucs code in `Source/` or `Tools/` uses an `apply_model` attribute, or any file shadows the imported name, and the blast radius is the entire suite.
+
+## 4. The three source edits
+
+**(a) `shifts=0` at the three call sites.** Correct and verified against the installed `apply_model`:
+- `shifts=0` is the third positional parameter with default `1`; passing it as a keyword is exactly right.
+- With `shifts=0` the `if shifts:` guard skips the whole shift-trick block, so `random.randint` is never called. No RNG, no unseeded offset.
+- In the `BagOfModels` branch, `kwargs` is built with `'shifts': shifts` and each member is invoked as `apply_model(sub_model, mix, **kwargs)`, so `shifts=0` propagates to every member of a bag. No member gets the default back.
+- The call sites use the default `num_workers=0`, so `pool` is `DummyPoolExecutor` and chunk futures are consumed in submission order. No ordering nondeterminism.
+- The edits are placed inside `with torch.no_grad():` as before, and `shifts=0` is passed as a keyword alongside `device=` and `progress=`, so no positional-argument shift is introduced in `apply_model(model, mix, shifts, split, overlap, transition_power, progress, device, ...)`. `device` and `progress` are keyword args in all three. Correct.
+- `probe_stem_kick_grid.py` and `stem_section_probe.py` both index `out[0]` then `out[names.index("drums")]`; the return shape is unchanged by `shifts=0` (both paths return `[batch, sources, channels, length]`). Correct.
+- One subtlety worth stating correctly: `shifts=0` removes the *random offset*, but with `shifts=0` Demucs takes the `elif split:` branch instead of the shift branch. The shift branch, when `shifts>0`, sets `kwargs['shifts']=0` and recurses; with `shifts=0` the code goes straight to the split branch with `kwargs['split']=False` inside. This is the same chunking/overlap logic the shift branch's recursive calls used, minus the shift. So `shifts=0` is not "shifts=1 without the RNG", it is a different (and the standard, deterministic) code path. The round 1 analysis called this correctly.
+
+**(b) `DRUMS_CACHE_VERSION = 1 -> 2`.** Correct and necessary. The round 1 excerpt of `_load_drums_cache` shows the gate order:
+
+```python
+for key in ("drums","sr","src_size","src_mtime_ns","demucs_model","cache_version"):
+    if key not in d.files: return None
+if int(d["cache_version"]) != DRUMS_CACHE_VERSION: return None
+if str(d["demucs_model"]) != DEMUCS_MODEL_NAME: return None
+if not _source_matches(d, wav_path): return None
+```
+
+The version check runs **before** the source-identity check, so a v1 record can never be served by matching fingerprint, and bumping to 2 forces every existing v1 drums sidecar to miss and be recomputed with the now-deterministic separation. That is exactly the required behaviour: the old cache froze whichever random separation was written last. The test `test_drums_cache_recorded_with_version_one_is_a_miss` exercises the loader with a hand-written v1 and v2 record and asserts miss/hit respectively.
+
+The test's v2 record includes all six required keys, `demucs_model` equal to `DEMUCS_MODEL_NAME`, and `src_size`/`src_mtime_ns` matching the real stat of the dummy wav, with `src_fingerprint` empty. `_source_matches` will pass: size matches outright, mtime matches, so the fingerprint branch is never entered. Correct.
+
+**(c) The `stem_grid.py` comment.** Covered in section 1. It no longer overstates.
+
+**One real defect in the new test file, independent of the checker logic: the module docstring is wrong.**
+
+> "The two call sites sit inside functions that need torch, soundfile and a loaded model"
+
+There are **three** call sites, and the file itself contains three separate tests, one per module (`probe_stem_kick_grid`, `kick_model_adapter`, `stem_section_probe`). The docstring is a leftover from the round 1 version of the file, where the round 1 diff also said "the two call sites" while the round 1 diff itself changed three call sites. It was carried forward into round 2 unchanged. This is a factual error in the artifact under review, and it is the sort of thing that misleads the next person reading the guard.
+
+**Second defect, minor: the standalone test file has trailing blank-line cruft.** Between `test_every_apply_model_use_under_source_and_tools_passes_shifts_zero` and `_src` there are three blank lines (lines 129-131 in the standalone file) where two would be normal. Cosmetic only, but it is the residue of the helper block being inserted.
+
+**Third: the file has no `if __name__` / no lint hygiene issue** -- not worth raising.
+
+## What I am not raising (per the brief's stop rule and the recorded follow-ups)
+
+- The 48 kHz native-rate probe vs the adapter's 44.1 kHz resample: recorded follow-up. The comment's "sample-rate paths" disclaimer covers it.
+- CPU vs GPU identity unmeasured: recorded follow-up, and the comment now explicitly disclaims it.
+- Envelope and bass caches not invalidated: recorded follow-up.
+- Cache writes not locked: recorded follow-up.
+- The class-body-import and computed-getattr bypasses: these are the "adversarial constructions nobody would write by accident" case, so they go in FOUND UNASKED rather than the verdict.
+- The `functools.partial` + `**kwargs` override: adversarial by the same test, but I put it in section 2 because the partial is a *checker feature the round 2 diff added and endorsed in its own good-case list*, so its weakness is a property of the artifact rather than a hypothetical. I have marked it adversarial.
+
+## What I am asking for
+
+Keep everything in the diff: the three `shifts=0` edits, the cache bump to 2, and the comment. Two changes to the test file:
+
+1. **Close the re-export hole.** Either resolve `apply_model` transitively across `Source/` (i.e. if a module imports `apply_model` from a `Source/` module that itself imports it from `demucs.apply`, treat it as the Demucs function and require `shifts=0` at the call), or forbid re-exporting the raw symbol by requiring that any module holding the Demucs import also pins `shifts=0` at its own call sites and that other modules go through a wrapper function (which the checker already enforces at the wrapper body). The simplest robust version: in `check_apply_model_source`, treat a Name/Attribute as a Demucs ref if the file imports it from `demucs.apply` **or** from any `Source/` module that the scan knows re-exports it. A two-pass scan (collect re-exports first, then check call sites) would close it.
+
+2. **Scope the attribute and getattr matching to files that actually touch Demucs,** or require the attribute base to be a known Demucs module alias. At minimum, do not report `getattr(x, "apply_model")` in a file with no Demucs import of any form. Otherwise the repo-wide sweep will block unrelated work the first time someone names something `apply_model`.
+
+Also fix the docstring's "two call sites" -> "three call sites".
+
+I have not demanded that the guard become a runtime assertion or that `shifts=0` be enforced by a wrapper; the AST guard plus the three explicit pins plus the cache bump is the right shape, and the round 1 verdict to keep `shifts=0` and the bump stands.
+
+## FOUND UNASKED
+
+- **The re-export hole also enables a reverse false negative on the per-module tests.** `test_kick_model_adapter_separation_passes_shifts_zero` asserts `len(calls) == 1` for `kick_model_adapter.py`, where `_apply_model_calls` matches on the *spelling* `apply_model`. A module could hide a second Demucs call behind an alias that does not end in `apply_model` and the per-module count test would not see it; only the repo-wide sweep would, and only if the alias is imported from `demucs.apply` in that same file.
+- **The guard's `getattr` branch and the `allowed`/`id()` bookkeeping are order-dependent in a way that is currently benign but fragile.** `allowed` stores `id(fn)` of AST nodes; the tree is kept alive by `tree`, so node ids cannot be recycled during the function. If anyone refactors the checker to free the tree between passes, `id()` reuse would silently produce false negatives. Using a set of node objects rather than `id()` would remove that dependency.
+- **The `Tools/` scan path is `SOURCE.parent / "Tools"`.** The diff shows the repo layout as `Source/...` and `Tests/...`, so `SOURCE.parent` is the repo root and `Tools/` would be a sibling of `Source/`. If the repo has no top-level `Tools/` directory, `Path.rglob` on a missing directory yields nothing and the scan silently covers only `Source/`. The `assert scanned > 0` does not detect this, because `Source/` alone satisfies it. If `Tools/` is meant to exist, the test should assert it was actually scanned; if it does not exist, the `Tools` reference is misleading noise.
+- **`test_drums_cache_recorded_with_version_one_is_a_miss` writes `src_fingerprint=np.array("")` and relies on the mtime matching exactly.** This works because the test stats the file immediately before writing and the file is not touched again. It is stable, but it is coupled to filesystem mtime granularity in a way that would break if the file were rewritten between `os.stat` and the assert. Not a bug in practice.
+- **`_content_fingerprint` returns `None` on `OSError` and `_save_drums_cache` stores `""` in that case**, while `_source_matches` treats an empty cached fingerprint as "no fingerprint available, require exact mtime". A cache written while the file was unreadable therefore degrades to mtime-only validation permanently, even after the file becomes readable again. Same class of issue as the size/mtime skip noted in round 1, not raised in the verdict.
+- **`_save_drums_cache` uses a single temp filename per track** (`{stem}.tmp.npz`) with `os.replace` at the end. Concurrent cold writers for the same track contend for that path. Carried forward from round 1's FOUND UNASKED; still open.
+- **The `Source/automated_dj_mixes/stem_grid.py` path in the diff is a nested package layout, while `Source/kick_model_adapter.py`, `Source/probe_stem_kick_grid.py` and `Source/stem_section_probe.py` sit at the top of `Source/`.** The comment that was edited lives in the nested one. `probe_stem_kick_grid.py` imports `from stem_section_probe import _device, _model` via `sys.path.insert(0, str(Path(__file__).parent))`, consistent with the flat layout. The mix of a flat `Source/` and a nested `Source/automated_dj_mixes/` is worth a glance, since the guard's `SOURCE.rglob("*.py")` covers both.
+- **The `shifts=0` change alters the numerical output of every separation, not just its reproducibility.** The old `shifts=1` path averaged `shifts` shifted predictions; the `shifts=0` path takes the plain chunked split with overlap weighting. These are not the same signal, only the same *determinism*. Any cached envelope, bass stem or analysis derived from the old path is on different audio than a fresh `shifts=0` run would produce, which is part of why the drums cache needed the version bump. The envelope and bass caches are recorded follow-ups and I am not re-raising them, but it is worth noting the drums bump is not merely a version-label change: it correctly invalidates the one cache whose contents the new path changes.
+
+| File read | SHA-256 prefix |
+|---|---|
+| `SHA.txt` (review-d21-fix1-r2) | listed below, verified against its three entries |
+| `change.diff` | `873c1e2a1341f042` |
+| `test_demucs_separation_deterministic.py` | `740d8a8febcae59e` |
+| `PRIOR_codex_review_r1.txt` | `39373b1182071df9` |
+| `brief_d21fix1_r2.txt` | not listed in `SHA.txt`, so unverified |
+| `demucs_apply_INSTALLED.py` (review-d21-fix1) | `316278eeb028c66f` |
+| `kick_model_adapter_cache_lines120-215.txt` (review-d21-fix1) | `1d5f26d8d5566db7` |
+| `kick_model_adapter_separation_lines700-800.txt` (review-d21-fix1) | `c20f9ef57dae714b` |
+| `probe_stem_kick_grid_lines20-60.txt` (review-d21-fix1) | `0d8de5371710c210` |
+| `d21_fix1.diff` (review-d21-fix1) | `92a8d1709590a189` |
+
+Notes on scope and honesty: the pack contains no Git metadata and no source tree. I could not verify the commits `64d746a`, `59fa9ce`, `5626568` against any tree, and I could not confirm that `Source/` and `Tools/` contain what the diff implies. The `Source/` excerpts I read are from the round 1 pack (`review-d21-fix1/`), which are the same files the round 2 diff modifies and which already show `shifts=0` applied, so they are consistent with the round 2 diff but are not the round 2 tree itself. The `review-d21-fix2/` pack is a different, later change against a different layout (`src/audio_analysis/`); I did not treat it as in scope. The standalone `test_demucs_separation_deterministic.py` matches the version in `change.diff` line for line on every function I compared. No code was executed, and no Demucs inference was run.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=045db4be6caa404f8b63e18986a884e0===
+===SEAT-DONE minimax d21fix1_r2===

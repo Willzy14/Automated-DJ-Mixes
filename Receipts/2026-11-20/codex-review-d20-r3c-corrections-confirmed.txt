@@ -1,0 +1,27 @@
+VERDICT: CORRECTION
+
+A one-bar track can still fail `--write-hints`. At 128 BPM, with a full kick readout and no detected outro, `_snap_merge()` drops the end boundary as too close to bar 0, then replaces bar 0 with the end. `detect()` writes a kick-model cache with `sections: []`, and the reader exits 2. I reproduced this through the writer and CLI in memory for 1, 2, and 3 bars. The one-bar test supplies a section by hand, so it misses the failure. Preserve both endpoints for a track shorter than four bars and keep the reader's empty-sections refusal.
+
+1. The final clamp runs after all four fallbacks, before rounding, and leaves in-range values unchanged. The writer-to-reader replay passed for 12, 15, and 16 bars. One brief detail is off. The `since_r3.diff` baseline has no single `first_break` clamp to replace. The prior Codex review describes that clamp at `5c3e38b`.
+2. `--track` resolves the actual WAV name for the cache lookup and hints key. Case collisions and explicit empty input exit 2 without writing.
+3. The corrected fixtures reach `OverflowError` and `AttributeError` and report both refusals.
+4. The spy verifies that both the overwrite guard and the cache reader call `_kick_provenance`.
+
+All 68 supplied test cases passed in memory, including the refusal corpus as represented by its fixtures. The real cache replay accepted all 10 kick-model tracks and reproduced the previous hint bytes. It refused all 10 energy caches with and without the override. The sentinel and section caches stayed unchanged. Both diffs matched the supplied file blobs, and the round delta contained only the two implementation edits and related tests. The pack contains no Git metadata to verify commit ancestry directly. No files were written.
+
+SHA-256 prefixes for files read from `SHA.txt`:
+
+- `stem_detector.py` `ada7f6944b98466a`
+- `test_stem_detector_write_hints_cache.py` `039b6d69ce04bb25`
+- `change.diff` `4476851cdd928c62`
+- `since_r3.diff` `e4a0e663580e6eb7`
+- `PRIOR_codex_r3.txt` `8c7c7c23e5d46995`
+- `PRIOR_r3a_minimax_d20_r3.txt` `7de2a0c8b98206d6`
+- `REPLAY_A_kick_on.log` `94ca635052e03337`
+- `REPLAY_B_real_energy_json.log` `e7bdae5f722a7ace`
+
+## FOUND UNASKED
+
+A hand-edited cache with `analysis.kick_model: true` and an unknown `kick_presence_source` still passes, even without the override. The reviewed writer emits a recognised source string.
+===CODEX-ASK-DONE exit=0 nonce=752a24ac31f54029a194a013c129fbca===
+===SEAT-DONE codex d20_r3c===

@@ -1,0 +1,34 @@
+VERDICT: CORRECTION
+
+**A valid kick-model analysis can still fail on a short track.** `5c3e38b` clamps `first_break_sec`, but leaves the first-drop and outro fallbacks unchanged. I ran `detect()` in memory with a full kick readout and a kick-led track with no qualifying bass drop. At 128 BPM and a zero downbeat, 15 bars produced a 30.00s first-drop hint against a 28.12s section end. At 16 bars, the outro fallback produced 31.88s against a 30.00s end. At 17 bars, the same shape passed. One such track blocks hints for the entire project. The issue is the new refusal of valid analysis, independent of the recorded follow-up on fallback cue quality. (`stem_detector.py:890-895,1599-1609`)
+
+**The historical empty-readout cache still passes as `KICK_ON`.** I reconstructed main from `change.diff` and ran its detector at 64 bars with an empty provider. It wrote `kick-detector-v3` with no `analysis` key, and round 3 accepted it silently and returned four hints. Round 1 also stamped `analysis.kick_model: true` on this path, which round 3 still trusts. The current writer correctly emits `false` plus `stem-energy-threshold` for an empty readout. The remaining correction is to regenerate or otherwise establish provenance for caches that could have come from the affected writers. The two existing fields cannot distinguish them from genuine kick-model caches. (`stem_detector.py:826-859,1045-1068`)
+
+**The overwrite guard can lose a race.** I interleaved two calls to `detect()` in memory. The kick-off run checked an empty cache, Phase 1a wrote a `KICK_ON` file, then the kick-off run replaced it. The guard and write need to be serialized together for runs against the same track. In sequential use, a full kick-model run and a first-ever kick-off run are both allowed, and an existing modern or legacy `KICK_ON` file is protected. (`stem_detector.py:936-956,1396-1403`)
+
+**`--track` has two Windows CLI gaps.** On the actual replay folder, changing the case of a WAV name still found both files, but the reader refused the cache because `track` was compared against the spelling from the command line. Resolve the selection to the actual directory entry and use its name for the lookup and hint key. An explicitly empty `--track ""` bypasses validation and selects the entire project. I intercepted that invocation before writing and confirmed it would have published all 10 hints. (`stem_detector.py:868,1640-1662`)
+
+**Refusals and writes.** Every listed corpus case is still refused in sequential use. Nothing in that corpus became newly accepted. The old default `--write-hints` output is legacy `KICK_OFF`, and current standalone kick-off output is `KICK_OFF` with both fields present. The reverify script bodies were outside the pack, so their classification is verified only for the described kick-off calls through `detect()`. I read the actual replay caches and confirmed 10 accepted in A and zero accepted in B, with or without the override. The hints path never writes a section cache. Its atomic output path serializes before touching the destination, stages beside it, and exits 2 on ordinary write or replace failures.
+
+**Tests.** All 58 supplied cases passed with an in-memory filesystem. `test_one_track_exception_does_not_stop_the_others_being_reported` also passed on round 2. Both fixtures say `"track": "T"` but are installed as `A` and `B`, so they hit the track mismatch check before either intended exception. The shared-trust test calls only the classifier, and the empty-provider test calls only the provider helper. Neither pins the wiring in `detect()`. The new clamp test catches the first-break regression on its 20-bar drop fixture, but misses the 15- and 16-bar detector outputs above.
+
+**Snapshot verified.** All `SHA.txt` prefixes matched. No files were written.
+
+| File | SHA-256 prefix |
+|---|---|
+| `stem_detector.py` | `e909f0b1db103552` |
+| `test_stem_detector_write_hints_cache.py` | `42fef43bb974f22c` |
+| `change.diff` | `819dc7192fa46d24` |
+| `since_r2.diff` | `0e7ceabbc45148ee` |
+| `PRIOR_codex_r2.txt` | `55d327970a89177b` |
+| `PRIOR_minimax_r2.txt` | `24b0a03d80a85faa` |
+| `PRIOR_r3a_minimax_d20_r3.txt` | `7de2a0c8b98206d6` |
+| `REPLAY_A_kick_on.log` | `94ca635052e03337` |
+| `REPLAY_B_real_energy_json.log` | `e7bdae5f722a7ace` |
+| `REPLAY_B_with_override_flag.log` | `e7bdae5f722a7ace` |
+
+## FOUND UNASKED
+
+A hand-built cache with no `analysis` key and an explicit `"kick_presence_source": null` is classified as `ABSENT` and accepted with the override. The implementation treats a present null source like a missing key. The reviewed detector writers emit a source string.
+===CODEX-ASK-DONE exit=0 nonce=a6367844830c4e0f89116cd00d7e44a1===
+===SEAT-DONE codex d20_r3===

@@ -1,0 +1,33 @@
+VERDICT: CORRECTION
+
+Keep `shifts=0` and the drums cache bump. Correct the claim in `stem_grid.py` that the same file gives a bit-identical stem on every run. The two full-resolution paths already provide a counterexample at 48 kHz, before CPU versus GPU enters the picture.
+
+1. **Separation.** With `shifts=0`, the installed `apply_model` skips its only explicit RNG call, `random.randint`. Split offsets, padding, overlap weights, and chunk accumulation order are fixed for a given input and segment. A `BagOfModels` forwards `shifts=0` to each member and sums in model order. Each member reaches `model.eval()`, which disables ordinary training dropout. The shown calls use the default `num_workers=0`. Even with a CPU thread pool, futures are consumed in submission order. Segment handling is deterministic given fixed model state, but changing the segment changes chunk boundaries and can change the result.
+
+   The wrapper does not establish determinism inside the model or its kernels. It sets neither cuDNN benchmarking nor deterministic algorithms. The shown waveform inputs are float32, and the wrapper neither requests float16 nor controls ambient autocast. Lower precision can change numerical results even when repeatable. PyTorch gives no CPU/GPU bit-identity guarantee. The RTX 3050 result establishes repeatability for the observed setup. To check machine-independent grids, compare cold CPU and GPU runs on the known flip tracks, including grid phase and hard-gate outcome. [PyTorch reproducibility](https://docs.pytorch.org/docs/2.15/notes/randomness.html), [PyTorch autocast](https://docs.pytorch.org/docs/2.15/amp.html)
+
+2. **Shift trick.** A fixed seed or a seed derived from a stable file-content hash can reproduce the offsets. This code uses Python's `random`, so a wrapper would save its state, seed it, and restore it in `finally`. The RNG is process-global, so concurrent draws can still interfere. A local RNG or explicit offsets avoids that. I'd keep `shifts=0` here. The measured kick-grid result supports it, and the separation-quality benefit of the trick does not establish better onset timing or section boundaries.
+
+3. **Drums cache.** The shown loader rejects version 1 and a missing `cache_version` before checking source identity. A matching fingerprint cannot bypass the gate. Version 2 identifies the model by name and does not distinguish device, weights, or preprocessing. The adapter resamples a 48 kHz file to 44.1 kHz and returns a 44.1 kHz stem. The direct probe hands native-rate samples to Demucs and returns a 48 kHz stem. A grid call served by the adapter sidecar can therefore receive a different signal and sample rate from a fresh probe of the same file. The excerpts show the adapter's intended write and the shared save helper, but cut off before the adapter save call and omit the grid cache hook body. I can establish the mismatch without assuming both callers write. Align preprocessing at the model sample rate, or enforce 44.1 kHz at the shared entry point if that is the pipeline contract.
+
+4. **Envelope and bass caches.** Leaving them alone is reasonable for the shown drums-only grid. The adapter's warm path can pair an existing legacy `__stemenv.npz` with any valid v2 drums stem, so the combined analysis can depend on cache history. A 0.1 s RMS hop does not bound the effect on a threshold-based section decision. The bass reader is independent and can still return a legacy bass stem to downstream callers. The supplied code shows that exposure, but does not establish that a section boundary or mix decision actually changed.
+
+5. **AST guard.** A new `Source/` module can use `from demucs.apply import apply_model as separate` followed by `separate(model, x)` and silently keep `shifts=1`. `getattr`, `functools.partial`, and calls under `Tools/` also evade the scan. Direct calls with positional shifts or `shifts=variable` are caught and rejected. The three named tests separately require one recognized call in each existing module.
+
+Validated read-only against the supplied pack. In-memory checks confirmed the cache gate, the sample-rate branch, the AST blind spots, and all three changes in the diff. The pack has no Git metadata, so the commit IDs were supplied provenance. No Demucs inference was run.
+
+| File read | SHA-256 prefix |
+|---|---|
+| `SHA.txt` | `a63560fa1473f9f4` |
+| `d21_fix1.diff` | `92a8d1709590a189` |
+| `demucs_apply_INSTALLED.py` | `316278eeb028c66f` |
+| `kick_model_adapter_cache_lines120-215.txt` | `1d5f26d8d5566db7` |
+| `kick_model_adapter_separation_lines700-800.txt` | `c20f9ef57dae714b` |
+| `probe_stem_kick_grid_lines20-60.txt` | `0d8de5371710c210` |
+| `test_demucs_separation_deterministic.py` | `7ce3b6f0a77f3f50` |
+
+## FOUND UNASKED
+
+The cache writer uses a single temporary filename per track. Concurrent cold writers can contend for that file before `os.replace`, so the version rollout can expose a write race. Separately, the loader skips hashing when size and mtime match. A same-size audio replacement that preserves mtime can therefore serve stale v2 drums.
+===CODEX-ASK-DONE exit=0 nonce=4f65f1b0cc2e439c92cc21a009929dd5===
+===SEAT-DONE codex d21fix1_r1===

@@ -1,0 +1,30 @@
+VERDICT: SOUND
+
+1. **Report selection.** The gate resolves the report destination before staging. A missing or unreadable explicit report stops Phase 3 and names the path. Reconcile checks the same staged report that publication uses. Preferring the report used for planning is the right order. The Phase 3 CLI requires the report argument whenever it receives a MixPlan, so the fallback order cannot change which report a real CLI run gates.
+2. **Crash state.** A failed second rename leaves the gated ALS in place and raises `ValueError` naming both files, warning that the report is stale, and directing the operator to rerun Phase 3. An unchanged report is never replaced. The stale-report warning is accurate. The earlier sentence in `apply_automation.py:1447` still overclaims that *any* failure leaves both destinations untouched. That guarantee applies only before ALS publication.
+3. **Loop length.** A four-bar partial on a four-bar loop is accepted again. The other limits still apply, including the total extension cap.
+4. **Byte parity.** The two revised comments qualify parity at a fixed mtime. The pre-existing comment in `als_generator.py:119` still lacks that qualifier.
+
+`since_r3.diff` contains only the requested implementation and comment changes, removal of the obsolete path comparison, and related tests. The trim code and both ALS writers' staging logic match round 3.
+
+_Validated: SHA-256 prefixes and read-only in-memory probes covering the refusal corpus, report precedence, unchanged-report handling, and second-rename failure._ The pack lacks Git metadata and full-suite dependencies, so I could verify the packed files but could not independently resolve the commit or repeat the 10-track run.
+
+```text
+8f7abb2dfe6fdad0  PRIOR_codex_review_r3.txt
+f3135db20c6b7af7  align_engine.py
+1b9f980225762e4c  als_generator.py
+5844daa0646d4640  apply_automation.py
+0fc6c2c9ad3bf8fe  apply_loops.py
+4b85e3320dd01293  change.diff
+a7b825744c337034  since_r3.diff
+0f1bc0a15e1bd08f  test_arrangement_safety.py
+3727cb1ed782f21e  test_d19_d22_round2.py
+ffa3f9926b888541  validate_mix_plan_als.py
+dc95f0582d591727  SHA.txt
+```
+
+## FOUND UNASKED
+
+None.
+===CODEX-ASK-DONE exit=0 nonce=ed83f166d0c74c7ba7048ea82aee49ff===
+===SEAT-DONE codex d19d22_r3c===

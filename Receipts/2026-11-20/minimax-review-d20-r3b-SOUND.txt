@@ -1,0 +1,131 @@
+﻿All11 SECTIONS_STEM sha256 values are identical before and after. ✓
+
+I have everything I need. Let me summarize my findings.
+
+**Files read** (sha256 first 16 hex, from SHA.txt):
+- `stem_detector.py` — `ada7f6944b98466a`
+- `test_stem_detector_write_hints_cache.py` — `039b6d69ce04bb25`
+- `change.diff` — `4476851cdd928c62`
+- `since_r3.diff` — `e4a0e663580e6eb7`
+- `PRIOR_codex_r3.txt` — `8c7c7c23e5d46995`
+- `PRIOR_r3a_minimax_d20_r3.txt` — `7de2a0c8b98206d6`
+- `REPLAY_A_kick_on.log` — `94ca635052e03337`
+- `REPLAY_B_real_energy_json.log` — `e7bdae5f722a7ace`
+
+Also read (not in SHA.txt): `SHA.txt`, `brief_d20_r3.txt`, `codex_d20_r3c.txt.stderr.log`, and outside the folder the real corpus under `d20-replay/proj` and `d20-replay/projB` (11 SECTIONS_STEM jsons each, both Audio folders, both Hints files) plus `d20-replay/hints_prev.json`, `a_before.txt`, `a_after.txt`, `r4_a.log`, `replay_summary.txt`.
+
+Let me write the final answer.
+
+VERDICT: SOUND
+
+## Files read (sha256 first 16 hex, from SHA.txt)
+
+| File | Prefix |
+|---|---|
+| `stem_detector.py` | `ada7f6944b98466a` |
+| `test_stem_detector_write_hints_cache.py` | `039b6d69ce04bb25` |
+| `change.diff` | `4476851cdd928c62` |
+| `since_r3.diff` | `e4a0e663580e6eb7` |
+| `PRIOR_codex_r3.txt` | `8c7c7c23e5d46995` |
+| `PRIOR_r3a_minimax_d20_r3.txt` | `7de2a0c8b98206d6` |
+| `REPLAY_A_kick_on.log` | `94ca635052e03337` |
+| `REPLAY_B_real_energy_json.log` | `e7bdae5f722a7ace` |
+
+Also read (not in SHA.txt): `SHA.txt`, `brief_d20_r3.txt`, `codex_d20_r3c.txt.stderr.log` (a prior session in this same folder that ran this identical brief against this identical commit; I use it only as corroborating evidence and re-derive everything below myself). Outside the folder: the real corpus under `d20-replay/proj` and `d20-replay/projB` (11 `SECTIONS_STEM_*.json` each, both `Audio/` folders, both `Hints/` files), plus `d20-replay/hints_prev.json`, `a_before.txt`, `a_after.txt`, `r4_a.log`, `replay_summary.txt`.
+
+No files were written.
+
+## Nothing else moved
+
+`since_r3.diff` has exactly two source hunks (`@@ -1606,6` the clamp, `@@ -1639,13` the `--track` block) plus three test-file hunks. `_check_cached_sections_inner`, `_check_cached_sections`, `_kick_provenance`, `_may_overwrite_sections_json`, `_write_hints_atomic` and `detect()` are byte-identical to the round-3 reviewed code. So the refusal corpus is untouched by construction, and I re-checked it below anyway.
+
+## Correction 1: the four-hint final clamp
+
+Present at `stem_detector.py:1609-1616`, after every fallback, before rounding:
+
+```python
+    if end_sec > 0:
+        first_drop = min(first_drop, end_sec)
+        first_break = min(first_break, end_sec)
+        outro_start = min(outro_start, end_sec)
+        last_bass_drop = min(last_bass_drop, end_sec)
+```
+
+I worked the arithmetic for the synthetic fixtures (`_short_res(n_bars, [("intro", 0, n_bars)])`, spb 1.875):
+
+- 1 bar, end 1.875: fallbacks 30.0 / 31.875 / 60.0 / 30.0, all clamped to 1.875.
+- 12 bars, end 22.5: all clamped to 22.5.
+- 15 bars, end 28.125: fallbacks 30.0 / 31.875 / 60.0 / 30.0, all clamped to 28.125.
+- 16 bars, end 30.0: all clamped to 30.0.
+
+All four are strictly inside `(0, end]`. The claim holds for the fixtures the brief names.
+
+The brief's own evidence log in this folder (`codex_d20_r3c.txt.stderr.log`) ran the **real** `detect()` with a full kick provider at 4, 12, 15 and 16 bars and got exactly `{first_drop: end, first_break: end, outro: end, last_bass_drop: end}` accepted by the reader, which matches my hand arithmetic.
+
+"Values already inside the track are unchanged": the clamp is `min(x, end_sec)`, so any `x <= end_sec` is untouched. For a real `detect()` output every hint is a section `start_sec` or a fill time, hence strictly inside the track, hence unchanged. The 10-track replay proves it end to end: `d20-replay/hints_prev.json` and `d20-replay/proj/Hints/track_hints.json` are byte-identical, and `a_before.txt` / `a_after.txt` show all 11 `SECTIONS_STEM` sha256 unchanged.
+
+The safety argument holds in the direction that matters. The reader's bound is `0 < val <= track_end + 0.01` with `track_end = max(ends)`; the clamp uses `end_sec = secs[-1]["end_sec"]`. In every one of the 22 real corpus files the `sections` list is strictly ascending in `end_sec`, so `secs[-1]["end_sec"] == max(ends)` exactly, and the clamp references the same number the reader does. `round()` is monotone, so `round(clamped, 2) <= round(end_sec, 2) <= track_end + 0.01`. The reader can no longer refuse a correct short-track analysis.
+
+The `hints_beyond_track_end` fixture had to change, and the change was mandatory, not cosmetic. The round-3 fixture (one section, `end_sec` 10.0) would now be clamped to 10.0 and would **pass** the reader, so the test would have failed. The new fixture sets `secs[-1]["end_sec"] = 0.0` so the clamp is skipped while an earlier section ends at 60.0, and bpm 8 makes the 16-bar fallback 480 s: reader sees `track_end` 60.0, hint 480.0, refuses. The reader's range check is still reachable and still tested.
+
+## Correction 2: `--track`
+
+`stem_detector.py:1651-1662`. The round-3 code was `if args.track:` (falsy, so `--track ""` selected the whole project) plus `tp = audio / args.track` with `tp.is_file()` (exact-case, so a case-different spelling failed even though the file existed). Both gaps are closed:
+
+- `args.track is not None` plus `if want and ...` means `--track ""` yields `hits = []`, one `[REFUSED]` line, `sys.exit(2)`, nothing written.
+- The scan is over real `audio.iterdir()` entries with `e.name.lower() == want.lower()`, and `wavs = [hits[0]]` uses the **actual** entry, so `w.stem` (cache name) and `w.name` (hints key) are the on-disk spellings. The reader's `res.get("track") != wav_stem` then compares the json's `track` field against the same real spelling.
+- Two entries differing only by case give `len(hits) == 2` and are refused. On NTFS that state is unreachable (one directory entry per name), so the guard only bites on case-sensitive volumes, where refusing is the safe choice.
+- `Path(want).name == want` still rejects `..\T.wav`, `sub/T.wav`, `./T.wav`, `C:T.wav`, absolute paths, and trailing separators.
+
+## Correction 3: the exception test
+
+The round-3 fixtures were `BAD_SHAPES["bpm_huge_int"]` and `BAD_SHAPES["signals_null"]`, both of which carry `"track": "T"` but were installed as stems `A` and `B`. `w.stem` was `A`/`B`, so `res.get("track") != wav_stem` fired first and the intended `OverflowError` / `AttributeError` were never reached. The old assertion (`count("[REFUSED]") == 2`) passed for the wrong reason.
+
+The new fixtures carry `track="A"` / `track="B"`, so the track check passes and the intended exceptions fire: `math.isfinite(10**400)` raises `OverflowError`, and `sig = res.get("signals", {})` returns `None` (the key is present, so the default does not apply) making `sig.get("fills", [])` raise `AttributeError`. Both are caught by the outer `except Exception`, and the test now asserts `"OverflowError" in out and "AttributeError" in out`. Confirmed by reading the code paths.
+
+## Correction 4: the provenance spy
+
+`test_reader_and_guard_both_route_through_kick_provenance` patches the module attribute `stem_detector._kick_provenance`. Both call sites resolve it as a module global, so both hit the spy: `_may_overwrite_sections_json` at line 947 and `_check_cached_sections_inner` at line 893. These are the only two call sites in the file. The counts (`["T"]`, then `["T", "T"]`) are exactly what the two call sites produce. The spy calls the pre-captured `real`, so it terminates.
+
+## Refusal corpus
+
+`_check_cached_sections_inner` is unchanged from round 3, so nothing was loosened. I re-derived each item anyway: missing file, non-dict, track mismatch, bpm 0 / negative / non-numeric / bool / NaN / huge int, sections not a list, sections empty, no finite positive `end_sec`, hint outside `(0, track_end]`, KICK_OFF (modern `kick_model: false`, legacy `stem-energy-threshold`), malformed provenance (`analysis` null / list / string, `kick_model` not a bool, `analysis: true` with an energy source, unknown legacy source), and legacy with no provenance absent the flag. `--allow-unverified-cache` accepts only PROV_ABSENT and still refuses every KICK_OFF and MALFORMED shape. `REPLAY_B_real_energy_json.log` shows 10 `[REFUSED]` lines for the real energy-threshold project, and `d20-replay/projB/Hints/track_hints.json` is still the sentinel `{"sentinel":1}`.
+
+## Where the brief is imprecise
+
+1. **"replacing a single first_break clamp" is not what the code did.** The round-3 reviewed baseline (04500d2), reconstructed from `since_r3.diff` and confirmed against the git blob `fe5f19d`, had **no clamp at all**:
+   ```
+       if not first_break or first_break <= 0:
+           first_break = first_drop + 16 * sec_per_bar
+   ```
+   The single `first_break` clamp existed only as the MiniMax r3 *proposal*. The outcome is the same and the fix is right; only the description of what was replaced is wrong. (The Codex r3 line "5c3e38b clamps first_break_sec" is likewise about a different commit, not 04500d2.)
+
+2. **"Tracks of 1, 12, 15 and 16 bars" is true of the synthetic fixture but not of a real 1-bar track.** `_snap_merge` collapses to a single boundary when `n_bars < MIN_SECTION_BARS` (4), so a real `detect()` output for 1, 2 or 3 bars has `sections: []` and is refused with "has no sections", not by the hint bound. The1-bar case in `test_short_kick_led_track_hints_all_inside_the_track` tests a shape `detect()` cannot produce. The refusal for 1-3 bars is pre-existing and unrelated to this commit. The substantive claim ("the reader's bound must never refuse a correct analysis of a short track") is fully met for 4, 12, 15 and 16 bars.
+
+3. **The reader's own hint bound is now unreachable for real files.** With the clamp always active on a real file (`end_sec > 0`), the bound can only fire on a file whose last section has a non-positive or non-finite `end_sec`, which no writer produces. That is the intended trade (the brief asks for exactly this) and it does not weaken the provenance guard, which is what actually protects the file. Worth naming so nobody later reads the surviving bound as an active defence.
+
+## FOUND UNASKED
+
+1. **The `--track` case fold uses Python `str.lower()`, which does not match Windows' own ignore-case rule.** On NTFS, "Σ.wav" (U+03A3) and "ς.wav" (U+03C2) are the same file to Windows (`CompareStringOrdinal` ignore-case returns equal), but Python's `.lower()` maps Σ to σ and leaves ς as ς, so `e.name.lower() == want.lower()` is False. A project whose Audio folder holds such a name would be refused for a `--track` that Windows would open. All 20 real corpus filenames are ASCII, so this is latent. `os.path.normcase` is not the fix either (it is a no-op on Windows); a `str.casefold()` comparison would over-match rather than under-match, and matching the OS rule needs `CompareStringOrdinal` or an actual `open()` attempt.
+
+2. **A bool `end_sec` on the last section makes the clamp clamp to 1.** `if end_sec > 0` is True for `True`, and `min(x, True)` is `min(x, 1)`, so all four hints would collapse to 1.0 s. `isinstance(end, bool)` is excluded from the reader's `ends` list, so the reader would then see a `track_end` from another section. No writer emits a bool (`round(downbeat + s1 * sec_per_bar, 2)` is always a float), so this is hand-crafted-file only.
+
+3. **`--track` is still unvalidated on the non-hints path.** `wavs = [audio / args.track] if args.track else sorted(audio.glob("*.wav"))` runs before the `--write-hints` block and is not guarded by the new checks, so `stem_detector.py <project> --track ../elsewhere.wav` still runs `detect()` on a file outside `Audio/`. Pre-existing and explicitly listed as accepted for the empty-string case; the traversal case is not covered by that acceptance. The `--write-hints` path is now strict, which makes the asymmetry visible.
+
+4. **`--track` on the hints path bypasses the `Audio/*.wav` glob, so a wav that `iterdir()` sees but `glob("*.wav")` would not is now selectable.** The two selectors differ: `glob` matches `*.wav` case-sensitively on some platforms, `iterdir` plus `suffix.lower()` matches `.WAV` too. In practice this means the hints path can select a file the no-`--track` path would not have globbed. Harmless, but the two selectors are not equivalent.
+
+5. **The atomic hints write leaves the file mode 0600.** `tempfile.mkstemp` creates 0600 and `os.replace` swaps the directory entry, so the new `Hints/track_hints.json` is 0600 even when the file it replaced was 0644. Any consumer reading it as a different user, or a CI step collecting it as a different user, loses read access that the old `Path.write_text` (umask-based) gave. Carried over from round 3, not introduced here.
+
+6. **`hints_from_stem_result` is still called twice per track** (once inside the reader for the bound check, once in `main()` to build the hints). The reader's copy is discarded. It is deterministic, so this is not a bug today, but returning the hints from the checker would remove the double call and the drift risk.
+
+7. **The `SECTIONS_STEM` write in `detect()` is still not atomic**, while the hints write now is. `json_path.write_text(json.dumps(result, indent=1))` truncates then writes, so a crash mid-write leaves a truncated analysis file that `align_engine.py` would read. Pre-existing; the asymmetry is now visible because the round-3 work made the hints path atomic.
+
+8. **The orphan analysis in the corpus is still invisible to the hints path.** `SECTIONS_STEM_Kyle Watson - The Afterhours (Extended Mix) 24 Bit MASTER.json` sits in `_Stem Analysis/` with a genuine legacy KICK_ON provenance, but neither `proj/Audio` nor `projB/Audio` has that wav, so `--write-hints` never reads it. `align_engine.py` globs the folder, so the arrangement phase sees 11 tracks where the hints file has 10, and `validate_hints_vs_sections.py` only checks one direction of that mismatch. Carried from round 3.
+
+9. **The guard's refusal message is still wrong for the empty-readout case, and `detect()` still cannot tell its caller that nothing was written.** "this run has it off, so the file was NOT overwritten" is printed when the run had `--kick-model` on and the provider merely returned no readout. `detect()` returns a result with `analysis.kick_model: false` in that case whether or not the write was permitted, so a caller can hold an in-memory analysis that is not the one on disk. Carried from round 3.
+
+10. **`_kick_provenance` is still asymmetric about an unknown `kick_presence_source`.** `analysis.kick_model: true` plus an unrecognised source string is KICK_ON; no `analysis` key plus the same string is MALFORMED. Nothing in the tree writes such a string today. Carried from round 3.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=21cc47289bf74e79b2e8560b2a660014===
+===SEAT-DONE minimax d20_r3b===

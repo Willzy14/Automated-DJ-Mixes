@@ -1,0 +1,25 @@
+VERDICT: CORRECTION
+
+Keep all three `shifts=0` edits and the drums cache bump from 1 to 2. The `stem_grid.py` comment now correctly limits bit identity to repeated separations of one file on the measured RTX 3050. The round 1 direct-import alias example is caught. Two ordinary patterns still bypass the guard, and the scan can block unrelated code.
+
+- **Partial with forwarded options.** `separate = functools.partial(apply_model, shifts=0)` passes the checker. `separate(m, t, **{"shifts": 1})` also passes and runs with `shifts=1`. A partial's bound keywords are defaults, so forwarding an options dict can override them. By comparison, a direct `apply_model(m, t, shifts=0, **{"shifts": 1})` passes the checker but raises `TypeError` before Demucs runs.
+- **Cross-module re-export.** `backend.py` can import `apply_model as separate` from `demucs.apply`, and another module can import `separate` from `backend` and call it without `shifts`. Both files pass, and the call uses the default. This is a plausible backend refactor. A normal wrapper or lambda is covered when its body directly calls Demucs. The checker flags an omitted keyword there even if the wrapper is called from another module.
+- **False alarms.** The checker treats every `.apply_model` attribute and every literal `getattr(obj, "apply_model")` as Demucs, even in a module that never imports Demucs. A legitimate `editor.apply_model(preset)` fails. A function parameter that shadows a Demucs import alias also fails. The brief's claim that module aliases and dotted paths are resolved overstates the implementation. Those calls are matched by attribute spelling alone.
+
+Track the Demucs bindings that the guard supports, reject partials that leave `shifts` overridable, and cover the re-export case. The test docstring also still says there are two call sites.
+
+_Validated read-only._ All manifest entries matched, the test in the diff matched the standalone copy, and both bundled checker self-tests passed in memory. I exercised the examples against the checker and a Python stub with `shifts=1` as its default. The pack has no Git metadata or source tree, so I could verify the supplied files but couldn't independently verify the commits or run the full suite.
+
+| File read | SHA-256 prefix |
+|---|---|
+| `SHA.txt` | `31d9773906a0be8a` |
+| `change.diff` | `873c1e2a1341f042` |
+| `test_demucs_separation_deterministic.py` | `740d8a8febcae59e` |
+| `PRIOR_codex_review_r1.txt` | `39373b1182071df9` |
+| `brief_d21fix1_r2.txt` | `cfd8e3115b8d21c7` |
+
+## FOUND UNASKED
+
+Two contrived bypasses ran with the default `shifts=1`. A class body can import `apply_model as separate` and expose it through `Backend.separate(...)`. An `importlib.import_module` caller can retrieve the function with `getattr(module, name)` after assigning `name = "apply_model"`. The checker catches the ordinary class assignment using `staticmethod(apply_model)`, the dynamic import followed by `module.apply_model(...)`, and a literal `getattr(module, "apply_model")`.
+===CODEX-ASK-DONE exit=0 nonce=4332f975fa084ccdb7100652eec81130===
+===SEAT-DONE codex d21fix1_r2===

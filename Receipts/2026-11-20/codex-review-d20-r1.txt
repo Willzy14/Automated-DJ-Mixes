@@ -1,0 +1,42 @@
+VERDICT: CORRECTION
+
+Make `--write-hints` fail before replacing `track_hints.json` if any requested track lacks usable Phase 1a sections. A warning still lets the command publish hints from a different analysis than the arrangement will read.
+
+Reviewed `SHA.txt`, `d20.diff` (`e9e087fcd31734fc`), `stem_detector.py` (`5b57126d325bb415`), `test_stem_detector_write_hints_cache.py` (`3f7ccdcfb04c18f0`), `readers_of_sections_json.txt`, and `validate_hints_vs_sections.py`. All three listed hashes matched. I ran the nine tests and selected mutations against the extracted functions in memory, and exercised `detect()` with synthetic envelopes and stubbed audio dependencies. No files were written.
+
+### Cache and overwrite findings
+
+- **A silently accepts weak caches.** On the first run after the upgrade, a legacy cache left by the old `--write-hints` command is reused without warning, even if the user now passes `--kick-model`. A cache explicitly marked `analysis.kick_model: false` gets the same treatment. A valid legacy Phase 1a cache is also reused without a write. The code already emits `signals.kick_presence_source`, which can distinguish legacy model output from legacy energy-threshold output when that field is present.
+- **The shape check accepts unrelated or unusable data.** Save `{"track":"Other","bpm":128,"sections":[]}` as `SECTIONS_STEM_T.json`. The command reports a cache hit and writes four synthetic timings for `T.wav`. A complete cache for an older audio file with the same name also passes. Require usable sections, an audio fingerprint, and compatible detector and configuration metadata.
+- **B, D and E can disagree about the source of truth.** With `{"bpm":128,"analysis":{"kick_model":true}}` on disk, the missing `sections` triggers fallback. The real `detect()` gets BPM from that cache, computes kick-off sections, and is refused permission to replace the JSON by the guard. It still returns its result, and the CLI publishes weak hints. I reproduced this with warnings and the original file intact.
+- **C records the request, and D trusts it.** A provider exception or literal `None` result aborts before the write. A provider returning `[]` takes a different path. It gets padded to all kicks off, is marked `kick_model: true`, and silently replaces a good marked file. I reproduced the replacement. Validate the provider's beat data before marking it usable or allowing the write.
+- **E is incomplete.** `signals: null` raises an uncaught `AttributeError`, BPM `0` raises `ZeroDivisionError`, and a read failure can raise `OSError` before fallback. A top-level array reaches fallback, then the BPM resolver rereads it and raises `TypeError`.
+
+### What each test catches
+
+| Test, omitting `test_` | What would fail if removed |
+|---|---|
+| `cached_json_used_detect_not_called_json_untouched` | Cache use, skipping `detect()`, and preserving the final bytes. A byte-identical rewrite still passes. |
+| `no_cache_falls_back_to_detect_with_warn` | Calling `detect()` once, either warning phrase, or writing the track's hint entry. The test captures the kwargs without checking them. |
+| `no_cache_with_kick_model_flag_has_no_kick_warning` | The missing-cache message or suppression of the kick-off warning. Skipping detection altogether on this path still passes. |
+| `malformed_cache_warns_and_falls_back` | The warning phrase or fallback call for invalid JSON syntax. Removing the shape check or exception detail still passes. |
+| `guard_blocks_kick_off_write_over_kick_on_json` | The helper returning `False` for a marked cache. It does not exercise the write. |
+| `guard_allows_kick_on_write_over_kick_on_json` | The helper allowing kick-on over kick-on. |
+| `guard_legacy_json_without_key_is_overwritten` | The helper allowing a legacy file. An always-allow guard also passes this test. |
+| `guard_kick_off_json_and_missing_file_are_overwritten` | The helper allowing either input. Deleting the missing-file fast path still passes through the exception handler. |
+| `guard_prints_warn_naming_file` | Removing the filename from stdout. Removing the warning label or refusal reason still passes. |
+
+There is no coverage for C's metadata, D's unreadable-file branch or actual write enforcement, E's parsed-but-invalid cache, or the fallback and guard interacting. Dropping `--kick-model` forwarding also leaves all nine tests green.
+
+### Readers and Windows
+
+`validate_hints_vs_sections.py` reads the named `bpm` field and tolerates `analysis`. The grep output suggests `propose_arrangement.py` reads named fields too. It shows `materialize_section_details.py` reading and writing section JSON, but does not show whether it preserves the new key. I could not inspect those reader bodies. The grep output cannot rule out strict schemas, exact-key comparisons, or metadata being stripped on rewrite.
+
+The new print literals are ASCII. Interpolated filenames and exception text can still contain Unicode. A filename containing a music-note emoji raised `UnicodeEncodeError` on a strict cp1252 stream. Escape dynamic values in the new messages to meet the ASCII rule.
+
+### FOUND UNASKED
+
+- **The overwrite guard has a race.** I simulated a kick-off run passing the guard while the path was absent, Phase 1a writing a good file, then the kick-off run replacing it without warning. The check and write need to be serialized if both can target the same path.
+- **A cache miss can erase existing hints.** With no cache and no legacy BPM stats, `detect()` returns `None`. The CLI skips that track, then exits successfully after replacing the hints file with partial output or `{}`. Passing `--kick-model` does not supply the missing grid.
+===CODEX-ASK-DONE exit=0 nonce=09dff94788dc48ae9c2ee0829165931f===
+===SEAT-DONE codex d20_r1===

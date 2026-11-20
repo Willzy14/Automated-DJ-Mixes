@@ -1,0 +1,54 @@
+VERDICT: CORRECTION
+
+Round 2 removes the fallback to `detect()`, but it still publishes hints from caches it should refuse. Fix the provenance checks, validate the derived timings, and replace the hints file atomically.
+
+## What still passes
+
+- **The override admits known kick-off analysis.** `--allow-unverified-cache` accepts `analysis.kick_model: false`, legacy `stem-energy-threshold`, and malformed provenance such as `analysis: []`. All three write hints with a warning. The new `test_allow_unverified_accepts_kick_off_with_warn` explicitly requires the first behavior, contradicting the brief. Also, `analysis: null` plus a legacy model marker passes silently without the flag, and `analysis.kick_model: true` overrides an explicit `stem-energy-threshold` marker. Distinguish absent, malformed, contradictory, and explicitly kick-off provenance. Allow the override only for absent provenance. (`stem_detector.py:848-860`)
+- **The legacy marker can attest to a model readout that never existed.** I ran the detector code reconstructed from both diffs with an empty provider. Main padded the empty result to 204 false beats and wrote `kick-detector-v3` with no `analysis` key. Round 1 did the same and also wrote `analysis.kick_model: true`. Round 2 silently published hints from both files. Checking that the two markers agree cannot catch the Round 1 case. A rewrite that retains either trusted marker can also replace the sections without invalidating provenance. The materializer source was outside the pack, so I could not establish whether it does that. Regenerate caches whose provenance cannot distinguish these cases. (`stem_detector.py:301-310`, `848-855`)
+- **Malformed sections can produce successful output.** With valid track, BPM, and model metadata, `sections: [{"label":"typo","end_sec":0.1}]` publishes plausible-looking cues 30 to 60 seconds into a tenth-of-a-second section. A drop with `start_sec: NaN` publishes four `NaN` values. Valid JSON with `bpm: 5e-324` and a single intro publishes `Infinity`. Validate section geometry and require finite, positive hint values before writing. Use strict JSON serialization as a final check. (`stem_detector.py:836-846`, `1495-1544`, `1599`)
+
+## Refusals and writes
+
+The default hints path refused every listed cache case, including NaN BPM. The overwrite guard blocked kick-off over a cache marked `analysis.kick_model: true`. It **allowed kick-off to replace a genuine legacy kick-on cache** that the new hints path had just accepted as verified. I reproduced that with both an ordinary kick-off run and a requested model run whose provider returned empty. The guard logic is unchanged, but its definition of trusted legacy now differs from the reader's. (`stem_detector.py:848-886`, `1326-1333`)
+
+Once the loop reaches `if bad`, it exits before touching the output. With one bad track and a write failure armed, the sentinel stayed byte-identical. An earlier exception can still prevent the promised refusal report. A BPM that's a 501-digit JSON integer raises `OverflowError` from `math.isfinite()` outside the `try`. In a run with an earlier refusal already queued, this produced zero `[REFUSED]` lines and left the sentinel intact. With every track accepted, an injected mid-write failure left a truncated hints file. Serialize before touching the destination, then write a sibling temporary file and atomically replace the destination. (`stem_detector.py:826-839`, `1574-1600`)
+
+## Detection and compatibility
+
+- **`detect()` correctly records actual use for a full or empty readout.** With synthetic envelopes, a full readout set `kick_model: true`. An empty readout preserved the energy signal, set `false`, and left a marked kick-on cache intact. A full-length all-false readout was correctly counted as used. With `kick_model=True`, an injected model-load exception propagated from `get_provider()` before any section JSON write. The production adapter was outside the pack, so I could not verify whether it raises immediately or defers loading. (`stem_detector.py:944-998`, `1326-1333`)
+- **A partial readout is still promoted to trusted.** A provider returning `[True]` for 204 beats gets 203 false beats appended, changes section inputs, records `true`, and replaces a marked kick-on cache. NumPy also coerces NaN beat values to `True` before validation. Validate the raw readout against the provider contract before conversion or padding. Apart from the legacy overwrite interaction and the intended empty-readout fallback, I found no accidental change to ordinary model-off or full-readout detection in the diff. (`stem_detector.py:276-310`, `988-998`)
+- **The empty-directory change is real and bypassable.** With no `--track`, zero WAVs now exit 2 and preserve existing hints. Round 1 exited 0 and wrote `{}`. The pack contains no caller that establishes a dependency on the old result. With `--track T.wav`, a leftover cache still publishes hints when that WAV is absent. `--track T.txt` can publish the same cache under `T.txt`. Validate explicit selections before looking up the cache. Exact stem comparison works for the detector's own JSON. I verified that a writer changing `T &amp; U` to `T & U` in the JSON causes refusal if the WAV stem stays literal. (`stem_detector.py:834-835`, `1326`, `1568-1589`)
+
+## Tests
+
+| New or replaced test | What fails if the behavior is removed |
+|---|---|
+| `cached_kick_on_json_used_detect_never_called_json_untouched` | Calling `detect()`, changing cache bytes, or losing the expected cue fails. A byte-identical rewrite passes. |
+| `missing_cache_for_one_of_two_tracks_refuses_and_writes_nothing` | Losing exit 2, replacing the sentinel, or dropping the filename or Phase 1a guidance fails. It does not count refusal lines. |
+| `unusable_shapes_are_refused` | Accepting any of the ten fixtures fails. The same `<= 0` check covers zero and negative. NaN BPM is absent from the fixtures. |
+| `legacy_file_with_kick_model_source_is_accepted` | Removing legacy acceptance fails. It does not test whether the marker is trustworthy. |
+| `legacy_file_with_energy_source_is_refused` | Accepting the explicit energy marker by default fails. |
+| `allow_unverified_accepts_kick_off_with_warn` | Removing explicit kick-off acceptance or the warning fails. Narrowing the override to the brief's contract makes this test fail. |
+| `allow_unverified_still_refuses_track_mismatch` | Letting the flag bypass track validation fails. |
+| `provider_returning_nothing_is_not_marked_used` | Marking empty as used or dropping the full readout fails. It exercises the helper only. |
+| `non_ascii_name_in_refusal_does_not_raise_on_cp1252` | Removing refusal-path escaping fails. It does not exercise success, override, or guard diagnostics. |
+
+Behavior **5** has no direct test of `detect()` metadata, energy fallback, model-load failure, or overwrite enforcement. All 23 cases still passed when I forced the metadata to `true` or disabled the guard inside `detect()`. Behavior **4** has no positive test for missing provenance. Behaviors **1-3** have coverage for ordinary cache reads and refusal, with gaps around write attempts, contradictory provenance, multiple refusal lines, and write failures. Behavior **6** is covered only on the refusal path. The five retained guard tests exercise the helper.
+
+I verified all four `SHA.txt` prefixes for the snapshot identified as `work/d20-hints` at `103dd04`.
+
+| File | SHA-256 prefix |
+|---|---|
+| `stem_detector.py` | `c1d57d150daaf10f` |
+| `test_stem_detector_write_hints_cache.py` | `108a129bbf907deb` |
+| `d20_r2_full.diff` | `92aacd0f68df41b5` |
+| `d20_r2_since_r1.diff` | `6286ed99f061eff3` |
+
+I also read `SHA.txt`, `brief_d20_r2.txt`, both prior reviews, and both replay logs. The logs show 10 hints written in A and 10 refusals in B. The exit statuses and byte comparisons are reported in the brief. The 23 supplied test cases passed against an in-memory filesystem with audio dependencies stubbed. No files were written.
+
+## FOUND UNASKED
+
+The direct output write follows filesystem links. If `Hints/track_hints.json` is a symlink or hard link to a `SECTIONS_STEM` file, a successful hints run can overwrite the analysis it just read. Replacing the output directory entry atomically also closes this path.
+===CODEX-ASK-DONE exit=0 nonce=ec4cb73f32b4483a8c82af40443cfa4e===
+===SEAT-DONE codex d20_r2===

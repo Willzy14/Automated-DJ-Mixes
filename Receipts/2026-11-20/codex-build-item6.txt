@@ -1,0 +1,313 @@
+```diff
+diff --git a/Tools/playlist_builder.py b/Tools/playlist_builder.py
+--- a/Tools/playlist_builder.py
++++ b/Tools/playlist_builder.py
+@@ -7,9 +7,10 @@
+   python Tools/playlist_builder.py sql   --label Defected --label DFTD            # print the SELECT (run it yourself)
+   python Tools/playlist_builder.py build --label Defected --arc rise --n 12       # live: uses the read-only mix_planner_ro Neon role
+   python Tools/playlist_builder.py build --rows rows.json --arc rise --n 12       # offline: rows = JSON list from the SELECT
++Add --resolve to build to print paths to matching master WAVs.
+ Selection presets (--preset): hits | cool | cult | any.  Arcs (--arc): rise | wave | flat.
+ Read-only: only SELECT is ever sent, and the live session is set read-only."""
+-import argparse, json, math, os, re, sys
++import argparse, importlib.util, json, math, os, re, sys
+ sys.stdout.reconfigure(encoding='utf-8')
+ 
+ # Genre -> heat 0..10 (how housey -> how hard). DB genre tags are unapproved enrichment drafts: this is a coarse ladder
+@@ -114,7 +115,75 @@
+     if a.arc == 'rise': picked.sort(key=lambda r: r['heat'])                # slots chose WHO; a rise is then ordered by heat
+     return picked
+ 
+-def report(picked, a):
++def load_resolver():
++    path = os.path.join(os.path.dirname(__file__), 'resolve_masters.py')
++    spec = importlib.util.spec_from_file_location('resolve_masters', path)
++    resolver = importlib.util.module_from_spec(spec)
++    try:
++        spec.loader.exec_module(resolver)
++        if not isinstance(resolver.idx, list) or not all(
++                isinstance(entry, list) and len(entry) == 2 and all(isinstance(s, str) and s.strip() for s in entry)
++                for entry in resolver.idx):
++            raise ValueError('expected a list of folder names and paths')
++    except (OSError, ValueError):
++        sys.exit('Cannot read Tools/folder_index.json. Run python Tools/build_folder_index.py.')
++    return resolver
++
++ORIGINAL_MIXES = ('', 'original', 'original mix', 'main', 'main mix', 'main original', 'main original mix',
++                  'extended', 'extended mix')
++
++def master_name_matches(resolver, filename, versions, *bases):
++    name = resolver.norm(resolver.strip_num(resolver.stem(filename)))
++    for base in bases:
++        if base and name != base and not name.startswith(base + ' '): continue
++        tail = name[len(base):].strip()
++        for version in versions:
++            if version and tail != version and not tail.startswith(version + ' '): continue
++            if not resolver.VERS.sub(' ', tail[len(version):]).strip(): return True
++    return False
++
++def master_matches(resolver, path, artist, title, versions):
++    name = os.path.basename(path)
++    full_title = artist + ' ' + title
++    if master_name_matches(resolver, name, versions, full_title): return True
++    folder = resolver.ftail(os.path.basename(os.path.dirname(os.path.dirname(path))))
++    folder_artist, sep, _ = folder.partition(' - ')
++    if not sep or resolver.norm(folder_artist) != artist: return False
++    if master_name_matches(resolver, name, versions, title): return True
++    # scan() can promote an untitled delivery in an exact folder, even when its named anchor is a radio edit.
++    if not resolver.vonly(name, artist, title) or not master_name_matches(resolver, name, versions, artist, ''):
++        return False
++    try:
++        with os.scandir(os.path.dirname(path)) as entries:
++            files = [e.name for e in entries if e.name.lower().endswith('.wav') and e.is_file()]
++    except OSError:
++        return False
++    named = {f for f in files if master_name_matches(resolver, f, versions, full_title, title)}
++    return bool(named) and all(f in named or (resolver.vonly(f, artist, title)
++                                             and master_name_matches(resolver, f, versions, artist, '')) for f in files)
++
++def resolve_pick(resolver, r):
++    artist, title = r['artist'], r['title']
++    a, t = resolver.norm(artist or ''), resolver.norm(title or '')
++    if not a or not t: return None, [], 'artist and title need a letter or digit'
++    remixer, mix_name = ((r.get(k) or '').strip() for k in ('remixer', 'mix_name'))
++    rm, mix = resolver.norm(remixer), resolver.norm(mix_name)
++    if (remixer and not rm) or (mix_name and not mix): return None, [], 'release version needs a letter or digit'
++    version = mix or (rm + ' remix' if rm else '')
++    if rm and f' {rm} ' not in f' {version} ': version = rm + ' ' + version
++    if version and not resolver.VERS.sub(' ', version).strip(): return None, [], 'release version is a delivery label'
++    versions = (version,) if version else ORIGINAL_MIXES
++    candidates, notes, miss = resolver.scan(artist, title, must=version or None)
++    # The hint may match only the folder, and scan() can return unrelated or alternate files as fallbacks.
++    for _, path in candidates:
++        if master_matches(resolver, path, a, t, versions): return os.path.abspath(path), notes, None
++    if miss:
++        kind, value = miss[0]
++        return None, notes, f'no file matched the {kind} "{value}"'
++    return None, notes, "no candidate matches the credit's title and version"
++
++def report(picked, a, resolver=None):
++    resolved = with_notes = 0
+     print(f"# Playlist draft: arc={a.arc} preset={a.preset} n={len(picked)}  (source: Neon credits ledger)\n")
+     print("Each row is one VERSION with its own streams (a remix and an original are different tracks). Genre is a DB DRAFT tag.\n")
+     for i, r in enumerate(picked, 1):
+@@ -121,8 +190,19 @@
+         ver = r.get('mix_name') or (f"{r['remixer']} remix" if r.get('remixer') else 'original/unspecified')
+         print(f"{i:>2}. [{r['heat']}] {r['artist']} - {r['title']}  ({ver}) | {r['label']} {year(r) or '?'} | {r['genre']} | "
+               f"{r['streams_plays']:,} streams | bpm {r.get('bpm') or '-'} | key {r.get('musical_key') or '-'} | tier {r.get('display_tier')}")
++        if resolver is not None:
++            path, notes, reason = resolve_pick(resolver, r)
++            if path:
++                print(f"   MASTER: {path}")
++                resolved += 1
++            else: print(f"   NONE: {reason}")
++            for why, note_path in notes: print(f"   NOTE: {why}: {note_path}")
++            with_notes += bool(notes)
+     print("\nHeat curve:", ' '.join(str(r['heat']) for r in picked))
+-    print("Next: Tools/resolve_masters.py to find audio + confirm Sam's version; BPM/key are measured by the pipeline.")
++    if resolver is None:
++        print("Next: Tools/resolve_masters.py to find audio + confirm Sam's version; BPM/key are measured by the pipeline.")
++    else:
++        print(f"Resolved {resolved} of {len(picked)}; {with_notes} with notes; {len(picked) - resolved} not found")
+ 
+ def main():
+     ap = argparse.ArgumentParser()
+@@ -133,8 +213,12 @@
+     ap.add_argument('--n', type=int, default=12); ap.add_argument('--max-per-artist', type=int, default=1)
+     ap.add_argument('--heat-min', type=int, default=0); ap.add_argument('--heat-max', type=int, default=10)
+     ap.add_argument('--rows')
++    ap.add_argument('--resolve', action='store_true', help='print matching master WAV paths for build')
+     a = ap.parse_args()
+-    if a.cmd == 'sql': print(SELECT.format(where=where_clause(a))); return
+-    report(build(fetch(a), a), a)
++    if a.cmd == 'sql':
++        if a.resolve: ap.error('--resolve requires build')
++        print(SELECT.format(where=where_clause(a))); return
++    resolver = load_resolver() if a.resolve else None
++    report(build(fetch(a), a), a, resolver)
+ 
+ if __name__ == '__main__': main()
+diff --git a/Tests/test_playlist_builder.py b/Tests/test_playlist_builder.py
+--- a/Tests/test_playlist_builder.py
++++ b/Tests/test_playlist_builder.py
+@@ -5,8 +5,7 @@
+ file), so the main path is tested through capsys, with the rows file (the offline `--rows` input) written to tmp_path.
+ 
+ Not tested on purpose: the exact numbers of the cool and cult presets (Sam's taste, still being tuned), only that they
+-return a finite score for every row. The builder does not call Tools/resolve_masters.py (it only prints a hint line), so
+-there is no resolver-integration path to test.
++return a finite score for every row. Resolver integration uses an isolated copy of the resolver and a synthetic index.
+ """
+ import argparse
+ import datetime
+@@ -345,6 +344,130 @@
+     pb.main()
+ 
+ 
++@pytest.fixture
++def resolver_tools(pb, monkeypatch, tmp_path):
++    tools = tmp_path / "Tools"
++    tools.mkdir()
++    (tools / "resolve_masters.py").write_bytes((REAL_SOURCE.parent / "resolve_masters.py").read_bytes())
++    monkeypatch.setattr(pb, "__file__", str(tools / "playlist_builder.py"))
++    return tools
++
++
++def _index_folder(tools, name, files):
++    renders = tools / name / "MASTER RENDERS"
++    renders.mkdir(parents=True)
++    for filename in files:
++        (renders / filename).touch()  # The resolver only needs names and file metadata.
++    (tools / "folder_index.json").write_text(json.dumps([[name, str(renders.parent)]]), encoding="utf-8")
++    return renders
++
++
++def _run_resolved(pb, monkeypatch, tools, *rows):
++    rows_file = tools / "rows.json"
++    rows_file.write_text(json.dumps(rows), encoding="utf-8")
++    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", str(len(rows)),
++              "--max-per-artist", str(len(rows)), "--resolve")
++
++
++def test_resolve_remix_uses_the_latest_matching_delivery(pb, monkeypatch, capsys, resolver_tools):
++    renders = _index_folder(resolver_tools, "Artist - Better When [Label] Project",
++                           ["Better When (Bob Remix) SW V3.wav", "Better When (Bob Remix) SW V2.wav",
++                            "Better When (Original Mix) SW V5.wav"])
++    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When", remixer="Bob"))
++    assert f"   MASTER: {renders / 'Better When (Bob Remix) SW V3.wav'}" in capsys.readouterr().out.splitlines()
++
++
++@pytest.mark.parametrize("mix", ["Bob Remix", "Dub", "Acapella", "Instrumental", "Radio Edit", "Bob Mix"])
++def test_resolve_original_rejects_alternate_only_folder(pb, monkeypatch, capsys, resolver_tools, mix):
++    _index_folder(resolver_tools, "Artist - Better When [Label] Project", [f"Better When ({mix}) SW V3.wav"])
++    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
++    out = capsys.readouterr().out
++    assert "NONE: " in out and "MASTER: " not in out
++
++
++@pytest.mark.parametrize("remixer,mix_name,version", [
++    (None, "Extended Mix", "Extended Mix"), ("Bob", "Extended Remix", "Bob Extended Remix"),
++    ("Bob", "Bob Extended Remix", "Bob Extended Remix"),
++])
++def test_resolve_requires_mix_in_the_filename(pb, monkeypatch, capsys, resolver_tools, remixer, mix_name, version):
++    renders = _index_folder(resolver_tools, f"Artist - Better When ({version}) [Label] Project",
++                           ["Better When (Original Mix) SW V3.wav", f"Better When ({version}) SW V1.wav"])
++    credit = row("Better When", remixer=remixer, mix_name=mix_name)
++    _run_resolved(pb, monkeypatch, resolver_tools, credit)
++    path = renders / f"Better When ({version}) SW V1.wav"
++    assert f"   MASTER: {path}" in capsys.readouterr().out.splitlines()
++    path.unlink()
++    _run_resolved(pb, monkeypatch, resolver_tools, credit)
++    out = capsys.readouterr().out
++    assert "NONE: " in out and "MASTER: " not in out
++
++
++def test_resolve_ep_picks_the_named_track(pb, monkeypatch, capsys, resolver_tools):
++    name = "02 Better When.wav"
++    renders = _index_folder(resolver_tools, "Artist - Better When [Label] Project",
++                           ["01 Change The Situation (Extended Mix) SW V9.wav", name,
++                            "03 Better When Again (Extended Mix) SW V9.wav"])
++    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
++    assert f"   MASTER: {renders / name}" in capsys.readouterr().out.splitlines()
++    (renders / name).unlink()
++    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
++    out = capsys.readouterr().out
++    assert "NONE: " in out and "MASTER: " not in out
++
++
++def test_resolve_title_only_file_needs_the_credited_artist(pb, monkeypatch, capsys, resolver_tools):
++    _index_folder(resolver_tools, "Someone Else - Better When [Artist Records] Project", ["Better When.wav"])
++    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
++    out = capsys.readouterr().out
++    assert "NONE: " in out and "MASTER: " not in out
++
++
++@pytest.mark.parametrize("title_suffix,expected", [("", "MASTER: "), (" (Radio Edit)", "NONE: ")])
++def test_resolve_untitled_delivery_needs_a_safe_named_anchor(pb, monkeypatch, capsys, resolver_tools, title_suffix, expected):
++    renders = _index_folder(resolver_tools, "Artist - Better When [Label] Project",
++                           [f"Better When{title_suffix} MASTER.wav", "MASTER AMENDED V2.wav"])
++    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
++    lines = capsys.readouterr().out.splitlines()
++    assert any(line.startswith(f"   {expected}") for line in lines)
++    if not title_suffix: assert f"   MASTER: {renders / 'MASTER AMENDED V2.wav'}" in lines
++
++
++def test_resolve_prints_every_note_and_counts_picks(pb, monkeypatch, capsys, resolver_tools):
++    renders = _index_folder(resolver_tools, "Artist - Better When [Label] Project",
++                           ["02 Better When SW V1.wav", "01 Change The Situation.wav", "SW V4.wav", "SW V5.wav"])
++    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"), row("Better When", remixer="Bob"), row("Missing"))
++    lines = capsys.readouterr().out.splitlines()
++    assert lines.count('   NONE: no file matched the hint "bob remix"') == 1
++    assert lines.count("   NONE: no candidate matches the credit's title and version") == 1
++    for name in ("SW V4.wav", "SW V5.wav"):
++        assert lines.count(f"   NOTE: the folder may hold other tracks: {renders / name}") == 2
++    assert lines[-1] == "Resolved 1 of 3; 2 with notes; 2 not found"
++
++
++@pytest.mark.parametrize("index", [None, "{", "{}"])
++def test_resolve_bad_index_exits_before_playlist(pb, monkeypatch, capsys, resolver_tools, index):
++    if index is not None: (resolver_tools / "folder_index.json").write_text(index, encoding="utf-8")
++    with pytest.raises(SystemExit) as e:
++        _run_main(pb, monkeypatch, "build", "--resolve")
++    assert e.value.code == "Cannot read Tools/folder_index.json. Run python Tools/build_folder_index.py."
++    captured = capsys.readouterr()
++    assert captured.out == captured.err == ""  # Python prints the single SystemExit message on stderr at the CLI.
++
++
++def test_main_without_resolve_keeps_the_existing_report(pb, monkeypatch, capsys, resolver_tools):
++    rows_file = resolver_tools / "rows.json"
++    rows_file.write_text(json.dumps([row()]), encoding="utf-8")
++    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "1")
++    assert capsys.readouterr().out == (
++        "# Playlist draft: arc=rise preset=any n=1  (source: Neon credits ledger)\n\n"
++        "Each row is one VERSION with its own streams (a remix and an original are different tracks). "
++        "Genre is a DB DRAFT tag.\n\n"
++        " 1. [3] Artist - Song  (original/unspecified) | Lab 2018 | House | 1,000 streams | bpm - | key - | tier A\n"
++        "\nHeat curve: 3\n"
++        "Next: Tools/resolve_masters.py to find audio + confirm Sam's version; BPM/key are measured by the pipeline.\n"
++    )
++
++
+ def test_main_build_from_a_rows_file(pb, monkeypatch, capsys, tmp_path):
+     rows_file = tmp_path / "rows.json"
+     rows_file.write_text(json.dumps(ladder_rows() + [row("Dubby (Dub Mix)", artist="Z", mix_name="Dub Mix")]), encoding="utf-8")
+```
+
+## HOW ROW FIELDS MAP TO RESOLVER ARGUMENTS
+
+`artist` and `title` go to `scan()` as stored. The resolver normalizes case and punctuation. A change from `feat.` to `&` can still yield `NONE`. The builder keeps the full artist credit and requires a matching project-folder artist for a title-only filename.
+
+| Row fields | `must` |
+|---|---|
+| Neither version field supplied | `None`. For the existing `original/unspecified` case, plain, Original, Main, and Extended filename forms are eligible. |
+| `remixer` only | Normalized `<remixer> remix`. |
+| `mix_name` only | Normalized `mix_name`. |
+| Both | Normalized `mix_name` if it already contains the full remixer name. Otherwise, prefix it with the remixer. |
+
+`exact` stays `None`. It takes a complete filename, including any delivery suffix, and using it suppresses notes. `scan()` returns three lists: ranked `(score, path)` candidates, `(reason, path)` notes, and missed `(filter, value)` pairs. Since `must` can match a folder name alone, the builder checks the filename and selects the first acceptable candidate in resolver order. Each pick gets one `MASTER` or `NONE` line, plus every note returned for that pick.
+
+## WHAT I COULD NOT VERIFY
+
+_Validated: all four SHA prefixes matched, `git apply --check` passed against the pinned CRLF files, and 19 new cases passed with the pinned resolver and an in-memory filesystem._
+
+The real index, live credits, and normal on-disk pytest run were outside this verification. If the pasted diff is saved with LF and the checkout has CRLF, `git apply --ignore-space-change` also passed the application check.
+
+| Test | What it catches |
+|---|---|
+| Latest remix delivery | Rules 1 and 7. A newer original or an older delivery of the remix wins. |
+| Alternate-only folder | Rule 1. An original resolves to a remix, dub, acapella, instrumental, radio edit, or named alternate mix. |
+| Mix in filename | Rule 1. A folder hint alone permits fallback to the original, or the builder loses an explicit mix name. |
+| EP named track | Rule 1 and the reported EP failure. `Change The Situation` or `Better When Again` stands in for `Better When`. |
+| Title-only artist | The builder mistakes an artist name in the label for the artist on the track. |
+| Untitled delivery | Rules 1 and 7. A radio edit supplies the only evidence for an unnamed master, or a valid `MASTER AMENDED V2` loses to `MASTER`. |
+| Notes and counts | A note is dropped, notes are counted as picks, or a resolver-supplied reason is lost. |
+| Missing or bad index | Rules 5 and 6. The build proceeds or prints a playlist despite an unusable index. |
+| Build without `--resolve` | Rules 4 and 6. The legacy report changes or the build requires an index. |
+
+## FOUND UNASKED
+
+- `scan()` only returns its top three candidates. If all three fail the builder's identity checks, the build reports `NONE` even if an eligible file ranked fourth or lower.
+- The builder's existing `song_keys()` omits artist. Two artists with the same normalized title, remixer, and mix name can collapse into one pick before resolution.
+- `build_folder_index.py` lists backup roots before its guarded scan. An unavailable backup root can abort the rebuild before it writes a fresh index.
+===CODEX-ASK-DONE exit=0 nonce=8a402a33de664dff8e04a6252a331772===
+===SEAT-DONE codex item6_r1b===

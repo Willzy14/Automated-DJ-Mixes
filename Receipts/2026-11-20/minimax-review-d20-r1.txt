@@ -1,0 +1,216 @@
+﻿Confirmed. Now let me write my final answer.
+
+VERDICT: CORRECTION
+
+Files read (sha256 first 16 hex, per SHA.txt):
+- `5b57126d325bb415` - `stem_detector.py` (post-change file, read in full, 1557 lines)
+- `3f7ccdcfb04c18f0` - `test_stem_detector_write_hints_cache.py` (read in full, 134 lines)
+- `e9e087fcd31734fc` - `d20.diff` (read in full)
+- No sha listed in SHA.txt, but read: `SHA.txt`, `readers_of_sections_json.txt`, `brief_d20_r1.txt`, `validate_hints_vs_sections.py`, `codex_d20_r1.txt.log`, `codex_d20_r1.txt.stdout.log`, `codex_d20_r1.txt.stderr.log`
+
+Limitation: I can only see `readers_of_sections_json.txt` as a grep output. I cannot see `align_engine.py`, `propose_arrangement.py`, `materialize_section_details.py`, `section_placement_viz.py`, `reverify_fast.py`, `reverify_sections.py`, `orchestrator.py`, `alignment_feasibility.py`, `extract_musical_landmarks.py`. Where a conclusion depends on their contents I say so.
+
+---
+
+## 1. Claims vs code
+
+All five claims A-E match the code as written.
+
+- **A** holds only for the cached branch. In the cached branch `detect()` is not called and the json is not rewritten (the json is only written inside `detect()`). Confirmed: `stem_detector.py:1509-1521` reads the cache, calls `hints_from_stem_result(res)` as a shape check, and only calls `detect()` when `res is None`.
+- **B** holds: no cache -> `[WARN] no cached analysis ...` then `detect()`, with a second `[WARN] this detect runs WITHOUT the kick detector` when `args.kick_model` is false.
+- **C** holds exactly: `kick_model_used = bool(kick_model or kick_provider is not None)` at line 1265, stored as `result["analysis"] = {"kick_model": kick_model_used}`.
+- **D** holds: `_may_overwrite_sections_json` returns False only when `kick_model_on` is False, the file exists, it parses, and `analysis.kick_model` is truthy. Legacy (no `analysis` key), `kick_model: false`, missing file, and unreadable file are all overwritten. `prior.get("analysis") or {}` handles `analysis: null` and `analysis: false` without raising.
+- **E** holds: the malformed path prints the exception type and message and falls back to `detect()`.
+
+The brief's framing is slightly off in one place: it says "it never calls detect and never rewrites the json in that case" for A. That is true, but A is stated in a way that suggests the json is never rewritten by `--write-hints` at all. In the no-cache fallback the json **is** written (see finding F1).
+
+---
+
+## 2. Breaking it
+
+### F1 (medium, real): the no-cache fallback writes a `kick_model: false` json that the next run silently trusts. The original hint bug becomes permanent.
+
+The fallback calls `detect(w, args.project, make_viz=False, kick_model=args.kick_model, ...)`. `write_json` is **not passed**, so it defaults to `True` (line 834). `detect()` therefore writes `SECTIONS_STEM_<track>.json` with `"analysis": {"kick_model": false}` (line 1265-1273).
+
+Sequence:
+
+1. Project has a good Phase 1a json? No. Say the json is missing, or Phase 1a was never run for that track, or the json was deleted.
+2. Run `python Source/stem_detector.py <project> --write-hints`. No cache -> `[WARN] no cached analysis` -> `[WARN] this detect runs WITHOUT the kick detector` -> `detect()` runs with the kick model off and **writes** a `kick_model: false` json to `_Stem Analysis/`.
+3. Run `--write-hints` again. The cache now exists and is well formed. The shape check passes. Output line is `  <track>: hints from the cached analysis (SECTIONS_STEM_<track>.json)`. **No warning of any kind.** The hints now come from a no-kick-model analysis.
+
+So the bug this change fixes re-appears on the *second* run, silently, and it is self-perpetuating. Step 2 is the only place the user sees a warning; step 3 is the run whose output actually lands in `Hints/track_hints.json`, and it looks clean.
+
+This is exactly the failure the brief describes as the thing to fix ("hints still come from a no-kick-model analysis without a visible warning"), and the fix does not close it for the no-cache case.
+
+Two independent ways to make this bite:
+
+- **F1a**: the fallback's `detect()` should not write the json at all (`write_json=False`). It is a hints-only step; the analysis it produced is explicitly the weaker one the change exists to avoid propagating. Writing it destroys the Phase 1a json's slot for any *future* Phase 1a run that does not pass `kick_model=True` (see F3).
+- **F1b**: even without F1a, the trust check should refuse (or loudly warn about) a cached json whose `analysis.kick_model` is false, because that is precisely the json the pipeline says not to trust.
+
+Note the asymmetry: the guard in D protects a *kick-on* json from being overwritten by a *kick-off* run. Nothing protects a *kick-off* json from being trusted for hints. The two halves of the fix are not symmetric, and the missing half is the one that produces wrong hints.
+
+### F2 (medium): `hints_from_stem_result` raises `ZeroDivisionError` on a cached json with `bpm: 0`, which is uncaught, and kills the whole `--write-hints` run with a traceback and no hints file.
+
+`hints_from_stem_result` does `sec_per_bar = 4 * 60.0 / res["bpm"]` (line 1444). With `"bpm": 0` that is `ZeroDivisionError` (Python raises this for float division by zero). The except tuple at line 1516 is `(KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError)`. `ZeroDivisionError` derives from `ArithmeticError`, not from any of those. `json.JSONDecodeError` is a subclass of `ValueError`, so listing it is redundant, but harmless.
+
+Consequence: the exception escapes the try, escapes the for loop, and aborts `main()` before `hints_dir.mkdir(...)` / `out.write_text(...)`. The user gets a Python traceback and **no** `Hints/track_hints.json` at all, even for the tracks that were fine. A stale `track_hints.json` from a previous run is left in place, so the failure can masquerade as success downstream.
+
+This is reachable from a truncated or hand-edited json, or from a json written by a different tool with a null/zero bpm. The fix is to add `ArithmeticError` to the except tuple (or `Exception`).
+
+### F3 (medium): the guard blocks the write but `detect()` still returns and the caller still uses the result, so the "no overwrite" protection is a partial protection for the file but not for the caller.
+
+In the `--write-hints` fallback, `detect()` writes the json only if `_may_overwrite_sections_json` returns True. But `detect()` always returns `result` regardless of whether the write happened. So on a refused write:
+
+- the on-disk json stays the good kick-on one (correct), but
+- the hints are computed from the fresh no-kick analysis (wrong), with only `[WARN] this detect runs WITHOUT the kick detector` as the signal.
+
+In the `--write-hints` flow this specific combination is hard to reach (if the cache was well formed we never call detect; if it was malformed it cannot have a kick-on `analysis` key). But it is reachable for `reverify_fast.py` / `reverify_sections.py`, which the brief already flags as known. I am not re-raising that. The point I am adding is that **`detect()` has no way to tell its caller that the write was refused**. `detect()` returns a result whose `analysis.kick_model` says `false`, while the file on disk says `true`. Any caller that assumes "the json on disk is what detect just produced" is now wrong. A `written` flag on the result, or a distinct return, would let callers notice.
+
+### F4 (low): the guard's own warning cannot fire from `--write-hints`, so the one line that explains the situation is dead code in the documented workflow.
+
+`_may_overwrite_sections_json` prints `[WARN] {path.name} was written WITH the kick model; this run has it off, so the file was NOT overwritten` only when `kick_model_on` is False and the existing file records `kick_model: true`. In `--write-hints`, that combination requires a cache that parses AND records `kick_model: true` AND still fails the shape check. A json that records `kick_model: true` was written by `detect()` and always has the shape `hints_from_stem_result` wants, so the shape check will not fail on it. **The branch is effectively unreachable via `--write-hints`.** It is reachable via `reverify_*` (already known).
+
+This matters for the brief's question 1 ("the fallback in B/E followed by the guard in D"): the answer is that D never fires in the `--write-hints` path, so D does not help F1 at all. D protects the file; nothing protects the hints.
+
+### F5 (low): a legacy json (no `analysis` key) is trusted for hints with no warning, even though it may be a stale kick-off analysis from the old `--write-hints` step.
+
+This is the "first run after this change on a project whose json files are legacy" case the brief asks about. The legacy json was written by the *old* `--write-hints` step, which ran `detect()` without the kick model. Its sections may disagree with the Ableton set that was built from the Phase 1a analysis that it overwrote. The new code reads it, the shape check passes, and it prints `hints from the cached analysis` with no warning.
+
+The `analysis` key cannot distinguish these, because the legacy json has no key at all. The code treats "legacy" as fine for the overwrite guard (D, defensible: a legacy file is at least as good as a fresh kick-off run) but also treats "legacy" as fine for the hints (not defensible: for hints, a legacy file is of unknown provenance and the old pipeline wrote it from a weaker analysis).
+
+At minimum the no-`analysis`-key case deserves a distinct line such as `[warn] cached json has no analysis.kick_model record (legacy); hints may not match the pipeline run`. That would have made the first post-change run on an existing project self-diagnosing instead of silent.
+
+### F6 (low): the shape check does not verify the cached json belongs to this track.
+
+`hints_from_stem_result` never looks at `res["track"]`. The json does carry a `"track"` field (written at line 1266 as `wav.stem`), and `propose_arrangement.py:339` in the readers list is documented as reading the json's own `"track"` field, so the field is real and meaningful. A cached json whose `"track"` does not match `w.stem` (stale file left over from a renamed track, or a copy-paste of `_Stem Analysis` between projects) passes the shape check and is trusted. A one-line comparison `res.get("track") == w.stem` would close it.
+
+### F7 (low): the shape check does not verify the cached json was produced by the current detector, so a stale json from an older detector version passes.
+
+Nothing in the json records a detector version or the analysis parameters that shaped the sections (downbeat, `soft_intro_outro`, `width_cues`, `tier_a`, kick source). `signals.kick_presence_source` is the only provenance hint and it is not checked. A json produced by an older build of `stem_detector.py` (or by a build with different tunables such as `MIN_ENERGY_RUN_BARS`, `DROP_REL`, `OUTRO_CAP_BARS`) has exactly the shape the check wants and is trusted, so hints are derived from sections the current pipeline would not have produced. The `analysis` dict is the natural place for a version/params stamp.
+
+### F8 (low): `analysis.kick_model` is `true` whenever a `kick_provider` was passed, regardless of whether the provider was actually used or whether it worked.
+
+`kick_model_used = bool(kick_model or kick_provider is not None)`. Meanwhile the actual kick path in `detect()` is gated on `if kick_model or kick_provider is not None:` (line 923) and the provider call itself is `_model_kick_presence_per_beat(...)`. So the flag and the behaviour line up on the *attempt*.
+
+The gap: if the provider raises, `detect()` propagates the exception and no json is written at all (so no stale-file corruption, and the caller sees the error). But if a provider is passed that returns an all-`False` readout, or a provider whose `presence_per_beat` yields a degenerate signal, `detect()` records `kick_model: true` and the sections are garbage, and the guard then **refuses to let anything overwrite that garbage**. A bad kick-on analysis is now permanent: no kick-off run can replace it, and the only escape is a fresh kick-on run. There is no "the model ran but produced nothing" signal, and `analysis` records only the flag, not the source string that already exists as `signals.kick_presence_source`. Recording the actual `kick_source` in `analysis` would at least make the condition visible to the reader and to the hint path.
+
+### F9 (medium): `materialize_section_details.py` writes `SECTIONS_STEM_<name>.json` into a `refined_stem_dir` (line 198). If that writer does not carry the `analysis` key through, the refined json is treated as legacy by the guard.
+
+I cannot see that file, so this is a flag, not a confirmed defect. What I can say from the grep line alone: `materialize_section_details.py:198` performs a `write_text(...)` of a `SECTIONS_STEM_<clean_name>.json`. If it constructs the dict from scratch rather than loading and re-emitting the detector's json, the `analysis` key will be missing, and the guard will treat that refined file as legacy (overwritable). That is probably harmless for the guard (the refined dir is not the pipeline's Phase 1a file) but it means the `analysis` key is not reliably propagated through the toolchain. Whoever writes json into that tree should preserve `analysis`, or the guard's notion of "kick-on file" is only valid for the one file `detect()` writes.
+
+---
+
+## 3. Are the tests real?
+
+Nine tests. I traced each against the behaviour it names.
+
+| Test | Would it fail if the named behaviour were removed? |
+|---|---|
+| `test_cached_json_used_detect_not_called_json_untouched` | **Yes.** If the cached branch were removed, `detect()` would be called and `calls == []` would fail. It also asserts the json sha is unchanged, so it catches a rewrite. Strong test. Note it asserts `first_drop_sec == 48 * 1.875` exactly, so the hint arithmetic is pinned too. |
+| `test_no_cache_falls_back_to_detect_with_warn` | **Yes.** Removing the no-cache branch would skip `detect()`, so `len(calls) == 1` fails; removing the WARN would fail the two string asserts. Good test. |
+| `test_no_cache_with_kick_model_flag_has_no_kick_warning` | **Yes.** If the "WITHOUT the kick detector" warning were emitted unconditionally, `"WITHOUT the kick detector" not in out` fails. Real. |
+| `test_malformed_cache_warns_and_falls_back` | **Yes.** Removing the except branch would let `json.JSONDecodeError` escape and the test would error out. Real. |
+| `test_guard_blocks_kick_off_write_over_kick_on_json` | **Yes.** Removing the `if prior_kick: return False` would return True and fail. Real. |
+| `test_guard_allows_kick_on_write_over_kick_on_json` | **Weakly yes.** If the first `if kick_model_on or not path.exists(): return True` were dropped, the function would read the file, find `prior_kick` True, and return False, failing the assert. So it is a real guard, but it is testing the trivial branch. |
+| `test_guard_legacy_json_without_key_is_overwritten` | **Yes.** If the `.get("kick_model", False)` default were flipped to True, or if legacy were treated as protected, this fails. Real. This is the one that pins D's legacy behaviour. |
+| `test_guard_kick_off_json_and_missing_file_are_overwritten` | **Yes.** Both asserts are real. Real. |
+| `test_guard_prints_warn_naming_file` | **Yes.** Removing the print would fail the string assert. Real, but it only checks the filename appears, not that the message says the file was NOT overwritten. |
+
+**Real weaknesses in the suite:**
+
+- **Every guard test tests the helper, never `detect()` itself.** The test module docstring admits this ("the overwrite guard is tested as a helper because detect() itself needs audio"). That is a genuine gap: the wiring inside `detect()` (`if _may_overwrite_sections_json(json_path, kick_model_used): json_path.write_text(...)`, lines 1271-1273) is **not covered by any test**. If someone deleted the `if` and always wrote, all nine tests still pass. That is the single most important untested line in the change, since it is the line that stops the overwrite.
+- **Claim C has no test at all.** Nothing asserts that `result["analysis"]["kick_model"]` is `True` when `kick_model=True`, `True` when a `kick_provider` is passed, and `False` otherwise. The `kick_provider` half of C is entirely untested.
+- **F1 has no test.** Nothing asserts that the fallback path does *not* write the json, and nothing asserts that a cached json with `kick_model: false` is refused or warned about. The suite's `_cached(kick=False)` helper exists and is used only as the *return value* of a fake `detect`, never as a *cached file on disk*. So the one state that reproduces the original bug is never constructed on disk.
+- **F2 has no test.** No test writes a cached json with `"bpm": 0`.
+- **F5 has no test.** `_cached(kick=None)` (legacy) is only used for the guard, never as a cache for `--write-hints`.
+- **The `--kick-model` flag is only exercised in the no-cache branch.** The cached branch ignores `args.kick_model` entirely: if a cached `kick_model: false` json exists and the user passes `--kick-model`, the code still uses the cached kick-off json and never runs a kick-on detect. `--kick-model` is silently a no-op whenever a cache exists. The two flags `--kick-model` and `--write-hints` now interact in a way the docs do not describe.
+
+---
+
+## 4. Readers and the new top-level `analysis` key
+
+Judging from `readers_of_sections_json.txt` plus the one reader I can see (`validate_hints_vs_sections.py`):
+
+- `validate_hints_vs_sections.py:67-72` reads `d.get("bpm")` inside `try/except Exception: continue`. Safe. It ignores `analysis` entirely.
+- `propose_arrangement.py:333,339,355` reads `"bpm"` and the `"track"` field. The new key does not collide with either.
+- `align_engine.py:304,2910,3036` reads the json as the arrangement's source of truth. Adding a key is additive.
+- `materialize_section_details.py:134,198` reads and writes it. See F9: it must preserve `analysis` or the key is lost for refined files.
+- `extract_musical_landmarks.py:74`, `alignment_feasibility.py:43`, `section_placement_viz.py:141,144`, `reverify_fast.py:16`, `reverify_sections.py:5` all just glob or open it.
+
+**Risk assessment: low.** A new *top-level* key is the least invasive kind of addition. The realistic hazards are:
+
+1. A reader that asserts an exact key set or does `set(d.keys()) == {...}`. I cannot rule this out for the files I cannot see, but the ones documented in the grep output all read specific keys.
+2. A reader that does `for k, v in d.items(): ...` and assumes every value is a list/dict of sections. The new value is a dict, so a naive `isinstance(v, list)` check could misbehave. I have no evidence of such a reader.
+3. `materialize_section_details.py` round-tripping (F9).
+
+One real, smaller point: `analysis` is a **generic** key name. `align_engine.py` already loads this json as "the arrangement's source of truth" and the docstring at line 14 mentions "sections + bass-in/...". A key named `analysis` holding only `{"kick_model": bool}` is likely to grow over time (version, params, provider, timestamp) and the name invites collision with a future, differently-shaped `analysis` field elsewhere in the codebase. `detector` or `provenance` would be safer. Cosmetic, but cheap to change now.
+
+---
+
+## 5. Windows cp1252 console safety
+
+**All new print templates are plain ASCII.** I checked each one:
+
+- `f"  {w.stem[:42]}: hints from the cached analysis ({cached.name})"` - ASCII literals.
+- `f"  [warn] malformed cache {cached.name}: {type(exc).__name__}: {exc}; falling back to a fresh detect"` - ASCII literals; `{type(exc).__name__}` is an identifier; `{exc}` for `json.JSONDecodeError` is ASCII ("Expecting property name enclosed in double quotes: line 1 column 3 (char 2)"). For `UnicodeDecodeError` the message contains a `repr` of the offending bytes, which is ASCII-escaped.
+- `f"  [WARN] no cached analysis for {w.stem[:42]} ({cached.name}); running detect"` - ASCII literals.
+- `f"  [WARN] this detect runs WITHOUT the kick detector and may disagree with a pipeline run"` - ASCII literals.
+- Guard: `f"  [warn] could not read existing {path.name} for the overwrite guard: {type(exc).__name__}: {exc}; overwriting"` - ASCII literals.
+- Guard: `f"  [WARN] {path.name} was written WITH the kick model; this run has it off, so the file was NOT overwritten"` - ASCII literals.
+
+**No em dash, no curly quotes, no ellipsis character, no bullet.** The house rule is met.
+
+One residual risk, which is **pre-existing and not made worse**: `{w.stem[:42]}` and `{cached.name}` interpolate the filename. A track filename with a non-cp1252 character (accented, CJK, emoji) raises `UnicodeEncodeError` on a Windows cp1252 console. The pre-existing line 1536 already prints `{w.stem[:42]}`, so this class of exposure already exists in the same loop. The new lines do not introduce a new failure mode, though they do mean the crash can now happen *earlier* in the loop than before. Note that `validate_hints_vs_sections.py` already contains non-ASCII (`✓`, `⚠`, `✗`, `Δ`, `—`) in its output, so the repo is not uniformly ASCII-safe; that file is a separate matter.
+
+---
+
+## 6. Answering the brief's open question: should "no cache, kick model off" be a hard error?
+
+**No, not as the primary fix, because it does not address the actual defect.**
+
+Making it a hard error is defensible as a safety measure: with no cache and no kick model, the hints will be derived from a weaker analysis and the hints-vs-sections gate may fail, so refusing to write bad hints is arguably right. But it has real costs:
+
+- It breaks the documented standalone workflow for any project that has not run Phase 1a with the kick model. Some users may legitimately want a hint-only pass.
+- It is **not sufficient**, because the same weaker analysis reaches `Hints/track_hints.json` through a second, quieter route: F1, the second run against the `kick_model: false` json the fallback itself wrote. A hard error on the *no-cache* path would not stop that path at all, because on the second run there **is** a cache.
+- It does not address F5 (legacy json with no `analysis` key, silently trusted) either.
+
+My recommendation, in priority order:
+
+1. **Stop the fallback from writing the json.** `detect(w, args.project, make_viz=False, write_json=False, ...)` in the `--write-hints` fallback. This is a one-word change and it kills F1 at the root: `--write-hints` becomes read-only with respect to `_Stem Analysis/`, which is the property the whole change is trying to establish. It also stops the fallback from clobbering a Phase 1a json in the legacy/no-`analysis` case (F5's file gets destroyed by the very step meant to read it). This is the highest-value correction.
+2. **Refuse to silently trust a `kick_model: false` cache.** If the cached json records `kick_model: false`, either fall back to detect (with the kick model if available) or print a prominent warning that the hints are from a no-kick-model analysis. At minimum, warn.
+3. **Warn on a cache with no `analysis` key** (legacy): `[warn] cached json has no analysis record (legacy); hints may not match the pipeline run`.
+4. **Add `ArithmeticError` to the except tuple** so `bpm: 0` cannot crash the run (F2). One word.
+5. **Cover the wiring**: a test that asserts `detect()` does not write when the guard refuses, and a test that asserts the fallback does not write the json. Since `detect()` needs audio, the practical route is to extract the write into a tiny helper (e.g. `_write_sections_json(path, result, kick_model_used)`) that both `detect()` and the tests can call.
+6. Optional, cheap: compare `res.get("track") == w.stem` in the trust check (F6); stamp a detector version into `analysis` (F7); rename `analysis` to something less collision-prone.
+
+F1 is the one I would call a must-fix: as written, the change makes the original bug *look* fixed on the second run of the very workflow the bug was found in.
+
+---
+
+## FOUND UNASKED
+
+1. **`ZeroDivisionError` is not in the malformed-cache except tuple** (line 1516), so a cached json with `"bpm": 0` crashes the whole `--write-hints` run with an unhandled traceback. No hints file is written at all, and any stale `Hints/track_hints.json` from a previous run survives, so the failure looks like success downstream. Fix: add `ArithmeticError`. (F2)
+
+2. **`--kick-model` is a silent no-op whenever a cache exists.** The cached branch never consults `args.kick_model`. If a `kick_model: false` json is cached, running `--write-hints --kick-model` still uses the cached kick-off json and never runs a kick-on detect. The two flags now interact in an undocumented way. This is also the natural place to implement fix #2 above: when `--kick-model` is passed and the cache is not kick-on, re-run detect with the model. (F1 / interaction)
+
+3. **`hints_from_stem_result` is called twice on the cached path** (once as the shape check at line 1514, once to build the hints at line 1534). Harmless for correctness, but the shape check's *result* is thrown away. Returning the hints from the first call and reusing them would remove the duplication and make the "shape check" a real thing rather than a discarded smoke test.
+
+4. **The `--write-hints` fallback writes to `_Stem Analysis/`, so the documented step is not read-only.** This is the root of F1 and is arguably a scope violation of the whole change: a step whose purpose is "write hints" should not be writing the pipeline's analysis cache. One-word fix: `write_json=False`.
+
+5. **`json.JSONDecodeError` in the except tuple is redundant** (it is a subclass of `ValueError`). Harmless, but it suggests the author was not certain which exceptions `json.loads` raises, and it did not prompt checking the one that actually escapes (`ZeroDivisionError`).
+
+6. **`prior.get("analysis") or {}` is defensive in a way that hides a bug class.** If a writer ever emits `"analysis": "kick-detector-v3"` (a string) or `"analysis": []`, the `or {}` fallback means `prior_kick` is False and the file is treated as legacy and overwritten, with no warning. A stricter check that distinguishes "key absent" from "key present but malformed" would let the guard warn instead of silently downgrading the file to legacy. Not currently reachable from `detect()` (it always writes a dict), but `materialize_section_details.py` (F9) is an unknown second writer.
+
+7. **The `analysis` key name is generic for a file that `align_engine.py` treats as the arrangement's source of truth.** `detector` or `provenance` would be less likely to collide with a future field of the same name and would read better next to `signals.kick_presence_source`.
+
+8. **`signals.kick_presence_source` already exists and records the real kick path** (`"kick-detector-v3"` vs `"stem-energy-threshold"`, line 1214). The new `analysis.kick_model` duplicates that fact in a second place with a weaker definition (it is `True` when a provider was merely *passed*, F8). Storing the existing `kick_source` string in `analysis` would be both more accurate and cheaper, and would let the hint path check the actual kick source rather than a boolean proxy. As written, `analysis.kick_model` can be `true` while the sections were in fact produced by the stem-energy threshold (a provider that was passed but whose branch fell through, or a future code path where the provider is None but the flag is set).
+
+9. **The guard cannot fire from `--write-hints` (F4), so its warning is dead code in the documented workflow.** Only the `reverify_*` scripts (already known) reach it. This means the change's most reassuring console line never appears in the workflow the bug was found in, which may mislead a reader of the output into believing the file was protected.
+
+10. **`detect()` does not report whether it actually wrote the json** (F3). It returns a result either way. A caller cannot tell "the json on disk is mine" from "the json on disk is still the old Phase 1a one that I was not allowed to touch". Adding a key to the returned result (for example `analysis.json_written`) would let `reverify_*` and any future caller notice, and it costs nothing.
+
+11. **`validate_hints_vs_sections.py` reads the json's `bpm` for the hints-vs-sections gate but never reads `analysis.kick_model`.** Now that the json carries an explicit statement of which kick path produced the sections, the gate could report "this track's hints were compared against a kick-off analysis" and flag it. That would have surfaced F1 and F5 automatically on the first run against an existing project, instead of requiring this review to find them. Worth adding to the validator as a diagnostic, not as a failure.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=da9c558ebf2e426cae9bf9b8eb08d6e9===
+===SEAT-DONE minimax d20_r1===

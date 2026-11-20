@@ -1,0 +1,326 @@
+﻿The real hints are analysis-derived (Eli Brown's `first_drop_sec: 30.72` = the actual drop_1 `start_sec: 30.72`). My analysis is confirmed.
+
+I have everything I need. Let me write the final review.
+
+Summary of my findings:
+
+**Verdict: CORRECTION** - the round-2 design fixes the round-1 findings, but there are real residual holes:
+
+1. **A json passes every check and yields 3 of 4 fabricated hints.** The check verifies shape + provenance but never that the analysis actually FOUND a drop/break. A json with only intro/outro sections (which is exactly what the pre-fix provider-empty path produces, since all-kicks-off -> `first_drop is None` -> labels collapse to intro/outro only) passes every usability check, and `hints_from_stem_result`'s hard-coded fallbacks (`16*sec_per_bar`, etc.) manufacture the four hint values. `analysis.kick_model: true` + `kick_presence_source: "kick-detector-v3"` are exactly what the pre-fix build wrote in that case. So the pre-fix bad file IS trusted as fully verified.
+
+2. **The write is not atomic.** `out.write_text(...)` truncates the existing `track_hints.json` then writes. A failure mid-write leaves it truncated/partial.
+
+3. **Test gaps:** NaN bpm, "no wav files" exit 2, multi-track refusal count, the `used`->`analysis.kick_model` wiring in detect(), the "no drop in sections" case, atomic write.
+
+4. **Brief inaccuracies** to state plainly: allow_unverified accepts explicitly-negative provenance too (not only "missing"); the overwrite guard is not byte-unchanged (its two print lines gained `_ascii`); "kick-off write over a kick-on json" is now structurally impossible from --write-hints rather than "refused".
+
+5. **3-tuple signature change** to `_model_kick_presence_per_beat` is a breaking change for any external caller.
+
+Let me write the final answer now, plain ASCII, no em dash.
+
+One more check on the "no wav files" question and the existing caller risk - let me make sure I have the r1 behaviour right: r1 with 0 wavs wrote `{}` to track_hints.json and exited 0. Confirmed from the code I read.
+
+Let me now compose the answer.
+
+For Q2 (partial write paths), let me be precise:
+- Check loop -> write: no exception can occur between `if bad: sys.exit(2)` and the write that would cause a partial write. The only statements between are `hints_dir.mkdir` and `out.write_text`.
+- `hints_dir.mkdir(parents=True, exist_ok=True)` could raise (permission) -> no write happened. Fine.
+- `out.write_text` -> truncates then writes. THIS is the failure window.
+- `json.dumps(hints, indent=2)` is evaluated before write_text is called (argument evaluation), so a dumps failure leaves the file untouched. But dumps cannot fail on these values (floats). Actually - could a hint value be non-finite? `round(x, 2)` of a float. If a section's start_sec were inf or nan... `hints_from_stem_result` would produce inf. `json.dumps` by default allows NaN/Infinity (allow_nan=True default) so it would emit `Infinity` - invalid strict JSON but no exception. And `float('inf') <= 0` is False so the fallback check `if not first_drop or first_drop <= 0` wouldn't catch inf. Hmm: `first_drop = inf` -> `not inf` is False, `inf <= 0` is False -> so it stays inf. So a json with an infinite start_sec yields `first_drop_sec: Infinity` in the hints file. That would be invalid JSON for strict parsers (though Python's json.loads accepts it). Worth a footnote - the hints file would contain `Infinity`, which `json.loads` accepts but which is not valid JSON per spec. Let me verify that path exists: sections' `start_sec` come from `round(downbeat + s0*sec_per_bar, 2)` - finite. But a hand-edited or corrupt json could have Infinity. And json.loads accepts `Infinity` by default. So yes: a json with `"start_sec": Infinity` passes the checks and produces `Infinity` in the hints file. Low severity but real - the hints file becomes non-standard JSON.
+
+Let me double check that `math.isfinite` is only applied to bpm, not to section times. Yes. So sections with Infinity start_sec pass. And `hints_from_stem_result` doesn't raise. So the hint values can be Infinity. Good - that's a concrete "passes every check" input for the JSON-validity angle.
+
+Now let me writeI have completed my analysis. Here is my review.
+
+---
+
+VERDICT: CORRECTION
+
+Files read (sha256 first 16 hex, per `SHA.txt`):
+
+- `c1d57d150daaf10f` - `stem_detector.py` (read in full, 1615 lines)
+- `108a129bbf907deb` - `test_stem_detector_write_hints_cache.py` (read in full, 209 lines)
+- `92aacd0f68df41b5` - `d20_r2_full.diff` (read in full)
+- `6286ed99f061eff3` - `d20_r2_since_r1.diff` (read in full)
+
+Also read (not in SHA.txt, so no hash to name): `SHA.txt`, `brief_d20_r2.txt`, `PRIOR_codex_r1.txt`, `PRIOR_minimax_r1.txt`, `REPLAY_A_kick_on_copy.log`, `REPLAY_B_real_clobbered_json.log`, and from neighbouring folders `review-d20/stem_detector.py` (the r1 build), `review-d20/validate_hints_vs_sections.py`, `review-d20/readers_of_sections_json.txt`, and the real replay data under `d20-replay/proj/_Stem Analysis/*.json` and `d20-replay/projB/_Stem Analysis/*.json`.
+
+No files were written. I did not run the test suite (no Python toolchain in the review harness); all behavioural claims below are derived by reading the code, and I quote the exact lines.
+
+---
+
+## 1. What round 2 actually does (verified against the code)
+
+The brief's description matches the code. Confirmed by reading `stem_detector.py`:
+
+- `_check_cached_sections()` (lines 819-861) is the only gate. Its order is: exists -> parse -> is-dict -> `track` equality -> bpm finite and > 0 -> `sections` non-empty list -> `hints_from_stem_result()` must not raise -> provenance.
+- `main()` (lines 1571-1602): the `--write-hints` branch calls only `_check_cached_sections` and `hints_from_stem_result`. **`detect()` is never reachable from this branch** - there is no call site left. The only write is `out.write_text(...)` to `Hints/track_hints.json`. Nothing in this branch writes a `SECTIONS_STEM_*.json`.
+- All-or-nothing holds: `bad` is accumulated during the loop, and `if bad: ... sys.exit(2)` precedes `hints_dir.mkdir()` and `out.write_text()`. A refused track means nothing is written and the exit status is 2.
+
+The round-1 findings are genuinely fixed, not re-raised here: the fallback detect() is gone (minimax F1), `bpm: 0` no longer crashes the run (minimax F2), the `track` equality check is in (minimax F6), `analysis.kick_model` is now tied to actual readout use (minimax F8), legacy files are no longer trusted silently (minimax F5), the cp1252 crash is fixed (codex r1), and a refused track can no longer erase existing hints (codex r1 "FOUND UNASKED" item 2).
+
+### Three places the brief does not match the code
+
+1. **Brief item 4 is wrong as written.** "`--allow-unverified-cache` accepts only the missing-provenance case" is not what the code does. The flag is consulted *only* after every other check has already passed, so it cannot bypass track/bpm/sections/parse checks - that part of the brief is right. But it accepts two distinct situations, not one:
+   - provenance genuinely absent (`analysis` key missing AND no `signals.kick_presence_source`), and
+   - provenance present and **explicitly negative** (`analysis.kick_model: false`, or `signals.kick_presence_source == "stem-energy-threshold"`).
+
+   Both fall through to the same `if allow_unverified: return res, (note)`. The second is arguably the more useful case (it is exactly the REPLAY_B state), and the flag's own `--help` text describes it correctly ("not known to come from the kick detector"), so the code is right and the brief is loose. Not a defect, but the WARN text does not distinguish "missing" from "explicitly says it is not the kick detector", which matters when reading a log.
+
+2. **"The round 1 overwrite guard is unchanged" is not byte-unchanged.** Its two `print` statements gained `_ascii(...)` wrappers (visible in `d20_r2_since_r1.diff`). The overwrite *decision* is unchanged; the log text changed. Cosmetic.
+
+3. **The refusal corpus item "kick-off write over a kick-on json" is not refused, it is structurally impossible.** From `--write-hints` there is no code path that can write a `SECTIONS_STEM_*.json` at all, so the scenario cannot arise. The guard still refuses it for the other entry points (`reverify_fast.py`, `reverify_sections.py`, plain `detect()`), which the brief lists as known. So the corpus item is satisfied by construction, not by a refusal rule.
+
+### Corpus re-check, item by item
+
+Every item in the brief's refusal corpus is refused. Confirmed by reading `_check_cached_sections`:
+
+| Corpus item | Refused? | By which check |
+|---|---|---|
+| kick-off write over a kick-on json | n/a | impossible from this path; guard covers the rest |
+| missing cache | yes | `if not path.exists()` |
+| track mismatch | yes | `res.get("track") != wav_stem` |
+| sections `[]` | yes | `not isinstance(sections, list) or not sections` |
+| bpm 0 | yes | `bpm <= 0` |
+| bpm negative | yes | `bpm <= 0` |
+| bpm non-numeric | yes | `not isinstance(bpm, (int, float))`; `bool` is also excluded explicitly |
+| bpm NaN | yes | `not math.isfinite(bpm)` |
+| signals null | yes | `hints_from_stem_result` raises `AttributeError` on `None.get("fills")`, caught by the try/except |
+| top-level array | yes | `not isinstance(res, dict)` |
+| invalid JSON syntax | yes | `except Exception` around `json.loads` |
+| `analysis.kick_model` false | yes | `analysis.get("kick_model") is True` fails |
+| legacy with no provenance | yes | `signals.kick_presence_source != "kick-detector-v3"` |
+
+`is True` is a strict identity check, so `kick_model: 1` (int) is also refused. Good.
+
+---
+
+## 2. Q1: what passes every usability check and is is still the wrong analysis to trust?
+
+Two classes. The first is the serious one.
+
+### 2a. A json whose sections contain no "drop" passes every check and three of its four hints are fabricated
+
+`hints_from_stem_result()` never raises on a well-shaped json. It then fills any missing value from hard-coded fallbacks:
+
+```python
+if not first_drop or first_drop <= 0:
+    first_drop = 16 * sec_per_bar
+if not outro_start or outro_start <= 0:
+    outro_start = max(first_drop + sec_per_bar, end_sec - 32 * sec_per_bar)
+if not first_break or first_break <= 0:
+    first_break = first_drop + 16 * sec_per_bar
+if not last_bass_drop or last_bass_drop <= 0:
+    last_bass_drop = max(first_drop, outro_start - 16 * sec_per_bar)
+```
+
+So a json whose `sections` contain only `intro` and `outro` entries - no `drop`, no `break`, no `fill` - passes every usability check and yields a `track_hints.json` in which `first_drop_sec`, `first_break_sec` and `last_bass_drop_sec` are **synthesised arithmetic, not derived from the analysis at all**. `first_drop_sec` would be `16 * sec_per_bar` (16 bars) for every such track regardless of the music.
+
+Why that matters here specifically: this is exactly the shape the **pre-fix** build produces on the provider-empty path. In the r1 build (`review-d20/stem_detector.py`, lines 923-937) the model branch ran unconditionally:
+
+```python
+if kick_model or kick_provider is not None:
+    _section_kick_on, _raw_kick_on = _model_kick_presence_per_beat(...)
+    kick_on = _raw_kick_on          # fit() pads an empty readout to all-False
+    kick_source = "kick-detector-v3"  # set regardless```
+
+An empty provider readout is padded by `fit()` to `n_beats` all-False beats. `kick_on` is then all-False, so `kick_on_bar` is all-False, so in `_assign_labels` `kf` is 0.0 everywhere, `is_drop()` is never true, `first_drop` is `None`, and the label branch collapses to `label = "intro" if i < n/2 else "outro"`. The result is a two-section intro/outro json - and that json carries `signals.kick_presence_source: "kick-detector-v3"` (r1/main) or `analysis.kick_model: true` (r1).
+
+**That is the answer to Q1 and to Q4: yes, a json can carry the kick-detector marker while its sections were not built from kick-detector data.** Round 2 fixed the *writer* (an empty readout now records `kick_model: false`), but the *reader* still trusts the marker the pre-fix writer stamped onto that exact degenerate file. `_check_cached_sections` checks a label next to the sections, never the sections themselves.
+
+There is also a second, non-degenerate instance of the same class: **a json with no `signals` key at all.** `hints_from_stem_result` does `sig = res.get("signals", {})`, so an absent `signals` is `{}` and `.get("fills", [])` returns `[]` without raising. Such a json passes the hints-shape check (unlike `"signals": null`, which does raise and is refused). With `analysis.kick_model: true` it is accepted as fully verified, and `last_bass_drop_sec` falls back to `max(first_drop, outro_start - 16*sec_per_bar)` - fabricated.
+
+Cheap fix, and safe on the real corpus: refuse a cached json whose sections contain no `"drop"` label. I checked all 11 real kick-on analyses under `d20-replay/proj/_Stem Analysis/` - every one contains at least one `"label": "drop"` (PAX, Offaiah, Ashibah, Ninetoes, Murphy's Law, Adam Ten, MASON, Kyle Watson, Darius, Eli Brown, Hannah Wants). A degenerate provider-empty analysis produces none, so this single check separates the good set from the bad set with no false positives on real data.
+
+### 2b. A section time of `Infinity` yields a non-standard-JSON hints file
+
+`math.isfinite` is applied to `bpm` only. Section times are not checked. `json.loads` accepts the literal `Infinity` by default, so a json containing `"start_sec": Infinity` parses fine, passes every check, and `hints_from_stem_result` returns `first_drop_sec: Infinity` (`not inf` is False and `inf <= 0` is False, so the fallback does not fire). `json.dumps` then emits `Infinity` into `track_hints.json`, which Python's `json.loads` accepts but which is **not valid JSON** per RFC 8259. Any strict downstream consumer (a browser `JSON.parse`, `jq`) breaks on it. Low severity, one-line fix (`math.isfinite` on the section times).
+
+### 2c. Accepted and not re-raised
+
+No audio fingerprint or detector version in the json (the brief's known item). A stale json from an older detector build with the same shape and a kick-on marker is still trusted. Same family as 2a but it needs the accepted follow-up, so I am not raising it as a new finding - I note it only because 2a's fix (checking the sections) also partly covers it.
+
+---
+
+## 3. Q2: any path where hints are written, or an existing hints file is modified or truncated, when a track was refused?
+
+**In the check phase: no.** The `if bad: sys.exit(2)` is before `hints_dir.mkdir()` and before `out.write_text()`. There is no code path in which a refused track and a written hints file coexist. The `hints` dict built for the good tracks is simply discarded. The existing `Hints/track_hints.json` is not opened, not truncated, and not touched. `test_missing_cache_for_one_of_two_tracks_refuses_and_writes_nothing` asserts this by sha256 and it is a real assertion.
+
+**In the write phase: yes, one window.** `Path.write_text()` opens with mode `"w"`, which truncates the existing file *before* writing the new content. If the write fails partway (disk full, an IO error, a `KeyboardInterrupt` between the truncate and the final flush), the pre-existing `Hints/track_hints.json` is left truncated or holding a partial JSON document. There is no temp-file-plus-`os.replace()`.
+
+Note the ordering: `json.dumps(hints, indent=2)` is evaluated as the *argument* to `write_text`, so a serialisation failure would leave the file untouched. But the values are plain floats, so `dumps` cannot realistically fail. The exposure is the truncate-then-write window itself. The brief's "nothing written, an existing Hints/track_hints.json left byte-identical" promise is true for the refusal path and is **not** true for the success path under an IO failure. Severity: low (it needs an IO fault), but it is exactly the question asked.
+
+Related, smaller: `hints_dir.mkdir(parents=True, exist_ok=True)` runs before the write and can itself raise (`PermissionError`), leaving no hints file at all and a traceback rather than the clean exit-2 message. Not a corruption, but the error surface is inconsistent with the refusal path.
+
+---
+
+## 4. Q3: does `--allow-unverified-cache` accept anything beyond missing provenance?
+
+Covered in section 1. Summary: it accepts the missing-provenance case **and** the explicitly-negative-provenance case (`kick_model: false`, or `kick_presence_source == "stem-energy-threshold"`). It accepts **nothing** beyond that in terms of the other checks - track, bpm, sections, parse, and the hints-shape check all run first and are unaffected by the flag. `test_allow_unverified_still_refuses_track_mismatch` pins one of them.
+
+One structural detail worth naming because it is not obvious: the legacy branch is reached only when `analysis is None`. `res.get("analysis")` returns `None` both when the key is absent **and** when the key is present with the value `null`. So `"analysis": null` is treated as legacy, while `"analysis": {}` is treated as "provenance present but not kick-on" and the legacy `signals.kick_presence_source` path is **not** consulted. That is the fail-safe direction (a false refusal rather than a false accept), but it means the two spellings of "no analysis record" behave differently. Not a defect; just not obvious.
+
+---
+
+## 5. Q4: can a json carry "kick-detector-v3" while its sections were not built from kick-detector data?
+
+**Yes.** Two independent ways, both live:
+
+1. **The pre-fix provider-empty path**, exactly as the brief hypothesises. The r1/main code sets `kick_source = "kick-detector-v3"` unconditionally whenever `kick_model or kick_provider is not None`, while `fit()` pads an empty readout to an all-False beat array. The resulting sections are built from an all-kicks-off signal and carry the kick-detector marker. Round 2's reader accepts such a file as **fully verified, with no WARN** - via `analysis.kick_model is True` (r1 files) or via `signals.kick_presence_source == "kick-detector-v3"` (main-era files, which have no `analysis` key at all and therefore take the legacy branch).
+
+   The legacy branch is exactly the hole: it was introduced to accept genuine main-era kick-model files, but the same marker was also written onto the degenerate provider-empty file. The two are indistinguishable by the marker.
+
+2. **A later rewrite that preserves `signals`.** `signals.kick_presence_source` and `sections` are independent fields. Any tool that rewrites `sections` while carrying `signals` through produces a file whose provenance marker describes the *old* sections. `readers_of_sections_json.txt` shows `materialize_section_details.py:134` reading `SECTIONS_STEM_{clean_name}.json` and `:198` writing `SECTIONS_STEM_{clean_name}.json` into a `refined_stem_dir` - a second writer of the same filename shape. I cannot see its body, so I cannot confirm whether it preserves `signals` or `analysis`; that is the thing to check. If it preserves `signals` and drops `analysis`, a refined file lands on the legacy branch and is accepted as verified even though its `sections` were rewritten.
+
+   Related, and this one is a false *refusal* rather than a false accept: `materialize_section_details.py` uses `clean_name`, not the raw stem. If `clean_name` differs from the wav stem in any way (trimmed, html-unescaped, stripped of a suffix), then either the filename no longer matches `SECTIONS_STEM_{w.stem}.json` (so `--write-hints` never sees it) or the `track` field inside it no longer equals `w.stem` (so it is refused). The `track` equality check protects against the refined file silently replacing the Phase1a file for the same track - that part is right - but it also means a cleaned-name refined file is unrefusable rather than merely refused.
+
+The general shape of the defect: **provenance is a label stored beside the data, not a property of the data.** The check verifies the label and never the sections.
+
+---
+
+## 6. Q5: is `detect()`'s `analysis.kick_model` line right?
+
+Reading it (`stem_detector.py` lines 975-999):
+
+```python
+kick_on, kick_peaks, kick_ref = _kick_on_per_beat(...)
+landmark_kick_on = kick_on.copy()
+kick_source = "stem-energy-threshold"
+kick_model_used = False
+if kick_model or kick_provider is not None:
+    _section_kick_on, _raw_kick_on, _model_used = _model_kick_presence_per_beat(...)
+    if _model_used:
+        kick_on = _raw_kick_on
+        landmark_kick_on = _raw_kick_on
+        kick_source = "kick-detector-v3"
+        kick_model_used = True
+    else:
+        print("  [WARN] the kick provider returned no readout; using the energy-threshold "
+              "kick presence and NOT recording kick_model true")
+```
+
+**The line is right, and the `else` branch is right.** Three things I checked:
+
+- **`used` is computed on the array that is actually consumed.** `_model_kick_presence_per_beat` returns `used = len(landmark_on) > 0`, and `landmark_on` is exactly the array that becomes `_raw_kick_on` and is assigned to `kick_on`. There is no path where `used` is True but the sections are built from something else, or vice versa. In the `presence_per_beat*` branches `landmark_on` is `readout.raw`; in the `on_per_beat*` branches it is `section_on.copy()`. In both, the consumed value and the flag refer to the same array.
+- **The energy-threshold presence is genuinely kept on the empty-readout path.** `kick_on` keeps the value from `_kick_on_per_beat(...)` and `landmark_kick_on` keeps `kick_on.copy()`; neither is reassigned in the `else` branch. `kick_source` stays `"stem-energy-threshold"`, so the json also records the honest source. Correct, and better than the pre-fix behaviour (which padded to all-False and used that).
+- **`analysis.kick_model` and `signals.kick_presence_source` cannot now disagree**, because both are set inside the same `if _model_used:` block. That was the r1 minimax F8 defect and it is closed.
+
+**On "kick_model is True but the model fails to load":** two distinct failures, both fail-safe.
+
+- `get_provider()` raises (weights missing, torch absent): the exception propagates out of `detect()` before any json is written. The track produces no file, `main()`'s non-hints loop aborts with a traceback, and the previously existing json is left alone. Nothing corrupt is written. The downside is that the whole batch dies on the first bad track rather than continuing - pre-existing behaviour, not introduced here.
+- `get_provider()` succeeds but the readout is empty: handled by the `else` branch above. The json (if written) records `kick_model: false` and `kick_presence_source: "stem-energy-threshold"`, and the sections are the energy-threshold ones.
+
+**One behavioural change in the non-hints path worth naming.** `kick_model_used` now also gates the overwrite guard:
+
+```python
+if _may_overwrite_sections_json(json_path, kick_model_used):
+    json_path.write_text(...)
+```
+
+Previously `kick_model_used = bool(kick_model or kick_provider is not None)`, so a kick-model run always had `kick_model_on=True` and always wrote. Now, a kick-model run whose provider returns nothing has `kick_model_used=False`, so the guard is consulted with `False` and **refuses to overwrite an existing `kick_model: true` json**, printing "this run has it off, so the file was NOT overwritten". The outcome (keep the good file, do not clobber it with a degraded analysis) is right. The message is misleading - the run did *not* have it off, it had it on and the model produced nothing. Also, `detect()` still returns `result` with `analysis.kick_model: false` while the file on disk says `true`, so a caller cannot tell which analysis it is holding. That is minimax's F3, unchanged by round 2, and it is now reachable from the kick-model path, not just from the kick-off path.
+
+---
+
+## 7. Q6: are the tests real? What would fail if the behaviour were removed?
+
+Test by test. "Would it fail if the behaviour were removed" means: if I deleted or inverted the specific code path the test names, would the test go red?
+
+| Test | Verdict | Notes |
+|---|---|---|
+| `cached_kick_on_json_used_detect_never_called_json_untouched` | **Real.** | Three independent assertions. `detect` is monkeypatched to `_boom` which raises, so any call to detect fails the test. The sha256 comparison catches a rewrite of the json even if byte-identical content is re-emitted differently. The `first_drop_sec == 48 * 1.875` pins the hint arithmetic. |
+| `missing_cache_for_one_of_two_tracks_refuses_and_writes_nothing` | **Real.** | Asserts exit code 2, the existing file's sha256 is unchanged, and that the refusal names the offending file. Removing the all-or-nothing rule (writing partial hints) makes the sha256 assert fail. Removing the exit-2 makes `pytest.raises(SystemExit)` fail. |
+| `unusable_shapes_are_refused` (10 params) | **Real, all 10.** | Each param is a distinct input that trips a distinct check. Removing the `track` check fails `track_mismatch`; removing the bpm check fails `bpm_zero`/`bpm_negative`/`bpm_string`; removing `isinstance(res, dict)` fails `top_level_array`; removing the parse try/except fails `invalid_json`; removing the provenance check fails `kick_model_false` and `legacy_no_provenance`. `signals_null` is refused by the `hints_from_stem_result` try/except (`AttributeError` on `None.get`), so it does test that the try/except exists. |
+| `legacy_file_with_kick_model_source_is_accepted` | **Real.** | Would fail if the legacy branch were deleted or if the marker string were changed. |
+| `legacy_file_with_energy_source_is_refused` | **Real.** | Would fail if the legacy branch accepted anything. Together with the previous test it pins the discrimination. |
+| `allow_unverified_accepts_kick_off_with_warn` | **Real.** | Asserts the hint entry exists AND `[WARN]` is in stdout. Removing the flag, or removing the WARN print, fails it. |
+| `allow_unverified_still_refuses_track_mismatch` | **Real.** | Would fail if the flag short-circuited the earlier checks. Only one of the earlier checks is pinned this way; the rest are pinned structurally (the flag is only consulted at the end of the function), not by test. |
+| `provider_returning_nothing_is_not_marked_used` | **Real.** | Would fail if `used` were hardcoded True or if the return arity changed. It exercises the `on_per_beat` branch (branch 4). |
+| `non_ascii_name_in_refusal_does_not_raise_on_cp1252` | **Real.** | Genuinely reproduces the cp1252 crash: a `TextIOWrapper` with `errors="strict"` over a `BytesIO`, and a CJK stem. Would fail without `_ascii`. Good test. |
+| `guard_*` (5 tests) | **Real but helper-only** | Unchanged from r1. Same known gap: they test `_may_overwrite_sections_json` in isolation, never the `if _may_overwrite_sections_json(...)` wiring inside `detect()`. Deleting the `if` in `detect()` leaves all of them green. |
+
+### Numbered behaviours with no test at all
+
+- **bpm NaN.** The brief's own corpus lists it; the code handles it (`not math.isfinite(bpm)`), but `BAD_SHAPES` has `bpm_zero`, `bpm_negative`, `bpm_string` and **no** `bpm_nan`. Remove the `math.isfinite` call and every test still passes. Same for `bpm` as a JSON `true` (the `isinstance(bpm, bool)` guard is untested - drop it and `bpm: true` would slip through as `1`).
+- **`analysis` present but not a dict** (`"analysis": {}`, `"analysis": "kick-detector-v3"`, `"analysis": []`, `"analysis": false`). All four are refused by `isinstance(analysis, dict) and analysis.get("kick_model") is True`, but none is tested. A regression that read `analysis.get("kick_model")` without the isinstance guard would pass the suite.
+- **The `used` -> `analysis.kick_model` wiring inside `detect()`.** This is the one the brief admits it could not test. It is untested, and it is the single line that decides whether the json is marked verified. It is also testable without audio: extract the `if _model_used:` block into a helper, or pass `kick_provider=` into `detect()` with the envelope functions monkeypatched. As it stands, a mutation that sets `kick_model_used = True` unconditionally inside the model branch would leave the whole suite green.
+- **"The energy-threshold presence is kept" on the empty-readout path.** `test_provider_returning_nothing_is_not_marked_used` only checks the returned flag. Nothing asserts that `detect()` keeps the energy-threshold `kick_on` (rather than the padded all-False array) when `used` is False. That is the behavioural half of the fix and it is untested.
+- **The `else` branch's WARN text.** Untested.
+- **Exit 2 on "no wav files".** Untested. The `if not wavs: bad.append(...)` line has no coverage.
+- **More than one refused track.** The corpus requires "one `[REFUSED]` line each". The test has exactly one bad track, so the count-per-track behaviour is not pinned. A bug that emitted a single aggregated refusal line would pass.
+- **`signals` absent entirely** (as opposed to `signals: null`). Untested, and it is the false-accept described in 2a.
+- **The write itself.** No test asserts the file content when more than one track is written, that the key is `w.name` (with `.wav`), or that the written file is byte-stable.
+
+---
+
+## 8. Q7: anything in the non-hints paths that this round changed by accident?
+
+Three real changes outside the hints path, none of them accidents in the "unintended" sense, but two are behaviour changes in the analysis path that deserve naming:
+
+1. **`_model_kick_presence_per_beat` changed arity from 2-tuple to 3-tuple.** It is a private helper (leading underscore) and I found no caller outside `stem_detector.py` in the files I can see - the visible tree has no `kick_model_adapter.py`, no `orchestrator.py`, no `reverify_*.py`, so I cannot rule out a caller in the full repo. If any other module or test unpacks the old two-value form, it now raises `ValueError: not enough values to unpack`. This is a breaking signature change on a helper that was previously stable.
+
+2. **The empty-readout behaviour change in `detect()`.** Pre-fix, a kick-model run with an empty provider readout produced an all-kicks-off analysis and labelled the file `kick-detector-v3`. Now it produces the energy-threshold analysis and labels the file `stem-energy-threshold`. This is the intended fix, and it is a real change to the analysis path - the sections for such a track will differ from the pre-fix build's. Worth stating explicitly because it means a re-run of Phase 1a on a project where the provider ever returned nothing will produce different sections than the file currently on disk.
+
+3. **The overwrite guard now sees `kick_model_used` rather than "did the user pass `--kick-model`".** A kick-model run whose provider returns nothing is now refused permission to overwrite an existing kick-on json (message: "this run has it off"). The outcome is right; the wording is wrong.
+
+4. **Cosmetic / non-behavioural:** `import math` and `import sys` added; the `--write-hints` and `--kick-model` help strings changed (the em dash in the `--write-hints` help became a hyphen, which is good for the ASCII rule); the two guard `print` calls gained `_ascii()`; `sys.exit(2)` introduced. No other non-hints line changed - I diffed the r1 file (`review-d20/stem_detector.py`) against the r2 file for the `detect()` body and the only differences are the three items above plus the `analysis` key that r1 already added.
+
+5. **New stdout noise in the analysis path.** The `else` branch prints a WARN from inside `detect()`. In a non-hints run (`stem_detector.py <project> --kick-model`), that WARN is interleaved with the normal per-track summary lines. Cosmetic.
+
+---
+
+## 9. The brief's two open questions
+
+**"Does exiting 2 on 'no wav files' break an existing caller or test?"**
+
+Behaviour change, confirmed by reading both builds:
+
+- r1: `wavs = []` -> the loop body never runs -> `hints = {}` -> `Hints/track_hints.json` is written containing `{}` -> exit 0.
+- r2: `wavs = []` -> `bad` gets "no wav files found in <Audio>" -> exit 2, nothing written.
+
+So yes, exit status changes from 0 to 2 for that input, and a previously-created `Hints/track_hints.json` is no longer overwritten with `{}`. I cannot check the caller: `orchestrator.py` is not in this snapshot and not in the visible tree, so I cannot say whether it uses `check=True` or inspects the exit code. Two things to note for whoever does check it:
+
+- The r1 behaviour was worse in substance (it silently replaced a good hints file with `{}`), so refusing is the right direction. But it is a contract change that a caller running `check=True` will now surface as a hard failure on a project with an empty `Audio/` directory - for example a project that has not had its audio staged yet, or a smoke test that runs the step before staging.
+- No existing test covers it: `test_missing_cache_for_one_of_two_tracks_refuses_and_writes_nothing` always has at least one wav. There is no test for the empty-project case, so the exit-2 contract is unpinned in either direction.
+
+**"Does `track` equality fail for names with characters that another tool html-unescapes?"**
+
+**No, and this is a non-issue for this check.** The comparison is `res.get("track") != wav_stem`, and both sides come from the same filesystem name:
+
+- `wav_stem` is `Path("Audio/.../T.wav").stem`, i.e. the literal on-disk filename.
+- `res["track"]` is written by `detect()` as `wav.stem` - the same literal on-disk filename.
+
+The html-unescape lives in a different file and a different data path: `validate_hints_vs_sections.py` does `track_name = html.unescape(raw_track_name)` on the **ALS-derived `Sections_V<N>.json` keys**, because those keys come from ALS XML where `&` arrives as `&amp;`. The `SECTIONS_STEM_*.json` `track` field never goes through XML, so it holds the raw `&`.
+
+I verified this on the real data: `d20-replay/proj/Audio/Adam Ten & Rafael - Call 911 24 Bit MASTER.wav` and the corresponding `SECTIONS_STEM_Adam Ten & Rafael - Call 911 24 Bit MASTER.json` both carry a literal `&` in the `track` field, and the REPLAY_A log shows that track passing the check and producing hints. So the equality holds for `&` names.
+
+The residual risk is on the *other* side of the comparison: a file produced by a tool that cleans the name (`materialize_section_details.py` uses `clean_name`) would have a `track` field that does not equal the wav stem, and would be **refused**. That is a false refusal, not a false accept, and it fails safe. The reverse false accept - a file whose `track` matches but whose sections are for different audio - is not detectable without an audio fingerprint (the accepted follow-up).
+
+---
+
+## FOUND UNASKED
+
+1. **The provenance check validates a label, never the data it labels.** This is the root of finding 2a and 2. `_check_cached_sections` reads `analysis.kick_model` or `signals.kick_presence_source` and stops there. It never asks whether the `sections` in the same file are consistent with that claim. The cheapest fix that closes the concrete hole: refuse a cached json whose `sections` contain no `"label": "drop"` entry. Verified against all 11 real kick-on analyses in `d20-replay/proj/_Stem Analysis/` - every one has at least one drop, and the degenerate provider-empty analysis has none. That single check also refuses the "no signals key" variant and most stale-detector variants for free.
+
+2. **The pre-fix degenerate file is trusted as fully verified, with no WARN.** A file written by the r1/main build on the provider-empty path carries `analysis.kick_model: true` (r1) or `signals.kick_presence_source: "kick-detector-v3"` (main), and its sections are intro/outro only. Round 2 accepts it silently as the most-trusted category. This is the exact scenario Q4 asks about, and it is live. The reader-side counterpart of the writer-side fix is missing.
+
+3. **`Hints/track_hints.json` is written non-atomically.** `Path.write_text()` truncates before writing. An IO failure between the truncate and the flush leaves the previous hints file truncated or holding invalid JSON, with no backup. Write to a sibling temp file and `os.replace()` it. The refusal path is clean; the success path is not.
+
+4. **`math.isfinite` is applied to `bpm` but not to section times.** A section with `"start_sec": Infinity` passes every check and produces `first_drop_sec: Infinity` in the hints file - accepted by Python's `json.loads`, rejected by `JSON.parse` and by `jq`. The hints file stops being valid JSON.
+
+5. **`bpm` NaN and `bpm` as a JSON boolean are implemented but untested.** The brief's own corpus lists NaN; `BAD_SHAPES` omits it. `isinstance(bpm, bool)` is likewise untested, so `bpm: true` slipping through as `1` would not be caught by the suite. Both are one-line additions to `BAD_SHAPES`.
+
+6. **`hints_from_stem_result` is called twice per track** - once inside `_check_cached_sections` as the shape check (result discarded) and once in `main()` to build the hints. Harmless today (the function is deterministic and nothing mutates `res` in between), but it means the shape check is a smoke test rather than the thing that gates the write. Returning the hints from the check and reusing them removes the double call and the possibility of the two drifting apart.
+
+7. **The `analysis` key spelling inconsistency bites in one direction.** `"analysis": null` takes the legacy branch and is judged on `signals.kick_presence_source`; `"analysis": {}` is judged as "present but not kick-on" and the legacy path is not consulted. The `is not None` test conflates "key absent" with "value null". Fail-safe today, but a deliberate distinction would be clearer, and the round-1 reviewers already flagged that `prior.get("analysis") or {}` in the guard silently downgrades a malformed `analysis` to "legacy, overwrite me".
+
+8. **The guard's refusal message is wrong for the new empty-readout case.** "this run has it off, so the file was NOT overwritten" is printed when the run had `--kick-model` **on** and the model produced nothing. Same refusal, better outcome than r1, misleading explanation.
+
+9. **`detect()` still cannot tell its caller whether it actually wrote the json.** It returns `result` whether or not `_may_overwrite_sections_json` permitted the write. Round 2 widens the set of runs where the file on disk and the returned result disagree (any kick-model run whose provider returned nothing). A `result["analysis"]["json_written"]` flag would cost one line and would let `reverify_*.py` and any future caller notice.
+
+10. **The `REPLAY_A` / `REPLAY_B` logs cover 10 tracks; the `_Stem Analysis` folder holds 11.** `d20-replay/proj/_Stem Analysis/` contains a `SECTIONS_STEM_Kyle Watson - The Afterhours (Extended Mix) 24 Bit MASTER.json` and a matching `DETECT_*.png`, but `d20-replay/proj/Audio/` has no Kyle Watson wav. So that json is orphaned relative to the Audio folder, and both replays ignore it because the glob is over `Audio/*.wav`. Harmless for this change, but it means the replay evidence covers 10 of the 11 analyses actually present, and the orphaned file is a good illustration of the missing-audio-fingerprint item: nothing in the system can tell that json has no audio behind it.
+
+11. **`analysis.kick_model` duplicates `signals.kick_presence_source` in a second place.** Round 2 has now made the two agree, which is good, but the boolean is the weaker of the two: it cannot express "the model ran and reported all-kicks-off" versus "the model ran and reported a real pattern", and it cannot distinguish a model that failed from one that legitimately found nothing. Storing the source string in `analysis` (or replacing the boolean with it) would make the reader's job a cross-check rather than a trust, which is the structural fix for finding 1.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=0aee15d3fe61473f826fd46c5da94110===
+===SEAT-DONE minimax d20_r2w===

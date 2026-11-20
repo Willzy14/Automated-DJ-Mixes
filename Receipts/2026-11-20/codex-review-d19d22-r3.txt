@@ -1,0 +1,37 @@
+VERDICT: CORRECTION
+
+**A can publish a report that reconcile would reject. E rejects a loop the existing writer accepts.**
+
+1. **A - Reconcile can check the wrong report.** In `apply_automation.py:1465-1501`, if the explicit report disappears after its copy is staged, the newest-report fallback can select a sibling JSON. Reconcile checks that sibling, then the publisher installs the staged copy of the original. I reproduced this in memory with a staged report that fails the transition-count check and a sibling that passes. Resolve the report once and use that staged copy for the gate and publication. If the explicit report disappears, fail the run instead of choosing a sibling.
+
+2. **A - The crash state can pass reconcile.** I ran the actual planner, envelope writer, and reconcile logic with a legacy overlap from beat 736 to 800. Automation clamps the reported swap from 800 to 796. Both tracks still have volume and EQ events at 800 because it is the overlap end. Reconcile checks event times, so it returns `PASS` with either report even though the bass switches four beats earlier than the old report says. A locked report can leave this state after an ordinary rename failure. The docstring's recovery guarantee needs a check that can distinguish the committed pair from this mix of old and new files.
+
+3. **E - A full-length final copy is newly refused.** A four-bar source with `reps=1` and `partial_bars=4` used to produce two identical four-bar copies. `validate_loop_spec` permits equality, and `apply_loops` writes the final copy. Round 3 rejects it in `align_engine.py:2876`. Preserve that geometry, for example by normalizing it to two repeats before applying the existing limits. I found no decision-path exemption for more than eight repeats or 32 bars.
+
+**D and the refusal corpus.** None of the listed refusals became accepted on the ordinary path. The probes covered equal and past-length trims in both windows and quote styles, missing and unreadable ends, negative partials, ALS validation rejection, and reconcile failure. An interrupt at the gate also preserved the report and cleaned both stages. Generated, loop-cloned, and split clips trimmed twice without touching the adjacent clip. The scan stops at the first closing `</AudioClip>` after the matching name. The writer's nested `<Time Value="0" />` is real, but the guard counts only the opening tag's `Time` attribute.
+
+**B and C.** Both writers matched historical direct-write gzip bytes at fixed mtime. The no-MixPlan comment overstates byte parity with `main`, whose gzip header came from the `.partial` basename. Exclusive creation and bounded retries look sound. Cleanup is best-effort. If Windows denies unlink, the new report stage or its `.tmp` can remain.
+
+**Tests.** A through E each have a failing-before test. The mid-publish failure test uses a fake gate and stops before checking the resulting pair with real reconcile. There is no test for a disappearing explicit report or an assertion that an unchanged report avoids replacement. The equality test in E locks in the compatibility regression. I ran read-only, in-memory probes with shims for missing dependencies. The pack lacks the full-suite dependencies and Git metadata for independently checking the branch and commit.
+
+**Snapshot hashes read and verified**
+
+```text
+65801fe283e3860f  PRIOR_codex_review_r2.txt
+a89b7bf5c486ae63  align_engine.py
+1b9f980225762e4c  als_generator.py
+0e94bcaf7243af86  apply_automation.py
+272aecc6bb69caad  apply_loops.py
+8086078d6caed421  change.diff
+0f1bc0a15e1bd08f  test_arrangement_safety.py
+f52c42137d577a28  test_d19_d22_guards.py
+f6e1f42fa5ae25b4  test_d19_d22_round2.py
+ffa3f9926b888541  validate_mix_plan_als.py
+8b2fa74bd06735f7  SHA.txt
+```
+
+## FOUND UNASKED
+
+A lone commented-out `<CurrentStart Value="..."/>` can still satisfy the text guard when the actual element is absent. The writers in the pack do not emit that shape.
+===CODEX-ASK-DONE exit=0 nonce=f9757b4d92fd4dae9f930a5ae0deee9c===
+===SEAT-DONE codex d19d22_r3===

@@ -1,0 +1,130 @@
+﻿My analysis is confirmed. I have everything I need for the final answer.
+
+VERDICT: CORRECTION
+
+## Files read (sha256 first 16 hex, from `SHA.txt`)
+
+| File | Prefix |
+|---|---|
+| `stem_detector.py` | `e1ab9e629b0049a2` |
+| `test_stem_detector_write_hints_cache.py` | `ee172535b192363e` |
+| `change.diff` | `333b167a033ce271` |
+| `since_r2.diff` | `3d83a3377527e19c` |
+| `PRIOR_codex_r2.txt` | `55d327970a89177b` |
+| `PRIOR_minimax_r2.txt` | `24b0a03d80a85faa` |
+| `REPLAY_A_kick_on.log` | `94ca635052e03337` |
+| `REPLAY_B_real_energy_json.log` | `e7bdae5f722a7ace` |
+| `REPLAY_B_with_override_flag.log` | `e7bdae5f722a7ace` |
+
+Also read (not listed in `SHA.txt`): `SHA.txt`, `brief_d20_r3.txt`. Also read for evidence, outside this folder: the real corpus under `d20-replay/proj/_Stem Analysis/SECTIONS_STEM_*.json` (11 files) and `d20-replay/projB/...` (11 files), `d20-replay/proj/Hints/track_hints.json`, and the round-2 baseline `review-d20-r2/stem_detector.py` for failing-before comparisons.
+
+No files were written. I did not execute the code (no toolchain in this harness); every behavioural claim below is derived by reading the code, and the arithmetic is worked out explicitly.
+
+Note: the two REPLAY_B logs have the same sha256 prefix, i.e. they are byte-identical files. That is the correct outcome (the flag must not change a KICK_OFF decision), but it means the "with override flag" run was not independently distinguishable from the plain run.
+
+## The round-2 findings are genuinely closed
+
+I verified each one against the code, and each now has a test that fails on the round-2 baseline:
+
+- **The override no longer accepts kick-off or malformed provenance.** `_kick_provenance` (lines 826-859) returns KICK_OFF / MALFORMED for `kick_model: false`, `analysis: null`, `analysis: []`, `analysis: "yes"`, `kick_model: "yes"`, `analysis: true` + energy source, and an unknown legacy source. The reader only honours `--allow-unverified-cache` for the ABSENT state. `test_allow_unverified_never_accepts_kick_off_or_malformed` and `test_legacy_energy_source_not_accepted_even_with_flag` fail on round 2 (round 2 accepted all of them).
+- **The guard now protects legacy kick-on files.** This was the round-2 codex finding ("the guard allowed kick-off to replace a genuine legacy kick-on cache"). Round 2's guard was `bool((prior.get("analysis") or {}).get("kick_model", False))`, which reads a legacy file as "not kick" and overwrites it. Round 3 routes through the shared function, so a legacy file with `kick_presence_source: "kick-detector-v3"` is KICK_ON and protected. `test_guard_protects_legacy_kick_on_file` fails on round 2.
+- **The whole per-track check is inside one `except Exception`.** Round 2's `_check_cached_sections` had a try only around `json.loads`, so `math.isfinite(10**400)` raised `OverflowError` (int too large to convert to float) and escaped `main()` entirely: a traceback, zero `[REFUSED]` lines, no report. Round 3 wraps the whole body. `test_two_bad_tracks_give_exactly_two_refused_lines` and `test_one_track_exception_does_not_stop_the_others_being_reported` both fail on round 2.
+- **The write is atomic**, the `--track` argument is validated before any cache lookup, and a failed write exits 2. All three have failing-before tests.
+
+I also confirmed the trust function classifies every real file in the corpus correctly: the 10 modern files (`analysis.kick_model: true` + `kick-detector-v3`) are KICK_ON; the 10 projB files (`stem-energy-threshold`, no `analysis` key) are KICK_OFF; and `SECTIONS_STEM_Kyle Watson - The Afterhours (Extended Mix) 24 Bit MASTER.json` is a genuine legacy KICK_ON file (no `analysis` key, `kick-detector-v3`, 6 drops, 2 breaks, a fill, a build and an outro - not degenerate). The legacy carve-out is needed and correct.
+
+## Refusal corpus: every item still refused
+
+All confirmed in code, and none is a false refusal of a real file:
+
+kick-off write over a KICK_ON json (modern and legacy) / missing cache / track mismatch / sections [] / bpm 0 / bpm negative / bpm non-numeric / bpm NaN / bpm huge integer / signals null / top-level array / invalid JSON syntax / `analysis.kick_model` false with and without the flag / legacy with no provenance without the flag / malformed analysis shapes with and without the flag.
+
+"What passes now that was refused before": the only thing that passes now that was refused before is nothing. Round 3 is strictly stricter than round 2 on every input. The one behavioural loosening is the *guard* (round 2 protected only `analysis.kick_model: true`; round 3 also protects the legacy kick-detector-v3 file), which is a tightening. The `--allow-unverified-cache` flag is narrower than in round 2: round 2 accepted explicit kick-off provenance with the flag, round 3 refuses it.
+
+## The defect: the new hint bound can refuse a correct real analysis
+
+Round 3 added a bound that round 2 did not have. In `_check_cached_sections_inner` (lines 890-895):
+
+```python
+for key, val in hints.items():
+    if not (isinstance(val, (int, float)) and math.isfinite(val)
+            and 0 < val <= track_end + 0.01):
+        return None, (f"{path.name} gives an invalid hint {key}={val!r} ...")
+```
+
+`track_end` is `max(end_sec)` over the sections, i.e. `n_bars * sec_per_bar` for a file `detect()` wrote. Three of the four `hints_from_stem_result` fallbacks are clamped to the track in effect, but **one is not**:
+
+```python
+if not first_break or first_break <= 0:
+    first_break = first_drop + 16 * sec_per_bar
+```
+
+`first_break` is the only hint with no clamp against `end_sec`. So the bound is violated exactly when `first_drop + 16*sec_per_bar > track_end`.
+
+**How short must a track be?** Two shapes, both real `detect()` outputs:
+
+**(a) No "drop" section and no "break" section.** This is the shape `_assign_labels` produces when `first_drop is None` (no section satisfies `kf > 0.6 and bf > 0.5 and ef >= drop_thr`): every section becomes "intro" or "outro". It is also the shape the empty/partial kick readout produces. Then `first_drop` falls back to `16*sec_per_bar` and `first_break` falls back to `32*sec_per_bar`. The bound needs `32*sec_per_bar <= n_bars*sec_per_bar`, i.e.
+
+**n_bars >= 32**, which is **60.0 s at 128 BPM, 61.0 s at 126 BPM, 64.0 s at 120 BPM, 54.9 s at 140 BPM, 44.1 s at 174 BPM.**
+
+Worked example (128 BPM, `sec_per_bar` = 1.875, sections intro(0-16) + outro(16-32)): `first_drop` = 30.0, `first_break` = 60.0, `track_end` = 60.0, and `60.0 <= 60.01` passes. At 31 bars: `first_break` = 60.0 but `track_end` = 58.13, so `60.0 <= 58.14` is false and the track is refused. The exact cliff is 32 bars.
+
+**(b) A real drop, but no "break" section, and the drop starts inside the final 16 bars.** Then `first_break = first_drop + 16*sec_per_bar` and the bound needs the first drop to begin at least 16 bars before the track ends. A 32-bar track that is 16 bars intro plus 16 bars drop passes exactly (30.0 and 60.0 against `track_end` 60.0); one bar shorter fails. `_assign_labels` explicitly supports tracks that end on a drop ("Never relabel a full DROP as outro"), so this shape is reachable.
+
+**Why this matters more than a narrow edge case:** the write is all-or-nothing. One short track refusing means `exit 2`, no hints for any track in the project, and the existing `Hints/track_hints.json` left stale. A 60-second radio edit or a short-form asset in an otherwise fine project kills the whole run. The brief asks for exactly this ("a false refusal on a real short track or radio edit matters: say how short a track must be to hit it"), and the answer is 32 bars / about one minute.
+
+The bound is also checking the wrong thing. The problem is not that the analysis is untrustworthy; it is that the *fallback* is arithmetic that is not clamped to the track. The fallback block's own comment says the fallbacks exist to "guarantee all four present + positive for the hint gate" - they were never clamped to the track length, and round 3 turned that gap into a refusal of a perfectly good analysis. The minimal fix is in `hints_from_stem_result`, not in the trust function:
+
+```python
+if not first_break or first_break <= 0:
+    first_break = min(first_drop + 16 * sec_per_bar, end_sec)
+```
+
+or, equivalently, clamp all four hints to `end_sec` once at the end of the function. That keeps the round-3 guarantee (no hint past the end) while refusing nothing.
+
+I am not asking for the fallback to be removed. Fabricating a hint is a separate (already accepted) problem; the point here is only that a *fabricated* hint must not cause a correct analysis to be refused.
+
+## The rest of round 3 holds up
+
+**Guard, question 2: no legitimate write is blocked.** A real Phase 1a run with the kick model on has `kick_model_used = True`, and the guard short-circuits on `if kick_model_on: return True` before it even reads the prior file, so it always writes. A first-ever kick-off run on a project with no cache hits `not path.exists()` and returns True. A kick-off run over a KICK_OFF file, an ABSENT file or an unreadable file writes, which is correct. The only case the guard blocks is a kick-off analysis over a kick-on file, which is the stated intent.
+
+**Atomic write, question 4: correct.** `json.dumps(..., allow_nan=False)` runs before the directory is touched, so a non-serialisable hint cannot create the `Hints/` directory or truncate anything. `mkstemp` in the destination directory guarantees the same filesystem, so `os.replace` is a true rename. The temp is removed on any exception, including `BaseException`, so a `KeyboardInterrupt` mid-write does not leave a temp file. `main()` catches `Exception` around the write and exits 2 with the old file byte-identical. The `+0.01` tolerance is not defeated by rounding: `round()` is monotone, so `round(A,2) <= round(B,2)` whenever `A <= B`.
+
+**`--track` check, question 4: correct.** `Path(args.track).name != args.track` rejects `..\T.wav`, `sub/T.wav`, absolute paths and `./T.wav`; `.suffix.lower() != ".wav"` rejects `T.txt` and rejects a bare `.wav` (Python reads that as a stem with no suffix); `is_file()` rejects a directory named `X.wav` and a non-existent file. The check runs before `_check_cached_sections` is ever called, which the test enforces by monkeypatching the checker to raise. The `--track` value is used for the cache name via `w.stem`, which is exactly what `detect()` writes into the `track` field, so the equality check still holds.
+
+**Tests, question 5.** Round 3 behaviours with a failing-before test: the shared trust function, the four refusal groups, the legacy guard protection, the atomic write (all three), the `--track` validation, the huge-integer bpm, and the new hint bound. Round 3 behaviours with **no** failing-before test (they are regression guards for round 3's own refactor, and would have passed on round 2): `test_signals_key_absent_with_analysis_true_is_accepted`, `test_signals_key_absent_without_analysis_is_absent_provenance`, `test_no_wav_files_exits_2_and_leaves_existing_hints` (round 2 already had that branch), `test_two_tracks_written_with_wav_names_and_matching_content`, `test_good_track_arg_writes_only_that_track`, and `test_guard_overwrites_legacy_energy_and_malformed_files`.
+
+**One test gap on the finding above.** The `hints_beyond_track_end` fixture uses a 5-bar track (`end_bar: 5`, `end_sec: 10.0`). That proves the bound fires, but 5 bars is far below the real threshold, so the suite never probes the boundary where a plausible track starts being refused. A 40-bar or 60-bar no-drop analysis that should be accepted has no test either. Adding a fixture at 31 bars (refused) and 33 bars (accepted) would pin the cliff.
+
+## Where the brief is imprecise
+
+- The brief's summary of the KICK_ON rule is accurate but easy to misread: `analysis.kick_model: true` is KICK_ON whenever the source is **anything other than** `stem-energy-threshold`, including a missing source and an unknown source string. The legacy branch (no `analysis` key) with an unknown source is MALFORMED. No current code writes an unknown source, so this is latent, but the asymmetry will bite the moment the source string is versioned.
+- "a failed write exits 2" is true, but the failure path prints the raw exception text, and the huge-integer bpm refusal prints "cannot use SECTIONS_STEM_X.json: OverflowError: int too large to convert to float" rather than a bpm-specific reason. Cosmetic.
+- "The temp is removed on an exception" is true for every exception raised inside the `try`, with one caveat in FOUND UNASKED.
+- REPLAY_A's "every SECTIONS_STEM sha256 unchanged" is consistent with the code: `--write-hints` never calls `detect()` and never writes a `SECTIONS_STEM` json.
+
+## FOUND UNASKED
+
+1. **The atomic write silently tightens the permissions on `Hints/track_hints.json`.** `tempfile.mkstemp` creates the file with mode 0600, and `os.replace` swaps the directory entry, so the new file is 0600 even when the file it replaces was 0644 (the old `Path.write_text` used the umask). Any consumer that reads the hints as a different user, or a CI step that collects the artifact as a different user, loses read access where it previously had it. `os.chmod(tmp, 0o666 & ~umask)` before the replace restores the old behaviour.
+
+2. **`os.fdopen` failing leaks the descriptor and, on Windows, orphans the temp file.** If `os.fdopen(fd, "w", encoding="utf-8")` raises, the fd is never closed and the temp file is still open; `os.unlink(tmp)` then fails with `PermissionError` on Windows, and the `except OSError: pass` swallows it, leaving `.track_hints.*.tmp` behind. Exotic, but the same code path the round-3 author explicitly hardened.
+
+3. **The `SECTIONS_STEM` json write in `detect()` is still not atomic.** `json_path.write_text(json.dumps(result, indent=1))` truncates then writes. A crash or a full disk mid-write leaves a truncated analysis file. That is pre-existing (main did the same) and not a round-3 regression, but round 3 made the hints write atomic and left the analysis write non-atomic, so the two are now asymmetric. A truncated analysis file is refused safely by the reader and overwritten safely by the guard, but `align_engine.py` globs `_Stem Analysis/SECTIONS_STEM_*.json` and would read it.
+
+4. **The guard's refusal message is wrong for the empty-readout case, and `detect()` cannot tell its caller that nothing was written.** The message "this run has it off, so the file was NOT overwritten" is printed when the run had `--kick-model` **on** and the provider merely returned no readout (the `else` branch at line 1066). `detect()` returns `result` with `analysis.kick_model: false` in that case whether or not the write was permitted, so a caller holds in memory an analysis that is not the one on disk. A `result["analysis"]["json_written"]` flag would cost one line. (Minimax r2 raised the message; I am adding that the returned-result divergence is the part that can mislead an orchestrator.)
+
+5. **`hints_from_stem_result` is called twice per track** - once inside `_check_cached_sections_inner` for the bound check and once in `main()` to build the hints. The checker's copy is discarded. It is deterministic today, but the two could drift, and returning the hints from the checker and reusing them removes the double call.
+
+6. **The corpus has an orphaned analysis that the hints path cannot see.** `SECTIONS_STEM_Kyle Watson - The Afterhours (Extended Mix) 24 Bit MASTER.json` exists in `_Stem Analysis/` with a full kick-model analysis, but `Audio/` has no Kyle Watson wav in either proj or projB, so `--write-hints` (which globs `Audio/*.wav`) never reads it. `align_engine.py` globs `_Stem Analysis/SECTIONS_STEM_*.json`, so the arrangement phase sees 11 tracks where the hints file has 10. `validate_hints_vs_sections.py` only checks one direction of the mismatch (`set(hints_data) - matched_hint_keys`), so a sections track with no hint entry is silent.
+
+7. **The bound closes the "out of range" half of the fallback problem but not the "fabricated" half.** A fallback hint that happens to land inside the track is indistinguishable from a real one for the trust function, yet `validate_hints_vs_sections.py` requires each hint to land within 8 bars of the corresponding ALS section, and a pure-arithmetic fallback will not. So a no-drop track can pass the round-3 bound and still fail the hints-vs-sections gate with a fabricated value. The round-3 bound is not a substitute for the accepted "fallbacks when a json has no drop or outro" item; it is an additional, orthogonal hazard.
+
+8. **`_kick_provenance` is asymmetric about an unknown `kick_presence_source`.** `analysis.kick_model: true` plus an unrecognised source string is KICK_ON; no `analysis` key plus the same unrecognised source string is MALFORMED. Nothing in the tree writes such a string today, so this is latent only.
+
+9. **The reader validates the analysis only through its own provenance label.** The trust function never checks that the `sections` in the file are consistent with the kick claim. A file whose `sections` were rewritten by another tool while `signals` or `analysis` were carried through keeps the label of the old sections. This is the same structural point minimax r2 made in its FOUND UNASKED item 1 and it is not addressed by round 3. I am not re-raising it as a verdict item because the brief records "no audio fingerprint or detector version in the json" as an accepted follow-up and the cheapest mitigation (refuse a json whose sections contain no "drop") was already proposed there; I am listing it only so the round-3 trust function is not later mistaken for more than it is.
+
+10. **The `--track` validation only applies to `--write-hints`.** The `detect()` path still uses `audio / args.track` unvalidated, so `stem_detector.py <project> --track ../elsewhere.wav` runs `detect()` on a file outside `Audio/`. Pre-existing and outside the round-3 scope, but the asymmetry is now visible: the same argument is strictly validated on one path and not the other.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=6cab2dba2ea14a96ab5d364a6719ad3f===
+===SEAT-DONE minimax d20_r3===

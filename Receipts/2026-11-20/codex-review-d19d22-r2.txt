@@ -1,0 +1,70 @@
+VERDICT: CORRECTION
+
+**Require staging for FIX 3.** I reproduced a failed run restoring over a second writer's valid output. With no pre-existing output, the failed run deleted the second writer's file instead. FIX 1 also still permits a zero-length clip.
+
+## FIX 3 - Publish and rollback
+
+- **Interrupts.** `main` catches `BaseException`. When reconcile raises `KeyboardInterrupt` or `SystemExit` after `published = True`, rollback restores both files if the filesystem allows it. An interrupt after the final rename but before `compress_als` returns or `published` is set leaves the new ALS in place. A hard kill also leaves any already-published files visible.
+- **Rollback can fail and discard the recovery copy.** If Windows denies the output replace or unlink, the shared `except OSError` skips report restoration too. `close()` then attempts to delete the output backup even though restoration failed. If report replacement fails, its restore `.partial` has no cleanup. A non-`OSError` raised during restore can mask the original failure.
+- **Before publish.** An ordinary write failure before rename preserves the old ALS and normally cleans up the backup. Report restoration still runs and can overwrite another writer's report change even though this run never published. If `copy2` fails after creating a truncated backup, such as when the disk fills, `_PublishRollback.__init__` raises outside the `try/finally`. The prior output survives and the partial backup can remain.
+- **Report identity.** Restoration compares bytes. If the report was deleted, `read_bytes()` raises and the report stays missing. Restoring changed bytes also gives the report a fresh mtime, which can affect the newest-report fallback. The normal CLI with a MixPlan supplies an explicit report path, so both paths agree while that file exists. If it disappears before reconcile, the fallback can validate against a different report beside the output. Rollback still targets the original report.
+- **Concurrent writers.** Once `published` is set, restore acts on whatever is currently at `output_path`. It can overwrite or delete a later writer's valid ALS and revert that writer's report. The shared report `.tmp` adds another race: one writer can replace the report with the other writer's staged bytes.
+
+Stage the ALS and the updated report, reconcile that exact pair, and publish only after the gate passes. The supplied `reconcile` reads and hashes its input paths, so it can use staged paths. Update the reported external test to assert that reconcile sees the intended bytes and that the final paths stay untouched until it passes. If concurrent runs must publish a consistent pair, serialize the final publication per destination. Two renames alone cannot commit the pair atomically.
+
+## FIX 1 - Clip trim
+
+The mixed-quote case from round 1 is fixed. The parser still requires the literal prefix `<Tag Value=` on one line. Whitespace around `=`, an attribute before `Value`, a line break before `Value`, or a numeric entity such as `&#49;00` can hide a real value.
+
+- With both Current fields spelled `Value = "..."`, a 12-beat trim moves `Time` from 100 to 112 and `LoopStart` from 0 to 12, while `CurrentStart` stays at 100. With all four window fields split across lines, it changes only `Time`. The unreadable fields themselves stay untouched, but the clip is still edited blindly.
+- I reproduced a zero-length arrangement window with valid XML. Put `<!-- <CurrentEnd Value="164" /> -->` before the real `CurrentEnd=132`, use `CurrentStart=100` and a longer Loop window, then trim 32 beats. The guard reads the comment as the end. Python's XML parser reads the resulting real start and end as 132.
+
+Read the actual clip elements and attributes, then patch the original text only after verifying all fields needed for the trim. Preserve the existing compatibility behavior for genuinely absent optional windows.
+
+## FIX 2 - Partial files
+
+The names end in `.partial`. A swallowed Windows `PermissionError` can leave a partial behind. None of the supplied production globs selects it as an ALS.
+
+`token_hex(4)` gives a 32-bit random suffix, and both writers open the chosen name with `wb` without reserving it exclusively. I forced equal tokens across the two writers and reproduced one writer deleting the other's stage. With the round 1 interleaving, where writer A renames before writer B rejects, the collision can still publish B's invalid bytes. Use exclusive creation with a retry on collision. In `apply_loops`, an interrupt after `stage_als` returns and before the caller enters its `try/finally` can also strand the stage.
+
+## FIX 4 - Tail loops
+
+Direct NaN and infinity inputs fail during `round()` or `int()`. Arithmetic can still produce infinity from finite inputs. On the four-bar loop fixture, `reps=10**308` returns an infinite target marker. `reps=1_000_000` returns bar `4000110`, and `partial_bars=5` is accepted for a four-bar loop. `int()` also silently truncates fractional counts. The later `validate_loop_spec` has repeat, partial-length, and extension limits, but `fills_from_decision` already returns the geometry and the planner uses its marker.
+
+The builder is right about `ext <= 0`. After the earlier checks, either the repeat count and span are positive or the partial is positive, and neither term can be negative. The branch is unreachable and untested. Check the repeat count before coercion and enforce the existing geometry limits before returning the fill.
+
+## Test sensitivity
+
+| Round 2 test cases | Would fail before the fix? |
+|---|---|
+| Single-quoted end, both windows | Yes. The cases isolate the two windows and require the length error. |
+| All single-quoted numeric fields | Yes. The old parser makes none of the three edits. |
+| Missing or unreadable end, both windows | Yes. All four cases catch the missing guard. |
+| Neither Loop field present | No. It pins existing behavior. |
+| Nested writer, all three entry points | Yes. The old shared partial is removed by B, so A's rename fails. The test does not force a token collision or prove the bad-byte publish interleaving. |
+| Two distinct names, both compressors | Yes. The old names are identical. |
+| Failed reconcile, with and without an old output | Yes. Without rollback, the new output and changed report survive. |
+| Passing reconcile parity and no-MixPlan run | No. Both are compatibility tests. |
+| Negative partial, both cases | Yes. The second case still catches removal of the negative-partial check even with `ext <= 0` retained. |
+| Valid tail loops, all three cases | No. They pin accepted behavior. |
+
+Every numbered fix has a failing-before test. Within FIX 4, the `ext <= 0` check has none. I verified all eight manifest entries and ran in-memory fault and before/after probes. The pack has no Git metadata to verify the branch or commit independently. The full suite also needs the absent real ALS validator, package modules, and `test_codex_round2_blockers` fixture module. All probes ran in memory.
+
+```text
+a019654ad06dd006  align_engine.py
+4cbdf61792d84363  als_generator.py
+76e4c996ecc0ed7d  apply_automation.py
+9155aa742f3fedcb  apply_loops.py
+f52c42137d577a28  test_d19_d22_guards.py
+ab4fa3e15954edc2  test_d19_d22_round2.py
+ffa3f9926b888541  validate_mix_plan_als.py
+07aaee4e01d7021a  d19d22_r2.diff
+ea739a6d7c8ea414  SHA.txt
+bd1de0203ceddeaf  PRIOR_codex_review_r1.txt
+```
+
+## FOUND UNASKED
+
+`apply_loops.stage_als` embeds the random staging basename in the gzip header. Identical XML compressed at a fixed timestamp now produces different ALS bytes across runs, including Phase 3 runs without a MixPlan. The success-parity test compares decompressed XML and misses the change. `als_generator` already supplies the final basename explicitly.
+===CODEX-ASK-DONE exit=0 nonce=b82a8f6b5489495fba518b286d4144f3===
+===SEAT-DONE codex d19d22_r2b===

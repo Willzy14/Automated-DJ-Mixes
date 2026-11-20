@@ -1,0 +1,190 @@
+﻿I have everything I need. Let me write the review.
+
+VERDICT: SOUND
+
+Files read (sha256 prefix from SHA.txt, all four in the snapshot):
+- change.diff 2785c47dd34332a6
+- playlist_builder.py e560fb4b9bb82175
+- resolve_masters.py 65a78d3024424df9
+- test_playlist_builder.py 4cfa2f0e681678bf
+
+I could not run anything (no execution tool in this harness), so every claim below is derived by reading the code and hand-tracing the regexes and tuple sort keys. Where I trace a case I give the exact intermediate strings.
+
+====================================================================
+1. RULE 1 (a remix and an original are different tracks)
+====================================================================
+
+The gate is `master_name_matches` (playlist_builder.py:135). After the base prefix, the leftover "tail" must be exactly one of the allowed version strings followed by nothing but VERS tokens:
+
+ tail == version   or   tail.startswith(version + ' ')
+    and VERS.sub(' ', tail[len(version):]).strip() == ''
+
+Because the loop `continue`s on failure and tries every version, the acceptance is a union, so the order of ORIGINAL_MIXES does not shadow anything. I verified that.
+
+Cases I tried, with the trace:
+
+(a) Remix row, remixer="Bob" -> version "bob remix" (resolve_pick:165). File "Better When (Bob Remix) SW V3.wav" -> norm "better when bob remix sw v3", base "better when", tail "bob remix sw v3", version "bob remix" startswith -> remainder " sw v3" -> VERS eats it -> accept. The original file "Better When (Original Mix) SW V5.wav" -> tail "original mix sw v5" -> "bob remix" is neither equal nor a prefix -> refused. No fallback path exists for a remix row: the untitled-delivery branch is unreachable for remix rows because `master_name_matches(name, ("bob remix",), artist, '')` fails on any pure version-token name. Sound.
+
+(b) Original row -> versions = ORIGINAL_MIXES. I checked every entry against the tail:
+    - "Better When (Original Mix) SW V1.wav": tail "original mix sw v1"; version "" -> remainder "original mix" (not empty, fails); version "original" -> remainder " mix" (fails); version "original mix" -> remainder " sw v1" -> "" -> ACCEPT. So "(Original Mix)" is accepted for an original row, as it must be.
+    - "Better When (Radio Edit) SW V1.wav": tail "radio edit sw v1". None of '', original, original mix, main, main mix, main original, main original mix, extended, extended mix matches -> REFUSED. Radio edit correctly excluded.
+    - "Better When (Club Mix) SW V1.wav": tail "club mix sw v1" -> REFUSED. Club mix correctly excluded.
+    - "Better When (Bob Remix) SW V1.wav" / "(Dub)" / "(Acapella)" / "(Instrumental)" / "(Bob Mix)": all refused, because the tail keeps the mix word, which is neither an ORIGINAL_MIXES word nor a VERS token.
+    - "Better When (Extended Mix) SW V1.wav" -> tail "extended mix sw v1"; version "extended" -> remainder " mix sw v1" (fails); version "extended mix" -> remainder " sw v1" -> "" -> ACCEPT.
+
+(c) "extended" for an original row: yes, accepted, and that matches the resolver's own rule (resolve_masters.py docstring: "For a DJ mix the Extended mix comes first"), and the owner's forbidden list (remix, dub, acapella, instrumental, radio edit) does not include extended. Note the consequence in FOUND UNASKED (same file served to two different DB rows).
+
+(d) Prefix titles ("Better When" vs "Better When Again"): the base test is `name == base or name.startswith(base + ' ')` and the tail must then contain nothing but version tokens. "better when again extended mix sw v9" -> tail "again extended mix sw v9" -> "again" survives -> REFUSED. In both directions (DB "Better When" vs file "Better When Again...", and DB "Better When Again" vs file "Better When..."). This is the test_resolve_ep_picks_the_named_track case, and it holds.
+
+(e) Remixer whose name is also a word in the title (title "Sunshine", remixer "Sun"): version "sun remix"; file "Sunshine (Sun Remix) SW V1.wav" -> tail "sun remix sw v1" -> startswith "sun remix " -> remainder " sw v1" -> accept. The same file for an original row -> tail "sun remix sw v1" -> refused. No cross-talk.
+
+(f) Folder artist check (master_matches:145) is exact: `resolver.norm(folder_artist) != artist` -> refuse. folder_artist is the text before the first " - " of the ftail()-ed folder name. So:
+    - DB "A & B" (norm "a b") vs folder "A & B - Title" -> "a b" == "a b" -> accepted.
+    - DB "A & B" vs folder "A, B - Title" -> "a b" == "a b" -> accepted (norm collapses punctuation).
+    - DB "A & B" vs folder "A and B - Title" -> "a and b" != "a b" -> REFUSED (title-only files only; see below).
+    - DB "A feat. C" (norm "a feat c") vs folder "A feat. C - Title" -> accepted; vs "A & C - Title" -> "a c" != "a feat c" -> refused.
+    - DB "A" vs folder "A & B - Title" -> folder_artist "A" -> "a" == "a" -> accepted (the partition takes the first name).
+
+(g) The untitled-delivery branch (master_matches:150-163) is the part I pushed on hardest, because it is the only branch that can promote a file whose name does not mention the title. It is safe, and it is safe because of a double gate:
+    - `resolver.vonly(name, artist, title)` requires a VERS token AND deco(), which requires the title NOT to be in the name and bare() to be empty. So only pure delivery names qualify ("MASTER AMENDED V2.wav", "Artist - MASTER AMENDED V2.wav", "16 Bit MASTER.wav" now that VERS knows 16 bit).
+    - The folder scan then requires at least one "named" file (master_name_matches against "artist title" and "title") AND every .wav in the folder to be either named or an untitled delivery. So a folder that also holds "Change The Situation (Original Mix) SW V1.wav" or "Better When (Radio Edit) MASTER.wav" makes the untitled delivery REFUSED (I traced both: "Change The Situation..." is not named and not vonly -> the `all(...)` fails; "Better When (Radio Edit) MASTER.wav" is not named and vonly is False because the title is in the name).
+    - The builder's rule is also strictly stricter than the resolver's own promotion rule `one` (which uses bare() == title). The resolver would promote in the radio-edit case; the builder refuses. Fail-safe direction.
+    - I could not make the untitled branch cross tracks: the branch requires the folder to contain a file named for THIS title, so the folder is the right folder. And scan() only ever puts a promoted version-only file into `out` when `one` is true, which requires the folder name to be exactly "artist - title" (no brackets, parens or "&"). So the builder's slightly looser folder test cannot be reached with a cross-track folder.
+
+(h) I could not construct any row + folder contents where --resolve prints a MASTER for the wrong version or the wrong track. The only "wrong version" I can reach is the duplicate case (item c, above): the original row and the mix_name="Extended Mix" row can both point at the same "Title (Extended Mix) SW V1.wav". The rule's own forbidden list does not cover that, and the resolver's DJ rule asks for the extended, so I am not calling it a violation, but see FOUND UNASKED.
+
+====================================================================
+2. THE VERS CHANGE IN resolve_masters.py (the brief's open question)
+====================================================================
+
+VERS (resolve_masters.py:41) is used in six places, none of which is `ver()`:
+
+    46/48  bare()   - strips VERS tokens (after DECO strips the decoration groups)
+    54 vonly()  - "has a version token AND is decoration-only"
+    64     vt - "the searched title is made only of version words"
+    74     tk      - only relevant when vt is true
+    75     vo      - dc AND has a VERS token
+    97     hd      - held-for-NOTE test
+
+`ver()` (21-26) does NOT use VERS. It has its own literals: `sw v\d+`, `amended v\d+`, `amended`, and the literal substring '24 bit'. So the VERS change cannot change any version score directly. It changes which names are "titled" (bare()), which changes `same`, `one`, `vo`, `hd`, and therefore promotion and NOTE behaviour.
+
+Your specific question: a folder holding both a "16 Bit MASTER" and a "24 Bit MASTER" of the same track.
+
+    bare("Artist - Title 16 Bit MASTER.wav", "artist")
+      before: "artist title 16 bit master" -> VERS(old) eats "master" -> s[6:] = "title 16 bit" -> bare = "title 16 bit"  != title -> NOT a titled file
+      after:  VERS(new) also eats "16 bit" -> s[6:] = "title" -> bare = "title" == title -> IS a titled file
+    bare("Artist - Title 24 Bit MASTER.wav", "artist") = "title" both before and after (24 bit was already a token).
+
+Ranking of the two candidates (the sort key is ((not junk, named or up, must, nm-in-kn), mx, ver(f), want_t, mt, fp), and out.sort(reverse=True)):
+
+    named is True for both, mx = mix(f) = 0 for both, so the tie-break is ver(f):
+      ver("...16 bit master") = 0    (no sw, no amended, and '24 bit' not in the name)
+      ver("...24 bit master") = 5    (the legacy +5 for '24 bit' in the no-SW branch)
+    -> the 24 Bit file wins, BEFORE and AFTER the change. The VERS change does not move this decision.
+
+So: 24 Bit wins before and after, and rule 5 does not speak about bit depth at all, so nothing is violated. But the change does create two real inconsistencies worth your decision (details in FOUND UNASKED):
+  - 32 Bit MASTER is now a recognised delivery label yet still scores ver() = 0, so a 24 Bit file still beats a 32 Bit file. 24 > 32 is not defensible on quality grounds.
+  - 16 Bit vs 32 Bit (both ver() = 0) is decided by mtime and then by the path string, i.e. by nothing the rules mention. Silently non-deterministic from the owner's point of view.
+
+The change is not purely additive, though. It can flip the resolver's own answer in a folder that contains a bit-depth delivery plus a version-only delivery:
+
+    Folder "Artist - Title [Label] Project":
+      "Artist - Title 16 Bit MASTER.wav"   (titled after the change, untitled before)
+      "MASTER AMENDED V2.wav" (version-only)
+    before: same = {} -> one = False -> the version-only file is HELD (NOTE), answer = the 16 Bit file
+    after:  same = {the 16 Bit file} -> one = True -> the version-only file is PROMOTED, answer = "MASTER AMENDED V2.wav"
+
+The new answer is the one the resolver's own documented rule wants (the folder is exactly "artist - title", every live file is a titled file or a version-only file, at least one titled file exists, and rule 5 says AMENDED V2 is newer than MASTER). So the flip is an improvement, not a regression, but it is a silent behaviour change to the standalone tool for libraries that already contain "16 bit"/"32 bit" names.
+
+Bottom line for point 2: adding 16 and 32 to VERS changes no ranking or promotion decision for names that do not contain those tokens. For names that do contain them, it changes the "titled file" classification and can promote a version-only delivery that was previously held. The 16-vs-24 winner is unchanged (24 won before and wins now, on the legacy '24 bit' +5 that the brief says was not changed). The bit-depth ordering is now undefined between 16/32 and inconsistent between 24 and 32, which rule 5 does not cover and which I therefore raise in FOUND UNASKED rather than in the verdict.
+
+====================================================================
+3. FALSE NONE (real-world names that get refused)
+====================================================================
+
+The builder's title-only rule is much stricter than the resolver's own `named` test. scan() matches a candidate when the title appears as whole words in the file name (kn = norm(stem(f)), unstripped); master_name_matches requires the file name to be EXACTLY "<artist> <title>" or "<title>" plus nothing but version tokens (or an allowed mix word plus version tokens). Result: files the standalone resolver would print can come back NONE from --resolve. Cases, all fail-safe (NONE, never a wrong MASTER):
+
+  - Track number without a separator: "12 Title.wav". strip_num (resolve_masters.py:36) only removes "\d{1,3} + separator" or zero-padded "0\d ". "12 Title" is neither -> the name stays "12 title" -> the base "title" does not match -> REFUSED. The resolver's `named` test uses the unstripped kn, so it WOULD answer this file. Zero-padded "01 Title.wav" and "01 - Title.wav" are fine (verified: strip_num removes "02 " via the 0\d alternative). Your library's fixtures are zero-padded, so the practical risk is low, but the divergence is real.
+  - A label or catalogue tag in the FILE name: "Better When [Defected].wav" -> norm "better when defected" -> tail "defected" -> not a version token -> REFUSED. Same for "(2024 Remaster)" -> tail "2024 remaster" -> refused. The resolver's bare() also keeps those, but its `named` test still finds the file, so again the two tools disagree.
+  - "24 Bit  MASTER" (double space): fine. norm collapses runs of non-alphanumerics to one space.
+  - Apostrophes: "Don't Stop" -> "don t stop" on both sides -> fine, as long as the DB and the file agree. "Dont Stop" in the file vs "Don't Stop" in the DB -> mismatch -> refused.
+  - Accents: norm strips non-ASCII rather than transliterating, so "Cafe" -> "cafe" but "Café" -> "caf". If both the DB row and the file name carry the accent they still match ("caf" == "caf"), so this only bites when the two sides differ. Pre-existing in the resolver (same norm), so not new here.
+  - "feat." forms: DB "A feat. C" -> "a feat c"; the folder "A & C" -> "a c" -> the title-only branch refuses. A file named "A feat. C - Title.wav" still matches through the first branch.
+  - Mix names that the DB spells differently from the file: a row with remixer="Bob" and mix_name="Extended Mix" builds version "bob extended mix" (resolve_pick:165 prepends the remixer when the remixer name is not already in the mix name), so the file must literally contain "bob extended mix". A file "Title (Extended Mix) SW V1.wav" -> REFUSED -> NONE. Same for remixer="Bob" + mix_name="Original Mix" -> version "bob original mix". Conservative (never a wrong answer) but a plausible false NONE if the credits table has rows with both fields populated.
+
+Your specific uncertainty ("will exact artist matching return NONE for most collaborations?"): no, and here is why. The folder equality test only guards the SECOND branch of master_matches. The FIRST branch ("<artist> <title>" as the file name prefix) never looks at the folder. And scan() itself requires `a in n` on the NORMED folder name, so a DB artist "A & B" only scans folders whose name contains "a b" at all. The refusal is therefore narrow: it bites only for title-only files (files named "Title (Mix) SW Vn.wav" with no artist prefix) sitting in a folder whose artist spelling differs from the DB spelling ("&" vs "and", "feat." vs "&"). Files that carry the artist prefix still resolve.
+
+====================================================================
+4. TESTS: would each one fail if its rule were broken?
+====================================================================
+
+test_resolve_remix_uses_the_latest_matching_delivery - Partial. It pins "latest matching delivery" (SW V3 over SW V2, which is the resolver's ranking) but it does NOT catch a "remix row falls back to the original" bug: in scan's sort order the remix file outranks the original file (the outer key element (not junk, named or up, must, nm-in-kn) has nm-in-kn True only for the remix file), so the builder would still return the remix file even if its version logic were broken. The rule IS caught elsewhere, by the unlink half of test_resolve_requires_mix_in_the_filename (remover the versioned file, the original must not appear).
+
+test_resolve_original_rejects_alternate_only_folder (Bob Remix, Dub, Acapella, Instrumental, Radio Edit, Bob Mix) - Yes, meaningful. scan() does put junk and alternate files into `out` (JUNK only costs 100 mix points, it does not exclude them), so a builder that accepted an alternate for an original row would print MASTER and the assert fails. This is the real rule-1 guard for the original half.
+
+test_resolve_requires_mix_in_the_filename - Yes. The positive half pins that a mix_name row needs the mix in the file name; the negative half (file unlinked) is the only place that proves a remix/mix row does not fall back to the original.
+
+test_resolve_ep_picks_the_named_track - Yes. If the prefix rule broke, "03 Better When Again (Extended Mix) SW V9.wav" (which outranks the others in scan's order) would be printed and the assert fails. The second half proves no fallback to a neighbouring track.
+
+test_resolve_accepts_every_bit_depth_delivery_label - Yes for the VERS regression (with the old regex the tail "16 bit master" leaves "16 bit" -> NONE, as the brief says). But it does NOT pin the 16-vs-24 preference inside one folder, which is the thing point 2 is really about.
+
+test_resolve_title_only_file_needs_the_credited_artist - Yes. Without the folder-artist equality the title-only file would be printed.
+
+test_resolve_untitled_delivery_needs_a_safe_named_anchor - Yes, both halves. Case 1 pins that the untitled delivery is the answer when the anchor is safe; case 2 (radio-edit anchor) fails if the anchor check is dropped.
+
+test_resolve_prints_every_note_and_counts_picks - Yes for the output format, the two NONE reason strings and the summary line. It does not test rule 1.
+
+test_resolve_bad_index_exits_before_playlist - Yes for rule 4. None / "{" / "{}" cover missing, malformed and wrong-shape indexes; the assert on captured.out == "" pins "before any playlist is printed".
+
+test_main_without_resolve_keeps_the_existing_report - Yes for rule 3, it pins the exact byte output.
+
+Rules with NO test:
+  - Rule 2 (never opens/copies audio). Untested. It is true by inspection (the builder uses os.scandir and never opens a .wav), but nothing would fail if someone added an open() of the master.
+  - Rule 5 ("the builder must not re-rank"). Untested in a way that distinguishes. All the resolve tests would still pass if the builder started sorting the acceptable candidates by its own version parse, because in every fixture the resolver's order and any sane re-rank agree. A test would need two acceptable candidates whose order differs (for example a "MASTER AMENDED V2" untitled delivery and a "SW V12" named file in the same folder).
+  - The 16-vs-24-bit preference in one folder (point 2).
+  - The collaboration artist-spelling mismatch (folder "A and B" vs DB "A & B").
+  - The false-NONE classes (track number without a separator, a label tag in the file name).
+  - The duplicate-MASTER case (the original row and the "Extended Mix" row resolving to the same file).
+  - `sql --resolve` -> argparse error. Untested, but trivial.
+
+====================================================================
+5. RULES 2, 3 AND 4
+====================================================================
+
+Rule 2 (no copying, moving or opening audio): holds by inspection. The builder only calls os.scandir on the directory and reads entry names and e.is_file() (a stat). The resolver itself does os.listdir and os.path.getmtime. No file object is opened on any .wav. Note that e.is_file() on an online-only (Dropbox) placeholder can trigger a metadata fetch from the cloud, but that is not opening the audio.
+Rule 3 (byte-identical output without the flag): holds. The only changes on the no-flag path are the report() signature (resolver=None) and the conditional "Next:" line, and test_main_without_resolve_keeps_the_existing_report pins the exact string. No side effect without the flag: load_resolver() is only called when a.resolve is true.
+Rule 4 (bad index -> non-zero exit before any playlist): holds. main() executes `resolver = load_resolver() if a.resolve else None` as a statement BEFORE the report(...) call, so the exit happens before fetch() (no DB connection, no rows file read) and before any printing. load_resolver() catches OSError (missing file, unreadable file, directory) and ValueError (json.JSONDecodeError is a ValueError subclass, plus the explicit list-of-pairs shape check), and sys.exit(<string>) gives exit status 1 at the CLI with the message on stderr. One cosmetic point: if resolve_masters.py itself is missing, the same message is shown even though the index was not the problem.
+
+====================================================================
+6. WHERE THE BRIEF IS WRONG OR INCOMPLETE
+====================================================================
+
+- "A remix and an original are DIFFERENT TRACKS ... an original row must never resolve to a remix, dub, acapella, instrumental or radio edit." I could not break this. The refusal of radio edit and club mix comes from the ORIGINAL_MIXES tail analysis, not from the JUNK regex, and it works.
+- "the 24 bit bonus in rank() was NOT changed" - correct, and the consequence is that the 24-bit winner is unchanged by the VERS change, but 32 bit still loses to 24 bit, and 16 vs 32 is decided by mtime.
+- "matching the database artist string exactly against the folder name will make --resolve return NONE for most collaborations" - over-stated. The folder equality only guards the title-only branch; the file-name branch is folder independent. It bites only for title-only files in folders whose artist spelling differs from the DB spelling.
+- "Before the VERS change three real '16 Bit MASTER' files came back NONE." Consistent with the code: the refusal was the builder's (the old VERS left "16 bit" in the tail), not the resolver's. The standalone resolver would have found them, because its `named` test only needs the title as whole words.
+- Everything in the "known, do not re-raise" list is confirmed and not re-raised.
+
+====================================================================
+FOUND UNASKED
+====================================================================
+
+1. The original row and the "Extended Mix" row can both print the same MASTER. ORIGINAL_MIXES contains 'extended' and 'extended mix', so an original row accepts "Title (Extended Mix) SW V1.wav"; a row with mix_name="Extended Mix" accepts it too. Two different DB rows, two different versions in the credits table, one identical MASTER path printed twice in the same playlist. If you want the original row to point at the true original delivery, 'extended'/'extended mix' must come out of ORIGINAL_MIXES (and then the original row would refuse the DJ mix, which is the opposite of what the resolver wants). Right now the two tools have different opinions about what "the original" is. Your call; I did not treat it as a rule-1 breach because the owner's forbidden list and the resolver's DJ rule both point at extended.
+
+2. The MASTER line does not say which mix it resolved to. An original row prints "MASTER: .../Title (Extended Mix) SW V1.wav" with nothing in the line to say "this is the extended delivery, not the original". Given point 1, that is confusing at the moment when a human is eyeballing the list.
+
+3. Bit-depth ordering is undefined and now internally inconsistent (see point 2 above). Suggested fix inside the existing ver(): give '16 bit' 0, '24 bit' 5, '32 bit' 10 (or, cleaner, replace the special case with a bit-depth rank) so the ordering stops depending on mtime. Not required by rule 5, which is silent on bit depth, but it is now a live decision the builder makes.
+
+4. The builder duplicates the resolver's name matching in a second, stricter dialect (master_name_matches / master_matches), so the two tools can disagree about the same file (the standalone resolver answers, the builder says NONE). That is the direct cause of every false NONE in section 3. A cheap improvement, if you want one: in master_name_matches, also try the UNSTRIPPED stem (so "12 Title.wav" and "Title [Label].wav" behave like the resolver's `named` test), rather than widening ORIGINAL_MIXES.
+
+5. The NOTE lines carry the resolver's raw reason strings ("the folder may hold other tracks", "ranked lower on mix, hint or exact title", "cannot tell which track it belongs to") and the resolver's notes are collected across EVERY folder scan() touched, not just the folder the pick belongs to. In the test fixture the same two NOTE lines therefore appear under two different picks. Not wrong, but noisy, and "the folder may hold other tracks" is emitted for files in unrelated folders.
+
+6. load_resolver() reports "Cannot read Tools/folder_index.json" when the actual problem is a missing resolve_masters.py or a missing folder_index.json in a relocated Tools directory. A one-line diagnostic that names the file it actually failed on would save a confusing debugging session.
+
+7. os.scandir + e.is_file() on an online-only (Dropbox) folder can trigger a metadata fetch. It does not open the audio, so rule 2 holds, but it does mean --resolve touches the cloud for files it may not need.
+
+8. build_folder_index.py is not in this snapshot, so I could not verify the "can abort if a backup drive is missing" note; I take it as given and did not re-raise it.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=e2398dada97d4a76a423a7335b65e523===
+===SEAT-DONE minimax item6_rev_r1===

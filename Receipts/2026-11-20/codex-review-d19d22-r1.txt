@@ -1,0 +1,52 @@
+VERDICT: CORRECTION
+
+D19 can still create a zero-length clip in memory. D22 can publish an invalid `.als` when two writers target the same output. Phase 3 also publishes before its optional MixPlan hard gate.
+
+## D19
+
+**Reproduced with valid XML syntax.** Take the `intro_1` fixture with `Time=100`, `CurrentStart=100`, `CurrentEnd=132`, `LoopStart=0`, and `LoopEnd=32`. Use single quotes around only the two end values: `<CurrentEnd Value='132.0' />` and `<LoopEnd Value='32.0' />`. Call `trim_named_clip_front(lines, track_start, track_end, "intro_1", 32.0)`. The guard cannot read either end because its regex requires double quotes. The function returns `3` and writes `CurrentStart=132` and `LoopStart=32`. I parsed the result with Python's XML parser and confirmed that both windows have zero length. I could not verify whether the real ALS validator would allow this clip onto disk.
+
+With the fixture's original quoting, equality, over-trim, and a remainder within floating-point noise all raise before any edits. I also checked the isolated Current and Loop windows and the exponent and plus-sign cases.
+
+`fills_from_decision` can be called directly. With an intro from bar 0 to 8, `fills_from_decision(o, i, {"intro_trim_bars": 8, "swap_in_bar": 20})` raises on its own. In the supplied production path, `compute_aligned_positions` calls `alignment_from_decision` first and passes the same tracks and decision to `fills_from_decision` afterward (`align_engine.py:2956, 2972`). I found no path there where only the second call sees the trim.
+
+## D22
+
+**Reproduced the shared staging-path race in memory with both writer bodies.**
+
+1. Writer A calls `compress_als(valid_lines, out)` for `Sections V9.als`. It writes and validates `Sections V9.als.partial`, then pauses before `replace`.
+2. Writer B calls `compress_als(["<not-an-als>\n"], out)`. It overwrites the same partial, closes it, and pauses before validation.
+3. A resumes and renames B's malformed gzip payload onto `Sections V9.als`. B's later failure and cleanup leave that published file in place. An existing valid output can be overwritten this way.
+
+In a single call, both writers attempt cleanup in `finally` even when the validator raises an unexpected `RuntimeError`. The exception propagates and the prior output stays intact. **Cleanup is best effort.** If the partial is held open without delete sharing on Windows, `unlink` can raise `PermissionError`. Both helpers swallow that error, leaving the partial behind. A `PermissionError` from the final rename is wrapped as `ValueError`, and the prior output stays intact. `apply_automation.compress_als` delegates to `apply_loops`.
+
+`generate_session` passes both job gates to `als_generator.compress_als`, which runs them on the partial before renaming. **Phase 3 has a separate post-publication failure path.** Call `apply_automation.main` with otherwise valid inputs and a supplied MixPlan whose transitions disagree with the result. It publishes the ALS, may update the arrangement report, then calls `reconcile`. A reconciliation failure leaves a structurally validated ALS that failed the job's hard gate (`apply_automation.py:1634, 1643, 1672`).
+
+**Writer search.** The supplied production ALS entry points use the reviewed compressors. The tests also write `.als` fixtures directly with `write_bytes` and `gzip.open`. One production helper can write non-ALS bytes to an ALS-named path: pass `write_final_swaps_to_report` an existing JSON report named `Sections V9.als` and a plan that changes a swap. It replaces that path with updated JSON. This requires a misnamed report. I could not see the rest of the repo.
+
+## Test sensitivity
+
+- **Planner and decision tests.** Removing the planner margin breaks the near-empty planner test and the parity cases at `8.0018` and `8.2499`. The two planner acceptance tests still pass. The parity test is inert against removal of either decision call's check alone because the other call still rejects. The direct eight-bar rejection test catches removal from either call.
+- **`test_arrangement_decisions.py`.** Whole-intro, over-trim, and fractional-edge rejection catch removal from either call. The error-text test catches removal from alignment only. Half-bar acceptance, missing intro data, and zero trim all survive guard removal. They pin accepted behavior.
+- **Clip tests.** Equal, past-end, and float-noise rejections fail when both window checks are removed. Either window alone keeps those tests passing. The short-Loop test isolates the Loop check. The exponent and plus-sign measurement test isolates the Current check. Successful trim, one-beat remainder, missing-window, zero/unknown-clip, and spelling/edit tests survive removal of the window checks. The spelling tests exercise the edit parser.
+- **Writer tests.** Rejection, old-output preservation, rename-error, and failing-job-gate tests catch their corresponding regressions. The generate-session spy checks both arguments and the partial path. The forced-failure integration test catches removal of the entire gate, but either argument alone still triggers its stub. Both integration tests require the absent template. The two early `raises(Exception)` tests can pass on an unrelated exception. Success, byte-identity, and import-origin tests do not establish rejection. The string-path tests catch removal of path normalization. No supplied test exercises shared staging or a failed cleanup unlink.
+
+I verified the hashes, ran isolated D19 mutations against the supplied functions, and exercised the D22 counterexamples with in-memory filesystem and validator stand-ins. The snapshot lacks the real validator, template, and other repo modules needed for a full test run. No files were written.
+
+```text
+92b95351d9b8cee0  align_engine.py
+df230baea70ffde0  als_generator.py
+1ce29ae430720976  apply_automation.py
+25d061b5e4bb7e7c  apply_loops.py
+ea6b1a71e3089f2b  test_arrangement_decisions.py
+e3bdfbe6e76377c6  test_d19_d22_guards.py
+aab35c93ec1cf9e8  burn_list_items_D19_D22.txt
+d061e0d8eb774ebd  SHA.txt
+```
+
+## FOUND UNASKED
+
+- `fills_from_decision` accepts `tail_loop={"source_start_bar":90,"source_end_bar":94,"reps":1,"partial_bars":-8}` on a 110-bar outgoing track. It emits an outgoing tail with `target_marker_bar=106`. The requested extension is negative.
+- The October 5 D22 status is stale against this snapshot. The legacy generator now stages and validates before publishing, and both compressors wrap rename `OSError` as `ValueError`.
+===CODEX-ASK-DONE exit=0 nonce=13f17f4a34ba4901b9d79e740fbdbf22===
+===SEAT-DONE codex codex_d19d22_r1===
