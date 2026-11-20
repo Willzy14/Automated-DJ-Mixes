@@ -46,6 +46,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from stem_section_probe import _separate_envelopes, _load_stats, _seccol
+from section_format import (
+    GROOVE as SECTION_MODE_GROOVE, LEGACY as SECTION_MODE_LEGACY, SECTION_MODES,
+    SectionFormatError, groove_fills, require_section_mode, section_mode_of,
+)
 from _tier_a_features import (
     TIERA_KEYS as _TIERA_KEYS,
     TIERA_BAND_LOW_KEY as _TIERA_BAND_LOW_KEY,
@@ -800,8 +804,6 @@ def _ascii(value) -> str:
 
 
 KICK_ON, KICK_OFF, PROV_ABSENT, PROV_MALFORMED = "kick_on", "kick_off", "absent", "malformed"
-SECTION_MODE_LEGACY, SECTION_MODE_GROOVE = "legacy", "groove"
-SECTION_MODES = (SECTION_MODE_LEGACY, SECTION_MODE_GROOVE)
 _ENERGY_SRC = "stem-energy-threshold"
 _MODEL_SRC = "kick-detector-v3"
 
@@ -842,7 +844,8 @@ def _kick_provenance(res) -> str:
     return PROV_MALFORMED
 
 
-def _check_cached_sections_inner(path: Path, wav_stem: str, allow_unverified: bool):
+def _check_cached_sections_inner(path: Path, wav_stem: str, allow_unverified: bool,
+                                 section_mode: str):
     if not path.exists():
         return None, f"missing {path.name}"
     res = json.loads(path.read_text(encoding="utf-8"))
@@ -857,6 +860,7 @@ def _check_cached_sections_inner(path: Path, wav_stem: str, allow_unverified: bo
     sections = res.get("sections")
     if not isinstance(sections, list) or not sections:
         return None, f"{path.name} has no sections"
+    require_section_mode(res, section_mode, "--write-hints", path.name)
     hints = hints_from_stem_result(res)
     ends = []
     for sec in sections:
@@ -868,16 +872,13 @@ def _check_cached_sections_inner(path: Path, wav_stem: str, allow_unverified: bo
         return None, f"{path.name} has no section with a finite positive end_sec"
     track_end = max(ends)
     for key, val in hints.items():
+        if key == "fallback_hints":
+            continue
         if not (isinstance(val, (int, float)) and math.isfinite(val)
                 and 0 < val <= track_end + 0.01):
             return None, (f"{path.name} gives an invalid hint {key}={val!r} "
                           f"(track ends at {track_end:.2f}s)")
 
-    from section_format import section_detector_of, LEGACY
-    fmt = section_detector_of(res)
-    if fmt != LEGACY:
-        return None, (f"{path.name} was written by section detector {fmt!r}; --write-hints "
-                      f"reads only legacy section files")
     state = _kick_provenance(res)
     if state == KICK_ON:
         return res, None
@@ -891,7 +892,8 @@ def _check_cached_sections_inner(path: Path, wav_stem: str, allow_unverified: bo
     return None, f"{path.name} is not known to come from the kick detector"
 
 
-def _check_cached_sections(path: Path, wav_stem: str, allow_unverified: bool = False):
+def _check_cached_sections(path: Path, wav_stem: str, allow_unverified: bool = False,
+                           section_mode: str = SECTION_MODE_LEGACY):
     """Judge a cached SECTIONS_STEM json for --write-hints.
 
     Returns (result_dict, note). result_dict is None when the file is not
@@ -899,7 +901,7 @@ def _check_cached_sections(path: Path, wav_stem: str, allow_unverified: bool = F
     track only, never a crash that hides the other tracks.
     """
     try:
-        return _check_cached_sections_inner(path, wav_stem, allow_unverified)
+        return _check_cached_sections_inner(path, wav_stem, allow_unverified, section_mode)
     except Exception as exc:  # noqa: BLE001 - one bad track must not stop the report
         return None, f"cannot use {path.name}: {type(exc).__name__}: {exc}"
 
@@ -921,7 +923,8 @@ def _write_hints_atomic(out: Path, hints: dict) -> None:
         raise
 
 
-def _may_overwrite_sections_json(path: Path, kick_model_on: bool) -> bool:
+def _may_overwrite_sections_json(path: Path, kick_model_on: bool,
+                                 section_mode: str = SECTION_MODE_LEGACY) -> bool:
     """Overwrite guard for SECTIONS_STEM_*.json.
 
     A kick-off write must not replace a file whose provenance is KICK_ON,
@@ -938,6 +941,10 @@ def _may_overwrite_sections_json(path: Path, kick_model_on: bool) -> bool:
               f"{type(exc).__name__}: {_ascii(exc)}; overwriting")
         return True
     if state == KICK_ON:
+        if section_mode == SECTION_MODE_GROOVE:
+            raise SectionFormatError(
+                f"{path.name} was written with the kick model. Re-run groove section "
+                "detection with --kick-model to replace it.")
         print(f"  [WARN] {_ascii(path.name)} was written WITH the kick model; this run has it off, "
               f"so the file was NOT overwritten")
         return False
@@ -1420,7 +1427,7 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     if write_json:
         (project / "_Stem Analysis").mkdir(parents=True, exist_ok=True)
         json_path = project / "_Stem Analysis" / f"SECTIONS_STEM_{wav.stem}.json"
-        if _may_overwrite_sections_json(json_path, kick_model_used):
+        if _may_overwrite_sections_json(json_path, kick_model_used, section_mode):
             json_path.write_text(json.dumps(result, indent=1), encoding="utf-8")
 
     if make_viz:
@@ -1590,6 +1597,7 @@ def hints_from_stem_result(res: dict) -> dict:
     non-positive). This is what makes a fully-autonomous mix possible: the cues
     Sam used to hand-author from the waveform now come straight from the stems.
     """
+    mode = section_mode_of(res, "hints_from_stem_result")
     secs = res["sections"]
     sig = res.get("signals", {})
     sec_per_bar = 4 * 60.0 / res["bpm"]
@@ -1609,13 +1617,18 @@ def hints_from_stem_result(res: dict) -> dict:
         after = [b["start_sec"] for b in breaks if first_drop is None or b["start_sec"] > first_drop]
         first_break = after[0] if after else breaks[0]["start_sec"]
 
-    # last_bass_drop = the natural bass swap near the end: the last fill drop-out
-    # before the outro, else the last break before it.
+    # Keep the swap in the existing pre-outro window. Groove swaps at the
+    # last eligible fill end or the outro start. Legacy uses fill/break starts.
     pre = outro_start if outro_start is not None else end_sec
     window_start = pre - 32 * sec_per_bar   # only a swap NEAR the end counts
-    cand = [f[0] for f in sig.get("fills", []) if window_start <= f[0] < pre]
-    cand += [b["start_sec"] for b in breaks if window_start <= b["start_sec"] < pre]
-    last_bass_drop = max(cand) if cand else None
+    if mode == SECTION_MODE_GROOVE:
+        fill_ends = [f.end_sec for f in groove_fills(res, "hints_from_stem_result")
+                     if window_start <= f.end_sec <= pre and f.end_sec < end_sec]
+        last_bass_drop = max(fill_ends, default=outro_start)
+    else:
+        cand = [f[0] for f in sig.get("fills", []) if window_start <= f[0] < pre]
+        cand += [b["start_sec"] for b in breaks if window_start <= b["start_sec"] < pre]
+        last_bass_drop = max(cand) if cand else None
 
     # Fallbacks — guarantee all four present + positive for the hint gate.
     if not first_drop or first_drop <= 0:
@@ -1624,8 +1637,10 @@ def hints_from_stem_result(res: dict) -> dict:
         outro_start = max(first_drop + sec_per_bar, end_sec - 32 * sec_per_bar)
     if not first_break or first_break <= 0:
         first_break = first_drop + 16 * sec_per_bar
-    if not last_bass_drop or last_bass_drop <= 0:
-        last_bass_drop = max(first_drop, outro_start - 16 * sec_per_bar)
+    synthetic_bass_drop = not last_bass_drop or last_bass_drop <= 0
+    if synthetic_bass_drop:
+        last_bass_drop = (outro_start if mode == SECTION_MODE_GROOVE else
+                          max(first_drop, outro_start - 16 * sec_per_bar))
 
     # One final step: no hint may sit past the end of the track. The fallbacks
     # above are bar counts from the start, so a short track would otherwise get
@@ -1636,12 +1651,23 @@ def hints_from_stem_result(res: dict) -> dict:
         outro_start = min(outro_start, end_sec)
         last_bass_drop = min(last_bass_drop, end_sec)
 
-    return {
+    hints = {
         "first_drop_sec": round(first_drop, 2),
         "first_break_sec": round(first_break, 2),
         "outro_start_sec": round(outro_start, 2),
         "last_bass_drop_sec": round(last_bass_drop, 2),
     }
+    if mode == SECTION_MODE_GROOVE and outro is None:
+        fallbacks = {
+            "outro_start_sec": {"fallback": True, "reason": "No outro section was detected."},
+        }
+        if synthetic_bass_drop:
+            fallbacks["last_bass_drop_sec"] = {
+                "fallback": True,
+                "reason": "No eligible fill end or detected outro. Used the fallback outro start.",
+            }
+        hints["fallback_hints"] = fallbacks
+    return hints
 
 
 def main():
@@ -1689,7 +1715,8 @@ def main():
         print(f"Deriving hints from the cached stem analysis for {len(wavs)} track(s):")
         for w in wavs:
             cached = args.project / "_Stem Analysis" / f"SECTIONS_STEM_{w.stem}.json"
-            res, note = _check_cached_sections(cached, w.stem, args.allow_unverified_cache)
+            res, note = _check_cached_sections(
+                cached, w.stem, args.allow_unverified_cache, args.section_mode)
             if res is None:
                 bad.append(f"  [REFUSED] {_ascii(w.stem[:60])}: {_ascii(note)}")
                 continue

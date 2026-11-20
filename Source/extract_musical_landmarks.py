@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from automated_dj_mixes.musical_landmarks import extract_kick_dropout_landmarks
+from section_format import section_mode_of
 
 
 LANDMARK_SCHEMA_VERSION = "kick_dropout_landmarks_v1"
@@ -79,6 +80,7 @@ def refresh_track_landmarks(
         raise FileNotFoundError(f"Track WAV not found: {wav_path}")
 
     result = json.loads(stem_path.read_text(encoding="utf-8"))
+    section_mode_of(result, "refresh_track_landmarks", stem_path.name)
     before = _section_signature(result["sections"])
     bpm = float(result["bpm"])
     seconds_per_bar = 240.0 / bpm

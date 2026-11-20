@@ -7,6 +7,7 @@ import copy
 import gzip
 import html
 import json
+from section_format import require_legacy
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -70,6 +71,7 @@ def materialize_track(
     track_name: str,
     stem_result: dict,
 ) -> tuple[list[dict], list[dict], dict | None]:
+    require_legacy(stem_result, "materialize_section_details", track_name)
     matched = _match_track(track_name, find_track_line_ranges(lines))
     if matched is None:
         raise ValueError(f"Detailed-section track '{track_name}' was not found")

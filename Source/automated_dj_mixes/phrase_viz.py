@@ -11,6 +11,7 @@ layer was removed 2026-08-18 (see Source/Archive/ and git history).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from section_format import section_mode_of
 
 # Ableton Live 12 color palette indices (18=green, 14=red confirmed by Sam in V2)
 COLOR_INTRO = 18   # green - pure intro (kicks-only, no bass)
@@ -65,6 +66,8 @@ def segments_from_stem_sections(
     grid disagree. Without a grid, falls back to bar*4 on the detector clock
     (standalone/legacy use).
     """
+    # Groove fill events are separate cues, so only structural sections cut clips.
+    section_mode_of(stem_result, "segments_from_stem_sections")
     sections = stem_result.get("sections", [])
     segments: list[PhraseSegment] = []
     counters: dict[str, int] = {}

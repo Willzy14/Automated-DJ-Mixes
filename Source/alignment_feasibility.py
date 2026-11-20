@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 from align_engine import _align_pair_landmark_aware, load_track, plan_fill_or_cut
+from section_format import require_uniform_modes
 from automated_dj_mixes.transition_policy import get_policy
 
 
@@ -48,6 +49,7 @@ def load_tracks(project: Path):
     for path in paths:
         track = load_track(path)
         tracks.append((track, _bpm(path)))
+    require_uniform_modes((track.section_mode for track, _ in tracks), "alignment_feasibility")
     return tracks
 
 

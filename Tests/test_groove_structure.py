@@ -85,7 +85,7 @@ def test_unknown_mode_is_refused(monkeypatch, tmp_path):
         run_detect(monkeypatch, tmp_path, [1] * 40, [1] * 40, mode="new")
 
 
-def test_readers_refuse_a_groove_file(tmp_path):
+def test_legacy_readers_and_default_hint_mode_refuse_groove(tmp_path):
     groove_res = {"track": "T", "bpm": 120.0, "n_bars": 8,
                   "sections": [{"start_bar": 0, "end_bar": 8, "start_sec": 0.0, "end_sec": 16.0, "label": "intro"}],
                   "signals": {"kick_presence_source": "kick-detector-v3"},
@@ -96,9 +96,6 @@ def test_readers_refuse_a_groove_file(tmp_path):
     p.write_text(json.dumps(groove_res), encoding="utf-8")
     res, note = sd._check_cached_sections(p, "T")
     assert res is None and "groove-1" in note
-    import align_engine
-    with pytest.raises(section_format.SectionFormatError):
-        align_engine.load_track(p)
     section_format.require_legacy({"analysis": {"kick_model": True}}, "reader")   # legacy passes
 
 

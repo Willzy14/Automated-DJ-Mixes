@@ -22,6 +22,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from section_format import GROOVE, GROOVE_DETECTOR, section_detector_of, section_mode_of
 
 
 def _label(sec: dict) -> str:
@@ -46,7 +47,8 @@ def _find_latest_sections_json(sections_dir: Path) -> tuple[int, Path]:
     return candidates[-1]
 
 
-def _bpm_lookup(project_dir: Path) -> dict[str, float]:
+def _bpm_lookup(project_dir: Path,
+                groove_clocks: dict[str, tuple[float, float]] | None = None) -> dict[str, float]:
     """Prefer the most-recent ARRANGEMENT_REPORT*.json for BPMs (MIK-enriched).
 
     Fallback (2026-06-11): the per-track stem JSONs carry the grid-true BPM
@@ -69,10 +71,19 @@ def _bpm_lookup(project_dir: Path) -> dict[str, float]:
             d = json.loads(j.read_text(encoding="utf-8"))
             stem = j.stem.replace("SECTIONS_STEM_", "")
             if d.get("bpm"):
-                out.setdefault(stem, float(d["bpm"]))
-                out.setdefault(stem + ".wav", float(d["bpm"]))
+                bpm = float(d["bpm"])
+            else:
+                continue
         except Exception:
             continue
+        out.setdefault(stem, bpm)
+        out.setdefault(stem + ".wav", bpm)
+        if (groove_clocks is not None and section_detector_of(d) == GROOVE_DETECTOR
+                and section_mode_of(d, "validate_hints_vs_sections", j.name) == GROOVE):
+            first = d["sections"][0]
+            downbeat = d["analysis"].get(
+                "downbeat_sec", first["start_sec"] - first["start_bar"] * 240.0 / bpm)
+            groove_clocks[stem] = bpm, downbeat
     return out
 
 
@@ -128,7 +139,8 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
 
     hints_data = json.loads(hints_path.read_text(encoding="utf-8"))
     sections_data = json.loads(sections_json_path.read_text(encoding="utf-8"))
-    bpms = _bpm_lookup(project_dir)
+    groove_clocks = {}
+    bpms = _bpm_lookup(project_dir, groove_clocks)
 
     lines = [f"# Hints vs sections — V{version}", ""]
     lines.append("| Track | Hint | Hint value (s) | Hint bar | Section bar | Δ bars | Verdict |")
@@ -137,6 +149,7 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
     has_error = False
     has_warn = False
     rows = 0
+    fallback_warnings = []
     matched_hint_keys: set[str] = set()
     for raw_track_name, secs in sections_data.items():
         if not raw_track_name or not secs:
@@ -155,10 +168,18 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
                 break
         if not hint_entry:
             continue
+        for hint_key, info in hint_entry.get("fallback_hints", {}).items():
+            if info.get("fallback") is True:
+                fallback_warnings.append(f"WARN: {track_name} / {hint_key}: {info['reason']}")
+                has_warn = True
         bpm = bpms.get(track_name)
         if bpm is None:
             # Try the .wav variant
             bpm = bpms.get(track_name + ".wav")
+        groove_clock = groove_clocks.get(track_name.removesuffix(".wav"))
+        downbeat = 0.0
+        if groove_clock is not None:
+            bpm, downbeat = groove_clock
         if bpm is None or bpm <= 0:
             continue
         sec_per_bar = 4 * 60.0 / bpm
@@ -168,7 +189,7 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
             hint_val = hint_entry.get(hint_key)
             if hint_val is None:
                 continue
-            hint_bar = float(hint_val) / sec_per_bar
+            hint_bar = (float(hint_val) - downbeat) / sec_per_bar
             if hint_key == "first_drop_sec":
                 # Nearest drop-section start, not only the first: a hint
                 # deliberately placed on a LATER drop boundary (early
@@ -213,7 +234,7 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
         last_bass = hint_entry.get("last_bass_drop_sec")
         outro = _first_section_of(secs, "outro")
         if last_bass is not None and outro is not None:
-            last_bar = float(last_bass) / sec_per_bar
+            last_bar = (float(last_bass) - downbeat) / sec_per_bar
             outro_start = outro["source_start_beats"] / 4
             outro_end = outro["source_end_beats"] / 4
             window_lo = outro_start - 32
@@ -237,6 +258,8 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
         lines.append(f"| {name[:40]} | (no matching sections track) | - | - | - | - "
                      f"| ✗ error |")
 
+    if fallback_warnings:
+        lines.extend(["", *fallback_warnings])
     summary = (
         f"\n**Total checks:** {rows} | "
         f"errors: {'yes' if has_error else 'none'} | "

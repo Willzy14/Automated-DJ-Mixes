@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from stem_detector import detect as stem_detect
+from section_format import require_legacy
 
 project = Path(sys.argv[1])
 audio = project / "Audio"
@@ -19,6 +20,7 @@ for jp in sorted((project / "_Stem Analysis").glob("SECTIONS_STEM_*.json")):
     if not wav.exists():
         continue
     d = json.loads(jp.read_text(encoding="utf-8"))
+    require_legacy(d, "reverify_fast", jp.name)
     bpm = d["bpm"]
     downbeat = d["sections"][0]["start_sec"]
     res = stem_detect(wav, project, bpm=bpm, downbeat=downbeat, make_viz=True, write_json=True)
