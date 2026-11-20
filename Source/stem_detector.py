@@ -130,8 +130,6 @@ WIDTH_STEP_MIN_RUN_BARS = 4    # a real 4-5 bar ramp produces a run of
                                # are imaging wobble, not a boundary
                                # (corpus: the target runs are 4-9 bars,
                                # the discarded blips 1-2)
-OUTRO_LEAD_FRAC = 0.60    # outro starts where the LEAD (vocals+other) drops below this fraction
-                          # of its body level near the end (kick+bass can keep running)
 MIN_OUTRO_BARS = 8        # don't push the outro start so late it leaves less than this
 MAX_OUTRO_BARS = 48       # a 'last fill' leaving a longer tail than this isn't an outro transition
 OUTRO_CAP_BARS = 32       # Sam's rule (24.06.26): an outro is never more than 32 bars (one phrase) — cap it there
@@ -552,23 +550,6 @@ def _phrase_fills(peaks, ref, bpm, downbeat, n_bars):
     return fills
 
 
-def _find_outro_start(pb, n_bars):
-    """The outro is the DJ wind-down where the LEAD (vocals + 'other'/effects)
-    drops out near the end — even if kick + bass keep running. Returns the start
-    bar of the trailing low-lead run, or None if there isn't a clear one."""
-    lead = pb["vocals"] + pb["other"]
-    lead = lead / (lead.max() + 1e-9)
-    hi = lead[lead > np.median(lead)]
-    body = np.median(hi) if len(hi) else lead.max()
-    thr = OUTRO_LEAD_FRAC * body
-    i = n_bars
-    while i > 0 and lead[i - 1] < thr:
-        i -= 1
-    if i >= n_bars or i <= n_bars * 0.5:    # nothing, or too long to be an outro
-        return None
-    return int(round(i / PHRASE_GRID) * PHRASE_GRID)
-
-
 def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start,
                    soft_intro_outro=False):
     """Label by song position: intro before the first drop; outro from the lead
@@ -819,6 +800,8 @@ def _ascii(value) -> str:
 
 
 KICK_ON, KICK_OFF, PROV_ABSENT, PROV_MALFORMED = "kick_on", "kick_off", "absent", "malformed"
+SECTION_MODE_LEGACY, SECTION_MODE_GROOVE = "legacy", "groove"
+SECTION_MODES = (SECTION_MODE_LEGACY, SECTION_MODE_GROOVE)
 _ENERGY_SRC = "stem-energy-threshold"
 _MODEL_SRC = "kick-detector-v3"
 
@@ -890,6 +873,11 @@ def _check_cached_sections_inner(path: Path, wav_stem: str, allow_unverified: bo
             return None, (f"{path.name} gives an invalid hint {key}={val!r} "
                           f"(track ends at {track_end:.2f}s)")
 
+    from section_format import section_detector_of, LEGACY
+    fmt = section_detector_of(res)
+    if fmt != LEGACY:
+        return None, (f"{path.name} was written by section detector {fmt!r}; --write-hints "
+                      f"reads only legacy section files")
     state = _kick_provenance(res)
     if state == KICK_ON:
         return res, None
@@ -958,7 +946,8 @@ def _may_overwrite_sections_json(path: Path, kick_model_on: bool) -> bool:
 
 def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True,
            kick_model=False, kick_model_path=None, kick_model_device="auto",
-           kick_provider=None, soft_intro_outro=True, tier_a=False, width_cues=True):
+           kick_provider=None, soft_intro_outro=True, tier_a=False, width_cues=True,
+           section_mode=SECTION_MODE_LEGACY):
     """Detect sections + mix signals for one track.
 
     bpm/downbeat may be passed in (pipeline use — they come from Rekordbox/analysis);
@@ -1000,6 +989,8 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     boundary at 152 and the protection at 153 and the cue folded away)
     with "detected_bar" exposing the unsnapped bar for the sweep report.
     """
+    if section_mode not in SECTION_MODES:
+        raise ValueError(f"section_mode must be one of {SECTION_MODES}, not {section_mode!r}")
     if bpm is None or downbeat is None:
         stats = _resolve_bpm_downbeat_stats(project, wav.stem)
         if not stats:
@@ -1069,7 +1060,7 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     kick_on_bar = np.array([kick_on[b * 4:(b + 1) * 4].mean() >= 0.5 for b in range(n_bars)])
     kick_cues = _kick_cues(kick_on, bpm, downbeat)
 
-    # Fills = brief raw-kick dips inside the grooves (1-beat phrase-end fills included —
+    # Fills = brief raw-kick dips inside the grooves (1-beat phrase-end fills included -
     # see _phrase_fills). Sam: kick dropouts mark changes and are good points to mix.
     fills = _phrase_fills(kick_peaks, kick_ref, bpm, downbeat, n_bars)
 
@@ -1137,62 +1128,78 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     # snapped to 152 lands the section boundary and the merge guard at the
     # same bar). Other cue types ("bar"/"beat"/raw int) keep int(round(...))
     # for back-compat - _width_step_cues is the only emitter of a float bar.
-    raw_bounds = [int(round(c["bar"])) for c in kick_cues + energy_cues] + [
-        int(c["bar"]) for c in wcues
-    ]
-    for b in range(1, n_bars):
-        if presence["bass"][b] != presence["bass"][b - 1]:
-            raw_bounds.append(b)
-    bounds = _snap_merge(sorted({b for b in raw_bounds if 0 < b < n_bars}), n_bars)
-    if outro_start is not None and 0 < outro_start < n_bars:
-        # Protected, UNSNAPPED final boundary AT the bass-finish point — Sam wants the
-        # outro exactly where the bass ends, and the file rarely ends on a phrase line,
-        # so don't let _snap_merge round it onto the body or MIN_SECTION_BARS-merge the
-        # (often short) tail away — which then let the hard rule relabel the final DROP
-        # as outro (Delacour/Discosteps).
-        bounds = [b for b in bounds if b < outro_start] + [outro_start, n_bars]
+    groove = None
+    if section_mode == SECTION_MODE_GROOVE:
+        # The groove detector (answer key 2026-11-20) lives in groove_sections.py;
+        # the legacy mode below never imports it.
+        from groove_sections import groove_detect
+        groove = groove_detect(
+            wav=wav, project=project, envs=envs, hop_t=hop_t, bpm=bpm, downbeat=downbeat,
+            sec_per_bar=sec_per_bar, n_bars=n_bars, pb=pb, presence=presence, mix_norm=mix_norm,
+            kick_on=kick_on, kick_peaks=kick_peaks, kick_ref=kick_ref, energy_cues=energy_cues,
+            wcues=wcues, width_cues=width_cues, tier_a=tier_a,
+            soft_intro_outro=soft_intro_outro, legacy_outro_start=outro_start)
+        sections, fills, outro_start = groove["sections"], groove["fills"], groove["outro_start"]
+        bass_pres = groove["bass_state"]
+    else:
+        raw_bounds = [int(round(c["bar"])) for c in kick_cues + energy_cues] + [
+            int(c["bar"]) for c in wcues
+        ]
+        for b in range(1, n_bars):
+            if presence["bass"][b] != presence["bass"][b - 1]:
+                raw_bounds.append(b)
+        bounds = _snap_merge(sorted({b for b in raw_bounds if 0 < b < n_bars}), n_bars)
+        if outro_start is not None and 0 < outro_start < n_bars:
+            # Protected, UNSNAPPED final boundary AT the bass-finish point - Sam wants the
+            # outro exactly where the bass ends, and the file rarely ends on a phrase line,
+            # so don't let _snap_merge round it onto the body or MIN_SECTION_BARS-merge the
+            # (often short) tail away - which then let the hard rule relabel the final DROP
+            # as outro (Delacour/Discosteps).
+            bounds = [b for b in bounds if b < outro_start] + [outro_start, n_bars]
 
-    sections = []
-    for i in range(len(bounds) - 1):
-        s0, s1 = bounds[i], bounds[i + 1]
-        sections.append({
-            "start_bar": s0, "end_bar": s1,
-            "start_sec": round(downbeat + s0 * sec_per_bar, 2),
-            "end_sec": round(downbeat + s1 * sec_per_bar, 2),
-            "stems_on": [s for s in STEMS if presence[s][s0:s1].mean() > 0.5],
-        })
-    _assign_labels(sections, kick_on_bar, presence["bass"], mix_norm, outro_start,
-                   soft_intro_outro=soft_intro_outro)
-    # Strip internal R2/R4 marker before downstream sees the section dicts.
-    for s in sections:
-        s.pop("_r2_r4_touched", None)
-    # Protected boundaries: the grid-snapped width-cue bars (the helper emits
-    # "bar" as the SNAPPED bar, so int(c["bar"]) lines up with the bar
-    # _snap_merge wrote into bounds - the section boundary and the merge
-    # guard land at the same bar). Flag OFF -> empty set, default branch ->
-    # byte-identical merge behaviour. Flag ON -> a width cut inside an
-    # otherwise-mergeable same-label run survives (Revoloution bars 128-164:
-    # drop on both sides of bar ~148, would otherwise fold into one drop and
-    # erase the cue inside).
-    width_protected = frozenset(
-        int(c["bar"]) for c in wcues
-    ) if width_cues else frozenset()
-    sections = _merge_same_label(sections, protected_bars=width_protected)
-
-    # A tiny drop fragment (<= one phrase) right before the outro is the last
-    # fill's block, not a real drop — fold it into the preceding drop so it reads
-    # drop -> outro (the fill stays at the drop's tail).
-    if (len(sections) >= 3 and sections[-1]["label"] == "outro"
-            and sections[-2]["label"] == "drop" and sections[-3]["label"] == "drop"
-            and sections[-2]["end_bar"] - sections[-2]["start_bar"] <= PHRASE_GRID):
-        sections[-3]["end_bar"] = sections[-2]["end_bar"]
-        sections[-3]["end_sec"] = sections[-2]["end_sec"]
-        sections[-3]["stems_on"] = sorted(set(sections[-3]["stems_on"]) | set(sections[-2]["stems_on"]))
-        del sections[-2]
-        counts = {}
+        sections = []
+        for i in range(len(bounds) - 1):
+            s0, s1 = bounds[i], bounds[i + 1]
+            sections.append({
+                "start_bar": s0, "end_bar": s1,
+                "start_sec": round(downbeat + s0 * sec_per_bar, 2),
+                "end_sec": round(downbeat + s1 * sec_per_bar, 2),
+                "stems_on": [s for s in STEMS if presence[s][s0:s1].mean() > 0.5],
+            })
+        _assign_labels(sections, kick_on_bar, presence["bass"], mix_norm, outro_start,
+                       soft_intro_outro=soft_intro_outro)
+        # Strip internal R2/R4 marker before downstream sees the section dicts.
         for s in sections:
-            counts[s["label"]] = counts.get(s["label"], 0) + 1
-            s["name"] = f"{s['label']}_{counts[s['label']]}"
+            s.pop("_r2_r4_touched", None)
+        # Protected boundaries: the grid-snapped width-cue bars (the helper emits
+        # "bar" as the SNAPPED bar, so int(c["bar"]) lines up with the bar
+        # _snap_merge wrote into bounds - the section boundary and the merge
+        # guard land at the same bar). Flag OFF -> empty set, default branch ->
+        # byte-identical merge behaviour. Flag ON -> a width cut inside an
+        # otherwise-mergeable same-label run survives (Revoloution bars 128-164:
+        # drop on both sides of bar ~148, would otherwise fold into one drop and
+        # erase the cue inside).
+        width_protected = frozenset(
+            int(c["bar"]) for c in wcues
+        ) if width_cues else frozenset()
+        sections = _merge_same_label(sections, protected_bars=width_protected)
+
+        # A tiny drop fragment (<= one phrase) right before the outro is the last
+        # fill's block, not a real drop - fold it into the preceding drop so it reads
+        # drop -> outro (the fill stays at the drop's tail).
+        if (len(sections) >= 3 and sections[-1]["label"] == "outro"
+                and sections[-2]["label"] == "drop" and sections[-3]["label"] == "drop"
+                and sections[-2]["end_bar"] - sections[-2]["start_bar"] <= PHRASE_GRID):
+            sections[-3]["end_bar"] = sections[-2]["end_bar"]
+            sections[-3]["end_sec"] = sections[-2]["end_sec"]
+            sections[-3]["stems_on"] = sorted(set(sections[-3]["stems_on"]) | set(sections[-2]["stems_on"]))
+            del sections[-2]
+            counts = {}
+            for s in sections:
+                counts[s["label"]] = counts.get(s["label"], 0) + 1
+                s["name"] = f"{s['label']}_{counts[s['label']]}"
+
+        bass_pres = presence["bass"]
 
     def to_sec(regs):
         return [[round(downbeat + a * sec_per_bar, 2), round(downbeat + b * sec_per_bar, 2), a, b]
@@ -1214,7 +1221,7 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     # bass-to-bass is the best mix point, and bass entry/exit do NOT track the
     # drop/outro (bass can enter mid-intro, leave mid-outro / on a fill). Read
     # straight from the bass envelope: first bass-on bar, end of last bass-on bar.
-    bass_on = np.where(presence["bass"])[0]
+    bass_on = np.where(bass_pres)[0]
     bass_in_sec = round(downbeat + int(bass_on[0]) * sec_per_bar, 2) if len(bass_on) else None
     bass_out_sec = round(downbeat + (int(bass_on[-1]) + 1) * sec_per_bar, 2) if len(bass_on) else None
 
@@ -1338,8 +1345,8 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     signals = {
         "bass_in": bass_in_sec,
         "bass_out": bass_out_sec,
-        "bass_regions": to_sec(_regions(presence["bass"], 1)),
-        "loop_windows": to_sec(_regions(presence["drums"] & ~presence["bass"], MIN_LOOP_BARS)),
+        "bass_regions": to_sec(_regions(bass_pres, 1)),
+        "loop_windows": to_sec(_regions(presence["drums"] & ~bass_pres, MIN_LOOP_BARS)),
         "vocal_regions": to_sec(_regions(presence["vocals"], MIN_VOCAL_BARS)),
         "kick_cues": kick_cues,
         "kick_presence_source": kick_source,
@@ -1396,6 +1403,20 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     result = {"track": wav.stem, "bpm": round(bpm, 2), "n_bars": n_bars,
               "sections": sections, "signals": signals,
               "analysis": {"kick_model": kick_model_used}}
+    if groove is not None:
+        # New-format file: readers that only understand legacy sections must
+        # refuse it (section_format.require_legacy), never mix the two.
+        from groove_sections import SECTION_DETECTOR, SECTIONS_SCHEMA
+        signals["fill_sections"] = groove["fill_sections"]
+        signals["bass_state_source"] = groove["bass_source"]
+        signals["bass_state_bar"] = [int(v) for v in groove["bass_state"]]
+        result["analysis"].update({
+            "section_detector": SECTION_DETECTOR,
+            "sections_schema": SECTIONS_SCHEMA,
+            "downbeat_sec": round(float(downbeat), 4),
+            "duration_sec": round(float(dur_real), 2),
+            "bar_one_suspect": groove["bar_one"],
+        })
     if write_json:
         (project / "_Stem Analysis").mkdir(parents=True, exist_ok=True)
         json_path = project / "_Stem Analysis" / f"SECTIONS_STEM_{wav.stem}.json"
@@ -1635,6 +1656,8 @@ def main():
                     help="With --write-hints: also accept a cached SECTIONS_STEM json that is "
                          "otherwise valid but not known to come from the kick detector (WARN per "
                          "track). Never accepts a missing, wrong-track, empty or bpm<=0 file.")
+    ap.add_argument("--section-mode", choices=SECTION_MODES, default=SECTION_MODE_LEGACY,
+                    help="legacy (default) or groove (the answer-key detector, groove_sections.py)")
     ap.add_argument("--kick-model", action="store_true",
                     help="Use Kick Detector V3 for kick IN/OUT presence. Default is off. "
                          "Does NOT affect --write-hints (which only reads the cached analysis).")
@@ -1700,6 +1723,7 @@ def main():
             kick_model=args.kick_model,
             kick_model_path=args.kick_model_path,
             kick_model_device=args.kick_model_device,
+            section_mode=args.section_mode,
         )
 
 

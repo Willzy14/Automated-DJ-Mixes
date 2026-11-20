@@ -1,0 +1,44 @@
+VERDICT: CORRECTION
+
+The default detector matches main. The flag-off difference is in the existing two-track picture command. It changes its PNG output without opting into groove mode. Gate those picture changes to `--track` or land them separately. `change_vs_main.diff:1986-2025,2063-2077`
+
+**Legacy detector.** I reconstructed main's `stem_detector.py` from the diff and verified its Git blob hash. With the legacy branch selected and `bass_pres` resolved to `presence["bass"]`, the executable `detect()` body matches main. All existing argument defaults, imports, and live constants are preserved. The same code computes fills, bass presence, labels, the outro, loop windows, and hints. The removed lead-outro helper and constant had no call in main's detector. Groove imports and JSON fields are conditional. `stem_detector.py:947-950,1016-1135,1144-1202,1224-1226,1345-1359,1403-1428`
+
+I compared both versions in memory with stubbed dependencies. JSON and diagnostics matched with no kick model, an empty model readout, a simulated Tier A cache miss, width cues off, no bass, and a track shorter than one bar. The supplied reports record 31 matching cached tracks, all with width cues on. I could verify that the five pins were restored from the diffs. The pack contains no Git checkout or raw replay results, so I could not independently verify the commit, full-suite result, or corpus scores. `legacy_identity_dftd.txt:1-12`, `legacy_identity_1408.txt:1-21`, `since_r1.diff:1928-1944,2120-2280`
+
+**Flag.** The API and both CLIs default to `legacy`. The detector CLI and replay tool forward the selected value, and tests explicitly pass `groove`. There is no environment selector or orchestrator change in the supplied diff. Groove requires an explicit value on the reviewed paths. `--bar-one-adjust` alone leaves replay in legacy. `stem_detector.py:947-950,992-993,1659-1660,1720-1727`, `change_vs_main.diff:2203-2204,2227-2237,2252-2257`
+
+**Format guards.** `align_engine.load_track` raises a clear `SectionFormatError` before reading section fields. That gives a nonzero process exit if uncaught. The enclosing CLI and its exception handling are outside the pack. I exercised `--write-hints` in memory and confirmed exit 2 with no write for marked groove, including with `--allow-unverified-cache`. Its format check runs after hint derivation, so malformed groove content can produce a generic error first. Tagged legacy and old files without a format marker pass the format check. Hints still apply the existing kick-provenance rules. The remaining readers can wait for activation if experimental files stay outside live cache folders. `change_vs_main.diff:7-13`, `section_format.py:17-32`, `stem_detector.py:845-904,1686-1715`
+
+**Bar one.** The detector computes and serializes a suspicion report using the supplied downbeat. The scorer reports the offset and the picture annotates it. The sole use that changes the grid is replay's explicit second call to `detect()` with an adjusted downbeat. `groove_sections.py:461-501,579-586`, `stem_detector.py:1406-1419`, `score_sections.py:169-187`, `change_vs_main.diff:1953-1956,2233-2238`
+
+**Round 1 follow-up**
+
+- Fixed: detector-side bar-one movement is gone. Upstream grid correction remains an activation item.
+- Partly fixed: format markers and two guards are in place. Cache isolation and the remaining readers are open.
+- Fixed: all five legacy test pins are restored, and the four retained legacy helpers have live calls.
+- Partly fixed: tests now cover cue gating, close lines, one-beat fills, bass relocation, and outro wiring. The fitted rules and owner validation remain open.
+- Partly fixed: groove bass state drives bass markers, regions, and loops. Section `stems_on` and soft-rule diagnostics still use legacy bass presence. `groove_sections.py:545-552`, `stem_detector.py:1285-1293`
+- Partly fixed: replay memo keys now include source and model metadata, and width reads are gated. Replay still allows `--out` to point at the live cache. `change_vs_main.diff:2165-2170,2198-2207,2227-2238`
+- Partly fixed: groove pictures have a duration field for the track end. The existing pair output also changed with groove off.
+- Open: downstream build and the skipped real-audio cases remain activation checks.
+
+**Scorer.** Fill hits now come from emitted intervals with one-to-one pairing, and kick gaps are diagnostic only. Any positive overlap still earns a hit, and duplicate intervals can escape the extras count because unmatched fills are checked by value. I reproduced both. A line 0.9 bars off also earns headline credit, and track end is outside the score. Filename matching is stricter, but `MASTER.*` accepts a name like `A - B 24 Bit MASTER (X Remix)` for `A - B`, and the JSON's internal track name is unchecked. Read `fills_exact` alongside the fill headline. `score_sections.py:47-50,95-110,139-187,203-230`
+
+SHA-256 prefixes verified from `SHA.txt`: `stem_detector.py` `174cc1cb781bb3f7`, `groove_sections.py` `a029dd5fe01f7334`, `section_format.py` `081cffb367b7dc38`, `score_sections.py` `f4be8593dbaef5fd`, `change_vs_main.diff` `1b021045139fcca8`, `since_r1.diff` `d4f78052e8038526`.
+
+**BLOCKS THE FLAG-OFF MERGE**
+
+- Preserve the existing pair-picture output. The shared renderer changes fill labels, end timestamps, and the legend in the old invocation.
+
+**BLOCKS TURNING THE FLAG ON**
+
+- Isolate groove caches and guard or migrate the remaining readers. Verify hints, alignment, planning, warp export, and render end to end.
+- Complete the owner picture checks, upstream grid correction, and validation of the fitted rules.
+
+**FOUND UNASKED**
+
+- The default-mode test explicitly passes `legacy`, and its import assertion ends in `or True`. It would miss a default flip or an eager groove import. `change_vs_main.diff:958-981`
+- A legacy rerun with the kick model off can leave a kick-model-backed groove cache on disk. The overwrite guard checks kick provenance only, so the reader's advice to rerun in legacy needs the kick-model setting too. `section_format.py:25-32`, `stem_detector.py:924-944,1420-1424`
+===CODEX-ASK-DONE exit=0 nonce=47accea2c8a34706a088cbb36de1f527===
+===SEAT-DONE codex sections_r2===

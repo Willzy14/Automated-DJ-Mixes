@@ -1,0 +1,63 @@
+﻿• VERDICT: SOUND
+
+  Files read, with SHA.txt prefixes: change_vs_main.diff (6ac401693769db8b), section_format.py (081cffb367b7dc38). Also read: brief_sections_r2k.txt (d48ab96433e32938), PRIOR_kimi_r1.txt (4bc17f5162c043d4), BUILDER_REPORT.txt (824976c1531a8da8), SHA.txt. SHAs match. Note: legacy_identity_dftd.txt / legacy_identity_1408.txt, cited by the builder as the byte-identity evidence, are NOT in this pack; that evidence is unverifiable here and I treat it as a claim.
+
+  1. LEGACY PATH IDENTITY
+
+  Every change in the stem_detector.py diff, checked for legacy-mode execution:
+
+  - Deleted OUTRO_LEAD_FRAC (diff lines 60-61) and _find_outro_start (lines 65-83). The diff shows NO call-site removal anywhere, so on main these were dead: the legacy block still uses outro_start but its computation is in unchanged diff context, and a live caller of the deleted function would have produced a NameError on every one of the builder's 31 identity tracks. Consistent with the builder's "no callers on main either" and with round 1's own finding of zero production callers for these helpers. Residual: an importer outside this pack (Tools/, Tests/) referencing the deleted names would break; see the first list below.
+  - detect() signature gains section_mode=SECTION_MODE_LEGACY (lines 112-116) and a ValueError validation (lines 124-125). Default is legacy; the validation only fires on a programmatically passed invalid value and cannot alter legacy output.
+  - The legacy section block (lines 195-266) is the main code moved under else, textually identical: raw_bounds, the protected unsnapped outro boundary, section dict construction, _assign_labels, the _r2_r4_touched strip, width_protected, _merge_same_label, and the drop-fragment fold are all unchanged. Only a comment's em dash became a hyphen (line 133-134).
+  - bass_pres is introduced as an alias: bass_pres = presence["bass"] in the legacy branch (line 268), then bass_on = np.where(bass_pres)[0] (line 277), bass_regions (line 287) and loop_windows (line 288) use it. In legacy mode this is the identical numpy array; no behavioural difference.
+  - The JSON result dict is unchanged for legacy (lines 292-295); analysis gains section_detector / sections_schema / downbeat_sec / duration_sec / bar_one_suspect only inside if groove is not None (lines 296-309). No new always-written key. This fixes round 1's unconditional-analysis-keys complaint.
+  - _check_cached_sections_inner gains a format check (lines 102-106) that runs on every cache read, but section_detector_of returns LEGACY for any file without the field (section_format.py:17-22), so for legacy and old files it is a strict no-op.
+  - New imports are function-local and pure: section_format.py has no import-time side effects; groove_sections is imported only inside the if section_mode == SECTION_MODE_GROOVE branch (lines 196-199), never on the legacy path.
+
+  Input classes the 31-track JSON comparison does not reach: no-kick-model runs, width_cues off, no-tier-A tracks, very short tracks. Since the legacy branch text is unchanged, the only differential risk left is the deleted symbols being imported from code outside this pack; every other named class runs byte-identical code.
+
+  2. THE FLAG
+
+  Set in exactly two places: the detect() keyword default SECTION_MODE_LEGACY (diff line 116) and the CLI --section-mode with argparse choices=SECTION_MODES, default legacy (lines 317-318), passed straight through to detect() (line 326). No environment variable. No caller in this pack passes it. argparse choices make an invalid CLI value impossible; a programmatic invalid value raises ValueError before any analysis (lines 124-126). The flag cannot come on by accident: it requires an explicit --section-mode groove or section_mode="groove" argument, and nothing in the repo supplies one.
+
+  3. FORMAT GUARD
+
+  - align_engine.load_track calls require_legacy immediately after parsing (diff lines 9-10). A groove file raises SectionFormatError with a clear message naming the reader, the file, the detector value and the schema (section_format.py:25-32); uncaught, that exits non-zero.
+  - The --write-hints reader refuses a groove cache before the provenance check, with a clear per-track message (diff lines 102-106). Precisely: it refuses via the existing (None, message) error-tuple mechanism, same handling as the other invalid-cache cases in that function; the diff does not show main()'s handling of those tuples, so "refuses with a clear message" is verified, a process-level non-zero exit for --write-hints is not shown in this pack.
+  - Old files with no field are accepted everywhere (LEGACY fallback, section_format.py:17-22).
+  - Unguarded readers (alignment_feasibility, extract_musical_landmarks, materialize_section_details, reverify_*, section_placement_viz, the propose_arrangement bpm reader): with the flag off, no file carrying the groove marker can exist, since only the groove branch writes it (diff lines 296-309). Acceptable for this merge. Before the flag is ever turned on: every reader of SECTIONS_STEM JSONs needs require_legacy or groove support (including any reader beyond the builder's named list, e.g. phrase_viz, hints tooling, Tools/*), and _may_overwrite_sections_json (unchanged at diff line 110) must refuse a cross-format overwrite so a legacy re-run cannot silently clobber a groove cache or vice versa.
+
+  4. BAR_ONE_SUSPECT
+
+  The only use of the measured offset in this pack is the report field analysis.bar_one_suspect, written inside the groove-only block (diff line 308). No legacy code reads or applies it; nothing in this diff shifts any grid, and main never had the shift (it was introduced and removed within this branch's history). The groove detector's internal behaviour is in groove_sections.py, not in this pack, but groove files are refused by the guarded readers regardless. The replay tool's --bar-one-adjust is likewise not in this pack; its confinement to the replay tool is the builder's claim and is consistent with this diff containing no shifting code.
+
+  5. ROUND 1 POINTS, ONE LINE EACH
+
+  - Bar-one silent corruption (stop-rule failure ii): fixed for this merge - the detector never shifts, bar_one_suspect is report-only and only exists on groove files; the underlying upstream grid fix stays a flag-on condition.
+  - Cache mixing across schemas (stop-rule failure iii): fixed for the two named readers; partly for the system - the remaining readers and the format-blind overwrite gate are recorded flag-on conditions, acceptable while no groove file can exist.
+  - Five changed pinned tests: builder claims restored to main's versions and passing; tests are not in this pack, unverifiable here.
+  - Dead old detector code: mostly fixed - _find_outro_start deleted, the remaining helpers are now genuinely called by the legacy path; the R2 dead-branch point lives in groove_sections.py, out of pack, flag-on scope.
+  - Replay memoisation without grid identity (kick activation .npy): not touched in this diff, open, flag-on condition.
+  - Test gaps (cue gating, 2-bar dedup, fill_sections-is-what-is-written): not verifiable in this pack, open, flag-on scope.
+  - Scorer generosity: scorer not in this pack; the headline-score question is explicitly out of scope here.
+
+  Stop-rule check: with the flag off, no diff hunk executes that main did not execute (deleted code was dead; all other changes are no-ops for legacy input); the flag cannot come on by accident; and both guarded readers refuse a groove file with a clear message. The two round-1 stop-rule failures are both resolved for the flag-off state. SOUND.
+
+  BLOCKS THE FLAG-OFF MERGE
+
+  - Nothing found in this pack. One offline grep to run before merging, because the slim pack cannot prove a negative: repo-wide search for OUTRO_LEAD_FRAC and _find_outro_start outside stem_detector.py. Round 1 found zero production callers and the name is private, so this is a confirmation, not an expected finding. Also confirm the two legacy_identity_*.txt evidence files exist on the branch.
+
+  BLOCKS TURNING THE FLAG ON
+
+  - require_legacy (or groove support) on every remaining SECTIONS_STEM reader, including any beyond the builder's named six.
+  - Format awareness in _may_overwrite_sections_json so re-detection cannot silently overwrite a cache of the other format.
+  - Downstream runs on groove output (align_engine builds, planner, phrase_viz, warp export, render) and a one-time cache invalidation or migration story per project folder.
+  - Owner check of the round-2 pictures; the upstream bar-one fix in the grid; the single-track rules (6-bar bass-holds fill exception, full-stop rule, low-band fallback) proven beyond their fitted tracks; the replay-tool kick-activation memo checked for grid dependence.
+
+  FOUND UNASKED
+
+  - The marker test is truthiness-based (section_format.py:20): a file with analysis.section_detector set to "" or null is read as legacy. Harmless today, but any future writer that writes an empty marker silently downgrades the guard.
+  - With the flag on, --write-hints refuses every groove cache even though the bpm in it is format-independent; a future hints reader that wants groove bpm must be taught the format rather than peeking past the guard.
+  - require_legacy's advice says "Re-run detection with section_mode='legacy' for this project" - correct for the CLI, but for a project that deliberately adopted groove it points the user at destroying the very file they wanted; a migrate-or-accept message would age better. Cosmetic, not blocking.
+
+===SEAT-DONE kimi sections_r2===
