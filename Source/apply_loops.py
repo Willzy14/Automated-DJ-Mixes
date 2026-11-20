@@ -105,8 +105,8 @@ def staged_als(lines: list[str], output_path: Path):
     `output_path`, validate THAT file, yield its path (not published), and
     remove it however the block ends. A rejected build raises ValueError and
     never touches `output_path`. The gzip header carries the FINAL basename
-    and the usual mtime, so a valid build is byte-identical to the original
-    direct write whatever the staging name was."""
+    and the usual mtime, so a valid build matches the original direct
+    write at a fixed mtime, whatever the staging name was."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     content = "".join(lines)

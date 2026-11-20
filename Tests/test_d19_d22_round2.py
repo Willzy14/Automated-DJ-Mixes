@@ -520,7 +520,7 @@ def test_a_pass_publishes_the_als_then_the_report(tmp_path, monkeypatch):
     assert _strays(tmp_path) == []
 
 
-def test_a_failure_between_the_two_publishes_leaves_new_als_and_old_report(
+def test_a_failed_report_publish_after_the_als_publish_is_loud_and_names_both_files(
         tmp_path, monkeypatch):
     report, out = _setup(tmp_path, monkeypatch)
     _patch_reconcile_recording(monkeypatch, report, out, "pass")
@@ -533,10 +533,79 @@ def test_a_failure_between_the_two_publishes_leaves_new_als_and_old_report(
         return real_replace(src, dst)
 
     monkeypatch.setattr(apply_automation.os, "replace", replace)
-    with pytest.raises(OSError, match="disk full"):
+    with pytest.raises(ValueError) as info:
         apply_automation.main()
+    msg = str(info.value)
+    assert str(out) in msg and str(report) in msg
+    assert "stale" in msg and "re-running Phase 3" in msg
     assert out.is_file() and _sha(report) == before
     assert _strays(tmp_path) == []
+
+
+def test_an_unchanged_report_is_not_replaced(tmp_path, monkeypatch):
+    report, out = _setup(tmp_path, monkeypatch)
+    # the swap is already at the beat automation will use (792), so the
+    # write-back changes nothing
+    data = json.loads(report.read_text(encoding="utf-8"))
+    data["transitions"][0]["swap_beats"] = 792.0
+    report.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _patch_reconcile_recording(monkeypatch, report, out, "pass")
+    before, mtime = _sha(report), report.stat().st_mtime_ns
+    real_replace = apply_automation.os.replace
+    targets = []
+
+    def spy(src, dst):
+        targets.append(Path(dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(apply_automation.os, "replace", spy)
+    apply_automation.main()
+    assert out.is_file()
+    assert report not in targets
+    assert _sha(report) == before and report.stat().st_mtime_ns == mtime
+    assert _strays(tmp_path) == []
+
+
+def test_an_explicit_report_that_is_missing_raises_and_publishes_nothing(
+        tmp_path, monkeypatch):
+    report, out = _setup(tmp_path, monkeypatch)
+    sibling = tmp_path / "sibling_ARRANGEMENT_REPORT.json"
+    sibling.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+    report.unlink()
+    _patch_reconcile_recording(monkeypatch, report, out, "pass")
+    with pytest.raises(ValueError, match="arrangement report"):
+        apply_automation.main()
+    assert not out.exists() and _strays(tmp_path) == []
+
+
+def test_a_passing_sibling_report_does_not_rescue_a_failing_staged_report(
+        tmp_path, monkeypatch):
+    report, out = _setup(tmp_path, monkeypatch)
+    sibling = tmp_path / "zz_ARRANGEMENT_REPORT.json"
+    sibling.write_text("{}", encoding="utf-8")
+    import validate_mix_plan_als
+    gated = []
+
+    def fake(plan_path, report_path, als_path):
+        gated.append(Path(report_path))
+        if Path(report_path) == sibling:
+            return {"status": "PASS"}
+        raise ValueError("staged report fails the gate")
+
+    monkeypatch.setattr(validate_mix_plan_als, "reconcile", fake)
+    # the explicit report vanishes AFTER its copy is staged: a re-resolving
+    # gate would fall back to the newest sibling and pass it
+    real_write = apply_automation.write_final_swaps_to_report
+
+    def vanish(path, plans):
+        report.unlink()
+        return real_write(path, plans)
+
+    monkeypatch.setattr(apply_automation, "write_final_swaps_to_report", vanish)
+    with pytest.raises(ValueError, match="staged report fails"):
+        apply_automation.main()
+    assert gated and sibling not in gated
+    assert not out.exists() and not report.exists() and _strays(tmp_path) == []
 
 
 # --- E: tail_loop limits --------------------------------------------------- #
@@ -554,10 +623,19 @@ def test_tail_loop_reps_above_the_repeat_limit_are_refused():
         ae.fills_from_decision(o, i, _tail(reps=ae.MAX_LOOP_REPEATS + 1))
 
 
-def test_tail_loop_partial_must_be_less_than_the_loop():
+def test_tail_loop_partial_equal_to_the_loop_is_accepted_with_the_pre_round_3_geometry():
+    # validate_loop_spec permits partial == loop length; main's fills_from_decision
+    # gave target_marker = n_bars + reps * loop + partial = 110 + 4 + 4.
     o, i = _track("out", 110), _track("in", 80)
-    with pytest.raises(ValueError, match="less than the 4-bar loop"):
-        ae.fills_from_decision(o, i, _tail(partial_bars=4))
+    (spec,) = ae.fills_from_decision(o, i, _tail(partial_bars=4))
+    assert (spec.reps, spec.partial_bars, spec.source_start_bar, spec.source_end_bar,
+            spec.target_marker_bar) == (1, 4.0, 90.0, 94.0, 118.0)
+
+
+def test_tail_loop_partial_above_the_loop_is_refused():
+    o, i = _track("out", 110), _track("in", 80)
+    with pytest.raises(ValueError, match="must not exceed the 4-bar loop"):
+        ae.fills_from_decision(o, i, _tail(partial_bars=5))
 
 
 def test_tail_loop_total_extension_above_the_limit_is_refused_and_the_limit_is_allowed():

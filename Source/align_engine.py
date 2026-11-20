@@ -2873,10 +2873,10 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
             raise ValueError(
                 f"decision for pair {pair}: tail_loop partial_bars {partial:g} "
                 "must not be negative")
-        if partial >= s1 - s0:
+        if partial > s1 - s0:
             raise ValueError(
                 f"decision for pair {pair}: tail_loop partial_bars {partial:g} "
-                f"must be less than the {s1 - s0:g}-bar loop")
+                f"must not exceed the {s1 - s0:g}-bar loop")
         if reps > MAX_LOOP_REPEATS:
             raise ValueError(
                 f"decision for pair {pair}: tail_loop reps {reps} exceeds the "

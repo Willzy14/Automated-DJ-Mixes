@@ -1448,58 +1448,81 @@ def _publish_with_reconcile(lines: list[str], output_path: Path,
     removes both staged files and leaves the real output and the real report
     untouched.
 
+    The report is resolved exactly ONCE, before anything is staged: the
+    explicit path when one was given (it must exist and be readable, else
+    ValueError; a sibling json is never substituted), otherwise the report
+    this run read (`report_path`), otherwise `<output stem>_ARRANGEMENT_REPORT
+    .json` or the newest `*ARRANGEMENT_REPORT.json` beside the output. The
+    gate and the publish both use that one staged copy.
+
     Why ALS first: the report must never describe an attempt that did not
-    ship. If the process dies between the two renames, the state is the new
-    ALS beside the OLD report. reconcile on that pair fails whenever a swap
-    beat moved (the automation implements the new beat, the old report names
-    the old one), so the next reconcile detects it; a resumed run re-reads the
-    old report as its input and rebuilds. The opposite order would leave a
-    report claiming swaps that never shipped, which nothing detects. When the
-    write-back changed nothing, no report is published at all."""
+    ship. The two renames are NOT atomic. If the report publish fails after
+    the ALS publish, the ALS on disk is valid and gated, but the report on
+    disk still holds the pre-automation swap beats, and a later reconcile may
+    not notice (a clamped swap whose old beat still carries envelope events
+    passes against either report). That failure is raised loudly as a
+    ValueError naming both files. When the write-back changed nothing, no
+    report is published at all."""
     from apply_loops import publish_staged, staged_als, staged_file
     from validate_mix_plan_als import reconcile
 
+    real_report = _resolve_gate_report(output_path, report_path,
+                                       arrangement_report_path)
+    try:
+        report_bytes = real_report.read_bytes()
+    except OSError as exc:
+        raise ValueError(
+            f"Arrangement report {real_report} cannot be read: {exc}") from exc
+
     with ExitStack() as stack:
         staged_als_path = stack.enter_context(staged_als(lines, output_path))
-        real_report = Path(report_path) if report_path is not None else None
-        staged_report = None
-        if real_report is not None and real_report.is_file():
-            staged_report = stack.enter_context(
-                staged_file(real_report, real_report.read_bytes()))
-            # write_final_swaps_to_report goes through `<name>.tmp`; that
-            # name belongs to the staged copy, so clean it up with it.
-            stack.callback(_unlink_quiet, Path(str(staged_report) + ".tmp"))
-        changed = (write_final_swaps_to_report(staged_report, plans)
-                   if staged_report is not None else 0)
+        staged_report = stack.enter_context(staged_file(real_report, report_bytes))
+        # write_final_swaps_to_report goes through `<name>.tmp`; that name
+        # belongs to the staged copy, so clean it up with it.
+        stack.callback(_unlink_quiet, Path(str(staged_report) + ".tmp"))
+        changed = write_final_swaps_to_report(staged_report, plans)
 
-        report_for_reconcile = arrangement_report_path or (
-            output_path.parent / (output_path.stem + "_ARRANGEMENT_REPORT.json")
-        )
-        if not report_for_reconcile.is_file():
-            # Try the newest ARRANGEMENT_REPORT.json beside the output ALS
-            reps = sorted(
-                output_path.parent.glob("*ARRANGEMENT_REPORT.json"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            report_for_reconcile = reps[0] if reps else report_for_reconcile
-        # The gate reads the staged copy when it is the same report this run
-        # updates (the normal case); otherwise the report it always read.
-        gate_report = (staged_report
-                       if staged_report is not None
-                       and _same_file(report_for_reconcile, real_report)
-                       else report_for_reconcile)
         print(f"\nReconciling MixPlan against {output_path.name} "
-              f"(plan={mix_plan_path.name}, "
-              f"report={report_for_reconcile.name}) ...")
-        reconcile(mix_plan_path, gate_report, staged_als_path)
+              f"(plan={mix_plan_path.name}, report={real_report.name}) ...")
+        reconcile(mix_plan_path, staged_report, staged_als_path)
         print(f"  [OK] MixPlan-to-ALS reconciliation passed")
 
         publish_staged(staged_als_path, output_path)
         print(f"Done -> {output_path}")
         if changed:
-            os.replace(staged_report, real_report)
+            try:
+                os.replace(staged_report, real_report)
+            except OSError as exc:
+                raise ValueError(
+                    f"ALS {output_path} was published, but the arrangement "
+                    f"report {real_report} could not be updated ({exc}). The "
+                    f"report is stale relative to the published ALS (it still "
+                    f"holds the pre-automation swap beats) and must be "
+                    f"regenerated by re-running Phase 3.") from exc
             print(f"  Wrote {changed} final swap beat(s) back to {real_report.name}")
+
+
+def _resolve_gate_report(output_path: Path, report_path: Path | None,
+                         arrangement_report_path: Path | None) -> Path:
+    """The one arrangement report the MixPlan gate checks and the write-back
+    updates. An explicit path is final: if it is missing, raise rather than
+    pick another file."""
+    if arrangement_report_path is not None:
+        chosen = Path(arrangement_report_path)
+        if not chosen.is_file():
+            raise ValueError(
+                f"Required arrangement report was not found: {chosen}")
+        return chosen
+    if report_path is not None and Path(report_path).is_file():
+        return Path(report_path)
+    chosen = output_path.parent / (output_path.stem + "_ARRANGEMENT_REPORT.json")
+    if not chosen.is_file():
+        reps = sorted(output_path.parent.glob("*ARRANGEMENT_REPORT.json"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+        chosen = reps[0] if reps else chosen
+    if not chosen.is_file():
+        raise ValueError(f"Arrangement report was not found: {chosen}")
+    return chosen
 
 
 def _unlink_quiet(path: Path) -> None:
@@ -1507,13 +1530,6 @@ def _unlink_quiet(path: Path) -> None:
         Path(path).unlink(missing_ok=True)
     except OSError:
         pass
-
-
-def _same_file(a: Path, b: Path) -> bool:
-    try:
-        return os.path.samefile(a, b)
-    except OSError:
-        return Path(a) == Path(b)
 
 
 def main() -> None:
@@ -1527,8 +1543,8 @@ def main() -> None:
     output_path = Path(sys.argv[3])
     arrangement_report_path = Path(sys.argv[4]) if len(sys.argv) >= 5 else None
     # Optional 5th positional: MixPlan JSON (Phase 2c artefact). When
-    # present, the auto-reconcile gate fires after compress_als; when
-    # absent, behaviour is byte-for-byte unchanged (mix.md:344 — a run
+    # present, the ALS and report are staged and gated before publishing;
+    # when absent, behaviour is unchanged (mix.md:344 - a run
     # without Phase 2c has no MixPlan to reconcile, skip the gate).
     mix_plan_path = Path(sys.argv[5]) if len(sys.argv) >= 6 else None
 
@@ -1716,7 +1732,8 @@ def main() -> None:
     # ── write output ──────────────────────────────────────────────────
     print(f"\nWriting {output_path.name} ...")
     if mix_plan_path is None:
-        # No MixPlan: byte-for-byte the behaviour this script always had.
+        # No MixPlan: the behaviour this script always had (output bytes match
+        # the original direct write at a fixed mtime).
         compress_als(lines, output_path)
         print(f"Done -> {output_path}")
 
