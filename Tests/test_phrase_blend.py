@@ -363,3 +363,95 @@ def test_candidates_are_ranked_best_first_and_deterministic():
     c2 = pb.candidates(OUT, IN)
     assert [c.cost for c in c1] == sorted(c.cost for c in c1)
     assert [c.key() for c in c1] == [c.key() for c in c2]
+
+
+# ---- R6 on MEASURED content (round 2) ------------------------------------------------------
+def with_content(track, bass, music):
+    t = json.loads(json.dumps(track))
+    t["content"] = {"has_bass": list(bass), "has_music": list(music)}
+    return t
+
+
+def test_measured_pre_switch_outgoing_needs_bass_or_music():
+    out = with_content(trk(8, [(0, "INTRO")]), [0, 0, 1, 1, 0, 0, 0, 0], [0, 0, 0, 0, 1, 0, 0, 0])
+    assert [pb._out_state(out, x, 6) for x in range(6)] == [False, False, True, True, True, False]
+
+
+def test_measured_post_switch_outgoing_needs_music_not_bass():
+    out = with_content(trk(8, [(0, "INTRO")]), [1] * 8, [0, 0, 0, 0, 0, 0, 1, 0])
+    assert pb._out_state(out, 3, 4) is True      # before the switch: bass counts
+    assert pb._out_state(out, 5, 4) is False     # after: its bass has left, no music
+    assert pb._out_state(out, 6, 4) is True      # after: music still plays
+
+
+def test_measured_incoming_counts_bass_or_music_after_the_switch_only():
+    ins = with_content(trk(8, [(0, "INTRO")]), [1, 0, 0, 0, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0, 0])
+    assert pb._in_state(ins, 0, 0, 4) is False   # pre-switch: percussion only (R7)
+    assert pb._in_state(ins, 0, 4, 4) is True    # bass
+    assert pb._in_state(ins, 1, 4, 4) is False
+    assert pb._in_state(ins, 2, 4, 4) is True    # music
+
+
+def test_measured_content_beats_the_label():
+    ins = with_content(trk(8, [(0, "DROP")]), [0] * 8, [0] * 8)    # label says carries; stems say not
+    assert pb._in_state(ins, 3, 10, 4) is False
+    ins2 = with_content(trk(8, [(0, "INTRO")]), [1] * 8, [0] * 8)  # label says not; stems say bass
+    assert pb._in_state(ins2, 3, 10, 4) is True
+
+
+def test_flag_beats_measured_content():
+    out = with_content(trk(8, [(0, "INTRO", False)]), [1] * 8, [1] * 8)
+    assert pb._out_state(out, 2, 6) is False
+    ins = with_content(trk(8, [(0, "INTRO", True)]), [0] * 8, [0] * 8)
+    assert pb._in_state(ins, 3, 10, 4) is True
+
+
+def test_measured_content_beyond_the_track_reads_as_the_last_bar():
+    out = with_content(trk(4, [(0, "DROP")]), [1, 1, 1, 0], [0, 0, 0, 1])
+    assert pb._measured(out, 9) == (False, True) and pb._measured(out, -1) == (True, False)
+
+
+def test_measured_flat_counts_each_side():
+    out = with_content(trk(40, [(0, "DROP")]), [1] * 20 + [0] * 20, [0] * 40)
+    ins = with_content(trk(40, [(0, "DROP")]), [0] * 40, [0] * 40)
+    _, flat = pb.content_check(out, ins, 24, 32, 40)   # outgoing has nothing from bar 20
+    assert flat == 16
+    ins2 = with_content(trk(40, [(0, "DROP")]), [0] * 8 + [1] * 32, [0] * 40)
+    _, flat2 = pb.content_check(out, ins2, 24, 32, 40)  # incoming bass from its bar 8 = out bar 32
+    assert flat2 == 8     # only the 8 pre-switch bars, where the outgoing has nothing
+
+
+def test_measured_planner_avoids_a_stretch_the_labels_would_pass():
+    # labels call this outgoing DROP to the end (carries); the stems say its bass stops at 76
+    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84)])
+    out_m = with_content(out, [0] * 10 + [1] * 66 + [0] * 24, [0] * 100)
+    ins = trk(100, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)])
+    ins_m = with_content(ins, [0] * 16 + [1] * 84, [0] * 100)
+    by_label = pb.plan_blend(out, ins)
+    by_stems = pb.plan_blend(out_m, ins_m)
+    assert by_label.flat_bars == 0
+    seen_by_stems = pb.content_check(out_m, ins_m, *by_label.key())[1]
+    assert seen_by_stems > 0                       # the label plan IS flat on the stems
+    assert by_stems.flat_bars == seen_by_stems == 8   # no phrase plan escapes: reported, not hidden
+
+
+def _measured_rows():
+    key = json.loads(sb.KEY.read_text(encoding="utf-8"))
+    content = json.loads(sb.CONTENT.read_text(encoding="utf-8"))
+    rows = []
+    for b in key["blends"]:
+        o = sb.prepare(key["tracks"][b["out"]], b["out"], "MEASURED", content)
+        n = sb.prepare(key["tracks"][b["in"]], b["in"], "MEASURED", content)
+        sam = sb.sam_numbers(b, o)
+        rows.append((pb.plan_blend(o, n).key() == tuple(float(x) for x in sam),
+                     pb.content_check(o, n, *sam)[1]))
+    return rows
+
+
+def test_measured_score_is_pinned_unaided():
+    # Characterisation of the real stems with NO overrides and no tuning: blends 1, 3, 5, 6
+    # exact; blends 2 and 4 are not.  Flat bars the planner sees on Sam's own placement:
+    # blend 2 = 11, blend 4 = 14 (questions for Sam, not bugs to force).
+    rows = _measured_rows()
+    assert [r[0] for r in rows] == [True, False, True, False, True, True]
+    assert [r[1] for r in rows] == [0, 11, 0, 14, 0, 0]

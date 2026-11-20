@@ -5,8 +5,10 @@ Standalone and pure. Not wired into propose_arrangement.py or align_engine.py.
 Inputs are dicts shaped like Documentation/Golden Sections/Answer Key 2026-11-20 DFTD.json
 -> tracks[name]:  bpm, n_bars, sections = [[start_bar, LABEL] or [start_bar, LABEL, carries]],
 fills = [[start_bar, end_bar]].  Bars are 0-based from the first beat.  The optional third
-element of a section (a bool, or {"carries": bool}) overrides the label-derived "carries
-bass or music" test used by the flat-blend check (rule R6).
+element of a section (a bool, or {"carries": bool}) overrides the content test used by the
+flat-blend check (rule R6).  A track may also carry "content": {"has_bass": [...], "has_music":
+[...]} (0/1 per bar, from Tools/measure_section_content.py); R6 then uses MEASURED content and
+falls back to labels only for a track without it.
 
 Blend geometry (all numbers are the OUTGOING track's own bar numbers):
   in_starts_at_out_bar   where the incoming track's bar 0 plays
@@ -106,25 +108,44 @@ def _intro_loop_options(track):
     return [(b, b - a) for a, b in zip(pts, pts[1:]) if b - a >= MIN_IN_LOOP]
 
 
+def _measured(track, bar):
+    """Measured (has_bass, has_music) at a bar, or None when the track carries no content.
+    track["content"] = {"has_bass": [0/1 per bar], "has_music": [0/1 per bar]} as written by
+    Tools/measure_section_content.py.  Bars past the end read as the last bar."""
+    c = track.get("content")
+    if not c:
+        return None
+    i = min(max(int(bar + 1e-9), 0), len(c["has_bass"]) - 1)
+    return bool(c["has_bass"][i]), bool(c["has_music"][i])
+
+
 def _out_state(track, x, switch):
-    """R6: does the outgoing carry bass or music at out bar x?  A flag wins.  Otherwise
-    the label decides, and after the switch its bass has left (drums only)."""
+    """R6: does the outgoing carry what the blend needs at out bar x?  Priority: an explicit
+    section `carries` flag, then MEASURED content, then labels.
+    Measured: before the switch the outgoing must have bass or music; after it its bass has
+    left, so only music counts.  Labels: DROP/BUILD/BREAK carry, and only before the switch."""
     n = float(track["n_bars"])
     sec = _section_at(track, min(x, n - 1e-6))
     if sec[2] is not None:
         return sec[2]
+    m = _measured(track, x)
+    if m is not None:
+        return (m[0] or m[1]) if x < switch - 1e-9 else m[1]
     return x < switch - 1e-9 and sec[1] in CARRY_LABELS
 
 
 def _in_state(track, j, x, switch):
     """R6/R7: the incoming's lows are cut before the switch, so only percussion counts there.
-    After the switch, label (or flag) decides."""
+    After the switch it carries if it has bass or music (measured), or by flag, or by label."""
     if x < switch - 1e-9:
         return False
     n = float(track["n_bars"])
     sec = _section_at(track, min(max(j, 0.0), n - 1e-6))
     if sec[2] is not None:
         return sec[2]
+    m = _measured(track, max(j, 0.0))
+    if m is not None:
+        return m[0] or m[1]
     return sec[1] in CARRY_LABELS
 
 
