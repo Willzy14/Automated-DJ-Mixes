@@ -81,6 +81,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+[Codex, 2026-11-20]: The round 9 cached replay kept all 16 entry and swap placements. Both exact builds stopped at the production loop-quality gate. Both review sets pass the final ALS and MixPlan checks after removing eight rejected loops, with all 16 swaps verified from the ALS clip geometry. The five stale tests were pinned to the updated owner key. The owner-key Bottom End score is 7 of 7.
+
 [Codex, 2026-11-20]: The planner-decisions worktree converts groove sections and cached stem envelopes into explicit phrase-blend decisions. Exact DFTD and Fresh Mix replays stopped at the existing loop-quality gate. The review replays remove rejected repeats, retain all 16 chosen bass swaps, and pass both final ALS validators. Fresh Mix transition 3 enters eight bars later in the review replay to retain its swap after removing the intro repeat.
 
 [Codex, 2026-11-20]: Groove sections can be selected with `--section-mode groove` in Phase 1a and `stem_detector.py --write-hints`. The deployment default is legacy. In a cached 10-track DFTD replay, groove built nine transitions and passed the hints, final ALS, and MixPlan gates. The legacy run stopped at Eli Brown into Call 911.

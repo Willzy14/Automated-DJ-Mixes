@@ -97,7 +97,9 @@ def test_the_owners_second_blend_7_answer_and_the_rejected_swap():
     assert pb.point_type(n, ac["bass_switch_out_bar"] - ac["in_starts_at_out_bar"]) == "implied 16"
     bitd = tr("Back In The Dance")
     assert pb.point_type(bitd, 193) == ""                          # "randomly slapped anywhere": on no grid
-    assert pb.point_type(bitd, 192) == "implied 16"
+    # Removing the layer-only line at 176 moves the grid origin back to section
+    # start 152. Bar 192 is 40 bars later, so it is still on-grid as an implied 8.
+    assert pb.point_type(bitd, 192) == "implied 8"
 
 
 # ---- snapping ---------------------------------------------------------------------------------

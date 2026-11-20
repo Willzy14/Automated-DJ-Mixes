@@ -192,14 +192,15 @@ def test_awareness_the_incoming_minute_is_noted_in_why_without_a_cost():
 
 # ---- R2: switch on a phrase point of at least one track; no premium for both ----------------
 def test_r2_a_sane_pairing_outranks_a_cheaper_one_sided_swap():
-    # round 6 (owner on blend 1): lining the swap up on BOTH tracks is a tier, not a weight
-    b = KEY["blends"][0]
-    o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
-    n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
-    cs = pb.candidates(o, n)
+    # Removing PAX's layer-only section at 48 left blend 1 with only sane candidates.
+    # This fixture keeps both tiers and makes the one-sided swap strictly cheaper.
+    out = trk(196, [(0, "INTRO"), (16, "DROP")], fills=[(135, 136), (171, 172)])
+    incoming = trk(100, [(0, "INTRO", True), (15, "DROP"), (32, "BREAK")], fills=[(31, 32)])
+    cs = pb.candidates(out, incoming)
     assert cs[0].sane and cs[0].paired
-    sane_keys = [c.key() for c in cs if c.sane]
-    assert sane_keys[0] == (184.0, 200.0, 215.0)          # the owner's own answer, rank 1 (round 8)
+    assert cs[0].key() == (172.0, 184.0, 200.0)
+    one_sided = next(c for c in cs if c.key() == (172.0, 187.0, 203.0))
+    assert not one_sided.paired and not one_sided.sane and one_sided.cost < cs[0].cost
     first_unsane = next(i for i, c in enumerate(cs) if not c.sane)
     assert all(c.sane for c in cs[:first_unsane]) and not any(c.sane for c in cs[first_unsane:])
 
@@ -1070,7 +1071,7 @@ def _blend1(mode="BOTTOM END"):
 
 def test_pairing_is_a_swap_on_a_phrase_point_of_both_tracks_and_the_entry_follows():
     b, o, n = _blend1()
-    owner = _cost(o, n, 184, 200, 215)                    # A11 (outro start) with B1 (kick-in), outro looped
+    owner = _cost(o, n, 184, 200, 215)                    # A8 (outro start) with B1 (kick-in), outro looped
     assert owner.paired and owner.sane and owner.in_point_kind == "kick-in"
     assert "entry" not in owner.terms and "minute_mark" not in owner.terms     # entry is derived, not chosen
     assert any("pairing" in w for w in owner.why)
@@ -1080,13 +1081,18 @@ def test_blend_1_the_owners_named_pairings_are_candidates_and_his_own_answer_ran
     b, o, n = _blend1()
     cs = pb.candidates(o, n)
     keys = [c.key() for c in cs]
-    assert keys[0] == (184.0, 200.0, 215.0)               # the owner's: A11 with B1, outro looped 6, now FREE
-    assert keys[1] == (192.0, 208.0, 223.0)               # the same shape one phrase later, looped to the
-    assert cs[0].terms.get("out_loop", 0.0) == 0.0        # next fill start: also free; the loop term never decides
-    assert keys.index((168.0, 200.0, 216.0)) > 0          # the long free loop pays in the early-entry clock
+    assert keys[0] == (184.0, 200.0, 215.0)               # the owner's A8 with B1, outro looped 6
+    assert keys[1] == (192.0, 208.0, 223.0)               # the same shape one phrase later
+    assert cs[0].terms.get("out_loop", 0.0) == 0.0
+    # PAX bar 48 lost its section line. The early entry can still target the fill
+    # before bar 32 by repeating 16 bars of intro, and it pays for its earlier entry.
+    assert (168.0, 200.0, 216.0) not in keys
+    early = cs[keys.index((168.0, 200.0, 215.0))]
+    assert keys.index(early.key()) > 0 and early.in_intro_looped_bars == 16
+    assert early.terms["entry_early"] > 0 and early.terms.get("out_loop", 0.0) == 0.0
     assert (152.0, 184.0, 200.0) not in keys              # drops the whole outro: a forbidden cut
     assert _cost(o, n, 152, 184, 200).out_cut_bars == 9
-    assert not any(c.key() == (161.0, 193.0, 209.0) and c.sane for c in cs)   # the round 5 pick is one-sided
+    assert not _cost(o, n, 161, 193, 209).paired          # the old round 5 swap is still one-sided
 
 
 def test_a_sane_pairing_outranks_every_one_sided_plan_even_a_far_cheaper_one():

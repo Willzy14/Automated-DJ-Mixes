@@ -76,7 +76,9 @@ def test_the_owners_names_for_points_and_pairings():
     a = key["Darius Syrossian & George Smeddles - Back In The Dance"]
     b = key["PAX - Revelry"]
     assert bc.point_name("A", a, 184) == "A-F7 end (bar 184)"
-    assert bc.point_name("A", a, 200) == "A-F8 end = A11 (bar 200)"      # the outro start is also a fill end
+    # Three layer-only section lines were removed. Bar 200 is still both a
+    # fill end and the outro start, which is now the eighth section line.
+    assert bc.point_name("A", a, 200) == "A-F8 end = A8 (bar 200)"
     assert bc.point_name("B", b, 16) == "B1 (bar 16)"
     assert bc.point_name("B", b, 32) == "B-F1 end (bar 32)"
     assert bc.point_name("A", a, 209) == "A end (bar 209)" and bc.point_name("A", a, 0) == "A start (bar 0)"
@@ -85,7 +87,8 @@ def test_the_owners_names_for_points_and_pairings():
 
 def test_report_prints_pairings_by_name():
     info, text = run("Back In", "PAX")
-    assert "swap: A-F8 end = A11 (bar 200) with B1 (bar 16) [B kick-in]  <sane PAIRING>" in text
+    # The updated key renumbered the outgoing outro start from A11 to A8.
+    assert "swap: A-F8 end = A8 (bar 200) with B1 (bar 16) [B kick-in]  <sane PAIRING>" in text
 
 
 def test_scan_ranks_unplaced_pairs_and_skips_the_owners_own():
