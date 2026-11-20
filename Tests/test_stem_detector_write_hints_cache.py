@@ -127,9 +127,13 @@ BAD_SHAPES = {
         {**_cached(kick=None), "signals": {"kick_presence_source": "mystery"}}),
     "no_finite_section_end": json.dumps(
         _bad(sections=[{"label": "drop", "start_sec": 0.0, "end_sec": None}])),
+    # The final clamp holds hints inside the LAST section's end, so the reader's own
+    # range check is reachable only when that end is 0 (clamp skipped) while an earlier
+    # section ends later; bpm 8 makes the 16-bar fallback (480s) pass that end.
     "hints_beyond_track_end": json.dumps(
-        _bad(sections=[{"label": "intro", "start_bar": 0, "end_bar": 5,
-                        "start_sec": 0.0, "end_sec": 10.0}])),
+        _bad(bpm=8.0, sections=[
+            {"label": "intro", "start_bar": 0, "end_bar": 2, "start_sec": 0.0, "end_sec": 60.0},
+            {"label": "x", "start_bar": 2, "end_bar": 2, "start_sec": 0.0, "end_sec": 0.0}])),
 }
 
 
@@ -267,10 +271,14 @@ def test_two_bad_tracks_give_exactly_two_refused_lines(tmp_path, monkeypatch, ca
 
 
 def test_one_track_exception_does_not_stop_the_others_being_reported(tmp_path, monkeypatch, capsys):
-    _project(tmp_path, raw=BAD_SHAPES["bpm_huge_int"], stem="A")
-    _project(tmp_path, raw=BAD_SHAPES["signals_null"], stem="B")
+    # Each fixture carries its own track name so it reaches the intended exception
+    # (not the track-mismatch refusal): A -> OverflowError, B -> AttributeError.
+    _project(tmp_path, raw=json.dumps(_bad(track="A", bpm=10 ** 400)), stem="A")
+    _project(tmp_path, raw=json.dumps(_bad(track="B", signals=None)), stem="B")
     _run_refused(tmp_path, monkeypatch)
-    assert capsys.readouterr().out.count("[REFUSED]") == 2
+    out = capsys.readouterr().out
+    assert out.count("[REFUSED]") == 2
+    assert "OverflowError" in out and "AttributeError" in out
 
 
 def test_no_wav_files_exits_2_and_leaves_existing_hints(tmp_path, monkeypatch):
@@ -417,3 +425,80 @@ def test_short_track_fallback_break_is_clamped_to_the_track_end():
     end = 20 * spb
     assert all(0 < v <= end + 0.01 for v in h.values()), h
     assert h["first_break_sec"] == round(end, 2)
+
+
+# ---- round 4 ----
+
+def _short_res(n_bars, sections):
+    spb = 4 * 60.0 / 128.0
+    return {"track": "T", "bpm": 128.0, "n_bars": n_bars, "signals": {},
+            "sections": [{"label": lab, "start_sec": a * spb, "end_sec": b * spb}
+                         for lab, a, b in sections]}
+
+
+@pytest.mark.parametrize("n_bars", [15, 16, 12, 1])
+def test_short_kick_led_track_hints_all_inside_the_track(n_bars):
+    # No qualifying drop/outro section: every fallback (16-bar drop, 32-bar outro window,
+    # +16-bar break) lands past a short track's end unless the final clamp holds it.
+    res = _short_res(n_bars, [("intro", 0, n_bars)])
+    end = n_bars * 4 * 60.0 / 128.0
+    h = stem_detector.hints_from_stem_result(res)
+    assert all(0 < v <= round(end, 2) for v in h.values()), (n_bars, h)
+
+
+def test_clamp_leaves_long_track_hints_unchanged():
+    # Values taken from the pre-clamp implementation on this fixture.
+    assert stem_detector.hints_from_stem_result(_cached(True)) == {
+        "first_drop_sec": 90.0, "first_break_sec": 195.0,
+        "outro_start_sec": 281.25, "last_bass_drop_sec": 251.25}
+
+
+def test_tiny_track_is_accepted_by_the_reader_when_hints_are_inside(tmp_path, monkeypatch):
+    d = _short_res(15, [("intro", 0, 15)])
+    d["analysis"] = {"kick_model": True}
+    _project(tmp_path, cache=d)
+    h = _run_ok(tmp_path, monkeypatch)["T.wav"]
+    assert all(0 < v <= 15 * 1.875 for v in h.values())
+
+
+def test_track_arg_matches_case_insensitively_and_uses_actual_name(tmp_path, monkeypatch):
+    _project(tmp_path, cache=_cached(kick=True))
+    hints = _run_ok(tmp_path, monkeypatch, extra=("--track", "t.WAV"))
+    assert list(hints) == ["T.wav"]
+
+
+def test_track_arg_two_entries_differing_by_case_is_refused(tmp_path, monkeypatch):
+    # NTFS cannot hold T.wav and t.wav together, so the directory listing is faked.
+    _project(tmp_path, cache=_cached(kick=True))
+    audio = tmp_path / "Audio"
+    fake = [audio / "T.wav", audio / "t.wav"]
+    real_iterdir, real_is_file = Path.iterdir, Path.is_file
+    monkeypatch.setattr(Path, "iterdir",
+                        lambda self: iter(fake) if self == audio else real_iterdir(self))
+    monkeypatch.setattr(Path, "is_file",
+                        lambda self: True if self in fake else real_is_file(self))
+    _run_refused(tmp_path, monkeypatch, extra=("--track", "T.wav"))
+    assert not (tmp_path / "Hints" / "track_hints.json").exists()
+
+
+def test_empty_track_arg_is_refused_not_the_whole_project(tmp_path, monkeypatch):
+    _project(tmp_path, cache=_cached(kick=True))
+    _run_refused(tmp_path, monkeypatch, extra=("--track", ""))
+    assert not (tmp_path / "Hints" / "track_hints.json").exists()
+
+
+def test_reader_and_guard_both_route_through_kick_provenance(tmp_path, monkeypatch):
+    jp = _project(tmp_path, cache=_cached(kick=True))
+    seen = []
+    real = stem_detector._kick_provenance
+
+    def spy(res):
+        seen.append(res.get("track") if isinstance(res, dict) else None)
+        return real(res)
+
+    monkeypatch.setattr(stem_detector, "_kick_provenance", spy)
+    assert stem_detector._may_overwrite_sections_json(jp, False) is False
+    assert seen == ["T"]
+    res, note = stem_detector._check_cached_sections(jp, "T")
+    assert res is not None and note is None
+    assert seen == ["T", "T"]

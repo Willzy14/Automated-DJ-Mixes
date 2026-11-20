@@ -1603,10 +1603,17 @@ def hints_from_stem_result(res: dict) -> dict:
         outro_start = max(first_drop + sec_per_bar, end_sec - 32 * sec_per_bar)
     if not first_break or first_break <= 0:
         first_break = first_drop + 16 * sec_per_bar
-        if end_sec > 0:
-            first_break = min(first_break, end_sec)
     if not last_bass_drop or last_bass_drop <= 0:
         last_bass_drop = max(first_drop, outro_start - 16 * sec_per_bar)
+
+    # One final step: no hint may sit past the end of the track. The fallbacks
+    # above are bar counts from the start, so a short track would otherwise get
+    # hints beyond its own end. Values already inside the track are untouched.
+    if end_sec > 0:
+        first_drop = min(first_drop, end_sec)
+        first_break = min(first_break, end_sec)
+        outro_start = min(outro_start, end_sec)
+        last_bass_drop = min(last_bass_drop, end_sec)
 
     return {
         "first_drop_sec": round(first_drop, 2),
@@ -1641,13 +1648,18 @@ def main():
     wavs = [audio / args.track] if args.track else sorted(audio.glob("*.wav"))
 
     if args.write_hints:
-        if args.track:
-            tp = audio / args.track
-            if (Path(args.track).name != args.track or tp.suffix.lower() != ".wav"
-                    or not tp.is_file()):
-                print(f"  [REFUSED] --track {_ascii(args.track)} is not a .wav file in "
-                      f"{_ascii(audio)}")
+        if args.track is not None:
+            want = args.track
+            hits = ([e for e in audio.iterdir()
+                     if e.is_file() and e.suffix.lower() == ".wav"
+                     and e.name.lower() == want.lower()]
+                    if want and Path(want).name == want and audio.is_dir() else [])
+            if len(hits) != 1:
+                why = ("matches more than one file differing only by case" if len(hits) > 1
+                       else "is not a .wav file in")
+                print(f"  [REFUSED] --track {_ascii(want)} {why} {_ascii(audio)}")
                 sys.exit(2)
+            wavs = [hits[0]]
         # Pure read of the Phase 1a analysis: never runs detect(), never writes
         # a SECTIONS_STEM json. All tracks must be usable or nothing is written.
         hints, bad = {}, []
