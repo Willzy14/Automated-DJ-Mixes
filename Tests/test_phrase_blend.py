@@ -73,24 +73,26 @@ def _exact_vector(mode):
         n = sb.prepare(key["tracks"][b["in"]], b["in"], mode, CONTENT)
         sam = sb.sam_numbers(b, o)
         p = pb.plan_blend(o, n, r6=sb.MODES[mode][1])
-        vec.append(bool(p and p.in_intro_looped_bars == 0 and p.key() == tuple(float(x) for x in sam)))
+        vec.append(sb.matches(p, b, sam) is not None)
     return vec
 
 
-def test_score_columns_are_pinned_as_measured_in_round_4():
-    # Characterisation, not validation: the six are few, the rules were written from them, and
-    # in all six the switch is entry + 16.  Pinned so any change in what the planner picks shows.
-    assert _exact_vector("MEASURED") == [True] * 6
-    assert _exact_vector("LABELS") == [True, True, False, True, True, True]
-    assert _exact_vector("OVERRIDES") == [True] * 6
-    assert _exact_vector("BOTTOM END") == [True] * 6
+def test_score_columns_are_pinned_as_measured_in_round_5():
+    # Characterisation, not validation.  Seven owner blends: the first six share switch = entry + 16,
+    # the seventh (swap on the incoming's bass-in) is entry + 24.  Round 5 regressed blend 1 (the
+    # derived 90 s plan 161/193/209 and the new kick-only swap cost beat the owner's) and fixed 7.
+    assert _exact_vector("MEASURED") == [False, True, True, True, True, True, True]
+    assert _exact_vector("LABELS") == [True, True, False, True, True, True, False]
+    assert _exact_vector("OVERRIDES") == [True, True, True, True, True, True, False]
+    assert _exact_vector("BOTTOM END") == [False, True, True, True, True, True, True]
 
 
 def test_headline_claims_are_true_and_stated():
     # the module docstring says R6 is inert on the six and the switch is entry + 16 in all six
     assert "INERT" in pb.__doc__ and "entry + 16" in pb.__doc__ and "END_SLACK_BARS from blend 2" in pb.__doc__
     assert "not tuned to pass" not in pb.__doc__
-    assert {b["bass_switch_out_bar"] - b["in_starts_at_out_bar"] for b in KEY["blends"]} == {16}
+    gaps = [b["bass_switch_out_bar"] - b["in_starts_at_out_bar"] for b in KEY["blends"]]
+    assert gaps[:6] == [16] * 6 and gaps[6] == 24
 
 
 def test_r6_is_inert_on_the_six_with_the_flat_cost_removed(monkeypatch):
@@ -107,7 +109,7 @@ def test_bottom_end_flat_runs_on_sams_placements_are_pinned():
         sam = sb.sam_numbers(b, o)
         rows.append(pb.flat_runs(pb.content_check(o, n, *sam, r6=pb.R6_BE)[0]))
     # blend 2: only PAX's last, partial bar 192, where nothing is left
-    assert rows == [[], [(192.0, 1.0)], [], [], [], []]
+    assert rows[:6] == [[], [(192.0, 1.0)], [], [], [], []] and rows[6] == []
 
 
 def test_blends_3_4_6_are_flat_by_label_without_overrides():
@@ -363,7 +365,7 @@ def test_plan_reports_its_loop_source():
     b = KEY["blends"][0]
     o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
     n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
-    p = pb.plan_blend(o, n)
+    p = _cost(o, n, 184, 200, 215)          # the owner's placement (round 5 plans differently)
     assert p.out_looped_bars == 6 and p.out_loop_source_bars == (200.0, 208.0)
     assert p.flat_bars == 0
 
@@ -373,42 +375,43 @@ def test_r5_best_plan_never_cuts():
     assert pb.plan_blend(OUT, IN).out_cut_bars == 0
 
 
-CUTTABLE_OUT = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84)])
-CUTTABLE_IN = trk(100, [(0, "INTRO"), (16, "DROP"), (30, "BREAK"), (32, "DROP")], fills=[(31, 32)])
+CUTTABLE_OUT = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84), (95, 96)])
+CUTTABLE_IN = trk(100, [(0, "INTRO"), (16, "DROP"), (26, "BREAK"), (30, "DROP"), (32, "DROP")], fills=[(31, 32)])
 
 
 def test_r5_cuts_are_excluded_whenever_any_non_cutting_plan_exists():
     cs = pb.candidates(CUTTABLE_OUT, CUTTABLE_IN)
     assert cs and all(c.out_cut_bars == 0 for c in cs)
-    # a cutting plan is genuinely generable here: bar 30 of the incoming ends the outgoing at 98
-    assert _cost(CUTTABLE_OUT, CUTTABLE_IN, 68, 84, 98).out_cut_bars == 2
+    # a forbidden cut is generable here: incoming bar 26 would stop the outgoing at 94, dropping the
+    # outgoing's fill end at 96 (a phrase point), so it is a cut, not a trim
+    assert _cost(CUTTABLE_OUT, CUTTABLE_IN, 68, 84, 94).out_cut_bars == 6
     assert any(c.out_end_bar >= 100 for c in cs)
+    assert not any(c.out_end_bar == 94 for c in cs)
 
 
 def test_r5_when_every_plan_cuts_the_cuts_are_returned_cheapest_first():
-    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(69, 70), (75, 76)])
+    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(69, 70)])   # one entry only: 70
     ins = trk(100, [(0, "DROP"), (8, "BREAK"), (20, "DROP")])   # no INTRO: no incoming loops either
     cs = pb.candidates(out, ins)
     assert cs and all(c.out_cut_bars > 0 for c in cs)
     assert [c.cost for c in cs] == sorted(c.cost for c in cs)
 
 
-def test_r5_the_codex_case_a_cut_never_beats_a_natural_end():
-    # continuous kick; a cut at 98 used to cost 13.5 against 18.0 for the natural end at 100
-    out = with_content(trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84)]),
-                       [1] * 100, [0] * 100, [1] * 100)
+def test_r5_a_forbidden_cut_never_beats_a_natural_end_even_when_it_is_cheaper():
+    # continuous kick; a cut to 94 drops the outgoing's fill end at 96, so it is a forbidden cut
+    out = with_content(CUTTABLE_OUT, [1] * 100, [0] * 100, [1] * 100)
     ins = with_content(CUTTABLE_IN, [1] * 100, [0] * 100, [1] * 100)
     allc = pb.candidates(out, ins)
-    assert allc and all(c.out_cut_bars == 0 for c in allc) and allc[0].out_end_bar >= 100
-    # the cut is a real candidate when scored directly, and would have been the cheaper one
-    cut = _cost(out, ins, 68, 84, 98)
-    assert cut.out_cut_bars == 2 and cut.cost < allc[0].cost + 100
+    assert allc and all(c.out_cut_bars == 0 for c in allc)
+    cut = _cost(out, ins, 68, 84, 94)
+    assert cut.out_cut_bars == 6 and cut.out_trim_bars == 0
 
 
 def test_r5_cut_reporting_counts_every_removed_bar():
-    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84)])
+    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84), (95, 96)])
     ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
-    assert _cost(out, ins, 68, 84, 98).out_cut_bars == 2     # two bars removed, two reported
+    c = _cost(out, ins, 68, 84, 94)                          # the fill end at 96 is dropped: a cut
+    assert c.out_cut_bars == 6 and c.out_trim_bars == 0      # six bars removed, six reported
     assert _cost(out, ins, 68, 84, 99).out_cut_bars == 0     # one bar of slack is not a cut
     assert _cost(out, ins, 68, 84, 99).out_end_bar == 100
 
@@ -778,3 +781,226 @@ def test_candidates_are_ranked_best_first_and_deterministic():
     c2 = pb.candidates(OUT, IN)
     assert [c.cost for c in c1] == sorted(c.cost for c in c1)
     assert [c.full_key() for c in c1] == [c.full_key() for c in c2]
+
+
+# ---- round 5: swap-anchored placement, tail trim, alternatives -------------------------------
+def _blend7(mode="BOTTOM END"):
+    b = KEY["blends"][6]
+    o = sb.prepare(KEY["tracks"][b["out"]], b["out"], mode, CONTENT)
+    n = sb.prepare(KEY["tracks"][b["in"]], b["in"], mode, CONTENT)
+    return b, o, n
+
+
+def test_bass_in_is_the_first_bar_where_bass_turns_on_and_stays_on():
+    bass = [0] * 24 + [1] * 8 + [0] * 8
+    assert pb.bass_in(with_content(trk(40, [(0, "INTRO")]), bass, [0] * 40, [1] * 40)) == 24.0
+    # a fill bar inside the run does not break it ("straight after its own fill")
+    fill = [0] * 16 + [1] * 7 + [0] + [1] * 6 + [0] * 10
+    assert pb.bass_in(with_content(trk(40, [(0, "INTRO")]), fill, [0] * 40, [1] * 40)) == 16.0
+    # a blip is not a bass-in; bass from bar one is not one either (the old phrase-point rule applies)
+    blip = [0] * 10 + [1] + [0] * 10 + [1] * 10 + [0] * 9
+    assert pb.bass_in(with_content(trk(40, [(0, "INTRO")]), blip, [0] * 40, [1] * 40)) == 21.0
+    assert pb.bass_in(with_content(trk(40, [(0, "INTRO")]), [1] * 40, [0] * 40, [1] * 40)) is None
+    assert pb.bass_in(trk(40, [(0, "INTRO")])) is None                       # no measured content
+
+
+def test_bass_in_of_the_real_incoming_tracks():
+    got = {}
+    for name in KEY["tracks"]:
+        n = sb.prepare(KEY["tracks"][name], name, "BOTTOM END", CONTENT)
+        got[name.split(" - ")[1][:8]] = pb.bass_in(n)
+    assert got["Back In "] == 24.0 and got["Better W"] == 16.0 and got["Come Bac"] is None
+
+
+def test_blend_7_the_owners_tricky_pair_is_planned_as_he_placed_it():
+    b, o, n = _blend7()
+    p = pb.plan_blend(o, n)
+    assert p.key() == (115.0, 139.0, 147.0)
+    assert p.swap_anchored and p.swap_at_bass_in and p.out_trim_bars == 8.0 and p.out_cut_bars == 0
+    assert sb.matches(p, b, sb.sam_numbers(b, o)) == "primary"
+
+
+def test_blend_7_the_owners_second_answer_is_offered_as_an_alternative():
+    b, o, n = _blend7()
+    p = pb.plan_blend(o, n)
+    ac = b["also_acceptable"][0]
+    assert any(a.plan.in_starts_at_out_bar == ac["in_starts_at_out_bar"]
+               and a.plan.bass_switch_out_bar == ac["bass_switch_out_bar"] for a in p.alternatives)
+
+
+def test_blend_7_the_old_pick_is_still_a_defensible_alternative_not_the_answer():
+    b, o, n = _blend7()
+    p = pb.plan_blend(o, n)
+    assert (123.0, 147.0, 155.0) in [a.plan.key() for a in p.alternatives]
+
+
+def test_blend_7_depends_on_the_late_swap_rule_stated_plainly(monkeypatch):
+    # without the "do not swap late on the bass-in" term the owner's plan loses by 0.25
+    b, o, n = _blend7()
+    monkeypatch.setattr(pb, "W_LATE_SWAP", 0.0)
+    assert pb.plan_blend(o, n).key() == (123.0, 147.0, 155.0)
+
+
+def test_swap_anchored_plan_waives_the_minute_mark_term_only():
+    b, o, n = _blend7()
+    anchored = _cost(o, n, 115, 139, 147)
+    other = _cost(o, n, 115, 131, 147)
+    assert anchored.swap_anchored and "minute_mark" not in anchored.terms
+    assert not other.swap_anchored and other.terms["minute_mark"] > 0.1
+    assert anchored.terms["entry"] > 0.5                 # R1 entry-type cost still applies
+
+
+def test_a_swap_on_kick_only_incoming_bars_costs_more_than_one_on_the_bass_in():
+    b, o, n = _blend7()
+    kick_only = _cost(o, n, 115, 131, 147)               # incoming bar 16: kick, no bass
+    on_bass = _cost(o, n, 115, 139, 147)                 # incoming bar 24: bass-in
+    assert kick_only.terms["swap_kick_only"] > 1.0 and "swap_kick_only" not in on_bass.terms
+    assert on_bass.swap_at_bass_in and not kick_only.swap_at_bass_in
+
+
+def test_a_late_bass_in_swap_costs_but_only_on_the_bass_in():
+    b, o, n = _blend7()
+    late = _cost(o, n, 123, 147, 155)                    # bass-in swap, 8 bars (15 s) before the end
+    early = _cost(o, n, 115, 139, 155)                   # bass-in swap, 16 bars (31 s) before the end
+    assert late.terms["late_bass_in_swap"] > 1.0 and "late_bass_in_swap" not in early.terms
+    kick_only = _cost(o, n, 123, 147 - 16, 155)          # not a bass-in swap: no late term
+    assert "late_bass_in_swap" not in kick_only.terms
+
+
+def test_swap_anchored_entries_may_be_early_but_not_beyond_the_cap():
+    b, o, n = _blend7()
+    cap_bars = pb.ENTRY_MAX_SECONDS / (240.0 / o["bpm"])
+    for c in pb.candidates(o, n):
+        assert c.in_starts_at_out_bar >= o["n_bars"] - cap_bars - 1e-9
+    assert any(c.in_starts_at_out_bar < o["n_bars"] - pb._zone_bars(o) for c in pb.candidates(o, n))
+
+
+def test_trim_is_allowed_for_short_tails_without_a_phrase_point_or_outro():
+    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84)])
+    ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
+    t = _cost(out, ins, 68, 84, 92)                      # 8 bars, nothing in (92, 100)
+    assert t.out_trim_bars == 8 and t.out_cut_bars == 0 and t.terms["trim"] > 1.0
+    assert any("tail trim" in w for w in t.why)
+
+
+def test_trim_is_refused_beyond_eight_bars_with_a_phrase_point_or_inside_an_outro():
+    ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
+    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84)])
+    assert _cost(out, ins, 68, 84, 91).out_cut_bars == 9            # 9 bars: too many
+    out2 = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84), (95, 96)])
+    assert _cost(out2, ins, 68, 84, 93).out_cut_bars == 7           # a fill end at 96 is dropped
+    out3 = trk(100, [(0, "INTRO"), (10, "DROP"), (90, "OUTRO")], fills=[(67, 68), (83, 84)])
+    assert _cost(out3, ins, 68, 84, 94).out_cut_bars == 6           # lands inside an OUTRO section
+    assert _cost(out3, ins, 68, 84, 94).out_trim_bars == 0
+
+
+def test_a_trim_costs_so_a_natural_end_of_comparable_quality_wins():
+    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(67, 68), (83, 84)])
+    ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
+    natural = _cost(out, ins, 68, 84, 100)
+    trim = _cost(out, ins, 68, 84, 96)
+    assert trim.terms["trim"] > 0.5 and "trim" not in natural.terms
+    assert trim.terms["trim"] == pytest.approx(pb.W_TRIM * 4)
+
+
+def test_the_first_six_never_trim_in_the_plans_chosen():
+    for idx in range(6):
+        b = KEY["blends"][idx]
+        o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
+        n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
+        assert pb.plan_blend(o, n).out_trim_bars == 0
+
+
+def test_alternatives_are_distinct_defensible_and_explained():
+    b, o, n = _blend7()
+    p = pb.plan_blend(o, n)
+    assert 1 <= len(p.alternatives) <= pb.MAX_ALTERNATIVES
+    seen = [(p.bass_switch_out_bar, p.in_starts_at_out_bar)]
+    for a in p.alternatives:
+        assert a.plan.cost <= p.cost + pb.ALT_MARGIN and a.plan.out_cut_bars == 0
+        assert a.plan.terms.get("flat", 0.0) == 0
+        assert a.reason and a.feel and chr(0x2014) not in a.reason + a.feel
+        pair = (a.swap_out_bar, a.plan.in_starts_at_out_bar)
+        assert pair not in seen
+        seen.append(pair)
+    assert any("more energy" in a.feel for a in p.alternatives)
+    assert any("less energy" in a.feel for a in p.alternatives)
+
+
+def test_alternatives_stay_inside_the_margin():
+    b, o, n = _blend7()
+    p = pb.plan_blend(o, n)
+    assert all(a.plan.cost - p.cost <= pb.ALT_MARGIN + 1e-9 for a in p.alternatives)
+    assert all(a.plan.cost - p.cost > 0 or a.plan.key() != p.key() for a in p.alternatives)
+
+
+def test_matches_reads_primary_acceptable_and_none():
+    b, o, n = _blend7()
+    sam = sb.sam_numbers(b, o)
+    mk = lambda a_, s_, e_: pb.BlendPlan(a_, s_, e_, 0.0, 0.0)
+    assert sb.matches(mk(115, 139, 147), b, sam) == "primary"
+    assert sb.matches(mk(115, 131, 160), b, sam) == "acceptable #1"      # the end is the planner's own
+    assert sb.matches(mk(115, 131, 147), b, sam) == "acceptable #1"
+    assert sb.matches(mk(123, 147, 155), b, sam) is None
+    assert sb.matches(None, b, sam) is None
+    looped = pb.BlendPlan(115, 139, 147, 0.0, 8.0)
+    assert sb.matches(looped, b, sam) is None                            # an incoming loop plays other bars
+
+
+def test_the_scorer_reports_primary_top3_and_the_acceptable_offer():
+    lines = []
+    exact, rows = sb.score("BOTTOM END", out=lines.append)
+    text = "\n".join(lines)
+    assert "owner's primary answer in the top 3" in text
+    assert "also_acceptable #1 (entry 115, swap 131): offered" in text
+    assert rows[6]["which"] == "primary" and rows[6]["primary_top3"]
+    assert rows[0]["which"] is None            # the round 5 regression on blend 1, stated not hidden
+
+
+# ---- round 5, mutation follow-ups ------------------------------------------------------------
+def test_no_kick_penalty_when_the_swap_lands_on_bars_with_no_kick_at_all():
+    out = with_content(trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)]),
+                       [1] * 200, [0] * 200, [1] * 200)
+    ins = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")]),
+                       [0] * 12 + [1] * 108, [0] * 120, [0] * 16 + [1] * 104)   # bars 8..15: no kick, no bass
+    c = _cost(out, ins, 176, 184, 200)                    # incoming bar 8: nothing but percussion
+    assert "swap_kick_only" not in c.terms
+
+
+def test_anchored_needs_the_swap_within_a_bar_of_the_30_second_mark():
+    b, o, n = _blend7()
+    late = _cost(o, n, 123, 147, 155)                     # on the bass-in, but only 15 s from the end
+    assert late.swap_at_bass_in and not late.swap_anchored
+    assert _cost(o, n, 115, 139, 147).swap_anchored       # 31 s from the original end
+    assert _cost(o, n, 116, 140, 148).swap_anchored       # on the bass-in, within a bar of the 30 s mark (139.5)
+
+
+def test_anchored_needs_the_swap_on_the_bass_in():
+    b, o, n = _blend7()
+    c = _cost(o, n, 123, 139, 155)                        # the 30 s mark, but incoming bar 16: kick only
+    assert not c.swap_at_bass_in and not c.swap_anchored
+
+
+def test_derived_entries_are_capped_at_two_minutes_before_the_end():
+    # outgoing 60 bpm (4 s bars), incoming 240 bpm (1 s bars) with a bass-in at its bar 40: the swap
+    # sits ~30 s from the end, so the derived entry would be 40 incoming bars (40 s) earlier... in
+    # outgoing bars that is 40, i.e. 160 s: beyond the 120 s cap of 30 bars
+    out = trk(300, [(0, "INTRO"), (50, "DROP")], fills=[(289, 290), (297, 298)], bpm=60.0)
+    ins = with_content(trk(300, [(0, "INTRO"), (12, "BREAK"), (40, "DROP"), (48, "BREAK"), (60, "DROP")], bpm=240.0),
+                       [0] * 40 + [1] * 260, [0] * 300, [1] * 300)
+    cs = pb.candidates(out, ins)
+    assert cs
+    assert all(c.in_starts_at_out_bar >= 300 - 30 - 1e-9 for c in cs)       # literal: 120 s / 4 s
+
+
+def test_alternatives_exclude_forbidden_cuts_costly_flat_and_respect_the_limits():
+    best = pb.BlendPlan(100, 116, 132, 0.0, 0.0, cost=1.0, terms={})
+    mk = lambda sw, cost, cut=0.0, flat=0.0: pb.BlendPlan(100 + sw, 116 + sw * 3, 132, 0.0, 0.0, out_cut_bars=cut,
+                                                      cost=cost, terms={"flat": flat})
+    cs = [best, mk(10, 2.0, cut=3.0), mk(20, 2.1, flat=5.0), mk(30, 2.2), mk(90, 50.0)]
+    alts = pb.alternatives_for(cs, trk(100, [(0, "INTRO")]))
+    got = [a.plan.in_starts_at_out_bar for a in alts]
+    assert got == [130]                                      # not the cut (110), the flat run (120), or 190
+    many = [best] + [mk(10 * i, 1.0 + 0.1 * i) for i in range(1, 11)]
+    assert len(pb.alternatives_for(many, trk(100, [(0, "INTRO")]))) <= 4     # literal limit
+    assert all(a.plan.cost <= best.cost + 5.0 for a in alts)  # literal: about a ten bar clock error

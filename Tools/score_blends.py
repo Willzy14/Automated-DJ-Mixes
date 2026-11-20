@@ -75,6 +75,21 @@ def sam_numbers(blend, out_t):
     return (blend["in_starts_at_out_bar"], blend["bass_switch_out_bar"], e)
 
 
+def matches(plan, blend, sam):
+    """None, "primary", or "acceptable #i": does the plan equal the owner's answer, or one of his
+    `also_acceptable` placements (entry and switch; the end too when the entry gives one)?"""
+    if plan is None or plan.in_intro_looped_bars != 0:
+        return None
+    if all(abs(x - y) < 1e-6 for x, y in zip(plan.key(), sam)):
+        return "primary"
+    for i, alt in enumerate(blend.get("also_acceptable", []), 1):
+        if (abs(plan.in_starts_at_out_bar - alt["in_starts_at_out_bar"]) < 1e-6
+                and abs(plan.bass_switch_out_bar - alt["bass_switch_out_bar"]) < 1e-6
+                and ("out_end_bar" not in alt or abs(plan.out_end_bar - alt["out_end_bar"]) < 1e-6)):
+            return "acceptable #%d" % i
+    return None
+
+
 def _runs(flag, lo, hi):
     out, start = [], None
     for x in range(int(lo), int(hi) + 1):
@@ -114,12 +129,16 @@ def score(mode, top=0, detail=False, out=print):
         plan = pb.plan_blend(o, n, r6=r6)
         sam = sam_numbers(b, o)
         mine = plan.key() if plan else (None, None, None)
-        # EXACT also needs no incoming loop (Sam's six have none): same key can play other bars
-        ok = (plan is not None and plan.in_intro_looped_bars == 0
-              and all(abs(x - y) < 1e-6 for x, y in zip(mine, sam)))
+        # RIGHT = the top plan is the owner's answer or one of his also_acceptable placements; also
+        # no incoming loop (his blends have none: the same key can play other bars)
+        which = matches(plan, b, sam)
+        ok = which is not None
         exact += ok
+        top3 = pb.candidates(o, n, limit=3, r6=r6)
+        primary_top3 = any(matches(c, b, sam) == "primary" for c in top3)
         sp = _sam_plan(o, n, sam, r6)
-        rows.append({"i": i, "ok": ok, "mine": mine, "sam": sam, "plan": plan, "sam_plan": sp})
+        rows.append({"i": i, "ok": ok, "which": which, "primary_top3": primary_top3, "mine": mine,
+                     "sam": sam, "plan": plan, "sam_plan": sp})
         out("%d. %s -> %s" % (i, b["out"][:30], b["in"][:30]))
         if plan is None:
             out("   planner: NO PLAN")
@@ -127,7 +146,19 @@ def score(mode, top=0, detail=False, out=print):
         out("   planner: in %g  switch %g  end %g  cost %.2f  flat runs: %s" % (
             mine + (plan.cost, _fmt_runs(plan.flat_runs))))
         out("   Sam    : in %g  switch %g  end %g  cost %.2f  flat runs: %s   -> %s" % (
-            sam + (sp.cost, _fmt_runs(sp.flat_runs), "EXACT" if ok else "MISS")))
+            sam + (sp.cost, _fmt_runs(sp.flat_runs), ("RIGHT (%s)" % which) if ok else "MISS")))
+        out("      owner's primary answer in the top 3 candidates: %s" % ("yes" if primary_top3 else "no"))
+        pool = [plan] + [a.plan for a in plan.alternatives]
+        for j, ac in enumerate(b.get("also_acceptable", []), 1):
+            hit = [q for q in pool if abs(q.in_starts_at_out_bar - ac["in_starts_at_out_bar"]) < 1e-6
+                   and abs(q.bass_switch_out_bar - ac["bass_switch_out_bar"]) < 1e-6]
+            out("      owner's also_acceptable #%d (entry %g, swap %g): %s" % (
+                j, ac["in_starts_at_out_bar"], ac["bass_switch_out_bar"],
+                "offered (top plan or an alternative)" if hit else "NOT offered"))
+        for alt in plan.alternatives:
+            out("      alternative swap %g (cost %.2f, entry %g, end %g): %s | feel: %s" % (
+                alt.swap_out_bar, alt.plan.cost, alt.plan.in_starts_at_out_bar, alt.plan.out_end_bar,
+                alt.reason, alt.feel))
         if not ok and r6 == pb.R6_BE and plan is not None:
             out("      cost breakdown, term by term (no weight was changed to flip this):")
             out(_breakdown("planner's pick", plan))
@@ -154,7 +185,8 @@ def score(mode, top=0, detail=False, out=print):
         if top:
             for c in pb.candidates(o, n, limit=top, r6=r6):
                 out("      cand %-26s cost %6.2f flat %g" % (c.key(), c.cost, c.flat_bars))
-    out("TOTAL %s: %d of %d exact" % (mode, exact, len(rows)))
+    out("TOTAL %s: %d of %d right; owner's primary answer in the top 3 for %d of %d" % (
+        mode, exact, len(rows), sum(r["primary_top3"] for r in rows if r["plan"]), len(rows)))
     return exact, rows
 
 
@@ -171,12 +203,14 @@ def headline(out=print):
     finally:
         pb.W_FLAT_RUN = saved
     out("HEADLINE (computed now):")
-    out("  switch minus entry in Sam's six blends: %s -> %s" % (
-        gaps, "ALL EXACTLY %g bars: the six say almost nothing about the switch rule" % gaps[0]
-        if len(set(gaps)) == 1 else "not all equal"))
-    out("  BOTTOM END score %d of 6; with W_FLAT_RUN = 0 (R6 cost removed) %d of 6 -> R6 and the "
-        "measured content are %s on these six; the score comes from geometry" % (
-            base, off, "INERT" if base == off else "NOT inert"))
+    nb = len(gaps)
+    first = gaps[:6]
+    out("  switch minus entry per owner blend: %s -> the first six %s; blends 7+ %s" % (
+        gaps, "ALL EXACTLY %g bars (they say almost nothing about the switch rule)" % first[0]
+        if len(set(first)) == 1 else "are not all equal", "differ" if len(set(gaps)) > 1 else "agree"))
+    out("  BOTTOM END score %d of %d; with W_FLAT_RUN = 0 (R6 cost removed) %d of %d -> R6 and the "
+        "measured content are %s on these blends; the score comes from geometry" % (
+            base, nb, off, nb, "INERT" if base == off else "NOT inert"))
     out("")
 
 
@@ -188,7 +222,7 @@ def _count(key, content, mode):
         n = prepare(key["tracks"][b["in"]], b["in"], mode, content)
         p = pb.plan_blend(o, n, r6=r6)
         sam = sam_numbers(b, o)
-        n_ok += bool(p and p.in_intro_looped_bars == 0 and all(abs(x - y) < 1e-6 for x, y in zip(p.key(), sam)))
+        n_ok += matches(p, b, sam) is not None
     return n_ok
 
 
@@ -197,16 +231,19 @@ def table(out=print):
     names = list(MODES)
     out("")
     out("blend | " + " | ".join("%-24s" % m for m in names))
-    for i in range(6):
+    nb = len(res[names[0]])
+    for i in range(nb):
         cells = []
         for m in names:
             r = res[m][i]
-            cells.append("%-24s" % ("EXACT" if r["ok"] else ("NO PLAN" if r["plan"] is None else "MISS %g/%g/%g" % r["mine"])))
+            cells.append("%-24s" % ((r["which"].upper() if r["which"] != "primary" else "RIGHT") if r["ok"] else
+                                    ("NO PLAN" if r["plan"] is None else "MISS %g/%g/%g" % r["mine"])))
         out("%5d | %s" % (i + 1, " | ".join(cells)))
-    out("total | " + " | ".join("%-24s" % ("%d of 6" % sum(r["ok"] for r in res[m])) for m in names))
+    out("total | " + " | ".join("%-24s" % ("%d of %d" % (sum(r["ok"] for r in res[m]), nb)) for m in names))
+    out("primary in top 3 | " + " | ".join("%-24s" % ("%d of %d" % (sum(r["primary_top3"] for r in res[m] if r["plan"]), nb)) for m in names))
     out("")
     out("flat runs (start+length) on SAM'S placement / on the PLANNER'S pick, per column:")
-    for i in range(6):
+    for i in range(nb):
         for m in names:
             r = res[m][i]
             out("  blend %d  %-12s Sam: %-28s planner: %s" % (

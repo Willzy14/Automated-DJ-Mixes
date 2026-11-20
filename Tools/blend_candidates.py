@@ -52,6 +52,38 @@ def rules_for(plan, out_t, in_t):
     }
 
 
+PLACEMENT_RULES = ("SWAP-ANCHORED", "FILL-END", "MINUTE-MARK")
+
+
+def placement_rules_for(plan, out_t):
+    """Which placement rules a candidate satisfies (round 5):
+    SWAP-ANCHORED  the swap is the incoming's bass-in about 30 s before the original end (entry derived)
+    FILL-END       entry and swap are both the END of an outgoing fill
+    MINUTE-MARK    the entry is an outgoing phrase point about a minute before the outgoing end"""
+    fill_ends = {float(f[1]) for f in out_t.get("fills", [])}
+    return {
+        "SWAP-ANCHORED": bool(plan.swap_anchored),
+        "FILL-END": plan.in_starts_at_out_bar in fill_ends and plan.bass_switch_out_bar in fill_ends,
+        "MINUTE-MARK": bool(plan.minute_mark),
+    }
+
+
+def disagreement(out_t, in_t, r6=pb.R6_BE):
+    """Best-ranked candidate per placement rule, and a disagreement score: the number of distinct
+    placements among them times 100, plus the spread of their swap bars.  0 when no rule is satisfiable."""
+    cs = pb.candidates(out_t, in_t, r6=r6)
+    best = {}
+    for rule in PLACEMENT_RULES:
+        for i, c in enumerate(cs, 1):
+            if placement_rules_for(c, out_t)[rule]:
+                best[rule] = (i, c)
+                break
+    keys = {c.key() for _, c in best.values()}
+    swaps = [c.bass_switch_out_bar for _, c in best.values()]
+    score = (len(keys) * 100 + (max(swaps) - min(swaps))) if len(keys) > 1 else 0
+    return best, score
+
+
 def report(out_t, in_t, out_name, in_name, top=5, r6=pb.R6_BE, out=print):
     cs = pb.candidates(out_t, in_t, r6=r6)
     out("%s  ->  %s   (R6 %s, %d candidates)" % (out_name, in_name, r6, len(cs)))
@@ -92,22 +124,74 @@ def report(out_t, in_t, out_name, in_name, top=5, r6=pb.R6_BE, out=print):
         out("  >>> agree: the best candidate for every rule has the same switch %s; this pair cannot "
             "discriminate (other top-%d switches %s meet no rule)." % (sorted(switch_bars), top,
                                                                       sorted(switches - switch_bars)))
-    return {"candidates": len(cs), "disagree": disagree}
+    pbest, pscore = disagreement(out_t, in_t, r6)
+    out("  best candidate meeting each PLACEMENT rule (swap-anchored, fill-end, one-minute mark):")
+    for rule in PLACEMENT_RULES:
+        if rule in pbest:
+            i, c = pbest[rule]
+            out("    %-14s rank %-3d entry %g  swap %g  end %g  cost %.2f" % (
+                rule, i, c.in_starts_at_out_bar, c.bass_switch_out_bar, c.out_end_bar, c.cost))
+        else:
+            out("    %-14s no candidate meets it" % rule)
+    out("  placement disagreement score %d (distinct placements x 100 + swap spread)" % pscore)
+    return {"candidates": len(cs), "disagree": disagree, "placement_score": pscore}
+
+
+def _prepared(tracks, content, name):
+    t = json.loads(json.dumps(tracks[name]))
+    if name in content:
+        c = content[name]
+        t["content"] = {k: c[k] for k in ("has_bass", "has_music", "has_kick") if k in c}
+    return t
+
+
+def scan(keydata, content, top=5, out=print):
+    """Rank every ordered pair of key tracks the owner has NOT already placed by how much the three
+    placement rules disagree: the pairs most worth showing him next."""
+    tracks = keydata["tracks"]
+    placed = {(b["out"], b["in"]) for b in keydata.get("blends", [])}
+    rows = []
+    for a in tracks:
+        for b in tracks:
+            if a == b or (a, b) in placed:
+                continue
+            best, score = disagreement(_prepared(tracks, content, a), _prepared(tracks, content, b))
+            rows.append((score, a, b, best))
+    rows.sort(key=lambda r: -r[0])
+    out("pairs ranked by placement disagreement (already placed by the owner are skipped):")
+    for score, a, b, best in rows[:top]:
+        out("  %4d  %s -> %s" % (score, a, b))
+        for rule in PLACEMENT_RULES:
+            if rule in best:
+                i, c = best[rule]
+                out("        %-14s entry %g swap %g end %g (rank %d, cost %.2f)" % (
+                    rule, c.in_starts_at_out_bar, c.bass_switch_out_bar, c.out_end_bar, i, c.cost))
+            else:
+                out("        %-14s no candidate" % rule)
+    return rows
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--key", default=str(KEY))
     ap.add_argument("--content", default=str(CONTENT))
-    ap.add_argument("--out", required=True, dest="out_name")
-    ap.add_argument("--in", required=True, dest="in_name")
+    ap.add_argument("--out", dest="out_name")
+    ap.add_argument("--in", dest="in_name")
+    ap.add_argument("--scan", action="store_true",
+                    help="rank every ordered pair of tracks in the key by placement disagreement")
     ap.add_argument("--top", type=int, default=5)
     ap.add_argument("--r6", default=pb.R6_BE, choices=[pb.R6_BE, pb.R6_V1])
     a = ap.parse_args(argv)
-    tracks = json.loads(Path(a.key).read_text(encoding="utf-8"))["tracks"]
+    keydata = json.loads(Path(a.key).read_text(encoding="utf-8"))
+    tracks = keydata["tracks"]
     content = {}
     if Path(a.content).exists():
         content = json.loads(Path(a.content).read_text(encoding="utf-8")).get("tracks", {})
+    if a.scan:
+        scan(keydata, content, a.top)
+        return 0
+    if not (a.out_name and a.in_name):
+        raise SystemExit("--out and --in are required unless --scan is given")
     names = (find(tracks, a.out_name), find(tracks, a.in_name))
     prepared = []
     for n in names:
