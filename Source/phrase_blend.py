@@ -25,9 +25,28 @@ Tools/score_blends.py, which prints each of these live):
     musical phrase").  Every owner swap, in all seven blends, then sits on a point of both tracks (a
     marked point on one side, marked or implied on the other), so the pairing rule no longer disagrees
     with his accepted answers; blend 1 now misses because a cheaper 17 bar pairing beats his looped one.
-  - The weights are hand-set judgements.  A constant set from a single case says which
-    (END_SLACK_BARS from blend 2).  Nothing here is "validated": the cases were run many times while
-    the rules were written, and the score is reported as measured.
+  - The weights are hand-set judgements.  Nothing here is "validated": the cases were run many
+    times while the rules were written, and the score is reported as measured.
+  - Round 8 (two CORRECTION reviews, codex_blend_r2 and kimi_blend_r2, both reproduced live):
+    (1) the exit may not run past the next incoming fill of 2 bars or more after the swap; the
+    outgoing must be OUT by the fill start, and a loop never carries it through the fill;
+    (2) a loop is valued, not taxed: looping the outgoing up to the exit the pairing calls for
+    (the incoming's next section start or fill start, capped by the long-fill bound) is FREE when
+    the loop source keeps its kick; only bars beyond that, a poor source, or the 24 bar cap cost;
+    (3) the entry side too: a pairing whose derived entry misses every outgoing cue point gets
+    intro-extended (loop intro bars back to the previous cue) or intro-cut (start part-way in, to
+    the next cue) variants, both free, and an unadjusted pairing entry off every cue point pays;
+    a cut never goes through the incoming fill that leads into the swap;
+    (4) the cliffs PAIR_WINDOW_SECONDS and SANE_BLEND_SECONDS are gone: the swap clock and the
+    length clock are graded costs, and an early entry is allowed (costed, not banned) when the
+    incoming plays a long intro before its bass-in; the one hard rule left is that a swap on no
+    outgoing phrase point is excluded whenever a two-sided pairing exists (the sane tier);
+    (5) END_SLACK_BARS is gone: an outgoing whose last counted bar has no kick ends within a
+    partial bar, so a stop there is the natural end (PAX: 193 bars counted, a target at 192);
+    (7) a soft minimum on the heard overlap so a ~26 s blend with ~10 s left cannot win;
+    (8) no implied grid point before the first real section when it is not at bar 0, and a
+    measured bass-in within one bar of a marked section start IS that section start;
+    (9) robustness: a one-element fill and a non-numeric section start do not crash.
 
 Inputs are dicts shaped like Documentation/Golden Sections/Answer Key 2026-11-20 DFTD.json
 -> tracks[name]:  bpm, n_bars, sections = [[start_bar, LABEL] or [start_bar, LABEL, carries]],
@@ -44,8 +63,20 @@ Blend geometry (all numbers are the OUTGOING track's own bar numbers):
   out_end_bar            where the outgoing stops.  > n_bars: its tail is looped.  < n_bars: cut.
 TEMPO ASSUMPTION: one bar of either track is one blend bar, because the pipeline warps both
 tracks to one tempo.  Clocks (a minute, 30 seconds, the mix zones) use each track's own bpm and
-4/4 bars (240 / bpm seconds).  Loops are never part of a track: every clock below measures to
-the ORIGINAL outgoing end, min(out_end, n_bars).
+4/4 bars (240 / bpm seconds).
+
+TWO CLOCKS (round 8):
+  - "original phrasing": loops and intro changes never count; this clock measures where the swap
+    sits relative to the track's ORIGINAL phrases and original end.  Terms on this clock:
+    switch_time (swap vs the original end), late_bass_in_swap (swap on the bass-in vs the
+    original end), the anchored test, and the forbidden-cut / trim tests (what is left of the
+    original track).  The in_point / out_point quality terms are also original-phrasing terms
+    (the swap must line up on original phrase points of both tracks).
+  - "actual overlap": what is heard.  Terms on this clock: length (entry to exit as heard,
+    loops included), short_blend (a soft minimum on the heard overlap), flat (the bottom-end
+    check walks heard bars, mapping looped outgoing bars to their source), and the loop terms
+    out_loop / in_loop (audible repetition, priced only beyond what the blend calls for).
+  A loop therefore never moves the swap clocks, but it does lengthen the heard blend.
 
 The rules (the owner's, a working DJ) are cited as R1..R9 beside the code that uses them.
 """
@@ -54,7 +85,9 @@ from dataclasses import dataclass, field
 # ---- hand-set weights (cost; lower is better) -------------------------------------------
 W_FLAT = 10.0          # R6 v1 (round 2 rule, kept for comparison): flat is a per-bar ban
 W_CUT = 12.0           # R5: only orders plans when EVERY candidate cuts; a cut is otherwise excluded
-W_LOOP = 1.5           # R4: prefer no loop; a loop is the cheap way to lengthen a blend
+W_LOOP = 1.5           # R4, round 8: looping up to the exit the pairing calls for is FREE (fix 2);
+#                        this rate applies only to loop bars BEYOND that, to a poor loop source, or
+#                        past the stated maximum (MAX_TAIL_LOOP)
 W_ENTRY_SECTION = 1.0  # R1: entry "normally" on a fill END; a plain section start is second best
 W_ENTRY_OFF = 6.0      # R1 is "normally", not "always"; an unphrased entry is allowed but costs
 W_SWITCH_NONE = 12.0   # R2: a switch on a phrase point of NEITHER track is the worst case; a hit
@@ -87,12 +120,13 @@ R6_BE = "be"           # round 3: bottom end (kick or bass); convex per-run flat
 MIX_ZONE_SECONDS = 75.0
 MINUTE_SECONDS = 60.0
 MINUTE_TOL_BARS = 2.0   # a "one-minute mark" is a phrase point within 2 bars (about 4 s) of a minute
-# n_bars counts a partial final bar (PAX 193): a target within 1 bar before n_bars is "reached
-# naturally", not a cut.  SET FROM BLEND 2 (the only case), and sits exactly on its edge: 0.5 flips
-# blend 2.  It applies to every track, including one with a full last bar.
-END_SLACK_BARS = 1.0
+# Round 8, fix 5: END_SLACK_BARS is gone.  The fact it approximated: n_bars can count a partial
+# final bar (PAX: 193 bars counted, kick stops at 192, the owner's target is 192).  An outgoing
+# whose last counted bar has no measured kick truly ends within that partial bar, so a stop at or
+# after the last kicked bar is the natural end, never a cut, and there is no slack constant to
+# set from a single blend.  Without measured content the natural end is n_bars, exactly.
 MIN_SIDE_BARS = 4.0     # the switch must sit at least 4 bars after entry and before the end
-MAX_TAIL_LOOP = 24.0    # never loop an outgoing tail by more than 24 bars (a bar count, not a clock)
+MAX_TAIL_LOOP = 24.0    # never loop an outgoing tail by more than 24 bars (the stated maximum)
 MIN_IN_LOOP = 4.0       # an incoming intro loop is a whole phrase of at least 4 bars
 MIN_LOOP_SOURCE = 4.0   # an outgoing tail loops a whole phrase of at least 4 bars
 MAX_LOOP_SOURCE = 16.0  # ... and repeats at most its last 16 bars
@@ -127,12 +161,10 @@ ALT_MARGIN = 5.0
 # start) with a phrase point of the OUTGOING (a fill end or a section start such as the outro start).
 # These PAIRINGS are enumerated; entry = outgoing point - incoming point, then the exit rule.  A
 # both-sided pairing that keeps the blend sane ALWAYS outranks any other swap (a TIER, not a weight).
-# Sane = bottom end kept, no forbidden cut, the swap within PAIR_WINDOW_SECONDS of the 30 s mark, and
-# a blend no longer than SANE_BLEND_SECONDS.  A swap on a phrase point of only one track is the
-# fallback, used when no sane pairing exists (and `why` says it is one-sided).
-PAIR_WINDOW_SECONDS = 20.0  # both swaps he named as fine, A-F7 end (17 s off the 30 s mark) and A-F4 end
-#                             in blend 7 (16.5 s off), lie inside it; a swap 30+ s from the mark is not "about 30 s"
-SANE_BLEND_SECONDS = 80.0   # a minute plus one phrase: the mix zone; his own blends run 62 to 77 s
+# Sane = paired, bottom end kept and no forbidden cut.  Round 8, fix 4: the old cliffs
+# PAIR_WINDOW_SECONDS and SANE_BLEND_SECONDS are gone - the swap's distance from the 30 s mark and
+# the blend's length are graded costs (W_SWITCH_TIME and W_LEN below), not tier gates, and a swap
+# 45+ s from the mark (his accepted alternative in blend 7) stays a sane pairing.
 # Incoming point quality, in his order: bass-in is "probably the most energetic", then the kick-in,
 # then a fill end, then a plain section start; a point that is no phrase point at all is worst.
 W_Q_KICKIN = 0.5
@@ -152,6 +184,21 @@ W_OUT_IMPL8 = 1.0        # ... and an implied 8 a little more than that
 BEAT_BARS = 0.25         # a line within one beat of a bar line is treated as that bar (Passion 135.75)
 ANCHOR_TOL_BARS = 1.0    # "about 30 seconds": the swap is within one bar of the 30 s mark of the original end
 MAX_ALTERNATIVES = 6
+# Round 8, fix 1: the START of the next incoming fill of LONG_FILL_BARS or more after the swap is a
+# hard bound on the exit - the outgoing must be OUT by it (its drums never play over the long fill,
+# and a loop never carries the outgoing through it).  The owner's own blend 5 rides a 2 bar fill to
+# its end and stops on the section there, so exiting ON the fill's end (a marked phrase point) is
+# allowed; only exits PAST the fill's end are excluded.  A one bar or one beat fill forces nothing.
+LONG_FILL_BARS = 2.0
+# Round 8, fix 4: an entry before the mix zone is not banned; it costs W_ENTRY_EARLY per bar, and is
+# allowed at all only when the incoming plays a long intro before the swap (LONG_INTRO_SECONDS of
+# audible intro) - "an early entry is allowed for a long incoming intro before its bass-in".
+W_ENTRY_EARLY = 0.25
+LONG_INTRO_SECONDS = 20.0
+# Round 8, fix 7: a soft minimum on the heard overlap (the actual-overlap clock), so a ~26 s blend
+# with ~10 s left cannot win on a technicality.  Graded cost per second below the floor, not a ban.
+MIN_BLEND_SECONDS = 30.0
+W_SHORT_BLEND = 0.25
 
 CARRY_LABELS = ("DROP", "BUILD", "BREAK")     # v1: INTRO and OUTRO do not carry unless flagged
 CARRY_LABELS_BE = ("DROP", "BUILD")           # BE: a BREAK is not assumed to have a kick
@@ -165,6 +212,7 @@ class BlendPlan:
     out_looped_bars: float
     in_intro_looped_bars: float
     out_cut_bars: float = 0.0
+    in_intro_cut_bars: float = 0.0                # round 8 fix 3: heard incoming starts this many bars in
     stretches: list = field(default_factory=list)
     flat_bars: float = 0.0
     cost: float = 0.0
@@ -188,8 +236,8 @@ class BlendPlan:
         return (self.in_starts_at_out_bar, self.bass_switch_out_bar, self.out_end_bar)
 
     def full_key(self):
-        """key() plus the incoming loop: two plans with the same key can play different bars."""
-        return self.key() + (self.in_intro_looped_bars, self.in_loop_phrase_end)
+        """key() plus the incoming loop and cut: two plans with the same key can play different bars."""
+        return self.key() + (self.in_intro_looped_bars, self.in_loop_phrase_end, self.in_intro_cut_bars)
 
 
 @dataclass
@@ -210,6 +258,15 @@ def _valid(track):
         return False
 
 
+def _num(x):
+    """float(x) or None: detector hiccups (a non-numeric section start) must not take the planner
+    down (round 8, fix 9)."""
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
 def _bar_seconds(track):
     return 240.0 / float(track["bpm"])
 
@@ -224,23 +281,42 @@ def _snap(x):
     return float(r) if abs(float(x) - r) <= BEAT_BARS + 1e-9 else float(x)
 
 
+def _fills(track):
+    """[(start, end)] snapped, malformed entries skipped.  A one-element fill [183] is read as a
+    fill at that bar alone (start = end = 183): it marks the point without inventing a length."""
+    out = []
+    for f in track.get("fills", []) or []:
+        if len(f) >= 2:
+            a, b = _num(f[0]), _num(f[1])
+            if a is not None and b is not None:
+                out.append((_snap(a), _snap(b)))
+        elif len(f) == 1:
+            v = _num(f[0])
+            if v is not None:
+                out.append((_snap(v), _snap(v)))
+    return out
+
+
 def _fill_ends(track):
-    return [_snap(f[1]) for f in track.get("fills", [])]
+    return [b for _, b in _fills(track)]
 
 
 def _fill_starts(track):
-    return [_snap(f[0]) for f in track.get("fills", [])]
+    return [a for a, _ in _fills(track)]
 
 
 def _sections(track):
     out = []
-    for s in track.get("sections", []):
+    for s in track.get("sections", []) or []:
+        st = _num(s[0]) if len(s) >= 1 else None
+        if st is None:
+            continue                        # a non-numeric section start is skipped, not a crash
         flag = None
         if len(s) > 2:
             f = s[2]
             flag = f.get("carries") if isinstance(f, dict) else f
             flag = None if flag is None else bool(flag)
-        out.append((_snap(s[0]), str(s[1]).upper(), flag))
+        out.append((_snap(st), str(s[1]).upper() if len(s) > 1 else "", flag))
     return sorted(out, key=lambda t: t[0])
 
 
@@ -265,9 +341,11 @@ def implied_points(track):
     """{bar: 16 or 8}: from each section start, every 8 bars until the next section start (or the track
     end); multiples of 16 from that start are the stronger 16.  The grid restarts at every section start,
     so it is measured from the LAST section start before a bar, not from bar 0.  Marked points are not
-    repeated here."""
+    repeated here.  Round 8, fix 8: bar 0 anchors the grid only when a section confirms it - there is
+    no implied point before the first real section when that section does not start at bar 0 (a
+    2 bar pickup used to phantom-shift the whole grid into the lead-in)."""
     n = float(track["n_bars"])
-    starts = sorted({x[0] for x in _sections(track)} | {0.0})
+    starts = sorted({x[0] for x in _sections(track)}) or [0.0]
     ends = starts[1:] + [n]
     marked = set(phrase_points(track))
     out = {}
@@ -303,6 +381,43 @@ def target_points(track):
     return sorted(pts)
 
 
+def natural_end_bar(track):
+    """Round 8, fix 5 (replaces END_SLACK_BARS): the outgoing's natural end.  n_bars can count a
+    partial final bar (PAX: 193 counted, the last one silent), so when measured content shows the
+    last counted bar has no kick, the track truly ends within that bar: a stop at or after the last
+    kicked bar is the natural end, free, whatever the offset (there is no slack constant to set).
+    Without usable content the natural end is n_bars exactly."""
+    n = float(track["n_bars"])
+    kick = (track.get("content") or {}).get("has_kick")
+    if kick and len(kick) >= int(n) > 0 and not kick[int(n) - 1]:
+        return n - 1.0
+    return n
+
+
+def _long_fill_after(track, k):
+    """Round 8, fix 1: the next fill of LONG_FILL_BARS or more whose start is at/after the swap's
+    incoming bar k, as (start, end); None when there is none.  A one bar or one beat fill forces
+    nothing."""
+    fills = [(a, b) for a, b in _fills(track)
+             if b - a >= LONG_FILL_BARS - 1e-9 and a >= k - 1e-9]
+    return min(fills) if fills else None
+
+
+def _called_for_exit(in_t, k):
+    """Round 8, fix 2: the exit target the pairing calls for - the incoming's first section start
+    or fill start after the swap (the owner's "looped up to the START of the next fill"), capped by
+    the long-fill bound (fix 1): the outgoing is faded by the START of the next long fill, so a loop
+    is never needed past it.  None when no target exists after the swap."""
+    tgts = [t for t in target_points(in_t) if t > k + 1e-9]
+    if not tgts:
+        return None
+    called = tgts[0]
+    long_fill = _long_fill_after(in_t, k)
+    if long_fill is not None:
+        called = min(called, long_fill[0])
+    return called
+
+
 def _intro_loop_options(track):
     """R3: whole-phrase loops of the incoming intro: consecutive phrase points inside the
     INTRO labelled stretch, at least MIN_IN_LOOP bars long.  Returns [(p, L)]."""
@@ -333,15 +448,21 @@ def _measured(track, bar, r6=R6_BE):
 def bass_in(track):
     """The incoming's bass-in bar (round 5): the first bar after bar 0 where measured bass is on and
     stays on, i.e. on for at least BASS_IN_FRACTION of the next BASS_IN_WINDOW bars, normally
-    straight after its own fill.  None when the track has no usable measured bass, or has bass from
-    bar one (then its first section start or fill end is used, as before)."""
+    straight after its own fill.  Round 8, fix 8: a measured bass-in within one bar of a marked
+    section start IS that section start (a measured 15 against a section line at 16 is the line, so
+    a pairing there is two-sided against a marked point, not one bar off it).  None when the track
+    has no usable measured bass, or has bass from bar one (then its first section start or fill end
+    is used, as before)."""
     hb = (track.get("content") or {}).get("has_bass")
     if not hb:
         return None
     w = int(BASS_IN_WINDOW)
     for b in range(len(hb)):
         if hb[b] and sum(1 for v in hb[b:b + w] if v) >= BASS_IN_FRACTION * w:
-            return float(b) if b > 0 else None
+            if b == 0:
+                return None
+            near = [x[0] for x in _sections(track) if abs(x[0] - b) <= 1.0 + 1e-9]
+            return min(near, key=lambda x: abs(x - b)) if near else float(b)
     return None
 
 
@@ -392,6 +513,18 @@ def loop_source(track, r6=R6_BE):
                 continue
         return (p, q)
     return (max(0.0, n - MIN_LOOP_SOURCE), n)
+
+
+def _loop_source_good(track, src, r6=R6_BE):
+    """Round 8, fix 2: whether the loop source phrase keeps its kick (the existing loop_source
+    rule).  A loop is free only when the source is good; without measured kick any whole phrase
+    counts, as loop_source assumes."""
+    m = _measured(track, src[0], r6)
+    if m is None:
+        return True
+    c = track["content"]["has_kick"]
+    bars = list(range(int(src[0]), int(src[1])))
+    return bool(bars) and sum(1 for b in bars if b < len(c) and c[b]) >= LOOP_SOURCE_KICK * len(bars)
 
 
 def _out_bar(track, x, src):
@@ -453,19 +586,20 @@ def _in_bar(x, a, loop_p, loop_l):
     return x - a - loop_l
 
 
-def content_check(out_t, in_t, a, s, e, loop_p=0.0, loop_l=0.0, r6=R6_BE, out_src=None):
+def content_check(out_t, in_t, a, s, e, loop_p=0.0, loop_l=0.0, r6=R6_BE, out_src=None, in_cut=0.0):
     """R6 per-stretch content check.  Walks the blend bar by bar and merges runs of the same
     (outgoing gives, incoming gives) state, so adjacent flat bars form one flat run.  Returns
     (stretches, flat_bars); a stretch is {start, end, out, in, flat, music_bars} where music_bars
     counts bars in it where either side has measured music (reported, never rescues a flat bar).
-    Looped outgoing bars (x >= n_bars) read their content from the loop source phrase."""
+    Looped outgoing bars (x >= n_bars) read their content from the loop source phrase; a cut
+    incoming (round 8 fix 3) is heard from its bar in_cut."""
     stretches, flat = [], 0.0
     if out_src is None and e > float(out_t["n_bars"]) + 1e-9:
         out_src = loop_source(out_t, r6)
     x = a
     while x < e - 1e-9:
         nxt = min(x + 1.0, e)
-        j = _in_bar(x, a, loop_p, loop_l)
+        j = _in_bar(x, a, loop_p, loop_l) + in_cut
         o = _out_state(out_t, x, s, r6, out_src)
         i = _in_state(in_t, j, x, s, r6)
         f = (not o) and (not i)
@@ -511,19 +645,21 @@ def _is_trim(out_t, e, out_pts):
     return _section_at(out_t, min(e, n_out - 1e-6))[1] != "OUTRO"
 
 
-def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
+def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE, in_cut=0.0):
     n_out = float(out_t["n_bars"])
+    n_nat = natural_end_bar(out_t)          # round 8 fix 5: the true natural end (partial bar seen)
     why, cost, terms = [], 0.0, {}
     fill_ends = set(_fill_ends(out_t))
     sec_starts = {x[0] for x in _sections(out_t)}
+    out_cues = set(out_pts) | set(implied_points(out_t))   # every outgoing cue point, marked or implied
     bars_min = MINUTE_SECONDS / _bar_seconds(out_t)       # bars in a minute, outgoing tempo
 
     # round 5: is this a SWAP-ANCHORED plan?  The swap is on the incoming's bass-in and about 30 s
     # before the ORIGINAL outgoing end.  Then the entry is derived from the swap, not chosen, so the
     # one-minute-mark awareness does not apply to it (the entry-type cost still does: R1 "normally").
-    k = s - a - loop_l
+    k = s - a - loop_l + in_cut             # the incoming bar heard at the swap (fix 3: a cut shifts it back)
     bi = bass_in(in_t)
-    forbidden_cut = (e < n_out - END_SLACK_BARS - 1e-9) and not _is_trim(out_t, e, out_pts)
+    forbidden_cut = (e < n_nat - 1e-9) and not _is_trim(out_t, e, out_pts)
     e_swap = e if forbidden_cut else n_out
     anchored = (bi is not None and abs(k - bi) < 1e-9
                 and abs((e_swap - s) - bars_min / 2.0) <= ANCHOR_TOL_BARS + 1e-9)
@@ -533,25 +669,33 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
     # a pairing needs a point on both tracks and at least one MARKED (implied with implied is anchored
     # to nothing the owner marked)
     paired = out_hit and in_hit and (s_type.startswith("marked") or k_type.startswith("marked"))
-    # R1: entry on an outgoing phrase point, normally a fill end.  For a PAIRING the entry is derived
-    # (outgoing point minus incoming point), not chosen, so the entry-type cost does not apply to it.
+    # R1, round 8 fix 3: the entry of a pairing should MEET an outgoing cue point (fill end, section
+    # start, else the implied grid).  A pairing whose derived entry misses every cue pays; the
+    # planner also generates intro-extended / intro-cut variants whose entry meets one (free).
     if paired:
+        if any(abs(a - c) < 1e-9 for c in out_cues):
+            why.append("round 8: pairing entry at out bar %g meets an outgoing cue point (%s)"
+                       % (a, point_type(out_t, a) or "marked"))
+        else:
+            cost += W_ENTRY_OFF
+            terms["entry"] = W_ENTRY_OFF
+            why.append("round 8: pairing entry at out bar %g meets NO outgoing cue point (a phrase "
+                       "point of either kind); the intro could be extended or cut to reach one" % a)
         why.append("round 6: pairing: the entry (out bar %g) follows from lining the swap up on both tracks" % a)
     if anchored:
         why.append("round 5: swap-anchored: the swap is the incoming's bass-in (incoming bar %g) about 30 s "
                    "before the original end, so the entry (out bar %g) is derived from it" % (k, a))
-    if a in fill_ends:
-        why.append("R1: entry at out bar %g is the end of an outgoing fill" % a)
-    elif a in sec_starts:
-        if not paired:
+    if not paired:
+        if a in fill_ends:
+            why.append("R1: entry at out bar %g is the end of an outgoing fill" % a)
+        elif a in sec_starts:
             cost += W_ENTRY_SECTION
             terms["entry"] = W_ENTRY_SECTION
-        why.append("R1: entry at out bar %g is an outgoing section start (not a fill end)" % a)
-    else:
-        if not paired:
+            why.append("R1: entry at out bar %g is an outgoing section start (not a fill end)" % a)
+        else:
             cost += W_ENTRY_OFF
             terms["entry"] = W_ENTRY_OFF
-        why.append("R1: entry at out bar %g is NOT an outgoing phrase point (placed back from the switch)" % a)
+            why.append("R1: entry at out bar %g is NOT an outgoing phrase point (placed back from the switch)" % a)
 
     # owner awareness (soft): a phrase point about a minute before the outgoing END
     mark = n_out - bars_min
@@ -583,60 +727,90 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
             who, s, s_type or "non-point", k, ("the incoming's %s" % kind if kind else "a non-point")))
         if not paired:
             mark_s = n_out - 30.0 / _bar_seconds(out_t)
-            near = [p for p in sorted(set(out_pts) | set(implied_points(out_t))) if p < n_out - 1e-9
-                    and abs(p - mark_s) * _bar_seconds(out_t) <= PAIR_WINDOW_SECONDS]
+            near = [p for p in sorted(out_cues) if p < n_out - 1e-9
+                    and abs(p - mark_s) * _bar_seconds(out_t) <= 20.0]
             why.append("ONE-SIDED swap: it lines up with a phrase point of only one track; "
                        + ("the outgoing offers phrase points near the 30 s mark (out bars %s) that a pairing could use"
                           % ", ".join("%g" % p for p in near) if near
-                          else "the outgoing offers no phrase point within %g s of the 30 s mark, so this is the fallback"
-                          % PAIR_WINDOW_SECONDS))
+                          else "the outgoing offers no phrase point near the 30 s mark, so this is the fallback"))
     else:
         cost += W_SWITCH_NONE
         terms["switch_phrase"] = W_SWITCH_NONE
         why.append("R2: switch is on no phrase point of either track (out bar %g, incoming bar %g)" % (s, k))
 
-    # R3/R4/R5: end, loops, cuts.  Loops are never part of the track: clocks use e0.
+    # R3/R4/R5: end, loops, cuts.  Two clocks (round 8, see the module docstring): the cut/trim and
+    # swap tests measure the ORIGINAL track; the length and short_blend clocks measure what is heard.
     looped = max(0.0, e - n_out)
     out_end = e
     cut = 0.0
     trim = 0.0
     if looped > 0:
-        cost += W_LOOP * looped
-        terms["out_loop"] = W_LOOP * looped
-        why.append("R3/R4: outgoing tail looped %g bars to reach the incoming phrase point at incoming bar %g"
-                   % (looped, e - a - loop_l))
-    elif n_out - e > END_SLACK_BARS + 1e-9 and _is_trim(out_t, e, out_pts):
+        # round 8, fix 2: a loop is valued, not taxed.  Looping up to the length needed to reach the
+        # exit the pairing calls for (the incoming's next section start or fill start, capped by the
+        # long-fill bound) is FREE when the loop source keeps its kick; only bars beyond that, a poor
+        # source, or the MAX_TAIL_LOOP cap cost.
+        src = loop_source(out_t, r6)
+        t_called = _called_for_exit(in_t, k)
+        free_len = max(0.0, a + loop_l + t_called - n_out) if t_called is not None else 0.0
+        if not _loop_source_good(out_t, src, r6):
+            free_len = 0.0
+        extra = max(0.0, looped - free_len)
+        if extra > 0:
+            cost += W_LOOP * extra
+            terms["out_loop"] = W_LOOP * extra
+        why.append("R3/R4: outgoing tail looped %g bars to reach the incoming phrase point at incoming bar %g; "
+                   "the blend calls for %g of them (up to the exit at incoming bar %s) and %g bars repeat"
+                   % (looped, e - a - loop_l + in_cut, min(looped, free_len),
+                      "%g" % t_called if t_called is not None else "none", extra))
+    elif e >= n_nat - 1e-9:
+        out_end = n_out
+        why.append("R3: outgoing ends naturally on the incoming phrase point at incoming bar %g"
+                   % (e - a - loop_l + in_cut))
+    elif _is_trim(out_t, e, out_pts):
         trim = n_out - e
         cost += W_TRIM * trim
         terms["trim"] = W_TRIM * trim
         why.append("tail trim: the outgoing stops at out bar %g, dropping its last %g bars, which hold "
                    "no phrase point and are not an outro section (not a usable outro)" % (e, trim))
-    elif n_out - e > END_SLACK_BARS + 1e-9:
+    else:
         cut = n_out - e
         cost += W_CUT * cut
         terms["cut"] = W_CUT * cut
         why.append("R5: outgoing outro CUT by %g bars" % cut)
-    else:
-        out_end = n_out
-        why.append("R3: outgoing ends naturally on the incoming phrase point at incoming bar %g"
-                   % (e - a - loop_l))
-    e0 = min(out_end, n_out)
-    e_sw = e0 if cut > 0 else n_out     # swap clock: to the ORIGINAL end unless a forbidden cut moved it
+    e_sw = e if cut > 0 else n_out     # swap clock (original phrasing): to the ORIGINAL end unless a forbidden cut moved it
     if loop_l > 0:
-        cost += W_LOOP * loop_l
-        terms["in_loop"] = W_LOOP * loop_l
-        why.append("R3/R4: incoming intro looped %g bars (phrase ending at incoming bar %g)" % (loop_l, loop_p))
+        # round 8, fix 3: an incoming intro loop exists only to serve the blend (meet a phrase point
+        # with the swap or the entry), exactly like an outgoing loop: it is free.  It is capped by
+        # construction at whole phrases inside the intro that complete before the swap.
+        why.append("R3/R4 (round 8): incoming intro looped %g bars (phrase ending at incoming bar %g): free, "
+                   "it only makes the blend meet the phrase points" % (loop_l, loop_p))
+    if in_cut > 0:
+        why.append("round 8: incoming intro cut by %g bars so the entry meets an outgoing cue point" % in_cut)
 
-    # R1/R2 clocks, soft, to the ORIGINAL end
-    terms["length"] = W_LEN * abs((e0 - a) - bars_min)
+    # R1/R2 clocks, soft.  length is the ACTUAL overlap heard (loops count - they make the blend
+    # longer, which is what a loop is for); switch_time stays on the ORIGINAL phrasing clock.
+    terms["length"] = W_LEN * abs((out_end - a) - bars_min)
     terms["switch_time"] = W_SWITCH_TIME * abs((e_sw - s) - bars_min / 2.0)
     cost += terms["length"] + terms["switch_time"]
     bs = _bar_seconds(out_t)
-    why.append("blend %g bars (%.0f s), switch %g bars (%.0f s) before the original end"
-               % (e0 - a, (e0 - a) * bs, e_sw - s, (e_sw - s) * bs))
+    why.append("blend %g bars (%.0f s) as heard, switch %g bars (%.0f s) before the original end"
+               % (out_end - a, (out_end - a) * bs, e_sw - s, (e_sw - s) * bs))
+    # round 8, fix 7: a soft minimum on the heard overlap, so a ~26 s blend with ~10 s left cannot win
+    heard_s = (out_end - a) * bs
+    if heard_s < MIN_BLEND_SECONDS - 1e-9:
+        terms["short_blend"] = W_SHORT_BLEND * (MIN_BLEND_SECONDS - heard_s)
+        cost += terms["short_blend"]
+        why.append("round 8: heard blend is only %.0f s (soft minimum %g s)" % (heard_s, MIN_BLEND_SECONDS))
+    # round 8, fix 4: an entry before the mix zone is costed, not banned (allowed at all only for a
+    # long incoming intro before its bass-in - the candidates() filter)
+    zone_lo = n_out - _zone_bars(out_t)
+    if a < zone_lo - 1e-9:
+        terms["entry_early"] = W_ENTRY_EARLY * (zone_lo - a)
+        cost += terms["entry_early"]
+        why.append("round 8: entry %.0f s before the mix zone (a long incoming intro)" % ((zone_lo - a) * bs))
     if _valid(in_t):
         in_min = MINUTE_SECONDS / _bar_seconds(in_t)
-        end_in = e - a - loop_l
+        end_in = e - a - loop_l + in_cut
         why.append("incoming one-minute mark is its bar %g; the blend ends at incoming bar %g and the "
                    "switch is at incoming bar %g" % (in_min, end_in, k))
 
@@ -659,7 +833,7 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
 
     # R6: flat check
     src = loop_source(out_t, r6) if looped > 0 else None
-    stretches, flat = content_check(out_t, in_t, a, s, out_end, loop_p, loop_l, r6, src)
+    stretches, flat = content_check(out_t, in_t, a, s, out_end, loop_p, loop_l, r6, src, in_cut)
     runs = flat_runs(stretches)
     flat_c = flat_cost(runs, r6)
     cost += flat_c
@@ -673,17 +847,16 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
                 why.append("R6: %s content unusable under bottom end (no has_kick, empty or mismatched "
                            "lists); fell back to labels for it" % nm)
 
-    mark_s = n_out - 30.0 / _bar_seconds(out_t)
-    bs_ = _bar_seconds(out_t)
-    sane = (paired and terms.get("flat", 0.0) == 0.0 and cut == 0.0
-            and abs(s - mark_s) * bs_ <= PAIR_WINDOW_SECONDS + 1e-9
-            and (e0 - a) * bs_ <= SANE_BLEND_SECONDS + 1e-9)
+    # round 6 sane tier, round 8 fix 4: the window and length cliffs are gone; sane means a
+    # both-sided pairing that keeps bottom end and does not cut the outgoing's usable outro.  The
+    # swap's distance from the 30 s mark and the blend's length are graded costs, not tier gates.
+    sane = paired and terms.get("flat", 0.0) == 0.0 and cut == 0.0
     if paired:
         why.append("pairing: %s" % ("sane, so it outranks every one-sided swap" if sane else
-                                    "both-sided but not sane (flat run, forbidden cut, swap far from the 30 s mark, "
-                                    "or a blend longer than %g s)" % SANE_BLEND_SECONDS))
+                                    "both-sided but not sane (a flat run or a forbidden cut)"))
     return BlendPlan(in_starts_at_out_bar=a, bass_switch_out_bar=s, out_end_bar=out_end,
                      out_looped_bars=looped, in_intro_looped_bars=loop_l, out_cut_bars=cut,
+                     in_intro_cut_bars=in_cut,
                      stretches=stretches, flat_bars=flat, cost=cost, why=why,
                      flat_runs=runs, terms=terms, out_loop_source_bars=src,
                      in_loop_phrase_end=loop_p if loop_l > 0 else 0.0, minute_mark=minute,
@@ -762,27 +935,67 @@ def candidates(out_t, in_t, limit=None, r6=R6_BE):
             for k in in_zone:
                 trips.add((a, a + l + k, p, l))
 
-    plans, seen = [], set()
+    # round 8, fix 3: for every trip whose swap is a two-sided pairing (a phrase point of both
+    # tracks), also offer intro-extended and intro-cut variants whose ENTRY meets the previous or
+    # next outgoing cue point.  Both are free: the loop/cut exists only to make the entry meet the
+    # outgoing's phrasing ("this counts for the intro as well").
+    out_cues = set(out_pts) | set(implied_points(out_t))
+    in_cues = set(in_pts) | set(implied_points(in_t))
+    first_non_intro = next((x[0] for x in _sections(in_t) if x[1] != "INTRO"), float(in_t["n_bars"]))
+    trips5 = set()  # (a, s, loop_p, loop_l, in_cut)
     for a, s, p, l in trips:
+        trips5.add((a, s, p, l, 0.0))
+        k = s - a - l
+        if k < -1e-9 or _snap(max(k, 0.0)) not in in_cues or _snap(s) not in out_cues:
+            continue                            # only pairings: the swap line-up is the fixed thing
+        if any(abs(a - c) < 1e-9 for c in out_cues):
+            continue                            # the entry already meets a cue point
+        prev = max([c for c in out_cues if c < a - 1e-9], default=None)
+        nxt = min([c for c in out_cues if c > a + 1e-9], default=None)
+        if prev is not None:
+            # EXTEND: loop intro bars so the entry moves back to the previous cue point
+            d = a - prev
+            l2, p2 = l + d, (p if p > 0 else k)
+            if l2 > 1e-9 and p2 - l2 >= -1e-9 and p2 <= first_non_intro + 1e-9:
+                trips5.add((prev, s, p2, l2, 0.0))
+        if nxt is not None:
+            # CUT: start part-way into the intro so the entry moves forward to the next cue point;
+            # never cut through the incoming fill that leads into the swap
+            c = nxt - a
+            fill_starts = [fs for fs, fe in _fills(in_t) if abs(fe - k) < 1e-9]
+            if all(c <= fs + 1e-9 for fs in fill_starts):
+                l2 = l - c
+                trips5.add((nxt, s, p if l2 > 1e-9 else 0.0, max(0.0, l2), max(0.0, -l2)))
+
+    n_nat = natural_end_bar(out_t)
+    plans, seen = [], set()
+    for a, s, p, l, cut_in in trips5:
         if a < 0 or a >= n_out or s - a < MIN_SIDE_BARS:
             continue
-        if a < zone_lo - 1e-9 and (a, s, p, l) not in derived:
+        k = s - a - l + cut_in
+        if k - cut_in < p - 1e-9 or k > zone_in + 1e-9:
             continue
+        entry_floor = n_out - ENTRY_MAX_SECONDS / _bar_seconds(out_t)
+        if a < zone_lo - 1e-9 and (a, s, p, l) not in derived:
+            # round 8, fix 4: an early entry is allowed (and costed, in _score) when the incoming
+            # plays a long intro before the swap; ENTRY_MAX_SECONDS stays as an enumeration bound
+            if k * _bar_seconds(in_t) < LONG_INTRO_SECONDS or a < entry_floor - 1e-9:
+                continue
         if s >= n_out - 1e-9:  # R4: a switch in the looped tail would be a loop-derived point
             continue
-        k = s - a - l
-        if k < p - 1e-9 or k > zone_in + 1e-9:
-            continue
+        long_fill = _long_fill_after(in_t, k)
         for t in tgts:
-            e = a + l + t
+            if long_fill is not None and t > long_fill[1] + 1e-9:
+                continue        # round 8, fix 1: no exit past the next long fill after the swap
+            e = a + l + t - cut_in
             if e - s < MIN_SIDE_BARS or e > n_out + MAX_TAIL_LOOP:
                 continue
-            e_eff = n_out if 0 <= n_out - e <= END_SLACK_BARS + 1e-9 else e   # slack: same plan
-            sig = (round(a, 6), round(s, 6), round(e_eff, 6), p, l)
+            e_eff = n_out if e >= n_nat - 1e-9 else e   # the natural end is one plan, however the
+            sig = (round(a, 6), round(s, 6), round(e_eff, 6), p, l, cut_in)  # partial bar counts it
             if sig in seen:
                 continue
             seen.add(sig)
-            plans.append(_score(out_t, in_t, a, s, e, p, l, out_pts, in_pts, r6))
+            plans.append(_score(out_t, in_t, a, s, e, p, l, out_pts, in_pts, r6, cut_in))
     plans = _drop_forbidden_cuts(plans)
     plans.sort(key=_rank_key)
     return plans[:limit] if limit else plans

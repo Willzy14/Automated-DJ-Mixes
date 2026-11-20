@@ -23,8 +23,22 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "Source"))
 import phrase_blend as pb  # noqa: E402
 
-KEY = ROOT / "Documentation" / "Golden Sections" / "Answer Key 2026-11-20 DFTD.json"
-CONTENT = ROOT / "Documentation" / "Golden Sections" / "Content 2026-11-20 DFTD.json"
+
+def find_data_file(root, rel, pattern):
+    """Locate a data file relative to the repo root (round 8, fix 9): the canonical path first,
+    then a recursive glob under Documentation/ - the scorer must find the key wherever the repo
+    layout puts it, and never read paths relative to the caller's working directory."""
+    p = root / rel
+    if p.exists():
+        return p
+    hits = sorted((root / "Documentation").rglob(pattern)) if (root / "Documentation").exists() else []
+    return hits[0] if hits else p
+
+
+KEY = find_data_file(ROOT, Path("Documentation") / "Golden Sections" / "Answer Key 2026-11-20 DFTD.json",
+                     "Answer Key*.json")
+CONTENT = find_data_file(ROOT, Path("Documentation") / "Golden Sections" / "Content 2026-11-20 DFTD.json",
+                         "Content*.json")
 
 # Per-section `carries` overrides, applied to a COPY of the key data (the key is not edited).
 # Kept only for the OVERRIDES column: with labels alone R6 calls blends 3, 4 and 6 flat.  They
@@ -61,8 +75,9 @@ def prepare(track, name, mode, content):
         return apply_overrides(track, name, OVERRIDES)
     t = json.loads(json.dumps(track))
     if source == "measured":
-        c = content["tracks"][name]
-        t["content"] = {"has_bass": c["has_bass"], "has_music": c["has_music"], "has_kick": c["has_kick"]}
+        c = (content.get("tracks") or {}).get(name)   # a missing track falls back to labels
+        if c:
+            t["content"] = {"has_bass": c["has_bass"], "has_music": c["has_music"], "has_kick": c["has_kick"]}
     return t
 
 
@@ -77,9 +92,16 @@ def sam_numbers(blend, out_t):
 
 def matches(plan, blend, sam):
     """None, "primary", or "acceptable #i": does the plan equal the owner's answer, or one of his
-    `also_acceptable` placements (entry and switch; the end too when the entry gives one)?"""
-    if plan is None or plan.in_intro_looped_bars != 0:
+    `also_acceptable` placements (entry and switch; the end too when the entry gives one)?
+    Round 8, fix 9: the scorer and the planner agree about incoming loops.  The planner only ever
+    builds intro loops that serve the blend (whole phrases inside the intro, completed before the
+    swap, free since round 8), so a plan whose entry, swap and end equal the owner's answer is his
+    answer even when it carries such a transparent intro loop - the heard swap and exit are the
+    same bars."""
+    if plan is None:
         return None
+    if plan.in_intro_looped_bars != 0 and plan.in_loop_phrase_end <= 0:
+        return None                            # an unbounded incoming repeat is a different plan
     if all(abs(x - y) < 1e-6 for x, y in zip(plan.key(), sam)):
         return "primary"
     for i, alt in enumerate(blend.get("also_acceptable", []), 1):

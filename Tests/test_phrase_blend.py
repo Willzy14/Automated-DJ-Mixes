@@ -79,18 +79,23 @@ def _exact_vector(mode):
 def test_score_columns_are_pinned_as_measured_in_round_6():
     # Characterisation, not validation.  Seven owner blends: the first six share switch = entry + 16,
     # the seventh (swap on the incoming's bass-in) is entry + 24.
-    # Round 7 (implied phrase points on a regular 8 bar grid): every owner swap is now a two-sided
-    # pairing, so blends 3, 4, 6, 7 are right again.  Blend 1 misses: a 17 bar natural-end pairing
-    # (192/200/209) is cheaper than the owner's 184/200/215, whose outro loop costs 9.0.
-    assert _exact_vector("MEASURED") == [False, False, True, False, True, True, True]
-    assert _exact_vector("LABELS") == [True, True, False, False, True, False, False]
-    assert _exact_vector("OVERRIDES") == [True, True, True, True, True, True, False]
-    assert _exact_vector("BOTTOM END") == [False, True, True, True, True, True, True]
+    # Round 8 (the two CORRECTION reviews): under BOTTOM END - the owner's own rule, with measured
+    # content - all seven now match, blend 1 included: its 6 bar loop to the next incoming fill
+    # start is free, exactly as the owner describes the device.  In the LABELS/OVERRIDES columns
+    # (no measured content) blend 2 now misses on purpose: without content the planner cannot see
+    # that PAX's last counted bar is a silent partial bar, so a stop at bar 192 is priced as a cut
+    # of the outro.  The partial-bar fact is a measured-content fact (round 8, fix 5).
+    assert _exact_vector("MEASURED") == [True, False, True, False, True, True, True]
+    assert _exact_vector("LABELS") == [True, False, False, False, True, False, False]
+    assert _exact_vector("OVERRIDES") == [True, False, True, True, True, True, False]
+    assert _exact_vector("BOTTOM END") == [True, True, True, True, True, True, True]
 
 
 def test_headline_claims_are_true_and_stated():
-    # the module docstring says R6 is inert on the six and the switch is entry + 16 in all six
-    assert "INERT" in pb.__doc__ and "entry + 16" in pb.__doc__ and "END_SLACK_BARS from blend 2" in pb.__doc__
+    # the module docstring says R6 is inert on the six and the switch is entry + 16 in all six,
+    # and tells the two-clock story (round 8)
+    assert "INERT" in pb.__doc__ and "entry + 16" in pb.__doc__
+    assert "original phrasing" in pb.__doc__ and "actual overlap" in pb.__doc__
     assert "not tuned to pass" not in pb.__doc__
     gaps = [b["bass_switch_out_bar"] - b["in_starts_at_out_bar"] for b in KEY["blends"]]
     assert gaps[:6] == [16] * 6 and gaps[6] == 24
@@ -195,7 +200,7 @@ def test_r2_a_sane_pairing_outranks_a_cheaper_one_sided_swap():
     cs = pb.candidates(o, n)
     assert cs[0].sane and cs[0].paired
     sane_keys = [c.key() for c in cs if c.sane]
-    assert (184.0, 200.0, 215.0) in sane_keys[:3]                        # the owner's own answer, rank 2
+    assert sane_keys[0] == (184.0, 200.0, 215.0)          # the owner's own answer, rank 1 (round 8)
     first_unsane = next(i for i, c in enumerate(cs) if not c.sane)
     assert all(c.sane for c in cs[:first_unsane]) and not any(c.sane for c in cs[first_unsane:])
 
@@ -295,26 +300,47 @@ def test_r4_prefers_a_plan_with_no_loop_when_one_fits():
     assert plan.out_looped_bars == 0 and plan.in_intro_looped_bars == 0
 
 
-def test_r4_no_loop_beats_a_looped_plan_with_a_better_clock():
+def test_r4_a_free_loop_can_beat_a_loop_free_plan_with_a_worse_shape():
+    # round 8, fix 2 (owner: "a loop exists only to make the blend longer and more natural", and
+    # free-looping "counts for the intro as well"): loops that serve the blend cost nothing, so
+    # the top pick may carry one.  What is pinned: the winner is chosen by the phrase geometry,
+    # never by an out_loop or in_loop term - those are zero for every loop it carries.
     out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(175, 176), (183, 184)])
     ins = trk(120, [(0, "INTRO"), (8, "DROP"), (24, "BREAK"), (32, "DROP")])
     cs = pb.candidates(out, ins)
-    best_loop_free = [c for c in cs if c.out_looped_bars == 0 and c.in_intro_looped_bars == 0][0]
-    assert cs[0].out_looped_bars == 0 and cs[0].in_intro_looped_bars == 0
-    looped = [c for c in cs if c.out_looped_bars > 0 and c.sane == cs[0].sane]
-    assert looped and min(c.cost for c in looped) > best_loop_free.cost
+    assert cs
+    assert cs[0].terms.get("out_loop", 0.0) == 0.0
+    assert cs[0].terms.get("in_loop", 0.0) == 0.0
+    # and the loop it does carry is an intro phrase looped back so the swap lines up on the
+    # incoming's phrase point (k = 8 = the section), exactly the free device
+    assert cs[0].paired and cs[0].in_loop_phrase_end <= 8.0
 
 
-def test_r4_a_tail_loop_adds_only_its_own_cost_the_clocks_ignore_it():
+def test_r4_a_tail_loop_beyond_the_called_for_exit_costs_and_only_that():
     out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)])
     ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
     nat = _cost(out, ins, 168, 184, 200)
     looped = _cost(out, ins, 168, 184, 206)
     diff = looped.cost - nat.cost
-    assert diff > 5                                   # literal: a loop is not free
-    assert abs(diff - pb.W_LOOP * 6) < 1e-9           # and it is exactly its own term
-    assert looped.terms["length"] == nat.terms["length"]
+    # the incoming's called-for exit after k=16 is its section at 32: the natural end (200) is
+    # already past it, so no loop bar is needed and all 6 cost W_LOOP each
+    assert looped.terms["out_loop"] == pytest.approx(pb.W_LOOP * 6)
+    # the only other change is the heard blend being 6 bars longer (length is the actual-overlap
+    # clock; switch_time is unchanged - the original phrasing clock ignores loops)
     assert looped.terms["switch_time"] == nat.terms["switch_time"]
+    assert diff == pytest.approx(looped.terms["out_loop"]
+                                 + looped.terms["length"] - nat.terms["length"])
+
+
+def test_r4_a_tail_loop_adds_only_its_own_cost_the_switch_clock_ignores_it():
+    out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)])
+    ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
+    nat = _cost(out, ins, 168, 184, 200)
+    looped = _cost(out, ins, 168, 184, 206)
+    diff = looped.cost - nat.cost
+    assert diff > 5                                   # literal: a beyond-need loop is not free
+    assert looped.terms["switch_time"] == nat.terms["switch_time"]   # the original clock ignores it
+    assert looped.terms["length"] > nat.terms["length"]              # the heard clock counts it
 
 
 def test_r4_the_clocks_use_the_outgoing_bpm_not_the_incomings():
@@ -431,13 +457,19 @@ def test_r5_cut_reporting_counts_every_removed_bar():
     ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
     c = _cost(out, ins, 68, 84, 94)                          # the fill end at 96 is dropped: a cut
     assert c.out_cut_bars == 6 and c.out_trim_bars == 0      # six bars removed, six reported
-    assert _cost(out, ins, 68, 84, 99).out_cut_bars == 0     # one bar of slack is not a cut
-    assert _cost(out, ins, 68, 84, 99).out_end_bar == 100
+    # one bar short of a full-bar ending is not the natural end (the last bar has its kick): it is
+    # an allowed trim, priced per bar (round 8, fix 5: no END_SLACK_BARS constant)
+    t = _cost(out, ins, 68, 84, 99)
+    assert t.out_cut_bars == 0 and t.out_trim_bars == 1 and t.out_end_bar == 99
 
 
-def test_r5_one_bar_slack_is_not_a_cut_on_pax():
+def test_r5_pax_partial_last_bar_is_not_a_cut():
+    # round 8, fix 5: PAX's last counted bar has no kick (a partial bar), so a stop at bar 192 is
+    # the natural end, not a one bar cut of the outro
     b = KEY["blends"][1]
-    plan = pb.plan_blend(KEY["tracks"][b["out"]], KEY["tracks"][b["in"]])
+    o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
+    n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
+    plan = pb.plan_blend(o, n)
     assert plan.out_end_bar == 193 and plan.out_cut_bars == 0
 
 
@@ -976,9 +1008,9 @@ def test_the_scorer_reports_three_numbers_and_the_acceptable_offer():
     text = "\n".join(lines)
     assert "top pick = primary" in text and "primary or also_acceptable" in text and "primary in top 3" in text
     assert "(info) swap bar equals one of his" in text
-    assert sum(r["primary"] for r in rows) == 6 and exact == 6
+    assert sum(r["primary"] for r in rows) == 7 and exact == 7          # round 8: all seven match
     assert sum(r["primary_top3"] for r in rows) == 7
-    assert rows[0]["which"] is None and rows[0]["primary_top3"] and rows[6]["which"] == "primary"
+    assert all(r["which"] == "primary" for r in rows)
 
 
 # ---- round 5, mutation follow-ups ------------------------------------------------------------
@@ -1045,13 +1077,14 @@ def test_pairing_is_a_swap_on_a_phrase_point_of_both_tracks_and_the_entry_follow
     assert any("pairing" in w for w in owner.why)
 
 
-def test_blend_1_the_owners_named_pairings_are_candidates_and_his_own_answer_ranks_second():
+def test_blend_1_the_owners_named_pairings_are_candidates_and_his_own_answer_ranks_first():
     b, o, n = _blend1()
     cs = pb.candidates(o, n)
     keys = [c.key() for c in cs]
-    assert keys[0] == (192.0, 200.0, 209.0)               # A11 with B bar 8 (implied 8): no loop, a 17 bar blend
-    assert keys[1] == (184.0, 200.0, 215.0)               # the owner's: A11 with B1, outro looped 6
-    assert keys.index((168.0, 200.0, 216.0)) < keys.index((168.0, 184.0, 216.0)) < 6
+    assert keys[0] == (184.0, 200.0, 215.0)               # the owner's: A11 with B1, outro looped 6, now FREE
+    assert keys[1] == (192.0, 208.0, 223.0)               # the same shape one phrase later, looped to the
+    assert cs[0].terms.get("out_loop", 0.0) == 0.0        # next fill start: also free; the loop term never decides
+    assert keys.index((168.0, 200.0, 216.0)) > 0          # the long free loop pays in the early-entry clock
     assert (152.0, 184.0, 200.0) not in keys              # drops the whole outro: a forbidden cut
     assert _cost(o, n, 152, 184, 200).out_cut_bars == 9
     assert not any(c.key() == (161.0, 193.0, 209.0) and c.sane for c in cs)   # the round 5 pick is one-sided
@@ -1063,7 +1096,7 @@ def test_a_sane_pairing_outranks_every_one_sided_plan_even_a_far_cheaper_one():
     assert plans[0].sane
 
 
-def test_sane_needs_bottom_end_no_forbidden_cut_a_swap_near_the_mark_and_a_sane_length():
+def test_sane_needs_bottom_end_no_forbidden_cut_and_a_two_sided_swap():
     out = with_content(trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)]),
                        [1] * 200, [0] * 200, [1] * 200)
     ins = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)]),
@@ -1073,7 +1106,8 @@ def test_sane_needs_bottom_end_no_forbidden_cut_a_swap_near_the_mark_and_a_sane_
     out_far = with_content(trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(159, 160), (167, 168), (183, 184)]),
                            [1] * 200, [0] * 200, [1] * 200)
     far = _cost(out_far, ins, 144, 160, 200)              # swap 40 bars (75 s) before the end, blend 105 s
-    assert far.paired and not far.sane
+    assert far.paired and far.sane                        # round 8, fix 4: graded costs, not tier cliffs;
+    assert far.terms["switch_time"] > good.terms["switch_time"]   # the far swap pays in the swap clock
     kickless = with_content(out, [1] * 168 + [0] * 32, [0] * 200, [1] * 168 + [0] * 32)
     quiet = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)]),
                          [0] * 120, [0] * 120, [0] * 120)
@@ -1084,15 +1118,16 @@ def test_sane_needs_bottom_end_no_forbidden_cut_a_swap_near_the_mark_and_a_sane_
     assert cut.out_cut_bars > 0 and not cut.sane
 
 
-def test_sane_window_and_blend_length_are_in_seconds():
+def test_sane_has_no_window_or_length_cliffs_left():
+    # round 8, fix 4: the constants are gone and sanity is not a function of seconds
+    assert not hasattr(pb, "PAIR_WINDOW_SECONDS") and not hasattr(pb, "SANE_BLEND_SECONDS")
     out = with_content(trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)]),
                        [1] * 200, [0] * 200, [1] * 200)
     ins = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)]),
                        [1] * 120, [0] * 120, [1] * 120)
-    # 128 bpm: 1.875 s a bar.  Swap 168 is 32 bars (60 s) from the end: 30 s off the mark: not sane
-    assert not _cost(out, ins, 152, 168, 184).sane
-    assert _cost(out, ins, 168, 184, 200).sane
-    assert pb.PAIR_WINDOW_SECONDS == 20.0 and pb.SANE_BLEND_SECONDS == 80.0
+    # 128 bpm: 1.875 s a bar.  Swap 168 is 32 bars (60 s) from the end: outside the old 20 s window,
+    # and a 32 bar (60 s) blend: under the old floor.  Both are graded costs now, so it stays sane.
+    assert _cost(out, ins, 152, 168, 200).sane
 
 
 def test_incoming_point_quality_runs_bass_in_kick_in_fill_end_section_start_none():

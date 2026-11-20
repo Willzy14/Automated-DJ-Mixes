@@ -166,15 +166,15 @@ def test_the_owner_swaps_in_blends_3_4_6_7_are_sane_pairings_and_top_ranked():
         assert top.key() == tuple(float(x) for x in sam) and top.paired and top.sane
 
 
-def test_blend_1_the_owner_is_second_the_terms_that_separate_him_are_the_loop_and_length():
+def test_blend_1_the_owner_is_first_the_loop_term_that_taxed_him_is_gone():
     b = KEY["blends"][0]
     o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
     n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
     cs = pb.candidates(o, n)
     top, own = cs[0], pb._score(o, n, 184, 200, 215, 0.0, 0.0, pb.phrase_points(o), pb.phrase_points(n))
-    assert cs[1].key() == own.key()
-    diff = {k: own.terms.get(k, 0.0) - top.terms.get(k, 0.0) for k in set(own.terms) | set(top.terms)}
-    assert diff["out_loop"] > 8.0 and diff["length"] < 0 and diff["in_point"] < 0
+    assert top.key() == own.key() == (184.0, 200.0, 215.0)
+    assert own.terms.get("out_loop", 0.0) == 0.0          # round 8, fix 2: the 6 bar loop to the next
+    assert own.out_looped_bars == 6                     # fill start is free, exactly as he prescribed
 
 
 def test_the_scorer_prints_the_owner_rank_among_sane_pairings_and_the_types():
@@ -183,7 +183,8 @@ def test_the_scorer_prints_the_owner_rank_among_sane_pairings_and_the_types():
     text = "\n".join(lines)
     assert "owner's primary among the" in text and "sane pairings: rank 1" in text
     assert "types: A bar 139 = implied 8, B bar 24 = marked fill end" in text
-    assert "terms separating the owner's primary from the top pick" in text
+    # round 8: every owner answer is the top pick, so the "terms separating" line never prints
+    assert "terms separating the owner's primary from the top pick" not in text
 
 
 # ---- six alternatives -------------------------------------------------------------------------
