@@ -18,6 +18,8 @@
 
 ## >>> START HERE NEXT SESSION <<<
 
+**2026-11-20 [Claude] - THE ONE THING NOT TO FORGET: SWITCH THE NEW SECTION DETECTOR ON.** Sam, in his words: "if it's good to go and everyone is happy get it switched on, I don't want to do a bunch of work today, forget about it, and then it never gets switched on." The groove detector (`Source/groove_sections.py`, `section_mode="groove"`) is merged but OFF. It finds 46 of Sam's 47 confirmed section lines and all 53 fills (legacy: 33 lines), and 28 of 28 on four unseen tracks. It is off only because the rest of the pipeline cannot read its output yet. Three jobs, none needs Sam, all started 2026-11-20: (1) the readers understand groove output and one real mix builds end to end (`work/groove-switch-on`, worktree `D:\Worktrees\dj-switchon`, brief `D:\Claude Workspace\Automated DJ Mixes\section-key\BRIEF_switch_on.md`); (2) bar one fixed in the grid (`work/bar-one`, worktree `D:\Worktreesat-barone`, brief `BRIEF_bar_one.md` beside it); (3) flip the default to groove after both are reviewed and one DFTD build passes every gate. Until the default is groove this line stays at the top. The same goes for the blend planner (`work/phrase-blend`, `D:\Worktrees\dj-blend`): built from Sam's cue-point rules, in review, unwired; wiring it into `propose_arrangement.py` is the step after the detector is on. Sam's rules are in `Documentation/Golden Sections/` and in the memory note `fills-are-phrase-points`.
+
 **2026-09-13 [Claude]:** first creation of this list. Two independent lenses swept the project
 in parallel, working blind to each other: **Claude/Fable** (general codebase + docs sweep) and
 **Codex/Astra** (`gpt-6-astra`, independent second sweep of the same question). Both converged
