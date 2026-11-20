@@ -2812,11 +2812,24 @@ def alignment_from_decision(o: "Track", i: "Track", decision: dict,
     entry_out = _decision_bar(decision["entry_out_bar"], "entry_out_bar", pair)
     trim = _decision_bar(decision.get("intro_trim_bars") or 0.0, "intro_trim_bars", pair)
     swap_in = _decision_bar(decision["swap_in_bar"], "swap_in_bar", pair)
+    blend_geometry = "out_end_bar" in decision
+    intro_loop = decision.get("intro_loop")
+    if intro_loop and not blend_geometry:
+        raise ValueError(f"decision for pair {pair}: intro_loop requires out_end_bar")
+    extension = 0.0
+    if intro_loop:
+        low = _decision_bar(intro_loop["source_start_bar"], "intro_loop.source_start_bar", pair)
+        high = _decision_bar(intro_loop["source_end_bar"], "intro_loop.source_end_bar", pair)
+        if trim or not 0 <= low < high <= min(i.n_bars, swap_in):
+            raise ValueError(f"decision for pair {pair}: intro_loop must repeat real, untrimmed "
+                             "source bars at or before swap_in_bar")
+        extension = high - low
     if trim < 0 or swap_in <= trim:
         raise ValueError(
             f"decision for pair {decision.get('pair_index')}: swap_in_bar {swap_in:g} "
             f"must come after the intro trim ({trim:g} bars)")
-    _check_decision_intro_trim(i, trim, pair)
+    if not blend_geometry:
+        _check_decision_intro_trim(i, trim, pair)
     if swap_in > i.n_bars + 1e-6:
         raise ValueError(
             f"decision for pair {decision.get('pair_index')}: swap_in_bar {swap_in:g} "
@@ -2826,11 +2839,14 @@ def alignment_from_decision(o: "Track", i: "Track", decision: dict,
         raise ValueError(
             f"decision for pair {decision.get('pair_index')}: the incoming would start "
             f"before the outgoing (entry {entry_out:g} - trim {trim:g})")
-    handoff_out = arr_offset + swap_in
+    handoff_out = arr_offset + swap_in + extension
     if handoff_out > o.n_bars + 1e-6:
         raise ValueError(
             f"decision for pair {decision.get('pair_index')}: the swap lands on outgoing "
             f"bar {handoff_out:g}, after '{o.name}' ends at bar {o.n_bars}")
+    if blend_geometry and _decision_bar(decision["out_end_bar"], "out_end_bar", pair) <= handoff_out:
+        raise ValueError(f"decision for pair {pair}: out_end_bar must come after the swap "
+                         f"at outgoing bar {handoff_out:g}")
     overlap = float(o.n_bars) - arr_offset
     if overlap <= 0:
         raise ValueError(
@@ -2864,6 +2880,12 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
     Cuts come first so a tail loop is planned against the shortened outgoing."""
     specs: list[FillCutSpec] = []
     pair = decision.get("pair_index")
+    blend_geometry = "out_end_bar" in decision
+    end = (_decision_bar(decision["out_end_bar"], "out_end_bar", pair)
+           if blend_geometry else float(o.n_bars))
+    if blend_geometry and (decision.get("outgoing_cut") or decision.get("outro_skip")):
+        raise ValueError(f"decision for pair {pair}: out_end_bar cannot be combined with "
+                         "outgoing_cut or outro_skip")
     cut = decision.get("outgoing_cut")
     if cut:
         cut_bars = _decision_bar(cut["cut_bars"], "outgoing_cut.cut_bars", pair)
@@ -2893,7 +2915,7 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
                 "a whole number")
         reps = int(raw_reps)
         partial = _decision_bar(loop.get("partial_bars") or 0.0, "tail_loop.partial_bars", pair)
-        if s1 <= s0 or reps < 0 or (reps == 0 and partial <= 0):
+        if s1 <= s0 or (blend_geometry and s0 < 0) or reps < 0 or (reps == 0 and partial <= 0):
             raise ValueError(f"decision for pair {pair}: tail_loop geometry is empty")
         if partial < 0:
             raise ValueError(
@@ -2916,14 +2938,30 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
             raise ValueError(
                 f"decision for pair {pair}: tail_loop total extension {ext:g} bars "
                 f"exceeds the {MAX_LOOP_EXTENSION_BARS:g}-bar limit")
+        if blend_geometry and end != o.n_bars + ext:
+            raise ValueError(f"decision for pair {pair}: tail_loop does not reach out_end_bar {end:g}")
         specs.append(FillCutSpec(
-            kind="outgoing_tail", reps=reps, source_start_bar=s0, source_end_bar=s1,
+            kind="decision_tail_loop" if blend_geometry else "outgoing_tail",
+            reps=reps, source_start_bar=s0, source_end_bar=s1,
             partial_bars=partial, target_marker_bar=float(o.n_bars) + ext,
             target_marker_name=f"decision:{loop.get('target') or 'tail'}", note="decision"))
+    elif blend_geometry and end != o.n_bars:
+        if not 0 < end < o.n_bars:
+            raise ValueError(f"decision for pair {pair}: out_end_bar {end:g} requires a tail_loop "
+                             "or a positive stop within the source")
+        specs.append(FillCutSpec(kind="decision_tail_trim", skip_bars=o.n_bars - end))
+    intro_loop = decision.get("intro_loop")
+    if intro_loop:
+        low = _decision_bar(intro_loop["source_start_bar"], "intro_loop.source_start_bar", pair)
+        high = _decision_bar(intro_loop["source_end_bar"], "intro_loop.source_end_bar", pair)
+        specs.append(FillCutSpec(kind="decision_intro_loop", reps=1,
+                                 source_start_bar=low, source_end_bar=high))
     trim = _decision_bar(decision.get("intro_trim_bars") or 0.0, "intro_trim_bars", pair)
     if trim > 0:
-        _check_decision_intro_trim(i, trim, pair)
-        specs.append(FillCutSpec(kind="intro_cut", cut_to_bar=trim,
+        if not blend_geometry:
+            _check_decision_intro_trim(i, trim, pair)
+        specs.append(FillCutSpec(kind="decision_intro_trim" if blend_geometry else "intro_cut",
+                                 cut_to_bar=trim,
                                  target_marker_bar=_decision_bar(
                                      decision["swap_in_bar"], "swap_in_bar", pair),
                                  note="decision"))
@@ -2998,6 +3036,8 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None,
     arr_pos = {0: 0.0}                                       # keyed by INDEX (names may repeat)
     alignments = []
     contraction = 0.0       # left-shift owed to a break-skip at the PREVIOUS pair (beats)
+    intro_extension = 0.0  # right-shift after the previous incoming's phrase repeats
+    intro_loop_end = 0.0
     decisions = decisions or {}
     for k in range(1, len(tracks)):
         o, i = stems[resolved[k - 1]], stems[resolved[k]]
@@ -3006,22 +3046,32 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None,
             al = alignment_from_decision(o, i, decision, policy)
         else:
             al = align_pair(o, i, policy)
+        if intro_extension and al.arr_offset_bars + al.intro_cut_bars < intro_loop_end:
+            raise ValueError(f"decision for pair {k}: entry precedes the outgoing track's "
+                             f"intro repeat at source bar {intro_loop_end:g}")
         prev = arr_pos[k - 1]
+        out_clock = prev + intro_extension if intro_extension else prev
         # A break-skip at an earlier pair tightened the timeline (its incoming lost a
         # break), so THIS track + the swap into it move left by `contraction`. The
         # break-skip pair's OWN incoming does NOT move (its drop lands on the existing
         # swap); only tracks AFTER it contract. So apply `contraction` here, then let a
         # break-skip detected at THIS pair set it for the next iteration. prev is already
         # contracted for later pairs, so the shift propagates once via the prefix sum.
-        new = max(prev + al.arr_offset_bars * 4.0 - contraction, prev)   # anti-rewind clamp
+        new = max(out_clock + al.arr_offset_bars * 4.0 - contraction, prev)
         arr_pos[k] = new
-        al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction    # outgoing final pos + handoff
+        al.swap_beats = out_clock + al.handoff_bar_out * 4.0 - contraction
         al.landmark_candidates = report_landmark_candidates(o, i, al, prev, new)
         al.vocal_regions_arrangement = report_vocal_regions(o, i, prev, new)
         if decision is not None:
             al.fills_cuts = fills_from_decision(o, i, decision)
         else:
             al.fills_cuts = plan_fill_or_cut(o, i, al, policy)   # loops/cuts around the swap
+        incoming_loop = next((f for f in al.fills_cuts if f.kind == "decision_intro_loop"), None)
+        if incoming_loop:
+            intro_extension = 4.0 * (incoming_loop.source_end_bar - incoming_loop.source_start_bar)
+            intro_loop_end = incoming_loop.source_end_bar
+        else:
+            intro_extension = 0.0
         # Computed AFTER plan_fill_or_cut, not right after align_pair (Codex
         # review, 2026-09-13): an outgoing-tail loop genuinely extends the
         # outgoing past its native n_bars (Christoph -> A Studio: flag would
@@ -3038,6 +3088,8 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None,
             max(o.n_bars, float(outgoing_tail.target_marker_bar))
             if outgoing_tail else None
         )
+        if decision is not None and "out_end_bar" in decision:
+            effective_end = float(decision["out_end_bar"])
         al.outgoing_has_post_swap_content = _outgoing_has_post_swap_content(
             o, al.handoff_bar_out, effective_end=effective_end
         )

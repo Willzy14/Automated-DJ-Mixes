@@ -99,8 +99,15 @@ def load_env(env_dir, word):
     hits = [f for f in glob.glob(env_dir + "/*__stemenv.npz") if word in f]
     if len(hits) != 1:
         raise SystemExit("expected one envelope file for %r, found %d" % (word, len(hits)))
-    z = np.load(hits[0], allow_pickle=True)
-    return {k: z[k] for k in z.files}, float(z["hop_t"]), hits[0]
+    with np.load(hits[0], allow_pickle=True) as z:
+        return {k: z[k] for k in z.files}, float(z["hop_t"]), hits[0]
+
+
+def read_envelope(path):
+    """Read a cached envelope at an exact path, independent of the answer key."""
+    with np.load(path, allow_pickle=False) as cache:
+        keys = ("drums", "bass", "vocals", "other", "tiera_band_low")
+        return {key: cache[key] for key in keys}, float(cache["hop_t"])
 
 
 def measure(env_dir=ENV_DIR, out=OUT, quiet=False):

@@ -135,6 +135,7 @@ class OverlapAnalysis:
     break_skip_shift: tuple | None = None  # (track_name, threshold_beat, delta) — pull drop onto swap
     outro_split: tuple | None = None       # (track_name, clip_name, skip_beats, keep_end_beats)
     front_cut: tuple | None = None         # (track_name, clip_name, cut_beats) — decisions: cut a clip's front, pull the rest in
+    blend_edits: list = field(default_factory=list)
     shift_delta: float = 0.0
     similar_pairs: list[dict] = field(default_factory=list)
     # Burn list C7 Step 1, report-only (never gates/rejects, same discipline
@@ -916,7 +917,41 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
     """
     from align_engine import DECISIONS_POLICY, LANDMARK_POLICIES
     for fc in getattr(al, "fills_cuts", None) or []:
-        if fc.kind == "outgoing_tail" and (fc.reps >= 1 or fc.partial_bars > 0):
+        if fc.kind in ("decision_intro_loop", "decision_tail_loop"):
+            is_intro = fc.kind == "decision_intro_loop"
+            track = in_track if is_intro else out_track
+            source_origin = float(track.sections[0]["source_start_beats"])
+            low, high = fc.source_start_bar * 4.0, fc.source_end_bar * 4.0
+            insert_at = track.arr_start + high if is_intro else track.arr_end
+            partial = fc.partial_bars * 4.0
+            extension = fc.reps * (high - low) + partial
+            spec = LoopSpec(
+                track_name=track.name,
+                source_beat_start=source_origin + low,
+                source_beat_end=source_origin + high,
+                count=fc.reps,
+                insert_at_beat=insert_at,
+                clip_name="decision_intro_loop" if is_intro else "decision_tail_loop",
+                tail_partial_beats=partial,
+            )
+            if is_intro:
+                analysis.in_intro_loop = spec
+                analysis.blend_edits.append((track.name, "insert", insert_at, extension))
+            else:
+                analysis.out_tail_loop = spec
+            track.arr_end += extension
+            analysis.overlap_policy = "named_landmark_64"
+            analysis.loop_target_marker = "decision:blend"
+            analysis.notes += f"; {fc.kind} {extension / 4:g} bars from native {low / 4:g}-{high / 4:g}"
+        elif fc.kind == "decision_intro_trim":
+            in_track.arr_start += fc.cut_to_bar * 4.0
+            analysis.blend_edits.append((in_track.name, "trim_front", in_track.arr_start, 0))
+            analysis.notes += f"; decision intro trim {fc.cut_to_bar:g} bars"
+        elif fc.kind == "decision_tail_trim":
+            out_track.arr_end -= fc.skip_bars * 4.0
+            analysis.blend_edits.append((out_track.name, "trim_end", out_track.arr_end, 0))
+            analysis.notes += f"; decision tail trim {fc.skip_bars:g} bars"
+        elif fc.kind == "outgoing_tail" and (fc.reps >= 1 or fc.partial_bars > 0):
             outro = next((s for s in out_track.sections if _label(s) == "outro"), None)
             if not outro and getattr(al, "alignment_policy", "") != DECISIONS_POLICY:
                 continue
@@ -1155,6 +1190,40 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
     for note in getattr(al, "notes", None) or []:
         if "suppressed" in note:
             analysis.notes += f"; {note}"
+
+
+def _apply_blend_edits(lines, overlaps):
+    """Split at exact decision boundaries, then shift or remove the affected clips."""
+    from apply_loops import shift_clips_from_beat
+    from automated_dj_mixes.als_generator import (
+        _audio_clip_line_ranges, _clip_number, _xml_number, split_audio_clip_at_beat,
+    )
+
+    for overlap in overlaps:
+        for name, operation, beat, extension in overlap.blend_edits:
+            match = _match_track(name, find_track_line_ranges(lines))
+            if not match:
+                raise ValueError(f"Transition {overlap.pair_index}: missing decision track {name!r}")
+            start, end, _ = match
+            before = len(lines)
+            split_audio_clip_at_beat(lines, start, end, beat)
+            end += len(lines) - before
+            clips = _audio_clip_line_ranges(lines, start, end)
+            if operation == "insert":
+                changed = shift_clips_from_beat(lines, start, end, beat, extension)
+            else:
+                if operation == "trim_front":
+                    remove = [(a, b) for a, b in clips
+                              if _clip_number(lines, a, b, "CurrentEnd") <= beat]
+                else:
+                    remove = [(a, b) for a, b in clips
+                              if _xml_number(lines[a], "AudioClip", "Time") >= beat]
+                for first, last in reversed(remove):
+                    del lines[first:last + 1]
+                changed = len(remove)
+            if not changed:
+                raise ValueError(f"Transition {overlap.pair_index}: {operation} at beat {beat:g} "
+                                 f"did not edit {name!r}")
 
 
 # -- Pair history matching ----------------------------------------------------
@@ -1536,7 +1605,9 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                       f"swap in-bar {d['swap_in_bar']}"
                       + (", tail loop" if d.get("tail_loop") else "")
                       + (", front cut" if d.get("outgoing_cut") else "")
-                      + (", outro skip" if d.get("outro_skip") else ""))
+                      + (", outro skip" if d.get("outro_skip") else "")
+                      + (f", end {d['out_end_bar']}" if "out_end_bar" in d else "")
+                      + (", intro loop" if d.get("intro_loop") else ""))
         positions, alignments = compute_aligned_positions(
             tracks, stem_dir, order=[t.name for t in tracks],
             policy=get_policy(transition_policy), decisions=decisions)
@@ -1992,6 +2063,9 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                         f"front cut: clip '{clip_name}' not found on '{tname}'")
                 print("  Front cut: '{}' on '{}' by {:.0f} beats, later clips pulled in".format(
                     clip_name, tname[:40], cut_beats))
+
+        if decisions_path is not None:
+            _apply_blend_edits(lines, plan.overlaps)
 
         # Step 2: Apply loop extensions
         if all_loops:

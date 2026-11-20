@@ -4,6 +4,10 @@ Module reference for all pipeline components.
 
 ## Modules
 
+### `Tools/plan_mix_decisions.py` (2026-11-20, Codex)
+
+Reads a project's groove section JSONs and cached stem envelopes, then writes one top-ranked phrase-blend decision per adjacent pair. Pass `--sections` to use the same layout JSON as Phase 2, `--out` for the decisions, and optionally `--content` for the measured per-bar kick, bass, and music flags. The decisions add `out_end_bar` and optional `intro_loop` to name an exact outgoing stop and an incoming phrase repeat for `propose_arrangement.py --decisions`. The normal loop and ALS validators check the resulting geometry.
+
 ### `Tools/playlist_builder.py` (2026-10-06, Claude)
 Builds a mix playlist from the Neon credits ledger via the read-only role `mix_planner_ro` (URL: `MIX_PLANNER_RO_DATABASE_URL` in the GitHub-folder `Credentials/Credentials.txt`; or `--rows file.json` offline). `sql` prints the SELECT; `build` filters by label/artist/year/streams/heat, orders by a genre-heat arc (`rise|wave|flat`), presets `hits|cool|cult|any`, one row per VERSION, drops acapella/dub/instrumental/radio edits. Genre tags are drafts. Not yet hooked to `resolve_masters.py`; no tests.
 
