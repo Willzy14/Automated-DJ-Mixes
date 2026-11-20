@@ -5,7 +5,8 @@ Usage:
   python Tools/blend_candidates.py --out "Ninetoes" --in "Ashibah"
          [--key FILE] [--content FILE] [--top 5] [--r6 be|v1]
 
---key     JSON with "tracks": {name: {bpm, n_bars, sections, fills}}  (default: the DFTD answer key)
+--key     JSON with "tracks": {name: {bpm, n_bars, sections, fills, optional end_bar}}
+          (default: the DFTD answer key)
 --content JSON from Tools/measure_section_content.py (default: the DFTD content file, used for any
           track named in it; other tracks fall back to labels)
 --out / --in   a track name or any unique part of one
@@ -42,7 +43,7 @@ def point_name(letter, track, bar):
     """The owner's name for a phrase point: fills F1.. in order (A-F7 end), section lines numbered from 1
     after the track start (A11, B1), the track start and end."""
     names = []
-    fills = sorted(track.get("fills", []), key=lambda f: f[0])
+    fills = sorted(pb._fills(track))
     for i, f in enumerate(fills, 1):
         if abs(bar - float(f[1])) < 1e-9:
             names.append("%s-F%d end" % (letter, i))
@@ -54,7 +55,7 @@ def point_name(letter, track, bar):
             names.append("%s%d" % (letter, j))
     if abs(bar) < 1e-9:
         names.append("%s start" % letter)
-    if abs(bar - float(track["n_bars"])) < 1e-9:
+    if abs(bar - pb.natural_end_bar(track)) < 1e-9:
         names.append("%s end" % letter)
     if not names:
         return "%s bar %g (no phrase point)" % (letter, bar)
@@ -63,7 +64,7 @@ def point_name(letter, track, bar):
 
 def pairing_name(plan, out_t, in_t):
     """e.g. 'A-F7 end (bar 184) with B1 (bar 16) [B kick-in]' for a candidate's swap."""
-    k = plan.bass_switch_out_bar - plan.in_starts_at_out_bar - plan.in_intro_looped_bars
+    k = plan.swap_incoming_bar
     a = point_name("A", out_t, plan.bass_switch_out_bar)
     b = point_name("B", in_t, k)
     role = " [B %s]" % plan.in_point_kind if plan.in_point_kind else ""
@@ -77,8 +78,8 @@ def rules_for(plan, out_t, in_t):
     """Which of the three switch rules a candidate satisfies."""
     out_pts, in_pts = pb.phrase_points(out_t), pb.phrase_points(in_t)
     a, s = plan.in_starts_at_out_bar, plan.bass_switch_out_bar
-    k = s - a - plan.in_intro_looped_bars
-    e0 = min(plan.out_end_bar, float(out_t["n_bars"]))
+    k = plan.swap_incoming_bar
+    e0 = pb.natural_end_bar(out_t)
     half_minute_bars = (30.0 / (240.0 / float(out_t["bpm"])))
     return {
         "ENTRY+16": abs((s - a) - 16.0) < 1e-9,
@@ -95,7 +96,7 @@ def placement_rules_for(plan, out_t):
     SWAP-ANCHORED  the swap is the incoming's bass-in about 30 s before the original end (entry derived)
     FILL-END       entry and swap are both the END of an outgoing fill
     MINUTE-MARK    the entry is an outgoing phrase point about a minute before the outgoing end"""
-    fill_ends = {float(f[1]) for f in out_t.get("fills", [])}
+    fill_ends = set(pb._fill_ends(out_t))
     return {
         "SWAP-ANCHORED": bool(plan.swap_anchored),
         "FILL-END": plan.in_starts_at_out_bar in fill_ends and plan.bass_switch_out_bar in fill_ends,
@@ -120,10 +121,11 @@ def disagreement(out_t, in_t, r6=pb.R6_BE):
 
 
 def report(out_t, in_t, out_name, in_name, top=5, r6=pb.R6_BE, out=print):
-    cs = pb.candidates(out_t, in_t, r6=r6)
+    why = []
+    cs = pb.candidates(out_t, in_t, r6=r6, why=why)
     out("%s  ->  %s   (R6 %s, %d candidates)" % (out_name, in_name, r6, len(cs)))
     if not cs:
-        out("  no candidate fits the mix zones")
+        out("  no plan" + (" - " + ". ".join(why) if why else ""))
         return {"candidates": 0, "disagree": False}
     for i, c in enumerate(cs[:top], 1):
         r = rules_for(c, out_t, in_t)
