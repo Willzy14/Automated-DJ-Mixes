@@ -569,6 +569,22 @@
    "out_looped_to_bar": null,
    "out_cut_at_bar": null,
    "status": "proposed by Claude, confirmed by Sam: bang on"
+  },
+  {
+   "out": "Adam Ten & Rafael - Call 911",
+   "in": "Darius Syrossian & George Smeddles - Back In The Dance",
+   "in_starts_at_out_bar": 115,
+   "bass_switch_out_bar": 139,
+   "out_looped_to_bar": null,
+   "out_cut_at_bar": 147,
+   "status": "TRICKY pair, not from the mix. Sam's own placement from a picture (provisional until heard): incoming intro starts at the outgoing drop return (A6), bass switch on the incoming bass-in which lands 30 seconds from the outgoing end, outgoing stops at the incoming break (last 8 bars, about 15 seconds, not used). The planner had picked 123 / 147 / 155. Confirmed after seeing it drawn: keep this one (most energetic, the swap is where the new bass comes in).",
+   "also_acceptable": [
+    {
+     "in_starts_at_out_bar": 115,
+     "bass_switch_out_bar": 131,
+     "note": "Sam: swapping at the end of outgoing fill A-F4 would also work (about 45 seconds of switch time); less energetic; he cannot rank them without listening."
+    }
+   ]
   }
  ]
 }

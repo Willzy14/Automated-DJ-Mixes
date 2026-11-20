@@ -1,0 +1,48 @@
+VERDICT: CORRECTION
+
+The Camelot maths and reported holdout results check out. Before merging, bound the estimator's memory use, make non-finite results return an unknown key, and rename `confidence` to `support_score`. A single 12-minute synthetic WAV reached **1,172 MiB peak working set** at the default analysis rate.
+
+### Maths and measurement
+
+I checked all 24 entries in the pinned sequencer against Mixed In Key's official wheel, tested both conversion directions, and independently checked all 576 ordered key pairs. All 24 rotated Krumhansl-Kessler profiles scored 1.0 against their corresponding test vectors and ranked the correct key first. Both profile arrays match Krumhansl's published Table 2.3 after rotating A minor to tonic-first order. Fifths wrap in both directions, relatives share a number, and parallels share a tonic. Both compatibility implementations correctly include exact, fifth and relative. [Official Camelot chart](https://mixedinkey.com/camelot-wheel/) and [Krumhansl, Table 2.3](https://www.scribd.com/doc/153235678/Cognitive-Foundations-of-Musical-Pitch-pdf).
+
+| Holdout result | Count | Percent |
+|---|---:|---:|
+| Exact | 94 | 47.0% |
+| Fifth | 38 | 19.0% |
+| Relative | 10 | 5.0% |
+| Parallel | 10 | 5.0% |
+| Other | 48 | 24.0% |
+| Camelot-compatible | 142 | 71.0% |
+
+I reclassified all 200 CSV rows from their key names. Every row agreed, the weighted score was **0.5900**, and the evaluator reproduced the supplied holdout summary exactly. At **0.62 or above**, 116 tracks qualified, with **66/116 exact (56.9%)** and **93/116 compatible (80.2%)**. The supplemental baseline CSV also reproduces 35.5% exact, 60.0% compatible, and the paired gains and losses in the builder report.
+
+### Fitting and confidence
+
+The development chroma cache contains exactly the 200 dev paths and zero holdout paths. From that cache I reproduced the four rounded confidence edges and the five exact-hit counts of 14, 15, 25, 28 and 28 out of 40. The report documents dev comparisons for the C3 cutoff, upper octave range, chroma aggregation, HPSS, profile choice, and bass bonus. The pitch gate uses the dev contrast floor and a white-noise probe. Tuning is estimated separately from each input's audio. The artifacts support dev-only fitting. The run-once chronology remains the builder's account.
+
+At a score of **0.70**, the dev exact rate was **56/80 (70.0%)** and the holdout rate was **40/71 (56.3%)**. That score band was also less often compatible on holdout than the **0.62** band, **76.1% versus 86.7%**. The score still distinguishes the broad low and high groups. It can stay high when a compatible runner-up nearly ties the winner because it measures separation from the best *incompatible* candidate.
+
+Rename the field to `support_score` and document it as follows. **"Heuristic ranking score derived from development-set bins and chroma contrast. Values have no probability interpretation. The 0.62 cutoff was evaluated with the default KK profile, crop, sample rate, and zero bass weight."**
+
+### Robustness and tests
+
+- **Long audio.** The 30-second cap only bounds reading and HPSS. `_harmonic` retains every block and concatenates them. Tuning then allocates several spectrogram-sized arrays across the full crop. For a 12-minute file, each of those float32 arrays is about 85 MiB at 22.05 kHz. Memory grows with duration and concurrent workers. The synthetic run completed at 1,172 MiB, including Python and the in-memory WAV. Bound the full analysis and verify peak memory at the intended worker count. [librosa 0.11 tuning source](https://librosa.org/doc/0.11.0/_modules/librosa/core/pitch.html)
+- **Short audio and formats.** Silence and a 100 ms tone returned unknown. Blocks below 4,096 resampled samples are zeroed, and surviving excerpts shorter than eight seconds are padded. A three-second triad gave the expected key at native 22.05, 48 and 96 kHz. Identical-channel stereo matched mono at each rate. Opposite-polarity stereo cancelled to unknown.
+- **Non-finite values.** NaN PCM in the crop raised `ValueError`. NaN injected into the final chroma returned `C major` with zero support and a NaN margin. Check finiteness before ranking and return unknown for invalid features.
+- **Tests.** All 80 pinned cases passed with in-memory WAVs, including the repeatability check. The alias, invalid-input, relation, profile-value, compatibility and detune tests exercise their stated cases. The full-wheel round-trip test shares the production table. The steady 44.1 kHz fixture can pass with only the first block, and its crop spans two blocks. Three deliberate edits survived their targeted tests: removing the numeric bass bonus, returning a named key for silence, and collapsing the middle calibration bins. The module labels its fixtures synthetic. The triads, chord progression and bass pedal exercise controlled signals. The holdout supplies the real-music evidence.
+
+### Merge and wiring
+
+Merge after those corrections as an unwired estimator. At wiring, use it only when a trusted key is missing, and only as a bounded tie-breaker at `support_score >= 0.62` under the measured settings. Failed, invalid, or below-threshold estimates should leave the key unknown. Require a transition-level check before enabling it by default. Two predictions of `8A` can each be compatible with their reference keys `7A` and `9A`, while those reference keys are two steps apart. The track-level 80.2% therefore cannot establish mix-pair accuracy.
+
+_Validated: pinned Git snapshot, independent wheel and CSV checks, 80 in-memory test cases, and a 12-minute synthetic run._
+
+All four `SHA.txt` prefixes matched `key_estimate.py` (`138cc3133762cb9d`), `eval_key_estimate.py` (`8974e194c859effe`), `test_key_estimate.py` (`e2f7a0deb05902f1`), and `change_vs_main.diff` (`52531ca92db820e9`). I also read the builder report, both summaries, the holdout CSV, the pinned sequencer, and the supplemental dev and baseline evidence.
+
+### FOUND UNASKED
+
+- **Resume can mix experiments.** The evaluator reuses rows by path alone, even if the reference key, profile, or estimator revision changes. The supplied holdout reported `resumed 0`. Require a matching run configuration and reference manifest before allowing reuse.
+- **The split is path-disjoint, with 13 project folders represented on both sides.** The listed mixes are distinct tracks. Some may share musical material, so group related versions by project for the next independent validation.
+===CODEX-ASK-DONE exit=0 nonce=85bda855786e447f8debe4fa2b531150===
+===SEAT-DONE codex item8_r1===

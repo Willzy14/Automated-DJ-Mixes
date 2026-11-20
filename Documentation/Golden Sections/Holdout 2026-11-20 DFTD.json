@@ -1,0 +1,10 @@
+{
+ "what": "Holdout check of the work/sections-key detector (commit 5705c43) on four DFTD tracks it was never tuned on. Sam judged each from a picture on 2026-11-20. Bars are 1-based as shown on the pictures.",
+ "pictures": "D:/Claude Workspace/Automated DJ Mixes/sections-key-work/holdout/",
+ "tracks": {
+  "Offaiah - Something In Your Eyes (Extended Mix)": {"verdict": "looks good", "lines": 6, "wrong": []},
+  "Hannah Wants - Ghetto": {"verdict": "looks good, one correction", "lines": 10, "wrong": [{"line": "A9 outro", "detector_bar": 170, "true_bar": 169, "why": "bass plays its last note on beat 1 of bar 169; line belongs straight after fill F7"}]},
+  "MASON Collective - A Little Affection": {"verdict": "lines usable, one fill missed", "lines": 5, "wrong": [{"missed_fill": "kick out for one beat at bar 152 beat 4, 4:49, one minute from the end (track ends 5:50)", "why": "one-beat fills are not detected"}], "notes": "A1 bar 25 is bass in (4 bars), 4 bar gap, full drop at bar 33; both are phrase points"},
+  "Kyle Watson - The Afterhours (Extended Mix)": {"verdict": "looking good", "lines": 7, "wrong": [], "notes": "fills print a quarter bar off the grid (grid of this track is suspect; it fails the grid gate). Sam: the end of fill F6 (about a minute from the end) is where a mix would start"}
+ }
+}

@@ -1,0 +1,92 @@
+VERDICT: CORRECTION
+
+The 5-of-6 score reproduced exactly, including the miss on blend 6. The planner can still cut a usable outro when a natural ending is available, start a blend before the outgoing track begins, and crash on empty measurement arrays. The blend 6 miss is a close scoring decision. It is not a bottom-end failure.
+
+## 1. Owner's rules versus the planner
+
+- **Never cut a usable outro.** Cuts are eligible and cost 12 per bar after one bar of slack. I gave both tracks continuous measured kick. The planner chose `(68, 84, 98)` at cost 13.50 on a 100-bar outgoing track. A natural ending at 100 was available at cost 18.00. The selected plan removes two bars and reports one. The planner has no test of whether an outro is usable.
+- **Use original phrasing.** The candidate generator keeps the switch out of the outgoing tail extension and puts any incoming repeat before the switch. But the timing costs use the loop-extended end, so adding a tail loop can change which switch wins before the original end. Outgoing loop content is also modeled by repeating the last measured bar's flags, without choosing or checking the audio span to repeat.
+- **Use fills and section boundaries in their musical roles.** Entry prefers a fill end, then a section start, then an unphrased point. Blend 2 itself uses the unphrased fallback. Switches use fill ends and section starts, with a premium for hitting both tracks. The owner accepted one-sided switches, and his words give no fixed premium for a second hit. Fill starts are used only as end targets, and the planner can skip the next eligible fill or section for a later one. It trusts supplied section markers, so it has no way to reject a pads-only change like the PAX example. It also has no preference for the first incoming kick, the outgoing fill into the outro, or the specific long-intro/long-outro placement the owner described. Several of those are examples whose priority he never made universal.
+- **Stay in the mix zones.** At 125 BPM the 64-bar search extends about 123 seconds, roughly twice the owner's stated minute. Incoming end targets reach 80 bars, about 154 seconds. The latter allowance has no explanation in the code.
+- **Keep bottom end through the blend.** With complete measurements and no overrides, the final mode excludes incoming lows before the switch, then counts incoming kick or bass and outgoing kick. Music cannot rescue a flat bar. That matches the stated intent, assuming the measured outgoing kick still supplies lows after EQ. A `carries` override can count the outgoing side after the switch even with no measured kick, and label fallback can count a `BREAK` with no verified bottom end. Sampling in whole-bar steps also misses fractional changes. Brief gaps are a soft cost per the owner. Making the first eight bars of every gap free is the builder's choice.
+- **Incoming level and pictures.** Full kick from bar zero is allowed. The module models the incoming low cut for scoring, with no gain or EQ instructions in the returned plan. The owner's picture requirements for fill times, track ends, bass entry and colour legends are outside these files.
+
+## 2. What the constants buy
+
+| Planner constant | Basis |
+|---|---|
+| `W_LEN=0.5`, `W_SWITCH_TIME=0.25` | The owner gave the targets of about a minute and about 30 seconds. The linear penalties and their relative weights are stated builder judgments. |
+| `W_ENTRY_SECTION=1`, `W_ENTRY_OFF=6` | The fill preference comes from the owner. The fallbacks and their prices are stated builder judgments. |
+| `W_SWITCH_ONE=2`, `W_SWITCH_NONE=12` | The code explicitly ranks two hits, one hit, then zero. The prices are judgments. With ordinary coordinates every generated switch has at least one hit, so `W_SWITCH_NONE` is exercised by a direct scorer test rather than the search. |
+| `W_CUT=12`, `W_LOOP=1.5` | Both are stated judgments. Pricing a cut contradicts the owner's prohibition. The owner allows loops to extend a blend without giving a per-bar price or an absolute preference against them. |
+| `FREE_FLAT_BARS=8`, `W_FLAT_RUN=0.25`, exponent `2` | The owner said short gaps can work and long ones lose energy. The free phrase, quadratic curve, and calibration equating 32 flat bars to a 12-bar cut are explicit judgments. |
+| `W_FLAT=10`, `CARRY_LABELS`, `v1`/`be`/alias | The 10 and the label mapping are legacy heuristics. The mode names and alias are implementation choices. The scorer's separate 6-of-6 override result is explicitly based in part on accepted placements. |
+| `MIX_ZONE_BARS=64`, target allowance `+16`, `MIN_SIDE_BARS=4`, `MAX_TAIL_LOOP=24`, `MIN_IN_LOOP=4` | The owner specified a rough time zone and phrase-based loops. These exact limits are unexplained choices, including the same 24-bar cap on early endings. The single incoming repeat between consecutive intro points, completed before the switch, is also a design choice. |
+| `END_SLACK_BARS=1` | Explicitly derived from PAX in the six-case set. It applies to every track, including a track with a full last bar. |
+| `4`, `240`, half the minute, bar-zero/end anchors, one-bar sampling, tolerances, rounding and tie order | The time conversions assume 4/4. The rest are implementation choices. Ties favor less incoming looping, then less outgoing looping, then earlier coordinates. |
+
+I changed one value at a time in memory. `W_LOOP` from 1.50 to 2.34 flips **blend 1** to `(176, 192, 207)`, a cut. The six-bar loop costs `0.75 + 6 * W_LOOP`, and the cut costs 14.75. `END_SLACK_BARS` from 1 to 0.5 flips **blend 2** to an end at 192. A 32-bar mix zone also flips blend 2 because its accepted entry is 33 bars from the recorded end. The file states that the weights predate the scoring run. The snapshot establishes the values and their effects, without establishing when they were chosen.
+
+## 3. Blend 6
+
+Both switches have zero flat cost. Bar 160 is the outgoing fill end and outro start. It lands on incoming bar 16, which has continuous kick and bass but no marked phrase point. Bar 168 hits an outgoing fill end and incoming bar 24, also a fill end. It leaves about 15 seconds before the end, versus about 31 seconds at 160.
+
+The owner's 30-second guidance favors 160. The final bottom-end rule does not distinguish the placements, and his words do not settle how much timing to give up for a second phrase hit. A literal last-fill preference would favor 168. A mandatory switch at bass departure would break blend 4.
+
+The smallest rule consistent with the six is a stronger preference for the 30-second switch when both choices sustain bottom end. `W_SWITCH_TIME=0.28` instead of `0.25` reproduces all six. The exact trade at the current weight is 1.8125 in timing savings versus 2.00 for the missing phrase hit. That change demonstrates sensitivity. The six placements cannot establish the right trade for a new pair.
+
+## 4. Measurement
+
+`has_kick` uses two independent per-bar percentiles. Hats or claps can raise the drum envelope while a bass note raises the low band, producing a kick flag even if their peaks never coincide. After the outgoing bass is cut, that false kick can still count. A quiet kick can miss either relative threshold. The P90 bass test helps with the sidechain pattern in the tests, but a narrower or quieter bass pulse can miss it, and deep ducking can defeat the P20 sustain check. A long kick tail can pass that sustain check. The vocal and other stems can also misreport music through leakage or quiet parts, though that changes diagnostics and legacy scoring rather than the final bottom-end cost.
+
+Call 911's half-bar lead-in is present in both JSON files and used by the measurement code. Dropping it shifts windows by about 0.97 seconds. At 125 BPM a 0.2 BPM error accumulates about 0.30 bars over 190 bars. Both errors can shift or smear a fill across the bar whose flag determines the cost. The cached envelopes were absent from the pack, so I checked the supplied flags and their consequences.
+
+The clearest cross-checks follow. The key says the owner confirmed marker positions and Claude assigned the labels, so a `BREAK` can legitimately carry lows.
+
+| Track | What the measurements show |
+|---|---|
+| Back In The Dance | Kick and bass return before labeled drops following the breaks at 32, 72 and 128. The outro has kick through bar 206, then two bars without a kick flag. |
+| Revelry | The DROP at 16 has kick but no detected bass until 32. The BREAK at 96 has substantial kick and bass. Kick continues well into the outro. |
+| Passion VIP | The note places the kick stop at 135.75. The whole-bar result also flags later kicks at 137 and 141, both with bass flags. |
+| Come Back | The INTRO has kick and bass throughout. The first BREAK retains bass, and the OUTRO retains kick through the end. |
+| Devotion | The INTRO has kick between fills, with no bass. The OUTRO has kick throughout. There is a one-bar kick and bass flag at 72 in the BREAK before the drop at 74. |
+| Better When | Kick persists through most of both labeled breaks and all of the outro. The last bass flag ends at 158, at the start of the fill into the 160 outro line. |
+| Call 911 | The INTRO has kick and bass throughout. The BREAK at 32 has bass throughout and kick for most of it. The final section has both through the end, with no outro marker. |
+
+These flags matter to the ranking. Clearing only Come Back's outro kick flags in memory moved **blend 4** from switch 176 to 168. Its low-cut incoming track cannot cover the 16 bars before the original switch.
+
+## 5. Tests and plausible failures
+
+All **79 tests passed** with a read-only path adapter for the flattened pack. The final score test pins the exactness vector to five passes and a miss on blend 6. It would accept a *different* miss on blend 6. The scorer prints both placements and the cost breakdown and reproduced `SCORE_OUTPUT.txt` exactly.
+
+I could not verify the stated 17-mutant set from the pack. My in-memory mutations removed the tail-loop cap, early-cut cap, incoming target cap, minimum intro loop length, and the requirement to complete the incoming loop before the switch. Each left all 79 tests passing. Removing either the kick's drum threshold or the sub route's minimum low-band amplitude also survived. The incoming 64-bar switch test iterates zero candidates. The test named for preferring kicks over a kickless plan gives the outgoing track kick on every bar.
+
+- **Sparse or short tracks.** Tracks without fills can work with enough section markers. A kick-through-end track without an outro label can also plan. An incoming track with only its initial section gives no end target, even when a natural overlap is possible. The planner returns `None`, and the scorer then dereferences it. A 16-bar outgoing example returned `(-8, 8, 16)`.
+- **Incoming shorter than the blend.** A target at incoming bar 11 on an 11.25-bar track was snapped to a 12-bar overlap. The planner counted the incoming track's last measured bar after it had ended.
+- **Fractional switches and different tempos.** In a synthetic case with a switch at 4.25, the content check kept outgoing bass until bar 5. The planner assumes beatmatching. Without it, at 126 versus 133.02 BPM, 32 outgoing bars span about 33.8 incoming bars.
+- **Empty measurements.** `{}` falls back to labels. A populated content dict with empty flag arrays raises `IndexError`, as can mismatched array lengths.
+
+## Snapshot verified
+
+The folder has no Git metadata, so I verified the exported files against `SHA.txt` and matched all six added files to their diff payloads and blob IDs. I could not independently resolve the branch or commit.
+
+```text
+d2a73538ea6be9ad  phrase_blend.py
+03c9eeb7061f3df8  score_blends.py
+7a7ecd5c4afcf184  measure_section_content.py
+5a258a58b3b29d90  test_phrase_blend.py
+9e9748acd074e6cc  change_vs_main.diff
+94627dbc3c34c619  test_measure_section_content.py
+1cee1ddc7a7e5602  answer_key.json
+4a18be952d48c40a  content.json
+2e07cfcc35d1a1c5  OWNER_RULES.txt
+a3f94927ad3caba1  SCORE_OUTPUT.txt
+97bb9efd52a0ba2d  SHA.txt
+```
+
+## FOUND UNASKED
+
+- Blend 2's planner and owner rows print identical placements but different costs, 6.31 and 7.06. The planner prices its target at 192 before reporting a natural end at 193. The owner's row is priced at 193. A future cost comparison needs to use the same effective end on both sides.
+- The returned plan records incoming loop length without a structured loop position, and the exact-match key ignores incoming loops altogether. A future result can score `EXACT` while playing different incoming bars.
+===CODEX-ASK-DONE exit=0 nonce=88a81c2f05f2469cb3317363ef5c4222===
+===SEAT-DONE codex blend_r1===

@@ -1,0 +1,108 @@
+﻿• Now the diff and the detector. Reading the diff first.
+
+• VERDICT: CORRECTION
+
+  Files read (SHA.txt): stem_detector.py fd536b1ad7ece27e, score_sections.py 45acfd3d7f4dcd17, test_groove_structure.py f434744ccb152553, change_vs_main.diff 775a99d17d66166c, plus answer_key.json, OWNER_RULES.txt, BUILDER_REPORT.txt, ABLATION.txt, SCORE_FINAL.txt, SCORE_MAIN.txt. The verdict rests on two stop-rule failures: the bar-one change can silently corrupt tracks that were right before, and cached outputs can be mixed across schema versions. Both are fixable; nothing here says drop the work.
+
+  1. OVER-FITTING
+
+  New constants and rules, one by one:
+
+  - KICK_FULL_FRAC = 0.75 (kick is full only at >= 0.75 of the track's solid kick level). General musical fact (a fill/soft kick is quieter than a groove kick), and the ablation sensitivity rows (0.65-0.85 all give 51/2/3) show the score is flat across the neighborhood on these 7 tracks. Reasonably safe. Failure mode elsewhere: a track whose kick is mixed genuinely quiet (deep house, a filtered second half, a sidechain-pumped kick) reads its whole groove as not-full and the detector falls apart; the threshold is only measured on 7 tracks.
+  - KICK_FULL_BAR_BEATS = 3. General fact (one dropped beat is syncopation). Fine.
+  - BASS_ON_FRAC = 0.10 with "a thinned bass is still bass". Justified by a named key example (Ninetoes 144-160); sensitivity rows show flatness 0.05-0.20 is NOT true (0.05 loses a line and adds an extra, so the margin to the nearest failure is one step). Borderline.
+  - BASS_IN_KICK_FRAC / LOW_ON_FRAC (bass stem nearly silent under full kick -> read the low band). The comment itself says "fires only on PAX". Single-track rule, but disclosed as such. Expect it to fire on any sub-heavy tech house where Demucs puts the bass in the kick bin; whether it then behaves is unproven on any track except PAX.
+  - SHORT_FILL_BARS = 2, FILL_MAX_BARS = 6 (short dropout is a fill, longer with bass gone is a break). Owner-backed: "fills are one or two bar dropouts". The 6-bar-while-bass-holds extension is the gap between owner wording and code; its only exercise is the key's own fills.
+  - FULL_STOP_FILL_BARS = 2 with "no kick heard AND no bass -> line at fill end" (Back In The Dance 54-56, 102-104, 174-176). The builder names this as the single-track rule; the ablation confirms it: removing it moves only Darius Syrossian (11 found -> 8). Disclosed, and it has a negative test (light-kick fills are ornament). Where I expect it to fail: techno/tech-house with recurring 2-bar percussion-only drops as a production device (a "drum drop" edit, or a track with a 2-bar full-stop every 16 bars). Every one of those becomes a section line. On the key it happens to fire only at phrase boundaries; nothing in the rule enforces that.
+  - FILL_LEAD_BARS = 2 (kick drop up to 2 bars before a phrase point is the fill into the break; line at the phrase point). Owner-backed by picture 2 (PAX 169: the section starts after the fill) and Eli Brown 30-32. Ablation shows it moves 4 tracks, so it is not single-track. Failure mode: phrase points are recomputed as 4-bar steps from the previous line, and pickups can move that line, so on tracks with off-grid breaks the phrase-point grid can drift and the line lands up to 2 bars away from where the music changes.
+  - SILENT_BEAT_FRAC = 0.15. Measured margin: Call 911 silent beats <= 0.09, quietest real intros >= 0.25. Only one track exercises the shift (ablation row 2: turning it off moves only Adam Ten, and only extras). Disclosed, but see point 2.
+  - "A bass change counts only when it lasts at least 4 bars both sides; if a fill sits on it the line goes at the fill end." Owner-backed in principle. Code detail not covered by the owner: the fill skip loop takes any fill within +-1 bar of the change, including 6-bar fills, so the line can land up to 6 bars after the actual bass change. Sam confirmed 2-bar cases.
+  - "A fill never makes a section line" and "fills are first-class output". Directly from OWNER_RULES.txt. Sound.
+  - Energy and stereo-width cues kept "only where the kick is full". Owner says the lines follow the rhythm section; keeping old cues as a fallback is the compromise that yields the known 3 extras. This is where the builder's arithmetic does not match the ablation: BUILDER_REPORT says "width cues give 2 key lines and cause all 3 extras". ABLATION row 9 (width cues off) says width cues currently contribute 3 found lines (PAX, Ashibah, Eli Brown each lose one) and cause the Ninetoes extra only; the two Call 911 extras (64, 124) survive with width cues off, so they come from the groove rules themselves. The claim "width cues cause all 3 extras" is wrong per the builder's own measurement file.
+
+  2. BAR ONE
+
+  Code check against the claim: the brief and the builder say the shift happens "only when the first sounding beat is a kick". The code (stem_detector.py:210-246) checks the DRUMS STEM: `dp[k] < 0.5 * median(dp)` -> keep grid; any drum hit at half the median level passes, not a kick. A track opening with a snare/clap pickup, a percussion roll, or a snap on the last beat of a bar gets its grid moved to that hit. That is the code being broader than the stated rule; either the rule should say "a drum" or the check should use the kick model output.
+
+  When it moves bar one wrongly:
+  - Quiet atmospheric intro: an ambient pad or filtered texture intro sitting at 0.10-0.14 of the body median for 4+ beats, followed by a kick, is classified as silence and skipped. If Sam counts the ambient intro as bar 1 (which DJs routinely do), the whole grid and every line jumps forward. The measured safety margin is a factor of ~1.7 on each side, from 7 tracks.
+  - Pickup/anacrusis: a kick pickup one beat before the true bar 1 moves the grid one beat early; every line lands on the .75. Whole-beats-only keeps the phase but not the bar.
+  - Reverse cymbal: a swell rising through the nominal silent beats can push a partial-beat peak above 0.15 and stop the skip early, or the skip can stop one beat late; the grid then differs by a beat from the owner's count.
+  - Half a beat of silence: correctly not skipped (whole beats only); no issue.
+  - First sound not a kick and not a drum (vocal, pad): guarded, grid kept. Good.
+
+  Downstream blast radius when it moves on a track that was right: every section start_sec is recomputed against the new zero point; n_bars changes; hints (first_drop_sec, last_bass_drop_sec, outro_start_sec) change; the mix.md convention documented in the code itself ("stem bar 0 == the track's downbeat == the sections-JSON zero point", stem_detector.py:1117-1118) is broken for shifted tracks (sections[0].start_sec is now e.g. 1.0s, not 0.0). align_engine.load_track and phrase_viz were not run. Old Hints/track_hints.json and any warp-marker/.ls artifacts derived from the old grid are stale by the shift amount, and nothing invalidates them. Note also the scorer's bar1 column exists precisely to catch this, but the headline found count cannot catch a uniform shift under 1 bar (see point 7).
+
+  3. COMPATIBILITY
+
+  Readers inside stem_detector.py of the changed data:
+  - signals.fills: `_visualize` (stem_detector.py:1851, plotting only) and `hints_from_stem_result` (line 1969: last_bass_drop_sec is the last fill start before the outro). The hint semantics change silently: old fills were energy dips including 1-beat fills; new fills are full-kick dropouts only. A track whose last bass-swap candidate was a 1-beat fill now produces a different hint, and the hints gate was not re-validated.
+  - sections / labels: `hints_from_stem_result` (labels drop/break/outro), the drop-fragment fold (lines 1555-1565, still mutates sections after labelling), `refine_intro_drop_boundary`, `_check_cached_sections_inner` (validates hint ranges against section ends), `_resolve_bpm_downbeat_stats` (reads only bpm from a cached JSON).
+  - downbeat: everything downstream of detect() inside the file uses the possibly-moved downbeat consistently, so the JSON is internally coherent; the hazard is external consumers that assume the old zero-point convention.
+  - Elsewhere in the pipeline, by name in the diff/comments: align_engine.load_track (explicitly named at stem_detector.py:1116 as the reader of these cached JSONs), phrase_viz (builder report, not run), the orchestrator reading soft_hints, Tools/section_key_picture.py (updated in the diff, reads fill_sections with a legacy fills fallback), Tools/section_key_replay.py (derives the downbeat from a cached JSON as start_sec - start_bar * spb, which handles both conventions by accident).
+
+  Versioning: there is NO schema or detector-version field. `analysis` gains downbeat_sec and leading_silence_beats, but nothing requires them. The existing provenance gate (`_kick_provenance`, used by `_check_cached_sections_inner` and `_may_overwrite_sections_json`) checks only the kick-model flag; an old-schema JSON written with the kick model and a new-schema JSON both classify as KICK_ON and both pass. So a project folder can hold old-grid JSONs for some tracks and new-grid JSONs for re-analyzed tracks, the gate accepts both, and align_engine mixes grids. This stop-rule prong fails. Fix is cheap: bump a `sections_schema` version in the JSON and refuse (or migrate) mismatched caches in the read path.
+
+  One more unflagged compat point: `section_key_replay.py` memoises the kick model activation as `<out>/_kick_activation/<stem>.npy` with no bpm/downbeat/model identity in the name; the docstring advertises re-runs "at a different grid". If the activation is grid-independent that is fine, but nothing checks it, and a memo computed under one grid is silently reused under another.
+
+  4. THE FIVE CHANGED PINNED TESTS
+
+  - test_kick_model_integration fills pin ([] -> [[8.0, 12.0]] + fill_sections): real semantic change with a stated reason; a 2-bar kick-out is a fill under rule b and OWNER_RULES says fills must be shown. Justified.
+  - R2 kick-less head (was: OFF-control intro 0-16 + break 16-32, ON merges to 0-32, neutralised control to 24; now: 0-32 for all three flag states): justified and correctly reasoned - with the groove detector, bass flips inside a kick-down head cannot cut lines (in_break[:head_end] excludes the head), so the negative controls test a state that no longer exists. But note the cost: the test now passes identically with the flag off, on, and R2-neutralised, so it no longer pins any behaviour of the R2 machinery. R2's branch in _label_groove_sections requires `groove["head_end"] is None`, which is only true for a kick-IN head - i.e. R2's own case is now structurally unreachable and only R4's case remains. The test is honest; the code it nominally pins is dead-by-construction.
+  - R2 negative (kick-in head + break): same expectation (on 24, off 16), measured on the intro block instead of one merged intro. Real improvement in measurement, not a weakening.
+  - R4 (was "one merged intro 0-24"; now intro 0-16 + intro 16-24 with the line at 16 kept): the merge removal makes this the correct expectation, and the new assertion is strictly stronger (it checks the boundary at 16 survives). Justified.
+  - R4 does-not-relabel-body-breaks: same, plus an added positive assertion that the bar-32 break stays. Strengthened.
+
+  None of the five was weakened without a stated reason; each carries a CHANGED comment explaining the new semantics. The one thing the diff does not say out loud: the old R2 OFF-control was the only proof that fixture was non-vacuous, and its deletion means the suite no longer detects if R2's wiring is removed entirely.
+
+  5. DEAD CODE
+
+  `_assign_labels`, `_merge_same_label`, `_snap_merge`, `_phrase_fills`, `_find_outro_start` remain in stem_detector.py with zero production callers (references at lines 84, 876, 882, 1308, 1659 are comments only). The builder says tests pin them; the diff itself does not show those tests, so I treat "pinned by tests" as a claim I could not verify from the pinned files, though 1872 passing tests makes it plausible. Whether pinned or not, keeping them is not acceptable as-is: they are the old detector, sitting next to the new one, importable and callable with no marker. The safest handling: delete them in the same change if no test truly needs them; if tests do need them, move them into the test file (or a test helper module) so production code cannot import them. That is the standard fix and it also answers "a later caller can pick the old one": after the move, no production namespace offers the old path. Same treatment applies to the now-unreachable R2 branch inside _label_groove_sections.
+
+  6. NEW TESTS
+
+  Rules a-f coverage in test_groove_structure.py:
+  - a (bar one): four tests (silent beats move it; no silence keeps it; quiet intro is not silence; silence-then-pad keeps the grid). Each fails if the rule is removed. Note the silence-then-pad test covers the pad case but not the percussion-pickup case that the drums-stem check actually permits.
+  - b (fills first-class, short dropout is a fill): test_one_and_two_bar_dropouts_are_fills_without_lines and test_kick_out_with_bass_holding_up_to_six_bars_is_a_fill. Yes. "A fill never makes a section line" is pinned by both (lines == [] assertions). The lead-fill case also pins that the fill itself does not get a line (line at the phrase point, not at the drop).
+  - c (kick/bass state changes): test_lasting_bass_entry_under_full_kick_is_a_line, test_bass_change_on_a_fill_goes_to_the_fill_end, test_thinned_bass_that_comes_back_is_not_a_line (negative guard), plus the bass-in-kick fallback pair. Yes.
+  - d (pickups): test_drop_two_bars_before_phrase_point_is_the_fill_into_the_break and test_kick_return_is_not_snapped_to_the_grid. Yes.
+  - e (outro): three direct tests of _groove_outro_start including the negative (no outro when last fills keep the low end). Yes, with the caveat that direct function tests would still pass if the function were no longer called from detect().
+  - f (short breaks): test_four_bar_break_with_bass_gone_is_a_section, test_long_kick_out_is_a_break_even_with_bass, test_short_break_is_labelled_break. Yes.
+  - The disclosed extra rule (full-stop fill): test_two_bar_full_stop_fill_resets_the_phrase plus the light-kick negative. Yes.
+
+  Gaps: no test for the "energy/width cues only where the kick is full / outside kick-down" gating; no test for the 2-bar line dedup ("keep the first of two lines closer than two bars"), which can drop a real owner line in favor of a spurious earlier one; no test pins that fill_sections, not legacy fills, is what detect() writes.
+
+  7. THE SCORER
+
+  score_sections.py can flatter the detector in specific ways:
+  - A systematic grid shift of just under 1 bar still scores every line "found": matching is one-to-one (so one detector line cannot match two key lines - that part is sound), but tolerance is 1.0 bar and matching is in bar space after lead-in correction. A detector that is uniformly 0.9 bars early scores 53/53 found with all the error invisible except in the bar1 column, which is printed but not gated. Call 911 on main is the proof: bar1 -0.50 and it still matched 3 of 6.
+  - Fills are counted found by ANY overlap in time, even a sliver, and any kick gap (kick_dropout to kick_return) also counts as a fill find, while gaps are excluded from the extras count. That asymmetry means the fill side can only look good: 53/53 with 4 extras is softer than the line score. A fill shifted a whole bar can still overlap a 2-bar key fill and count.
+  - Extras for lines are counted correctly (one-to-one, nearest-first; Ninetoes 179.999 and Call 911 64.001 show up). No flattery there.
+  - Labels are not scored at all, which is fair because Sam confirmed positions only, but it means "51 of 53" says nothing about intro/drop/break/outro naming.
+
+  Net: the headline numbers are real but the fill number and any bar-shifted line number are generous. The builder's own claims mostly survive; the scorer would not catch a half-bar-everywhere regression, which is exactly the bar-one risk.
+
+  8. MERGE JUDGEMENT
+
+  Before this replaces main's detector, all of the following must be true:
+  - Every downstream reader is run against new output on real audio: align_engine (mix builds), phrase_viz, the hints gate with fresh Hints files, and one Ableton render checked against a picture. The builder states none were run.
+  - The skipped corpora (Revoloution, Double Dutch, James Poole, and whatever else the 47 skips cover) are re-run and their pinned expectations either pass or are re-justified track by track. These are the only real-audio checks outside the 7 fitted tracks, and they are currently silent.
+  - A schema/version field is added to SECTIONS_STEM JSONs and enforced in `_check_cached_sections_inner` / `_may_overwrite_sections_json` / align_engine, with a one-time cache invalidation or migration. Without this, old-grid and new-grid JSONs mix silently.
+  - The four holdout pictures are confirmed by Sam (owner check, not score check).
+  - The bar-one shift needs owner eyes on a broader set than 7 tracks, specifically tracks with quiet intros and percussion pickups, or it lands behind a flag.
+
+  Should it land behind a flag first: yes. The natural shape is what the codebase already does for soft_intro_outro: a flag (or a sections_schema version plus new cache filename) that lets the pipeline run both detectors, score both on the next real mix, and let Sam pick from pictures. Given "every later step depends on those lines", an unconditional merge with unrun downstream callers and unversioned caches is not safe. The direction is right and the builder's disclosure is unusually good; the blockers are wiring and validation, not the approach.
+
+  Stop-rule check: (i) every rule that moves only one track in the ablation is disclosed in a comment (full-stop -> Back In The Dance; bar-one -> Call 911; bass-in-kick -> PAX), so no hidden single-track fit found; (ii) the bar-one change CAN silently corrupt a previously-right track, and its blast radius (hints, alignments, stale caches) is unaddressed; (iii) cached outputs CAN be mixed across versions, there is no schema field and the provenance gate does not distinguish old from new; (iv) no pinned test was weakened without a stated reason. Two prongs fail -> CORRECTION, not SOUND. The brief's own uncertainties (points 2, 3, 8) are exactly where the failures are.
+
+  FOUND UNASKED
+
+  - The stated bar-one rule does not match the code: "only when the first sounding beat is a kick" (brief, builder, docstring flavour) vs the implementation, which accepts any drum hit in the drums stem at >= 0.5 of median (stem_detector.py:243-245). A clap/snare/snare-roll opening moves the grid under the documented rule's own wording.
+  - `_groove_structure`'s fill-skip loop (stem_detector.py:779) can park a bass-change line at the end of a 6-bar fill, 6 bars after the change; Sam confirmed the 2-bar behaviour only. The answer key's own note on Call 911 ("the stem analysis grid is half a bar late") shows the owner confirmed bar one = first sounding kick on exactly one track.
+  - `_refine_fill_beats` gives beat-precise fill edges, but lead fills are forced to a bar-precise end (`ke = 4 * s1`) while other fills keep beat precision; two fill formats in one output list.
+  - `section_key_replay.py` memoises kick activations under `<stem>.npy` with no bpm/downbeat/model identity, and its docstring advertises re-running "at a different grid"; if the activation is grid-dependent in any way, the memo silently reuses the wrong grid.
+  - `find_result` in score_sections.py takes the first sorted glob hit on a name prefix, so two SECTIONS_STEM files sharing a prefix score the wrong one without warning.
+  - The R2 branch inside `_label_groove_sections` is unreachable in its own kick-less-head case (requires head_end is None, which means kick-in head); the changed R2 test passing identically for all flag states is the suite confirming the dead code rather than pinning behaviour.
+  - Test gap: the 2-bar minimum line spacing ("keep the first of two lines closer than two bars") can discard a genuine owner line in favour of a spurious earlier one, and nothing tests it.
+
+===SEAT-DONE kimi sections_r1===
