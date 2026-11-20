@@ -39,7 +39,7 @@ def stem_audio(wav_path: Path) -> tuple[np.ndarray, np.ndarray, int]:
     t = (t - ref.mean()) / (ref.std() + 1e-8)
     print(f"  separating {wav_path.name} ({_device().upper()}, full-res)...")
     with torch.no_grad():
-        out = apply_model(model, t[None], device=_device(), progress=False)[0]
+        out = apply_model(model, t[None], shifts=0, device=_device(), progress=False)[0]
     out = out * (ref.std() + 1e-8) + ref.mean()
     names = list(model.sources)
     drums = out[names.index("drums")].mean(0).cpu().numpy()

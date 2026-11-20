@@ -22,7 +22,7 @@ DEFAULT_THRESHOLD = 0.30
 DEFAULT_FILL_OFF_BEATS = 6
 DEFAULT_DROP_ON_BEATS = 1
 DEMUCS_MODEL_NAME = "htdemucs"
-DRUMS_CACHE_VERSION = 1
+DRUMS_CACHE_VERSION = 2
 
 _MODEL_MODULE = None
 _PRESENCE_MODULE = None
@@ -749,7 +749,7 @@ def _run_demucs_separation(
     t = (t - ref.mean()) / (ref.std() + 1e-8)
     print(f"  separating {wav_path.name} ({dev.upper()}, kick model)...")
     with torch.no_grad():
-        out = apply_model(model, t[None], device=dev, progress=True)[0]
+        out = apply_model(model, t[None], shifts=0, device=dev, progress=True)[0]
     out = out * (ref.std() + 1e-8) + ref.mean()
 
     hop = max(1, int(sr * hop_sec))
