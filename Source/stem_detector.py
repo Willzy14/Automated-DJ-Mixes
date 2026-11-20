@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -301,7 +303,11 @@ def _model_kick_presence_per_beat(wav, bpm, downbeat, n_beats, kick_model_path=N
             return np.pad(values, (0, n_beats - len(values)), constant_values=False)
         return values[:n_beats]
 
-    return fit(section_on), fit(landmark_on)
+    # `used` is what the sections will actually be built from: a provider that
+    # returned an empty readout is padded to all-kicks-off below, which is not
+    # kick-detector data and must not be recorded as such.
+    used = len(landmark_on) > 0
+    return fit(section_on), fit(landmark_on), used
 
 
 def _energy_cues(mix_norm, downbeat, sec_per_bar):
@@ -805,6 +811,55 @@ def _resolve_bpm_downbeat_stats(project: Path, wav_stem: str) -> dict | None:
     return _load_stats(blind, wav_stem) if blind else None
 
 
+def _ascii(value) -> str:
+    """Printable on a cp1252 console: non-ASCII becomes backslash escapes."""
+    return str(value).encode("ascii", "backslashreplace").decode()
+
+
+def _check_cached_sections(path: Path, wav_stem: str, allow_unverified: bool = False):
+    """Judge a cached SECTIONS_STEM json for --write-hints.
+
+    Returns (result_dict, note). result_dict is None when the file is not
+    usable and note is then the reason. A usable result may carry a note (only
+    with allow_unverified, when the kick-detector provenance is missing).
+    """
+    if not path.exists():
+        return None, f"missing {path.name}"
+    try:
+        res = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - any read/parse failure is "unusable"
+        return None, f"unreadable {path.name}: {type(exc).__name__}: {exc}"
+    if not isinstance(res, dict):
+        return None, f"{path.name} is not a JSON object"
+    if res.get("track") != wav_stem:
+        return None, f"{path.name} is for track {res.get('track')!r}, not {wav_stem!r}"
+    bpm = res.get("bpm")
+    if (isinstance(bpm, bool) or not isinstance(bpm, (int, float))
+            or not math.isfinite(bpm) or bpm <= 0):
+        return None, f"{path.name} has no usable bpm ({bpm!r})"
+    sections = res.get("sections")
+    if not isinstance(sections, list) or not sections:
+        return None, f"{path.name} has no sections"
+    try:
+        hints_from_stem_result(res)
+    except Exception as exc:  # noqa: BLE001 - any failure means the file is unusable
+        return None, f"{path.name} cannot yield hints: {type(exc).__name__}: {exc}"
+
+    analysis = res.get("analysis")
+    if analysis is not None:
+        verified = isinstance(analysis, dict) and analysis.get("kick_model") is True
+    else:
+        signals = res.get("signals")
+        verified = (isinstance(signals, dict)
+                    and signals.get("kick_presence_source") == "kick-detector-v3")
+    if verified:
+        return res, None
+    if allow_unverified:
+        return res, (f"{path.name} is not known to come from the kick detector "
+                     f"(accepted by --allow-unverified-cache)")
+    return None, f"{path.name} is not known to come from the kick detector"
+
+
 def _may_overwrite_sections_json(path: Path, kick_model_on: bool) -> bool:
     """Overwrite guard for SECTIONS_STEM_*.json.
 
@@ -821,11 +876,11 @@ def _may_overwrite_sections_json(path: Path, kick_model_on: bool) -> bool:
         prior = json.loads(path.read_text(encoding="utf-8"))
         prior_kick = bool((prior.get("analysis") or {}).get("kick_model", False))
     except (ValueError, AttributeError, OSError) as exc:
-        print(f"  [warn] could not read existing {path.name} for the overwrite guard: "
-              f"{type(exc).__name__}: {exc}; overwriting")
+        print(f"  [warn] could not read existing {_ascii(path.name)} for the overwrite guard: "
+              f"{type(exc).__name__}: {_ascii(exc)}; overwriting")
         return True
     if prior_kick:
-        print(f"  [WARN] {path.name} was written WITH the kick model; this run has it off, "
+        print(f"  [WARN] {_ascii(path.name)} was written WITH the kick model; this run has it off, "
               f"so the file was NOT overwritten")
         return False
     return True
@@ -920,8 +975,9 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     kick_on, kick_peaks, kick_ref = _kick_on_per_beat(envs["drums"], hop_t, bpm, downbeat, n_bars)
     landmark_kick_on = kick_on.copy()
     kick_source = "stem-energy-threshold"
+    kick_model_used = False
     if kick_model or kick_provider is not None:
-        _section_kick_on, _raw_kick_on = _model_kick_presence_per_beat(
+        _section_kick_on, _raw_kick_on, _model_used = _model_kick_presence_per_beat(
             wav, bpm, downbeat, n_bars * 4,
             kick_model_path=kick_model_path,
             kick_model_device=kick_model_device,
@@ -929,12 +985,17 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
             drums_mono=model_drums,
             drums_sr=model_drums_sr,
         )
-        kick_on = _raw_kick_on            # THE FIX -- was the smoothed/section signal.
-                                           # Classification/boundary-cutting now sees the
-                                           # same un-bridged signal the default stem-energy
-                                           # path already uses correctly.
-        landmark_kick_on = _raw_kick_on   # unchanged in effect -- was already raw before this fix
-        kick_source = "kick-detector-v3"
+        if _model_used:
+            kick_on = _raw_kick_on            # THE FIX -- was the smoothed/section signal.
+                                               # Classification/boundary-cutting now sees the
+                                               # same un-bridged signal the default stem-energy
+                                               # path already uses correctly.
+            landmark_kick_on = _raw_kick_on   # unchanged in effect -- was already raw before this fix
+            kick_source = "kick-detector-v3"
+            kick_model_used = True
+        else:
+            print("  [WARN] the kick provider returned no readout; using the energy-threshold "
+                  "kick presence and NOT recording kick_model true")
     kick_on_bar = np.array([kick_on[b * 4:(b + 1) * 4].mean() >= 0.5 for b in range(n_bars)])
     kick_cues = _kick_cues(kick_on, bpm, downbeat)
 
@@ -1262,7 +1323,6 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
         }
         signals["tier_a"] = tier_a_data
 
-    kick_model_used = bool(kick_model or kick_provider is not None)
     result = {"track": wav.stem, "bpm": round(bpm, 2), "n_bars": n_bars,
               "sections": sections, "signals": signals,
               "analysis": {"kick_model": kick_model_used}}
@@ -1490,9 +1550,15 @@ def main():
     ap.add_argument("--track", type=str, default=None)
     ap.add_argument("--write-hints", action="store_true",
                     help="Auto-write Hints/track_hints.json from stem sections (the "
-                         "fully-autonomous path — no manual visual-pass needed). No PNGs.")
+                         "fully-autonomous path - no manual visual-pass needed). No PNGs. "
+                         "Reads the Phase 1a SECTIONS_STEM json only; never runs detect.")
+    ap.add_argument("--allow-unverified-cache", action="store_true",
+                    help="With --write-hints: also accept a cached SECTIONS_STEM json that is "
+                         "otherwise valid but not known to come from the kick detector (WARN per "
+                         "track). Never accepts a missing, wrong-track, empty or bpm<=0 file.")
     ap.add_argument("--kick-model", action="store_true",
-                    help="Use Kick Detector V3 for kick IN/OUT presence. Default is off.")
+                    help="Use Kick Detector V3 for kick IN/OUT presence. Default is off. "
+                         "Does NOT affect --write-hints (which only reads the cached analysis).")
     ap.add_argument("--kick-model-path", type=Path, default=None,
                     help="Path to Kick Detector weights. Defaults to sibling "
                          "'Kick Detector/Models/kick_crnn_V3.pt'.")
@@ -1503,43 +1569,35 @@ def main():
     wavs = [audio / args.track] if args.track else sorted(audio.glob("*.wav"))
 
     if args.write_hints:
-        hints = {}
-        print(f"Auto-generating hints from stem detection for {len(wavs)} track(s):")
+        # Pure read of the Phase 1a analysis: never runs detect(), never writes
+        # a SECTIONS_STEM json. All tracks must be usable or nothing is written.
+        hints, bad = {}, []
+        print(f"Deriving hints from the cached stem analysis for {len(wavs)} track(s):")
         for w in wavs:
-            res = None
             cached = args.project / "_Stem Analysis" / f"SECTIONS_STEM_{w.stem}.json"
-            if cached.exists():
-                try:
-                    res = json.loads(cached.read_text(encoding="utf-8"))
-                    hints_from_stem_result(res)  # shape check before trusting it
-                    print(f"  {w.stem[:42]}: hints from the cached analysis ({cached.name})")
-                except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                    print(f"  [warn] malformed cache {cached.name}: {type(exc).__name__}: {exc}; "
-                          f"falling back to a fresh detect")
-                    res = None
-            else:
-                print(f"  [WARN] no cached analysis for {w.stem[:42]} ({cached.name}); running detect")
+            res, note = _check_cached_sections(cached, w.stem, args.allow_unverified_cache)
             if res is None:
-                if not args.kick_model:
-                    print("  [WARN] this detect runs WITHOUT the kick detector and may disagree "
-                          "with a pipeline run")
-                res = detect(
-                    w, args.project, make_viz=False,
-                    kick_model=args.kick_model,
-                    kick_model_path=args.kick_model_path,
-                    kick_model_device=args.kick_model_device,
-                )
-            if not res:
+                bad.append(f"  [REFUSED] {_ascii(w.stem[:60])}: {_ascii(note)}")
                 continue
+            if note:
+                print(f"  [WARN] {_ascii(w.stem[:60])}: {_ascii(note)}")
             h = hints_from_stem_result(res)
             hints[w.name] = h
-            print(f"  {w.stem[:42]:42} drop {h['first_drop_sec']:6.1f}  break {h['first_break_sec']:6.1f}  "
+            print(f"  {_ascii(w.stem[:42]):42} drop {h['first_drop_sec']:6.1f}  break {h['first_break_sec']:6.1f}  "
                   f"bass-swap {h['last_bass_drop_sec']:6.1f}  outro {h['outro_start_sec']:6.1f}")
+        if not wavs:
+            bad.append(f"  [REFUSED] no wav files found in {_ascii(audio)}")
+        if bad:
+            print("\n".join(bad))
+            print("No hints written. Run Phase 1a for this project first (the orchestrator "
+                  "with --sections-layout --stem-sections --stem-grid --kick-model), "
+                  "then re-run --write-hints.")
+            sys.exit(2)
         hints_dir = args.project / "Hints"
         hints_dir.mkdir(parents=True, exist_ok=True)
         out = hints_dir / "track_hints.json"
         out.write_text(json.dumps(hints, indent=2), encoding="utf-8")
-        print(f"Wrote {len(hints)} hints -> {out}")
+        print(f"Wrote {len(hints)} hints -> {_ascii(out)}")
         return
 
     print(f"Stem section detection on {len(wavs)} track(s):")
