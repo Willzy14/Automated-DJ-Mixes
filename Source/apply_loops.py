@@ -30,7 +30,9 @@ import html
 import json
 import math
 import re
+import secrets
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -52,44 +54,102 @@ def decompress_als(als_path: Path) -> list[str]:
     return content.splitlines(keepends=True)
 
 
+_STAGE_TRIES = 8
+
+
+def _create_partial(final: Path):
+    """Create `<name>.<16 hex>.partial` beside `final`, exclusively (O_EXCL via
+    mode "xb"), and return (path, open binary file). A name that already
+    exists is never reused or overwritten: retry with a new token, a bounded
+    number of times, then raise. The `.partial` suffix stays last so cleanup
+    and Dropbox ignore patterns match."""
+    final = Path(final)
+    for _ in range(_STAGE_TRIES):
+        partial = final.with_name(f"{final.name}.{secrets.token_hex(8)}.partial")
+        try:
+            return partial, open(partial, "xb")
+        except FileExistsError:
+            continue
+    raise ValueError(
+        f"could not create a unique staging file beside {final.name} "
+        f"after {_STAGE_TRIES} tries")
+
+
 def _discard_partial(partial: Path) -> None:
     """Best-effort removal of a `.partial` file; never raises, so cleanup can
     not mask the error that is already on its way out."""
     try:
-        partial.unlink(missing_ok=True)
+        Path(partial).unlink(missing_ok=True)
     except OSError:
         pass
 
 
-def compress_als(lines: list[str], output_path: Path) -> Path:
-    """Write, validate, THEN publish. The ALS is written to a sibling
-    `.partial` file and renamed onto `output_path` only if it validates, so a
-    rejected build never leaves an invalid Sections V<N>.als behind for a
-    resumed run (or Ableton) to pick up (burn list D22). The partial is
-    removed on every outcome. A failed final rename (a read-only or locked
-    output) is reported as ValueError, like a validation failure, and leaves
-    any existing output intact."""
+@contextmanager
+def staged_file(final: Path, data: bytes):
+    """Stage `data` in this call's own exclusive `.partial` beside `final`,
+    yield its path, and remove it however the block ends (return, exception,
+    KeyboardInterrupt). Creation and cleanup are one construct, so no caller
+    can strand a stage."""
+    partial, raw = _create_partial(final)
+    try:
+        with raw:
+            raw.write(data)
+        yield partial
+    finally:
+        _discard_partial(partial)
+
+
+@contextmanager
+def staged_als(lines: list[str], output_path: Path):
+    """Write `lines` to this call's own exclusive `.partial` beside
+    `output_path`, validate THAT file, yield its path (not published), and
+    remove it however the block ends. A rejected build raises ValueError and
+    never touches `output_path`. The gzip header carries the FINAL basename
+    and the usual mtime, so a valid build matches the original direct
+    write at a fixed mtime, whatever the staging name was."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     content = "".join(lines)
-    partial = output_path.with_name(output_path.name + ".partial")
+    partial, raw = _create_partial(output_path)
     try:
-        with gzip.open(partial, "wb") as f:
-            f.write(content.encode("utf-8"))
+        with raw:
+            with gzip.GzipFile(filename=output_path.name, mode="wb",
+                               fileobj=raw) as f:
+                f.write(content.encode("utf-8"))
         from validate_als import report_als
         errors = report_als(partial)
         if errors:
             raise ValueError(
                 f"ALS validation failed for {output_path.name}: {errors[0]}"
             )
-        try:
-            partial.replace(output_path)
-        except OSError as exc:
-            raise ValueError(
-                f"ALS write failed for {output_path.name}: {exc}"
-            ) from exc
+        yield partial
     finally:
         _discard_partial(partial)
+
+
+def publish_staged(partial: Path, final: Path) -> Path:
+    """Rename a staged, validated `partial` onto `final`. A failed rename (a
+    read-only or locked target) is reported as ValueError and leaves any
+    existing target intact."""
+    final = Path(final)
+    try:
+        Path(partial).replace(final)
+    except OSError as exc:
+        raise ValueError(f"ALS write failed for {final.name}: {exc}") from exc
+    return final
+
+
+def compress_als(lines: list[str], output_path: Path) -> Path:
+    """Write, validate, THEN publish. The ALS is staged in this call's own
+    `.partial` (unique per call, so two writers aimed at one output can not
+    swap each other's bytes) and renamed onto `output_path` only if it
+    validates, so a rejected build never leaves an invalid Sections V<N>.als
+    behind for a resumed run (or Ableton) to pick up (burn list D22). That
+    same file is removed on every outcome. A failed final rename is reported
+    as ValueError and leaves any existing output intact."""
+    output_path = Path(output_path)
+    with staged_als(lines, output_path) as partial:
+        publish_staged(partial, output_path)
     return output_path
 
 
@@ -538,6 +598,14 @@ def shift_named_clip(lines: list[str], track_start: int, track_end: int,
     return changed
 
 
+def _quoted_number_re(prefix: str):
+    """`<prefix>"n"` or `<prefix>'n'` (either XML quote style): group `pre` is
+    the text up to and including the opening quote, `num` the number, `q` the
+    quote that closes it."""
+    return re.compile(
+        rf"(?P<pre>{re.escape(prefix)}(?P<q>[\"']))(?P<num>{_XML_NUMBER})(?P=q)")
+
+
 def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
                           clip_name: str, trim_beats: float) -> int:
     """Trim the FRONT of a named clip by `trim_beats`: move its start later in
@@ -581,39 +649,75 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
     if clip_close_idx is None:
         return 0
 
-    def _first_value(tag: str):
-        for k in range(clip_open_idx, clip_close_idx + 1):
-            m_val = re.search(rf'<{tag} Value="({_XML_NUMBER})"', lines[k])
-            if m_val:
-                return float(m_val.group(1))
-        return None
+    clip_text = "".join(lines[clip_open_idx:clip_close_idx + 1])
+    open_tag = clip_text[:clip_text.index(">") + 1] if ">" in clip_text else clip_text
+
+    def _read_once(tag: str):
+        """The tag's value, None when the tag is genuinely absent from the
+        clip. Anything but exactly one occurrence that the strict one-line
+        pattern reads (a repeat, a comment copy, spaces around `=`, another
+        attribute first, a line break, an entity in the number) is refused:
+        the edit below patches single lines, so it must be sure which text it
+        is patching."""
+        n = len(re.findall(rf"<{tag}(?=[\s/>])", clip_text))
+        if n == 0:
+            return None
+        rx = _quoted_number_re(f"<{tag} Value=")
+        hits = [m for k in range(clip_open_idx, clip_close_idx + 1)
+                if (m := rx.search(lines[k]))]
+        if n > 1 or len(hits) != 1:
+            raise ValueError(
+                f"trim_named_clip_front: clip '{clip_name}' has {n} <{tag}> "
+                f"element(s) and {len(hits)} readable one(s); refusing to edit "
+                f"a clip whose {tag} is not exactly one plainly written value")
+        return float(hits[0].group("num"))
+
+    time_rx = _quoted_number_re("Time=")
+    time_count = len(re.findall(r"\sTime\s*=", open_tag))
+    if time_count > 1 or (time_count == 1 and not time_rx.search(lines[clip_open_idx])):
+        raise ValueError(
+            f"trim_named_clip_front: clip '{clip_name}' has a Time attribute "
+            f"that is not exactly one plainly written value; refusing to edit")
+
+    values = {tag: _read_once(tag)
+              for tag in ("CurrentStart", "CurrentEnd", "LoopStart", "LoopEnd")}
+    if time_count == 1 and values["CurrentStart"] is None:
+        raise ValueError(
+            f"trim_named_clip_front: clip '{clip_name}' has a Time to move but "
+            f"no readable CurrentStart; refusing to edit")
 
     # Same two windows validate_als checks for zero/negative length: the
-    # arrangement window and the source window.
+    # arrangement window and the source window. A window whose start this
+    # function is about to move must have a readable end: otherwise the trim
+    # could empty it unseen, so refuse before any edit.
     for lo_tag, hi_tag in (("CurrentStart", "CurrentEnd"), ("LoopStart", "LoopEnd")):
-        lo, hi = _first_value(lo_tag), _first_value(hi_tag)
-        if lo is not None and hi is not None and trim_beats >= (hi - lo) - 1e-6:
+        lo, hi = values[lo_tag], values[hi_tag]
+        if lo is not None and hi is None:
+            raise ValueError(
+                f"trim_named_clip_front: clip '{clip_name}' has a readable "
+                f"{lo_tag} but no readable {hi_tag}; refusing to trim blind")
+        if lo is not None and trim_beats >= (hi - lo) - 1e-6:
             raise ValueError(
                 f"trim_named_clip_front: trimming {trim_beats:g} beats would empty "
                 f"clip '{clip_name}' ({hi_tag} - {lo_tag} = {hi - lo:g} beats)")
+
+    def _moved(rx, line):
+        old = float(rx.search(line).group("num"))
+        return rx.sub(
+            lambda mm: f"{mm.group('pre')}{old + trim_beats}{mm.group('q')}",
+            line, count=1)
+
     changed = 0
-    m = re.search(rf'Time="({_XML_NUMBER})"', lines[clip_open_idx])
-    if m:
-        lines[clip_open_idx] = re.sub(
-            rf'Time="{_XML_NUMBER}"', f'Time="{float(m.group(1)) + trim_beats}"',
-            lines[clip_open_idx], count=1)
+    if time_count == 1:
+        lines[clip_open_idx] = _moved(time_rx, lines[clip_open_idx])
         changed += 1
     # ONLY the start fields move (keep the end). CurrentStart + LoopStart shift
     # together to preserve the 1:1 source->arrangement mapping.
     for k in range(clip_open_idx, clip_close_idx + 1):
-        line = lines[k]
         for tag in ("CurrentStart", "LoopStart"):
-            m = re.search(rf'<{tag} Value="({_XML_NUMBER})"', line)
-            if m:
-                lines[k] = re.sub(
-                    rf'(<{tag} Value="){_XML_NUMBER}(")',
-                    rf'\g<1>{float(m.group(1)) + trim_beats}\g<2>', line, count=1)
-                line = lines[k]
+            start_rx = _quoted_number_re(f"<{tag} Value=")
+            if start_rx.search(lines[k]):
+                lines[k] = _moved(start_rx, lines[k])
                 changed += 1
     return changed
 

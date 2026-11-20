@@ -509,7 +509,7 @@ def test_d22_generate_session_runs_the_job_gate_on_the_partial_not_the_published
     job = [c for c in calls if c[1] is not None]
     assert len(job) == 1
     path, count, devices = job[0]
-    assert path.name == "Sections V9.als.partial"
+    assert path.name.startswith("Sections V9.als.") and path.name.endswith(".partial")
     assert count == 1 and devices == validate_als.MIXER_AUTOMATION_DEVICES
     assert all(c[0] != out for c in calls), "nothing re-validates the published file"
     assert out.exists() and _partials(tmp_path) == []
