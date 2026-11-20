@@ -152,6 +152,17 @@ def score(mode, top=0, detail=False, out=print):
         out("   Sam    : in %g  switch %g  end %g  cost %.2f  flat runs: %s   -> %s" % (
             sam + (sp.cost, _fmt_runs(sp.flat_runs), ("RIGHT (%s)" % which) if ok else "MISS")))
         out("      owner's primary answer in the top 3 candidates: %s" % ("yes" if primary_top3 else "no"))
+        allc = pb.candidates(o, n, r6=r6)
+        sane_c = [c for c in allc if c.sane]
+        own_rank = next((j for j, c in enumerate(sane_c, 1) if matches(c, b, sam) == "primary"), None)
+        out("      owner's primary among the %d sane pairings: %s; types: A bar %g = %s, B bar %g = %s" % (
+            len(sane_c), ("rank %d" % own_rank) if own_rank else "not a sane pairing",
+            sam[1], pb.point_type(o, sam[1]) or "NONE", sam[1] - sam[0],
+            pb.point_type(n, max(sam[1] - sam[0], 0.0)) or "NONE"))
+        if r6 == pb.R6_BE and which != "primary":
+            diff = {k_: sp.terms.get(k_, 0.0) - plan.terms.get(k_, 0.0) for k_ in set(sp.terms) | set(plan.terms)}
+            out("      terms separating the owner's primary from the top pick (owner minus top): " + " ".join(
+                "%s=%+.2f" % (k_, diff[k_]) for k_ in sorted(diff) if abs(diff[k_]) > 1e-9))
         pool = [plan] + [a.plan for a in plan.alternatives]
         for j, ac in enumerate(b.get("also_acceptable", []), 1):
             hit = [q for q in pool if abs(q.in_starts_at_out_bar - ac["in_starts_at_out_bar"]) < 1e-6

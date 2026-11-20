@@ -21,6 +21,10 @@ Tools/score_blends.py, which prints each of these live):
     That fixes blend 1 again and, in BOTTOM END, misses the owner's own one-sided answers for blends 3,
     6 and 7 because a sane pairing exists for each; his stated rule and his accepted placements
     disagree there (Tools/score_blends.py prints the numbers and the term-by-term costs).
+  - Round 7 adds IMPLIED phrase points (a regular 8 bar grid from each section start, "it's always a
+    musical phrase").  Every owner swap, in all seven blends, then sits on a point of both tracks (a
+    marked point on one side, marked or implied on the other), so the pairing rule no longer disagrees
+    with his accepted answers; blend 1 now misses because a cheaper 17 bar pairing beats his looped one.
   - The weights are hand-set judgements.  A constant set from a single case says which
     (END_SLACK_BARS from blend 2).  Nothing here is "validated": the cases were run many times while
     the rules were written, and the score is reported as measured.
@@ -135,8 +139,19 @@ W_Q_KICKIN = 0.5
 W_Q_FILL = 1.0
 W_Q_SECTION = 1.5
 W_Q_NONE = 2.0
+# Round 7 (owner: "it's always a musical phrase"): the phrase runs on a regular grid whether or not
+# anything marks it.  IMPLIED phrase points: from each section start, every 8 bars until the next
+# section start (multiples of 16 from that start are stronger).  Marked points (section lines, fill
+# ends) keep the highest quality, implied 16s next, implied 8s next, anything else is no phrase point.
+# A marked point lined up with an implied point on the other track is a real pairing, ranked a little
+# below marked-with-marked; implied-with-implied is not (it is anchored to nothing the owner marked).
+W_Q_IMPL16 = 1.75        # incoming implied 16: just below a marked section start (1.5)
+W_Q_IMPL8 = 1.9          # incoming implied 8: just below an implied 16, still better than none (2.0)
+W_OUT_IMPL16 = 0.5       # outgoing side: an implied 16 costs a little more than a marked point (0)
+W_OUT_IMPL8 = 1.0        # ... and an implied 8 a little more than that
+BEAT_BARS = 0.25         # a line within one beat of a bar line is treated as that bar (Passion 135.75)
 ANCHOR_TOL_BARS = 1.0    # "about 30 seconds": the swap is within one bar of the 30 s mark of the original end
-MAX_ALTERNATIVES = 4
+MAX_ALTERNATIVES = 6
 
 CARRY_LABELS = ("DROP", "BUILD", "BREAK")     # v1: INTRO and OUTRO do not carry unless flagged
 CARRY_LABELS_BE = ("DROP", "BUILD")           # BE: a BREAK is not assumed to have a kick
@@ -203,6 +218,20 @@ def _zone_bars(track):
     return MIX_ZONE_SECONDS / _bar_seconds(track)
 
 
+def _snap(x):
+    """A line within one beat of a bar line is that bar; other fractions (a half-bar fill start) stay."""
+    r = round(float(x))
+    return float(r) if abs(float(x) - r) <= BEAT_BARS + 1e-9 else float(x)
+
+
+def _fill_ends(track):
+    return [_snap(f[1]) for f in track.get("fills", [])]
+
+
+def _fill_starts(track):
+    return [_snap(f[0]) for f in track.get("fills", [])]
+
+
 def _sections(track):
     out = []
     for s in track.get("sections", []):
@@ -211,7 +240,7 @@ def _sections(track):
             f = s[2]
             flag = f.get("carries") if isinstance(f, dict) else f
             flag = None if flag is None else bool(flag)
-        out.append((float(s[0]), str(s[1]).upper(), flag))
+        out.append((_snap(s[0]), str(s[1]).upper(), flag))
     return sorted(out, key=lambda t: t[0])
 
 
@@ -228,15 +257,48 @@ def phrase_points(track):
     """Every section start, every fill END, the track start and the track end."""
     pts = {0.0, float(track["n_bars"])}
     pts.update(s[0] for s in _sections(track))
-    pts.update(float(f[1]) for f in track.get("fills", []))
+    pts.update(_fill_ends(track))
     return sorted(pts)
+
+
+def implied_points(track):
+    """{bar: 16 or 8}: from each section start, every 8 bars until the next section start (or the track
+    end); multiples of 16 from that start are the stronger 16.  The grid restarts at every section start,
+    so it is measured from the LAST section start before a bar, not from bar 0.  Marked points are not
+    repeated here."""
+    n = float(track["n_bars"])
+    starts = sorted({x[0] for x in _sections(track)} | {0.0})
+    ends = starts[1:] + [n]
+    marked = set(phrase_points(track))
+    out = {}
+    for st, en in zip(starts, ends):
+        m = 1
+        while st + 8 * m < en - 1e-9:
+            b = st + 8.0 * m
+            if b not in marked:
+                out[b] = max(out.get(b, 0), 16 if m % 2 == 0 else 8)
+            m += 1
+    return out
+
+
+def point_type(track, bar):
+    """What a bar is on this track: 'marked fill end', 'marked section start', 'implied 16', 'implied 8'
+    or '' (no phrase point).  The track start and end count as marked section starts."""
+    bar = _snap(bar)
+    if any(abs(bar - p) < 1e-9 for p in _fill_ends(track)):
+        return "marked fill end"
+    if abs(bar) < 1e-9 or abs(bar - float(track["n_bars"])) < 1e-9 or any(
+            abs(bar - x[0]) < 1e-9 for x in _sections(track)):
+        return "marked section start"
+    v = implied_points(track).get(bar)
+    return {16: "implied 16", 8: "implied 8"}.get(v, "")
 
 
 def target_points(track):
     """Where an outgoing track may END against this incoming track (R3): a section start
     or the START of a fill."""
     pts = {s[0] for s in _sections(track)}
-    pts.update(float(f[0]) for f in track.get("fills", []))
+    pts.update(_fill_starts(track))
     pts.discard(0.0)
     return sorted(pts)
 
@@ -299,10 +361,15 @@ def in_point_kind(track, k):
     ki = kick_in(track)
     if ki is not None and abs(k - ki) < 1e-9:
         return "kick-in", W_Q_KICKIN
-    if any(abs(k - float(f[1])) < 1e-9 for f in track.get("fills", [])):
+    if any(abs(k - e) < 1e-9 for e in _fill_ends(track)):
         return "fill end", W_Q_FILL
     if any(abs(k - x[0]) < 1e-9 for x in _sections(track)):
         return "section start", W_Q_SECTION
+    t = point_type(track, k)
+    if t == "implied 16":
+        return t, W_Q_IMPL16
+    if t == "implied 8":
+        return t, W_Q_IMPL8
     return "", W_Q_NONE
 
 
@@ -447,7 +514,7 @@ def _is_trim(out_t, e, out_pts):
 def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
     n_out = float(out_t["n_bars"])
     why, cost, terms = [], 0.0, {}
-    fill_ends = {float(f[1]) for f in out_t.get("fills", [])}
+    fill_ends = set(_fill_ends(out_t))
     sec_starts = {x[0] for x in _sections(out_t)}
     bars_min = MINUTE_SECONDS / _bar_seconds(out_t)       # bars in a minute, outgoing tempo
 
@@ -461,9 +528,11 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
     anchored = (bi is not None and abs(k - bi) < 1e-9
                 and abs((e_swap - s) - bars_min / 2.0) <= ANCHOR_TOL_BARS + 1e-9)
 
-    out_hit = any(abs(s - p) < 1e-9 for p in out_pts)
-    in_hit = any(abs(k - p) < 1e-9 for p in in_pts)
-    paired = out_hit and in_hit
+    s_type, k_type = point_type(out_t, s), point_type(in_t, max(k, 0.0))
+    out_hit, in_hit = bool(s_type), bool(k_type)
+    # a pairing needs a point on both tracks and at least one MARKED (implied with implied is anchored
+    # to nothing the owner marked)
+    paired = out_hit and in_hit and (s_type.startswith("marked") or k_type.startswith("marked"))
     # R1: entry on an outgoing phrase point, normally a fill end.  For a PAIRING the entry is derived
     # (outgoing point minus incoming point), not chosen, so the entry-type cost does not apply to it.
     if paired:
@@ -502,13 +571,19 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
     if qcost:
         cost += qcost
         terms["in_point"] = qcost
+    ocost = {"implied 16": W_OUT_IMPL16, "implied 8": W_OUT_IMPL8}.get(s_type, 0.0)
+    if ocost:
+        cost += ocost
+        terms["out_point"] = ocost
     if out_hit or in_hit:
-        who = "both tracks" if paired else ("the outgoing only" if out_hit else "the incoming only")
-        why.append("R2: switch is a phrase point of %s (out bar %g, incoming bar %g%s)" % (
-            who, s, k, ", the incoming's %s" % kind if kind else ""))
+        who = "both tracks" if paired else ("the outgoing only" if out_hit and not in_hit
+                                            else "the incoming only" if in_hit and not out_hit
+                                            else "both tracks, but implied on both (no marked anchor)")
+        why.append("R2: switch is a phrase point of %s (out bar %g is a %s, incoming bar %g is %s)" % (
+            who, s, s_type or "non-point", k, ("the incoming's %s" % kind if kind else "a non-point")))
         if not paired:
             mark_s = n_out - 30.0 / _bar_seconds(out_t)
-            near = [p for p in out_pts if p < n_out - 1e-9
+            near = [p for p in sorted(set(out_pts) | set(implied_points(out_t))) if p < n_out - 1e-9
                     and abs(p - mark_s) * _bar_seconds(out_t) <= PAIR_WINDOW_SECONDS]
             why.append("ONE-SIDED swap: it lines up with a phrase point of only one track; "
                        + ("the outgoing offers phrase points near the 30 s mark (out bars %s) that a pairing could use"
@@ -613,9 +688,8 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
                      flat_runs=runs, terms=terms, out_loop_source_bars=src,
                      in_loop_phrase_end=loop_p if loop_l > 0 else 0.0, minute_mark=minute,
                      out_trim_bars=trim, swap_at_bass_in=at_bass_in, swap_incoming_bar=k,
-                     swap_anchored=anchored, paired=paired, sane=sane, in_point_kind=kind,
-                     out_point_kind=("fill end" if any(abs(s - float(f[1])) < 1e-9 for f in out_t.get("fills", []))
-                                     else "section start" if s in sec_starts else ""))
+                     swap_anchored=anchored, paired=paired, sane=sane, in_point_kind=kind or k_type,
+                     out_point_kind=s_type)
 
 
 def _rank_key(b):
@@ -623,6 +697,14 @@ def _rank_key(b):
     no incoming loop, then less outgoing loop, then the earlier entry, switch and end."""
     return (0 if b.sane else 1, round(b.cost, 9), b.in_intro_looped_bars, b.out_looped_bars,
             b.in_starts_at_out_bar, b.bass_switch_out_bar, b.out_end_bar)
+
+
+def _drop_forbidden_cuts(plans):
+    """R5 is HARD: a plan that cuts the outgoing's usable outro is excluded whenever any plan that does
+    not (natural end, looped tail or allowed trim) exists; when every plan cuts, all are kept."""
+    if any(b.out_cut_bars == 0 for b in plans):
+        return [b for b in plans if b.out_cut_bars == 0]
+    return plans
 
 
 def candidates(out_t, in_t, limit=None, r6=R6_BE):
@@ -639,6 +721,8 @@ def candidates(out_t, in_t, limit=None, r6=R6_BE):
     zone_in = _zone_bars(in_t)
     out_zone = [p for p in out_pts if zone_lo - 1e-9 <= p < n_out - 1e-9]
     in_zone = [p for p in in_pts if 0 < p <= zone_in + 1e-9]
+    out_impl = [p for p in sorted(implied_points(out_t)) if zone_lo - 1e-9 <= p < n_out - 1e-9]
+    in_impl = [p for p in sorted(implied_points(in_t)) if 0 < p <= zone_in + 1e-9]
     tgts = target_points(in_t)
     loops = [(0.0, 0.0)] + _intro_loop_options(in_t)
 
@@ -660,12 +744,17 @@ def candidates(out_t, in_t, limit=None, r6=R6_BE):
                         trips.add((a, s2, 0.0, 0.0))
                         derived.add((a, s2, 0.0, 0.0))
     for p, l in loops:
-        for s in out_zone:                      # switch on an outgoing phrase point
-            for k in in_zone:                   # ... and an incoming one: a PAIRING, entry derived
+        for s in out_zone + out_impl:           # switch on an outgoing phrase point (marked or implied)
+            for k in in_zone + in_impl:         # ... and an incoming one: a PAIRING, entry derived
+                if s in out_impl and k in in_impl:
+                    continue                    # implied with implied: no marked anchor
                 a_pair = s - k - l
                 trips.add((a_pair, s, p, l))
                 if a_pair >= n_out - ENTRY_MAX_SECONDS / _bar_seconds(out_t):
                     derived.add((a_pair, s, p, l))
+        for s in out_zone:                      # switch on an outgoing phrase point
+            for k in in_zone:
+                trips.add((s - k - l, s, p, l))
             for a in out_zone:                  # ... entry on an outgoing phrase point
                 if a < s:
                     trips.add((a, s, p, l))
@@ -694,8 +783,7 @@ def candidates(out_t, in_t, limit=None, r6=R6_BE):
                 continue
             seen.add(sig)
             plans.append(_score(out_t, in_t, a, s, e, p, l, out_pts, in_pts, r6))
-    if any(b.out_cut_bars == 0 for b in plans):
-        plans = [b for b in plans if b.out_cut_bars == 0]
+    plans = _drop_forbidden_cuts(plans)
     plans.sort(key=_rank_key)
     return plans[:limit] if limit else plans
 

@@ -24,7 +24,8 @@ CONSTANTS = ["W_FLAT", "W_CUT", "W_LOOP", "W_ENTRY_SECTION", "W_ENTRY_OFF", "W_S
              "MIN_LOOP_SOURCE", "MAX_LOOP_SOURCE", "LOOP_SOURCE_KICK", "W_SWAP_KICK_ONLY", "W_LATE_SWAP",
              "LATE_SWAP_SECONDS", "W_TRIM", "MAX_TRIM_BARS", "ENTRY_MAX_SECONDS", "ANCHOR_TOL_BARS",
              "BASS_IN_FRACTION", "ALT_MARGIN", "PAIR_WINDOW_SECONDS", "SANE_BLEND_SECONDS",
-             "W_Q_KICKIN", "W_Q_FILL", "W_Q_SECTION", "W_Q_NONE"]
+             "W_Q_KICKIN", "W_Q_FILL", "W_Q_SECTION", "W_Q_NONE", "W_Q_IMPL16", "W_Q_IMPL8",
+             "W_OUT_IMPL16", "W_OUT_IMPL8", "BEAT_BARS"]
 
 
 def vector(mode, key, content):
@@ -39,13 +40,13 @@ def vector(mode, key, content):
     return out
 
 
-def run(pct=25, out=print):
+def run(pct=25, out=print, constants=None):
     key = json.loads(sb.KEY.read_text(encoding="utf-8"))
     content = json.loads(sb.CONTENT.read_text(encoding="utf-8"))
     base = {m: vector(m, key, content) for m in sb.MODES}
     out("baseline exact counts: " + "  ".join("%s %d" % (m, sum(v)) for m, v in base.items()))
     flips = []
-    for name in CONSTANTS:
+    for name in (constants or CONSTANTS):
         orig = getattr(pb, name)
         for f in (1 - pct / 100.0, 1 + pct / 100.0):
             setattr(pb, name, orig * f)
@@ -62,7 +63,7 @@ def run(pct=25, out=print):
         out("no constant changes any column at +-%d%%" % pct)
     for name, f, m, n, miss in flips:
         out("%-18s x%.2f  %-11s -> %d of %d (misses: blends %s)" % (name, f, m, n, len(key["blends"]), miss))
-    never = [c for c in CONSTANTS if not any(x[0] == c for x in flips)]
+    never = [c for c in (constants or CONSTANTS) if not any(x[0] == c for x in flips)]
     out("")
     out("no effect on any column at +-%d%%: %s" % (pct, ", ".join(never)))
     return flips

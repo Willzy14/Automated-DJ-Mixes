@@ -79,13 +79,13 @@ def _exact_vector(mode):
 def test_score_columns_are_pinned_as_measured_in_round_6():
     # Characterisation, not validation.  Seven owner blends: the first six share switch = entry + 16,
     # the seventh (swap on the incoming's bass-in) is entry + 24.
-    # Round 6 (sane both-sided pairings outrank one-sided swaps): blend 1 is right again; blends 3, 6
-    # and 7 are now missed in BOTTOM END because a sane pairing exists and the owner's own answer is
-    # one-sided (his stated rule against his own accepted placements: see the report).
-    assert _exact_vector("MEASURED") == [True, False, True, False, True, False, True]
+    # Round 7 (implied phrase points on a regular 8 bar grid): every owner swap is now a two-sided
+    # pairing, so blends 3, 4, 6, 7 are right again.  Blend 1 misses: a 17 bar natural-end pairing
+    # (192/200/209) is cheaper than the owner's 184/200/215, whose outro loop costs 9.0.
+    assert _exact_vector("MEASURED") == [False, False, True, False, True, True, True]
     assert _exact_vector("LABELS") == [True, True, False, False, True, False, False]
-    assert _exact_vector("OVERRIDES") == [True, True, True, True, True, False, False]
-    assert _exact_vector("BOTTOM END") == [True, True, False, True, True, False, False]
+    assert _exact_vector("OVERRIDES") == [True, True, True, True, True, True, False]
+    assert _exact_vector("BOTTOM END") == [False, True, True, True, True, True, True]
 
 
 def test_headline_claims_are_true_and_stated():
@@ -188,15 +188,16 @@ def test_awareness_the_incoming_minute_is_noted_in_why_without_a_cost():
 
 # ---- R2: switch on a phrase point of at least one track; no premium for both ----------------
 def test_r2_a_sane_pairing_outranks_a_cheaper_one_sided_swap():
-    # round 6 (owner on blend 1): lining the swap up on BOTH tracks beats a cheaper swap that sits
-    # on only one, because it is a tier, not a weight
+    # round 6 (owner on blend 1): lining the swap up on BOTH tracks is a tier, not a weight
     b = KEY["blends"][0]
     o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
     n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
     cs = pb.candidates(o, n)
     assert cs[0].sane and cs[0].paired
-    assert any((not c.sane) and c.cost < cs[0].cost for c in cs)         # a cheaper one-sided plan exists
-    assert cs[0].key() == (184.0, 200.0, 215.0)                          # the owner's own answer
+    sane_keys = [c.key() for c in cs if c.sane]
+    assert (184.0, 200.0, 215.0) in sane_keys[:3]                        # the owner's own answer, rank 2
+    first_unsane = next(i for i, c in enumerate(cs) if not c.sane)
+    assert all(c.sane for c in cs[:first_unsane]) and not any(c.sane for c in cs[first_unsane:])
 
 
 def test_r2_no_phrase_point_at_all_is_the_worst_case():
@@ -207,20 +208,17 @@ def test_r2_no_phrase_point_at_all_is_the_worst_case():
     assert none.cost - one.cost > 5 and "switch_phrase" in none.terms
 
 
-def test_r2_reconciling_the_owners_one_sided_answers_with_the_pairing_rule():
-    got = {}
+def test_every_owner_swap_is_a_two_sided_pairing_once_implied_points_exist():
+    # the owner's swaps in blends 3, 4, 6 and 7 sit on a MARKED point of one track and an IMPLIED
+    # (regular 8 bar grid) point of the other
     for idx in (2, 3, 5, 6):
         b = KEY["blends"][idx]
         o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
         n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
-        got[idx] = pb.plan_blend(o, n)
-    # blend 4: the outgoing offers no phrase point within 20 s of the 30 s mark, so the owner's
-    # one-sided swap (176) is the fallback and is chosen, and `why` says so
-    assert got[3].key() == (160.0, 176.0, 192.0) and not got[3].paired
-    assert any("ONE-SIDED" in w and "fallback" in w for w in got[3].why)
-    # blends 3, 6 and 7: a sane pairing exists, so it outranks the owner's one-sided placement
-    for idx in (2, 5, 6):
-        assert got[idx].paired and got[idx].sane
+        sam = sb.sam_numbers(b, o)
+        own = _cost(o, n, *sam)
+        assert own.paired and own.sane
+        assert pb.plan_blend(o, n).key() == tuple(float(x) for x in sam)
 
 
 def test_r2_switch_never_off_every_phrase_point_when_a_phrase_exists():
@@ -248,10 +246,9 @@ def test_r3_outgoing_ends_naturally_on_incoming_section_start():
 def test_r3_short_outro_loops_tail_to_incoming_fill_start():
     out = trk(209, [(0, "INTRO"), (24, "DROP"), (200, "OUTRO")], fills=[(183, 184)])
     ins = trk(100, [(0, "INTRO"), (16, "DROP"), (48, "DROP")], fills=[(31, 32)])
-    plan = pb.plan_blend(out, ins)
-    assert plan.in_starts_at_out_bar == 184
-    assert plan.out_end_bar == 184 + 31
-    assert plan.out_looped_bars == 6
+    plan = _cost(out, ins, 184, 200, 184 + 31)            # entry 184, swap 200 with incoming bar 16
+    assert plan.out_looped_bars == 6 and plan.out_end_bar == 184 + 31
+    assert any("looped" in w for w in plan.why)
 
 
 def test_r3_end_target_is_section_or_fill_start_never_fill_end():
@@ -412,12 +409,11 @@ def test_r5_cuts_are_excluded_whenever_any_non_cutting_plan_exists():
     assert not any(c.out_end_bar == 94 for c in cs)
 
 
-def test_r5_when_every_plan_cuts_the_cuts_are_returned_cheapest_first():
-    out = trk(100, [(0, "INTRO"), (10, "DROP")], fills=[(69, 70)])   # one entry only: 70
-    ins = trk(100, [(0, "DROP"), (8, "BREAK"), (20, "DROP")])   # no INTRO: no incoming loops either
-    cs = pb.candidates(out, ins)
-    assert cs and all(c.out_cut_bars > 0 for c in cs)
-    assert [c.cost for c in cs] == sorted(c.cost for c in cs)
+def test_r5_when_every_plan_cuts_the_cuts_are_kept_otherwise_dropped():
+    cut = lambda c: pb.BlendPlan(1, 2, 3, 0, 0, out_cut_bars=4.0, cost=c)
+    ok = pb.BlendPlan(1, 2, 3, 0, 0, cost=50.0)
+    assert [p.cost for p in pb._drop_forbidden_cuts([cut(1.0), cut(2.0)])] == [1.0, 2.0]     # all cut: kept
+    assert pb._drop_forbidden_cuts([cut(1.0), ok]) == [ok]                                    # a non-cut exists
 
 
 def test_r5_a_forbidden_cut_never_beats_a_natural_end_even_when_it_is_cheaper():
@@ -802,7 +798,7 @@ def test_candidates_hold_no_duplicate_plans():
 def test_candidates_are_ranked_best_first_and_deterministic():
     c1 = pb.candidates(OUT, IN)
     c2 = pb.candidates(OUT, IN)
-    assert [c.cost for c in c1] == sorted(c.cost for c in c1)
+    assert [(not c.sane, c.cost) for c in c1] == sorted((not c.sane, c.cost) for c in c1)
     assert [c.full_key() for c in c1] == [c.full_key() for c in c2]
 
 
@@ -835,24 +831,20 @@ def test_bass_in_of_the_real_incoming_tracks():
     assert got["Back In "] == 24.0 and got["Better W"] == 16.0 and got["Come Bac"] is None
 
 
-def test_blend_7_planner_prefers_the_sane_pairing_and_says_so():
-    # round 6: A-F4 end (bar 131) lined up with B's bass-in (bar 24) is a sane both-sided pairing, so
-    # it outranks the owner's primary, whose swap (139) is on no outgoing phrase point
+def test_blend_7_the_owners_primary_is_the_top_pairing_marked_bass_in_with_implied_8():
     b, o, n = _blend7()
     p = pb.plan_blend(o, n)
-    assert p.key() == (107.0, 131.0, 147.0) and p.paired and p.sane and p.in_point_kind == "bass-in"
-    assert sb.matches(p, b, sb.sam_numbers(b, o)) is None            # entry 107, not his 115
-    assert p.bass_switch_out_bar == b["also_acceptable"][0]["bass_switch_out_bar"]   # same swap bar as his second answer
-    assert p.out_trim_bars == 8.0 and p.out_cut_bars == 0
+    assert p.key() == (115.0, 139.0, 147.0) and p.paired and p.sane and p.swap_anchored
+    assert p.out_point_kind == "implied 8" and p.in_point_kind == "bass-in" and p.out_trim_bars == 8.0
+    assert sb.matches(p, b, sb.sam_numbers(b, o)) == "primary"
 
 
-def test_blend_7_the_owners_primary_is_a_one_sided_anchored_fallback_in_the_top_3():
+def test_blend_7_the_owners_second_answer_is_a_sane_pairing_and_offered():
     b, o, n = _blend7()
-    cs = pb.candidates(o, n)
-    assert (115.0, 139.0, 147.0) in [c.key() for c in cs[:3]]
-    own = _cost(o, n, 115, 139, 147)
-    assert own.swap_anchored and not own.paired and not own.sane
-    assert any("ONE-SIDED" in w for w in own.why)
+    own2 = _cost(o, n, 115, 131, 147)                     # A-F4 end (marked) with B bar 16 (implied 16)
+    assert own2.paired and own2.sane and own2.out_point_kind == "marked fill end" and own2.in_point_kind == "implied 16"
+    p = pb.plan_blend(o, n)
+    assert (115.0, 131.0, 147.0) in [a.plan.key() for a in p.alternatives]
 
 
 def test_blend_7_the_owners_second_answer_is_a_candidate():
@@ -867,20 +859,18 @@ def test_blend_7_the_round_4_pick_is_still_a_candidate():
     assert (123.0, 147.0, 155.0) in [c.key() for c in pb.candidates(o, n)]
 
 
-def test_blend_7_pick_no_longer_depends_on_the_late_swap_term(monkeypatch):
+def test_blend_7_pick_depends_on_the_late_swap_term_stated_plainly(monkeypatch):
     b, o, n = _blend7()
-    before = pb.plan_blend(o, n).key()
     monkeypatch.setattr(pb, "W_LATE_SWAP", 0.0)
-    assert pb.plan_blend(o, n).key() == before
+    assert pb.plan_blend(o, n).key() == (123.0, 147.0, 155.0)
 
 
 def test_swap_anchored_plan_waives_the_minute_mark_term_only():
     b, o, n = _blend7()
     anchored = _cost(o, n, 115, 139, 147)
-    other = _cost(o, n, 115, 131, 147)
+    other = _cost(o, n, 115, 133, 147)                   # neither anchored nor on any phrase point
     assert anchored.swap_anchored and "minute_mark" not in anchored.terms
-    assert not other.swap_anchored and other.terms["minute_mark"] > 0.1
-    assert anchored.terms["entry"] > 0.5                 # R1 entry-type cost still applies
+    assert not other.swap_anchored and not other.paired and other.terms["minute_mark"] > 0.1
 
 
 def test_a_swap_on_kick_only_incoming_bars_costs_more_than_one_on_the_bass_in():
@@ -947,7 +937,7 @@ def test_the_first_six_never_trim_in_the_plans_chosen():
 def test_alternatives_are_distinct_defensible_and_explained():
     b, o, n = _blend7()
     p = pb.plan_blend(o, n)
-    assert 1 <= len(p.alternatives) <= pb.MAX_ALTERNATIVES
+    assert 1 <= len(p.alternatives) <= 6
     seen = [(p.bass_switch_out_bar, p.in_starts_at_out_bar)]
     for a in p.alternatives:
         assert a.plan.cost <= p.cost + pb.ALT_MARGIN and a.plan.out_cut_bars == 0
@@ -986,9 +976,9 @@ def test_the_scorer_reports_three_numbers_and_the_acceptable_offer():
     text = "\n".join(lines)
     assert "top pick = primary" in text and "primary or also_acceptable" in text and "primary in top 3" in text
     assert "(info) swap bar equals one of his" in text
-    assert sum(r["primary"] for r in rows) == 4 and exact == 4
-    assert sum(r["primary_top3"] for r in rows) == 6
-    assert rows[6]["which"] is None and rows[6]["primary_top3"] and rows[6]["swap_only"]
+    assert sum(r["primary"] for r in rows) == 6 and exact == 6
+    assert sum(r["primary_top3"] for r in rows) == 7
+    assert rows[0]["which"] is None and rows[0]["primary_top3"] and rows[6]["which"] == "primary"
 
 
 # ---- round 5, mutation follow-ups ------------------------------------------------------------
@@ -1036,7 +1026,7 @@ def test_alternatives_exclude_forbidden_cuts_costly_flat_and_respect_the_limits(
     got = [a.plan.in_starts_at_out_bar for a in alts]
     assert got == [130]                                      # not the cut (110), the flat run (120), or 190
     many = [best] + [mk(10 * i, 1.0 + 0.1 * i) for i in range(1, 11)]
-    assert len(pb.alternatives_for(many, trk(100, [(0, "INTRO")]))) <= 4     # literal limit
+    assert len(pb.alternatives_for(many, trk(100, [(0, "INTRO")]))) == 6     # literal limit: up to six
     assert all(a.plan.cost <= best.cost + 5.0 for a in alts)  # literal: about a ten bar clock error
 
 
@@ -1055,15 +1045,14 @@ def test_pairing_is_a_swap_on_a_phrase_point_of_both_tracks_and_the_entry_follow
     assert any("pairing" in w for w in owner.why)
 
 
-def test_blend_1_the_owners_named_pairings_are_candidates_and_his_own_answer_ranks_first():
+def test_blend_1_the_owners_named_pairings_are_candidates_and_his_own_answer_ranks_second():
     b, o, n = _blend1()
     cs = pb.candidates(o, n)
     keys = [c.key() for c in cs]
-    assert keys[0] == (184.0, 200.0, 215.0)               # A11 with B1, outro looped a little
-    assert keys.index((168.0, 184.0, 216.0)) < 6          # A-F7 end with B1 (kick-in)
-    assert (168.0, 200.0, 216.0) in keys                  # A11 with B-F1 end (bass-in)
-    # A-F7 end with B-F1 end would stop the outgoing at its outro start, dropping all 9 outro bars
-    assert (152.0, 184.0, 200.0) not in keys
+    assert keys[0] == (192.0, 200.0, 209.0)               # A11 with B bar 8 (implied 8): no loop, a 17 bar blend
+    assert keys[1] == (184.0, 200.0, 215.0)               # the owner's: A11 with B1, outro looped 6
+    assert keys.index((168.0, 200.0, 216.0)) < keys.index((168.0, 184.0, 216.0)) < 6
+    assert (152.0, 184.0, 200.0) not in keys              # drops the whole outro: a forbidden cut
     assert _cost(o, n, 152, 184, 200).out_cut_bars == 9
     assert not any(c.key() == (161.0, 193.0, 209.0) and c.sane for c in cs)   # the round 5 pick is one-sided
 

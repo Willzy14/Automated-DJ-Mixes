@@ -62,11 +62,11 @@ def test_rules_for_reads_entry_plus_16_the_half_minute_and_both_tracks():
 
 
 def test_sensitivity_flips_are_reported_for_the_geometry_constants():
-    flips = bs.run(25, out=lambda *_: None)
+    flips = bs.run(25, out=lambda *_: None, constants=["MIX_ZONE_SECONDS", "END_SLACK_BARS", "W_FLAT_RUN"])
     names = {f[0] for f in flips}
-    assert {"MIX_ZONE_SECONDS", "END_SLACK_BARS"} <= names
+    assert "END_SLACK_BARS" in names and "W_FLAT_RUN" not in names
     # every constant is restored afterwards
-    assert pb.MIX_ZONE_SECONDS == 75.0 and pb.END_SLACK_BARS == 1.0
+    assert pb.MIX_ZONE_SECONDS == 75.0 and pb.END_SLACK_BARS == 1.0 and pb.W_FLAT_RUN == 0.25
 
 
 def test_the_owners_names_for_points_and_pairings():
