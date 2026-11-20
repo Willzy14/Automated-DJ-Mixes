@@ -1,0 +1,79 @@
+RESULT: Groove built all nine DFTD transitions from cached stems and passed the final ALS and MixPlan gates. Legacy stopped at Eli Brown into Call 911. The default remains legacy. Zero new separations. Changes are in the working tree for the coordinator to commit. [Groove Final.als](D:/Worktrees/dj-switchon/_scratch/groove/Output/Final.als)
+
+## Reader map
+
+| Reader | Groove handling |
+|---|---|
+| `section_format`, `stem_detector` | Recognize `groove-1` schema 2. The hints reader refuses a cache from the other mode. Detection can replace it after a successful rerun, subject to the kick-model provenance guard. |
+| `align_engine`, `alignment_feasibility` | Read beat-precise `fill_sections` for loop exclusion and offer exact bar-line fill ends as swap candidates. Preserve structural boundaries, including repeated labels. Intro-length checks span consecutive opening intros. Mixed analyses fail. Loop quality still reads the cached grid and envelopes. |
+| `orchestrator`, `phrase_viz`, `extract_sections_als` | The orchestrator forwards `--section-mode`. `phrase_viz` cuts structural clips on the supplied warp grid and numbers repeated labels. The extractor reads those clips as before. Groove fills stay separate from the clips. |
+| `propose_arrangement`, `apply_automation` | Phase 2 takes fill cues through the aligner and uses the extracted clips for intro, break, and outro geometry. BPM backfill reads the same per-track field. Phase 3 uses the arranger's swap and refuses the label-only fallback when groove analysis is present. |
+| `validate_hints_vs_sections` | Uses groove's recorded BPM and downbeat to compare hints with clips. Existing tolerances and the swap window stay in force. |
+| `extract_musical_landmarks`, `section_placement_viz` | Landmark refresh preserves sections, fill events, and grid metadata. The placement plot draws the separate fill spans. |
+| `materialize_section_details`, `reverify_fast`, `reverify_sections` | Refuse groove explicitly. These utilities still use legacy refinement or re-detection rules. |
+| Detector plot, `render_review`, `validate_corpus`, learner | `signals.fills` still carries seconds pairs. The detector plot can draw them. The review and corpus scripts still generate legacy analyses in their fixed calls. The learner consumes the ALS and extracted clips. |
+
+For groove hints, `first_drop_sec` uses the first drop, `first_break_sec` uses the first break after that drop when available, and `outro_start_sec` uses the first outro. `last_bass_drop_sec` uses the latest eligible fill **end** in the existing 32-bar window or falls back to the outro start. The detector reports `bar_one_suspect` without shifting the grid.
+
+## Commands and results
+
+I copied 10 audio files and their cached analysis from `d20-replay/proj`. Both modes replayed the cached v1 drums, bass, and envelopes. I reused the official `Sections V1.als` for its track order, template, and warps, then recut each copy from its own replay JSON using the production section-to-clip function. Warp summaries matched the original for all 10 tracks in each mode. This exercises the new cuts and downstream readers on the existing grid. [Replay and gate commands](D:/Worktrees/dj-switchon/_scratch/run_pipeline.ps1)
+
+| Command or stage | Legacy exit | Groove exit |
+|---|---:|---:|
+| `Tools/section_key_replay.py --section-mode <mode>` | 0 | 0 |
+| `_scratch/replay_layout.py <mode>` and `validate_als.py` on the recut layout | 0 | 0 |
+| `extract_sections_als.py` | 0 | 0 |
+| `stem_detector.py --write-hints --section-mode <mode>` | 0 | 0 |
+| `validate_hints_vs_sections.py --version 1` | 0, 35 checks | 0, 36 checks |
+| `propose_arrangement.py --tempo-arc --mix-plan --report` | 1, zero built | 0, nine built |
+| `validate_als.py` on arranged set | Skipped | 0 |
+| `apply_automation.py` with report and MixPlan | Skipped | 0 |
+| `validate_als.py --expected-tracks 10 --require-devices --arrangement-report` | Skipped | 0 |
+| `validate_mix_plan_als.py` | Skipped | 0, 71 checks |
+| `learn_from_correction.py --dry-run` | Skipped | 0, nine self-comparison entries |
+
+- `_scratch/compare.py` and `Tools/score_sections.py` exited 0. On this cache and current key, the section-line score within one bar was **30/47 legacy, 46/47 groove**. Fills found were **40/53 legacy, 53/53 groove**. The brief's legacy count of 33 did not reproduce here.
+- The focused pytest run exited 0 with **184 passed**. The full suite exited 1 with **1,936 passed, 47 skipped, and one known failure**. The Kick Detector test could not find its expected sibling project. I reproduced the same failure on `main` and confirmed the test passed when that dependency was present in the scratch copy. [Full suite output](D:/Worktrees/dj-switchon/_scratch/suite-final.log)
+- The legacy reader comparison against `main` exited 0 with byte-identical output across 10 tracks. `bash -n`, the Python syntax checks, and `git diff --check` exited 0. Both legacy-only reverify commands exited 1 on groove with an explicit format error. PAX placement plots rendered in both modes.
+
+_Validated: groove hints, strict ALS validation, and all 71 MixPlan reconciliation checks passed._
+
+## Legacy versus groove
+
+Values are **entry / swap / overlap** in bars. Entry and swap are relative to the outgoing track's source bar zero. Legacy values come from isolated Phase 2 dry runs because the full legacy mix stopped at T6. Sam's key supplies entry and swap for the first six pairs. [Comparison data](D:/Worktrees/dj-switchon/_scratch/transition-comparison.json)
+
+| Transition | Legacy | Groove | Sam |
+|---|---:|---:|---:|
+| Back In The Dance -> PAX | 168 / 200 / 41 | 183 / 199 / 32 | 184 / 200 |
+| PAX -> Passion VIP | 176 / 192 / 17 | 160 / 176 / 33 | 160 / 176 |
+| Passion VIP -> Ninetoes | 97 / 129 / 47 | 96 / 128 / 48 | 112 / 128 |
+| Ninetoes -> Ashibah | 144 / 160 / 56 | 144 / 160 / 56 | 160 / 176 |
+| Ashibah -> Eli Brown | 122 / 138 / 32 | 122 / 138 / 32 | 122 / 138 |
+| Eli Brown -> Call 911 | No alignment | 143 / 160 / 33 | 144 / 160 |
+| Call 911 -> Offaiah | 115 / 131 / 39 | 115 / 122 / 39 | |
+| Offaiah -> Hannah Wants | 122 / 138 / 48 | 122 / 138 / 48 | |
+| Hannah Wants -> MASON Collective | 144 / 168 / 40 | 144 / 168 / 40 | |
+
+## What blocks switching on
+
+- **Call 911 grid.** Groove builds T6, but still reports a two-beat bar-one offset. Rerun with the upstream grid fix before switching the default.
+- **Two blends need listening review.** Passion VIP into Ninetoes enters 16 bars early. Ninetoes into Ashibah enters and swaps 16 bars early. The structural gates pass both.
+
+## Files changed or added
+
+- `Source/` files `align_engine.py`, `alignment_feasibility.py`, `apply_automation.py`, `extract_musical_landmarks.py`, `groove_sections.py`, `materialize_section_details.py`, `propose_arrangement.py`, `reverify_fast.py`, `reverify_sections.py`, `section_format.py`, `section_placement_viz.py`, `stem_detector.py`, `validate_hints_vs_sections.py`
+- `Source/automated_dj_mixes/` files `orchestrator.py`, `phrase_viz.py`
+- `Tests/` files `test_groove_pipeline_readers.py` (new), `test_groove_structure.py`, `test_track_by_track_analysis_resumability.py`
+- `Tools/run_mix_pipeline.sh`, `Documentation/AI_CONTEXT.md`, `Documentation/TOOLBOX.md`, `.github/ai-activity-log.md`
+- [Complete scratch file inventory](D:/Worktrees/dj-switchon/_scratch/scratch-files.txt)
+
+## NOT CHECKED
+
+Live Phase 1a and its beat-grid gate, an Ableton Live open or listen, and learning against an owner-edited set. The Bash wrapper was syntax-checked. The cached replay used the equivalent downstream commands in PowerShell.
+
+## FOUND UNASKED
+
+The hints gate passed groove with **36 of 40 hint fields checked**. Call 911 and MASON Collective have no labelled outro, so the gate skips both outro-related checks for each track. Both tracks still received generated fallback hints.
+===CODEX-ASK-DONE exit=0 nonce=e0713f4151494470bb2292fd8a70a39d===
+===SEAT-DONE codex switchon_r1===

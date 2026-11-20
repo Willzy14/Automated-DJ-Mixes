@@ -1,0 +1,98 @@
+﻿• The diffs are in. Now let me verify a few things the diff alone can't show: the pre-existing `section_detector_of`, the full `hints_from_stem_result` fallback tail, and whether any pipeline caller uses the three refusing utilities.
+
+• Working tree is on `main`, so the snapshot exists only as these diffs — pre-existing code I'll verify against `main` where the diff context doesn't suffice.
+
+• VERDICT: CORRECTION
+
+  Reviewed against `change_source.diff` (782 lines), `change_tests_tools.diff` (331 lines), and `BUILDER_REPORT.txt`. Where the diff context was insufficient I checked the pre-existing code on `main` in the working repo (the snapshot branch itself is not checked out; `main`'s unchanged code matches the diff context lines exactly). Citations below are `file` + function + diff line numbers in `change_source.diff` / `change_tests_tools.diff`.
+
+  **1. Legacy unchanged**
+
+  Every compute path on the legacy route is verbatim. Hunks that execute with the flag at default, and their effect:
+
+  - `align_engine.py:307` `load_loop_quality_context`: new `section_mode_of(metadata, ...)` call. For a legacy file this returns LEGACY and changes nothing; it raises only for an unsupported detector (changed error for foreign files, not a changed result).
+  - `align_engine.py:673` `Track`: new field `section_mode: str = LEGACY`. In-memory only, not written to any JSON. Side effect: dataclass equality now includes it, so any test comparing `Track` objects could newly differ.
+  - `align_engine.py:688-697` `load_track`: `require_legacy` replaced by `section_mode_of`. Identical accept/refuse set for well-formed files; mode is stored on the Track.
+  - `align_engine.py:701-708` fills parsing: groove branch added, legacy `for f in sig.get("fills") ... _sec_to_bar` loop kept byte-for-byte.
+  - `align_engine.py:1042-1049` `_mix_cues`: groove branch added; legacy now reaches the old body via `elif CUE_CONFIG.emit_fills:` — identical condition outcome.
+  - `align_engine.py:1673-1677` `align_pair`: `require_uniform_modes` (no-op for two legacy tracks) and the condition becomes `outgoing_mode == GROOVE or o.musical_landmarks or i.musical_landmarks` — for legacy, identical.
+  - `align_engine.py:2153-2161` `_leading_intro_end`: for legacy it takes `sections[0].end_bar` and breaks after the first section — provably the same as the two removed inline expressions in `plan_fill_or_cut` (diff 2323) and `_check_decision_intro_trim` (diff 2770).
+  - `align_engine.py:2971-2973` `compute_aligned_positions`: `require_uniform_modes` over resolved tracks — no-op for all-legacy.
+  - `alignment_feasibility.py:52`: same, no-op legacy.
+  - `apply_automation.py:651-652,746-747`: new keyword-only `require_report_swaps=False`; legacy callers unchanged. `main()` (diff 1597-1605) now reads sibling stem JSONs via `track_section_mode`; for a legacy project `any(... == GROOVE)` is False and behavior is identical. Changed error only: a stem JSON with an unsupported detector now crashes `main` where it previously never read these files.
+  - `orchestrator.py:229-236,537-552`: flag validation no-op at default; stage 3 passes `section_mode` through. One real legacy-visible change at diff 548-551: the stage-3 `except` now re-raises `SectionFormatError` even in legacy mode, where main used to print a warning and continue. Same for `_may_overwrite_sections_json` (diff 939-946): a legacy run (kick model off) over a groove cache used to silently overwrite it; now it raises. Both are fail-loud changes to error paths, not result paths.
+  - `phrase_viz.py:69-71`, `extract_musical_landmarks.py:83`, `materialize_section_details.py:74`, `reverify_fast.py:23`, `reverify_sections.py:27-35`, `propose_arrangement.py:1544-1548`: pure accept/refuse guards; legacy files pass exactly as before (materialize/reverify previously had no check at all).
+  - `section_placement_viz.py`: legacy render path identical (`fills = signals.get("fills", [])`); `main` now exits nonzero if any failure was a `SectionFormatError` (changed exit code for a viz tool; other render failures still exit 0).
+  - `stem_detector.py`: constants moved, same values. `_check_cached_sections_inner` (diff 860): `require_section_mode` inserted before hint parsing; for legacy files it passes, and a groove cache is refused exactly as on main (message wording differs). `_may_overwrite_sections_json` as above. `hints_from_stem_result` (diff 1596-1641): `mode = section_mode_of(res)` then an `if mode == GROOVE` — the legacy branch, window math, and fallback `max(first_drop, outro_start - 16 * sec_per_bar)` are verbatim. `main` passes the pre-existing `--section-mode` arg (present on main, stem_detector.py:1659).
+  - `validate_hints_vs_sections.py`: `_bpm_lookup` restructure (diff 71-81) is equivalent for legacy (`setdefault` logic unchanged); the hint-bar formula becomes `(val - downbeat) / sec_per_bar` with `downbeat = 0.0` for legacy (diff 185-190) — identical math. Changed error: `section_mode_of` at diff 734-736 sits outside the try/except, so a SECTIONS file with a foreign detector now kills the gate where it used to be skipped.
+  - `run_mix_pipeline.sh`: `--section-mode "$SECTION_MODE"` added with `SECTION_MODE` defaulting to legacy — same commands as before at default.
+
+  Bottom line for question A: no result changes on well-formed legacy inputs; three error paths got louder (orchestrator re-raise, overwrite guard, hints-gate `_bpm_lookup`). The builder's "byte-identical to main on 10 tracks" is consistent with the verbatim legacy branches but I could not reproduce it (scratch dir not reachable from here), so it stands as the builder's claim, not a verified fact.
+
+  **2. Format detection**
+
+  `section_detector_of` (unchanged, on main): LEGACY when `analysis.section_detector` is missing, null, or empty string; otherwise the string value. `section_mode_of` (diff 425-434): GROOVE only when detector is exactly "groove-1" AND `type(sections_schema) is int` AND equals 2; anything else raises `SectionFormatError`.
+
+  - Legacy read as groove: impossible; requires the exact marker plus int schema 2.
+  - Groove read as legacy: `require_legacy` refuses any detector != "legacy"; every dual-mode reader dispatches on the same function. The only misclassification hole is a file with a falsy `section_detector`, which no groove writer produces.
+  - Schema as string "2", null, or missing: raise (not legacy, not groove) — the string-schema case the brief asks about is explicitly rejected by `type(schema) is int`.
+  - Mixed folder, entry point by entry point: orchestrator stage 3 is uniform by construction and the overwrite guard raises on a mismatched cache (kick off); `--write-hints` refuses the wrong-mode tracks per track and, verified on main (stem_detector.py:1686-1709), writes nothing and exits 2 if any track is refused; `compute_aligned_positions`, `alignment_feasibility.load_tracks`, and `align_pair` all have `require_uniform_modes`; `propose_arrangement` raises if any track is groove. The one gap: `apply_automation.main` has no uniformity check — mixed analyses only fail there if the arrangement report lacks a swap for some pair (the new `require_report_swaps` raise). In the real pipeline phase 2 gates first, so this is a standalone-entry hole, not a reachable one. The hints gate itself is deliberately dual-mode but can only ever receive uniform hints because write-hints enforces it. The builder's "mixed analyses fail" holds for every real entry point.
+
+  **3. Fills as cue points**
+
+  For groove there is no beats-to-bars conversion at all: `load_track` takes `fill_sections` bar fields directly (diff 701-704), on the same clock as the section bar fields ("use the bar fields directly" comment). `groove_fills` (diff 453-472) validates finite numerics and `0 <= start_bar < end_bar`, so off-by-one and zero-length fills are rejected. In `_mix_cues` (diff 1042-1049) a fill end becomes a `fill:end` cue only when `float(end_bar).is_integer()`, so a fill end not on a bar line cannot be a swap anchor — no. Partial-bar fills still feed the loop-exclusion mask through `track.fills` regardless of integrality, and the new test proves both (asserts `cues[63]["labels"] == ["fill:end"]`, no cues at 56/57 for the 56–56.25 fill, and `pick_clean_drum_loop(track, 55, 57)` is None — test_groove_pipeline_readers.py:78-88). A fill crossing a section line is accepted by validation (no cross-check against sections); if its end is integer it simply adds another label at that bar, which `add` merges. One nuance: fractional fill ends can still reach the mixer as a `last_bass_drop_sec` hint (question 4), which is a hint, not a cue — nothing snaps it to a bar line; only the hints-gate tolerances stand over it.
+
+  **4. Hints window**
+
+  The window is anchored at the right end in both modes: `pre = outro_start if outro_start is not None else end_sec; window_start = pre - 32 * sec_per_bar` (diff 1663-1665, unchanged lines). Groove collects `f.end_sec` in `[window_start, pre]` (inclusive, and `< end_sec`), defaulting to `outro_start` (diff 1668-1671). For a track with no outro label: raw `outro_start` is None, so with no eligible fill ends `last_bass_drop` is None; the unchanged fallback block then synthesizes `outro_start = max(first_drop + sec_per_bar, end_sec - 32 * sec_per_bar)` (verified on main, stem_detector.py:1623-1624) and the new groove fallback sets `last_bass_drop = outro_start`, clamped to `end_sec`. So a real hint is always emitted — this matches the builder's two fallback-hint tracks (Call 911, MASON Collective). Is a skipped check a silent pass? Yes. The gate only runs the last-bass-vs-outro check `if last_bass is not None and outro is not None` (diff 775-779), where `outro` comes from the extracted clips; a no-outro track skips the check entirely, and missing hint fields are skipped by `continue` (diff 767-769). So for exactly the tracks where the hint is most likely to be a synthetic guess, nothing ever validates it. Note the asymmetry this creates: groove fallback lands at end - 32 bars (window edge, defensible); the legacy fallback lands at synthetic_outro - 16 = end - 48 bars, i.e. outside its own 32-bar window — pre-existing, unchanged, but worth knowing before trusting legacy comparisons. Also deliberate but undocumented: groove eligibility uses `<= pre` (a fill ending exactly at the outro start counts) while legacy uses `< pre`.
+
+  **5. apply_automation refusal**
+
+  `raise ValueError(f"Groove sections require a report swap for {out_t.name!r} -> {in_t.name!r}")` inside the `plan_transitions` loop (diff 746-748), uncaught in `main`. It stops the build with a traceback and nonzero exit, naming the pair — a loud stop, not a silent skip. The new test asserts exactly this raise. One caveat: whether the requirement is armed at all depends on the `track_section_mode` scan in `main` (see 9 below).
+
+  **6. The three refusing utilities**
+
+  Grep across `Source/`, `Tools/`, `Tests/`: nothing imports or invokes `materialize_section_details`, `reverify_fast`, or `reverify_sections` except themselves; the pipeline script never calls them. They are manual utilities that now fail loudly on groove (builder verified exit 1). Switching the default breaks no normal run.
+
+  **7. Cache safety**
+
+  Hints reader: `_check_cached_sections_inner` calls `require_section_mode(res, section_mode, ...)` before any consumption (diff 860); a wrong-mode cache becomes a per-track refusal, and `main` writes no hints file and exits 2 if anything was refused (verified on main, stem_detector.py:1704-1709 — the "all tracks must be usable or nothing is written" atomicity survives). Detection replace: `_may_overwrite_sections_json` keeps its early `if kick_model_on or not path.exists(): return True` (unchanged, above the diff hunk), so with `--kick-model` a rerun replaces any prior file; with kick off, a prior KICK_ON file in groove mode raises with the correct advice (re-run with --kick-model) — I initially suspected the advice was unreachable, but the kick-model early return makes it work. A stale other-mode file surviving: the orchestrator's stage 3 has no cache skip (verified, orchestrator.py:509-533), so a full relay always normalizes every track; a standalone `stem_detector.py` detection run rewrites per track too. The residual hole is `track_section_mode` returning LEGACY on OSError/ValueError (diff 486-489): an unreadable or corrupt groove JSON is "not groove" to `apply_automation` and `propose_arrangement`. In practice the same corrupt file crashes `load_track` downstream, so it fails loudly rather than being consumed — but see 9.
+
+  **8. Tests**
+
+  New file covers: `section_format.groove_fills` (exact spans, schema 3 rejected, missing `fill_sections` rejected); `align_engine` groove and legacy (`test_alignment_uses_groove_fills_as_events...` and `test_legacy_reader_keeps_rounded_seconds_and_the_original_intro_scope` — the strongest pair, asserting both modes); `alignment_feasibility` groove + mixed refusal; `load_loop_quality_context` groove downbeat; `phrase_viz` groove naming and beat positions; `stem_detector` hints with exact expected values including the no-fill fallback to outro start, the CLI refuse/accept pair, and both overwrite-guard directions; `orchestrator` CLI forwarding including the legacy default; `materialize_section_details` refusal; `extract_musical_landmarks` preservation; `apply_automation` refusal raise. `test_groove_structure.py` keeps the legacy `--write-hints` refusal. Gaps: `propose_arrangement` (untouched by any test), `section_placement_viz` (no test), `compute_aligned_positions` uniform gate (only the feasibility variant tested), and `apply_automation`'s legacy default path. Weakest tested reader: `validate_hints_vs_sections` — the only assertion is `validate(tmp_path, 1)[0] == 0`; the actual behavioral change (downbeat-subtracted hint bars via the groove clock map) is never asserted on values, and no legacy fixture passes through the new formula. Runner-up: `phrase_viz`, which has a groove fixture but no legacy-unchanged assertion.
+
+  **9. Unlisted risks for switching the default**
+
+  - Guard bypass in `apply_automation.main` (diff 1597-1605): `groove = any(track_section_mode(...) == GROOVE ...)`, and `track_section_mode` silently returns LEGACY on a missing/unreadable file — including the case where neither candidate `_Stem Analysis` path exists (`stem_dir.exists()` false, then every open fails). In exactly those cases the "refuse the label-only fallback" requirement silently disarms and the build proceeds on groove sections with `find_bass_swap`. This is the one place the change trusts absence of evidence.
+  - No-outro tracks (builder found it but did not list it as a switch blocker): synthetic fallback `last_bass_drop` hints are written and the gate skips the outro check, so a wrong fallback ships with zero validation — 36 of 40 fields checked means 4 unchecked, all on the two riskiest tracks.
+  - Operational trap: on any existing project whose caches were written with the kick model (all production runs), a standalone groove rerun without `--kick-model` hard-raises on the very first track via the overwrite guard. `run_mix_pipeline.sh` passes `--kick-model` so the official path is fine; ad-hoc reruns will hit a wall that reads like a bug. Fail-loud, but it will generate confusion, and an interrupted rerun after some tracks were rewritten creates the mixed-folder state the gates then refuse.
+  - Fractional fill-end hints (question 3) have no bar-line snap anywhere; only hints-gate tolerances cover them, and those tolerances were tuned on legacy integer-ish hints.
+
+  The builder's two listed blockers (Call 911 two-beat bar-one offset; the Passion VIP -> Ninetoes and Ninetoes -> Ashibah blends entering 16 bars early) are consistent with the comparison table and I have nothing to add against them.
+
+  BLOCKS MERGING WITH THE FLAG OFF
+
+  - Nothing blocks outright: every legacy result path is verbatim. But three error paths changed and should be accepted deliberately or softened before merge: (1) orchestrator stage 3 re-raises `SectionFormatError` in legacy mode where main warned and continued (mid-loop, so earlier tracks may already be rewritten); (2) the hints gate's `_bpm_lookup` now raises on a foreign-detector SECTIONS file where it used to skip it; (3) `_may_overwrite_sections_json` raises instead of silently overwriting a groove cache in a legacy kick-off run. All are fail-loud and arguably fixes, but "legacy provably unchanged" is only true for results, not for error behavior.
+  - New `Track.section_mode` field changes dataclass equality; check no test compares Track objects.
+  - The builder's byte-identical legacy claim is unverifiable from this snapshot (scratch not reachable); the diff supports it but the merge should keep the comparison harness runnable.
+
+  BLOCKS SWITCHING THE DEFAULT TO GROOVE
+
+  - Call 911 bar-one offset (builder).
+  - Passion VIP -> Ninetoes and Ninetoes -> Ashibah 16-bar-early entries need listening (builder).
+  - `apply_automation` groove detection can silently read as legacy (missing/corrupt JSON, absent stem_dir) — the report-swap requirement must not depend on absence-of-error equalling legacy.
+  - No-outro tracks ship synthetic fallback hints the gate never checks; either label such tracks for review or validate the fallback against the 32-bar window.
+  - Test corrections first: value-level assertions for `validate_hints_vs_sections`, tests for `propose_arrangement` and `section_placement_viz`, and a test that `apply_automation` arms `require_report_swaps` when the stem dir is present and groove.
+  - Document the rerun order for existing projects (groove requires `--kick-model` or a cache purge, else the first track hard-raises).
+
+  FOUND UNASKED
+
+  - With `--kick-model`, `_may_overwrite_sections_json` overwrites unconditionally (pre-existing early return); the mode guard only ever fires with the kick model off. The builder's "subject to the kick-model provenance guard" is accurate but the guard is asymmetric in a way the report does not spell out.
+  - The interrupted-rerun hazard: stage 3 rewrites tracks sequentially, so a raise after track N leaves tracks 1..N in the new mode and N+1.. in the old — the tool can create the mixed state its own `require_uniform_modes` gates then refuse. First-track raises (the common case) avoid it; mid-list raises do not.
+  - `_mix_cues` groove branch ignores `CUE_CONFIG.emit_fills`; the config flag is silently inert for groove (probably intended, but a config that does nothing with no warning is a trap).
+  - The legacy no-outro fallback puts `last_bass_drop` at end - 48 bars, outside the 32-bar window the hint is defined against; pre-existing and unchanged, but the new groove fallback (end - 32) will make legacy-vs-groove hint comparisons look divergent when both are "correct".
+  - Groove hint eligibility is `end_sec <= pre` (fill ending exactly at the outro start qualifies); legacy is `< pre`. Deliberate-looking, undocumented.
+  - The brief stated the builder "notes two such tracks got fallback hints and the gate skipped their outro checks" — verified against the code and consistent; the mechanics are the `outro is not None` guard plus the synthetic outro fallback, both confirmed on main.
+
+===SEAT-DONE kimi switchon_rev_r1===
