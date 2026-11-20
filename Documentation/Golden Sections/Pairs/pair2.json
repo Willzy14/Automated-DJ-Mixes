@@ -1,0 +1,145 @@
+{
+ "title": "Picture 2 of 6 (your blend): PAX Revelry into Passion (V.I.P Mix)",
+ "stem_dir": "D:/Claude Workspace/Automated DJ Mixes/d20-replay/proj/_Stem Analysis",
+ "b_starts_at_a_bar": 160,
+ "zoom": [
+  144,
+  224
+ ],
+ "tracks": [
+  {
+   "key": "A",
+   "match": "PAX",
+   "name": "A: PAX - Revelry",
+   "bpm": 126.0,
+   "n_bars": 193,
+   "sections": [
+    [
+     0,
+     "INTRO"
+    ],
+    [
+     16,
+     "DROP"
+    ],
+    [
+     48,
+     "DROP"
+    ],
+    [
+     76,
+     "BREAK"
+    ],
+    [
+     80,
+     "DROP"
+    ],
+    [
+     96,
+     "BREAK"
+    ],
+    [
+     128,
+     "DROP"
+    ],
+    [
+     176,
+     "OUTRO"
+    ]
+   ],
+   "fills": [
+    [
+     31,
+     32
+    ],
+    [
+     95,
+     96
+    ],
+    [
+     175,
+     176
+    ]
+   ]
+  },
+  {
+   "key": "B",
+   "match": "Passion",
+   "name": "B: Murphy's Law & Guy Mac - Passion (V.I.P Mix)",
+   "bpm": 133.02,
+   "n_bars": 144,
+   "sections": [
+    [
+     0,
+     "INTRO"
+    ],
+    [
+     16,
+     "DROP"
+    ],
+    [
+     32,
+     "BREAK"
+    ],
+    [
+     48,
+     "DROP"
+    ],
+    [
+     64,
+     "BREAK"
+    ],
+    [
+     88,
+     "BUILD"
+    ],
+    [
+     96,
+     "DROP"
+    ],
+    [
+     128,
+     "OUTRO"
+    ],
+    [
+     136,
+     "OUTRO"
+    ]
+   ],
+   "fills": [
+    [
+     15,
+     16
+    ],
+    [
+     31,
+     32
+    ],
+    [
+     55,
+     56
+    ],
+    [
+     62,
+     64
+    ],
+    [
+     95,
+     96
+    ],
+    [
+     103,
+     104
+    ],
+    [
+     111,
+     112
+    ],
+    [
+     126,
+     128
+    ]
+   ]
+  }
+ ]
+}

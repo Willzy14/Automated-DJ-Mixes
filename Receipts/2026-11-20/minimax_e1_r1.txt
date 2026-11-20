@@ -1,0 +1,193 @@
+﻿VERDICT: CORRECTION
+
+Files read (sha256 prefixes from SHA.txt): `render_check.py` (3fc62346712e1bfc), `change.diff` (ca58a3380f3084a0), `BUILDER_REPORT.txt` (0d71668d465649cf). The snapshot does not contain `Tests/test_render_check.py`, so I read the test file from the worktree `D:/Worktrees/dj-e1` and cross-checked it against the test hunks in `change.diff` (they match). I also read the builder's scratch directory `D:/Claude Workspace/Automated DJ Mixes/e1/` (not in SHA.txt, not part of the snapshot) because it contains the measurements the report cites. NOTE: that worktree has MOVED ON since the pinned commit (it now contains `_locate_arc_votes`, `ARC_UNLOCATED_REASONS`, `_weighted_ncc`, `ARC_MIN_VOTES` and a `r2_*` scratch series). I reviewed the pinned snapshot throughout; I cite the later work only as evidence about the pinned code, not as the subject of the review.
+
+---
+
+## 1. The flat-tempo path: unchanged
+
+I checked this line by line and it holds.
+
+`check_boundary_click(..., offsets_sec=None)`:
+- `null_cache` key is `bp` (int) exactly as before; the tuple key `(bp, int(round(offset*sr)))` is only used when `offsets_sec is not None`.
+- `bp_center = int(round(arr_to_sec(bp, tempo_map) * sr))` on the flat branch, identical to the old expression.
+- The null-window EOF branch still does `eof_truncated_count += 1` on the flat path (the arc-only suppression is inside `if offsets_sec is None:`).
+- `t_sec` is not shifted, so `center`, `t0`, `t1` are unchanged.
+- The finding `measured` dict keeps the same five keys in the same order (`metric`, `null_max`, `null_mean`, `null_std`, `z`); `located_offset_ms` is added only when `offsets_sec is not None`.
+- The message string on the flat path is byte-identical; the arc suffix is appended only on the arc.
+- `skipped` on the flat path has no `tempo_arc` key, and `_boundary_click_coverage` fills all four reasons via `.get(r, 0)`, so the coverage record is byte-identical, including key order (fixed by `BOUNDARY_CLICK_SKIP_REASONS`, whose tuple the diff does not change).
+
+`run_check` on the flat path:
+- Old: `trusted, untrusted = list(boundaries_sec), []`, then `if trusted: check_boundary_click(...)`, then the unconditional coverage rebuild with `tempo_arc: len(untrusted)` (= 0).
+- New: the same, except the check call moved inside the `if tempo_map.is_flat:` branch and the coverage rebuild is now guarded by `if tempo_map.is_flat:`. On a flat map both guards are true, so the sequence is identical.
+- The SKIP finding is emitted only `if untrusted:`, which on a flat map is never true, so the flat path's message change (the only user-visible string change in the diff) is unreachable on flat.
+
+`_parse_als_bytes` only ADDS clip keys (`track_index`, `warp_markers`, `is_warped`, `sample_path`, `sample_rel_path`) and changes `for track in` to `for track_index, track in enumerate(...)`. Iteration order is the same; no other code reads the new keys on the flat path.
+
+Two pre-existing tests pin the flat path well, and I would not want them removed:
+- `test_run_check_findings_are_unchanged_by_the_coverage_record` asserts the exact `(check, level, msg)` list, the verdict and the exit code for a flat mix, and its docstring states the values "were captured from the code as it stood BEFORE E1". That is a real pin on the flat message text.
+- `test_boundary_click_coverage_flat_click_is_inspected_and_failed` and `..._clean_pass_shows_how_much_it_covered` pin the flat coverage counts and the exact MD coverage line.
+
+**Point 1 verdict: the "exactly as before" claim matches the files.**
+
+---
+
+## 2. The locator: yes, it can bless the wrong position
+
+The structural insight that makes this locator work, and that makes most of the brief's worries less dangerous than they look, is worth stating first: **the locator is not finding "the boundary". It is finding a global render-versus-map time offset.** The clip's source is reconstructed at MAPPED times; the render actually contains it at mapped + d; the correlation peak is at d regardless of which part of the clip is used or whether the clip starts on silence. That is why a silence-led clip is harmless, and why two tracks playing the same sample are harmless (both are displaced by the same d).
+
+That design is sound. But the guards around it are weaker than the report implies, and the brief's specific worries land on real holes.
+
+**(a) The rival check only looks INSIDE the search window.** `v` is computed over `r_env` of length `n + 2*lag_n`, so the lag axis spans exactly -0.45 beat to +0.45 beat. `second = v[rival].max()` therefore can only ever see rivals inside that window. The brief's "repeated 1 to 4 bar pattern" case produces rival peaks at 1, 2 and 4 beats, which are OUTSIDE the window and completely invisible. The uniqueness check then passes on the in-window global max, which may be a half-beat alias rather than the true lag. The constant's own comment says the 0.45 beat limit exists because "further out the kick lattice itself repeats and the peak is no longer unique" - but the code then only checks uniqueness inside the region it deliberately restricted for that reason. A periodic source can therefore win the vote with a clean 0.9+ peak and a 0.02 margin, at a lag that is a fraction of a beat off the truth.
+
+**(b) One vote is enough.** `if not votes: return None` then `med = median(votes)` then `if max(abs(v - med)) > 0.001: return None`. With exactly one voter, `max(...)` is 0 and the vote is accepted with NO cross-check at all. The 1 ms agreement rule provides zero protection in the single-voter case, and the code never requires a second opinion.
+
+**(c) The per-track template sums ALL of a track's clips in range, so a track can correlate against itself.** `by_track[k] = by_track[k] + y` sums every clip of that track within +/-4 beats into one template. If the same source appears twice (a repeated section, two tracks on the same sample, a loop baked into the source), the template contains the material and the render contains it too, and the correlation can lock onto the wrong occurrence. Nothing tests or excludes this.
+
+**(d) `start_relative` is ignored for non-looping clips.** `src_beat = clip["loop_start"] + (beats - clip["arr_start"])`. Live writes `StartRelative` for a clip whose start is offset inside its loop region, and the builder's own report says the two "Tweaks" sets were HAND-EDITED in Live. A non-zero `StartRelative` shifts the reconstruction by a constant number of source beats. If the shift is large the correlation falls below 0.9 and the boundary SKIPs (safe); if it is small (a few tens of ms) the peak can stay above 0.9 and the offset is silently BIASED. The pipeline's own generator always writes `StartRelative` 0, so the four measured sets do not exercise it.
+
+**(e) The "beyond the search it lands at the edge and is refused" claim is not what the code does.** `edge = max(1, int(round(0.001 * sr)))` is 44 samples, 1 ms. A drift just past the search radius is NOT refused by a 1 ms edge zone; the refusal depends on the correlation being monotone toward the edge, which is exactly what periodicity breaks. The code comment asserts "a boundary beyond it lands at the search edge and is refused", and the builder's report repeats "If the drift there exceeds 0.45 beat ... boundaries become SKIP, not false results". Neither is guaranteed by the code. In that regime the failure mode is a WRONG LOCK reported as a clean inspection, which is strictly worse than a SKIP.
+
+**(f) Missing source WAV: handled correctly.** `_resolve_sample_path` tries `RelativePath` against the ALS folder, then the absolute `Path`; if neither exists it returns None, the clip contributes nothing, and a boundary with no other evidence returns None, which becomes a named SKIP. This is exercised by the `nosrc` case of `test_e1_arc_unlocatable_boundary_is_a_named_skip_never_a_pass`. Good.
+
+**(g) The evidence for the locator is from a DIFFERENT search geometry than the shipped code.** The report's "It searches +/-0.45 beat around the mapped time, with no correction model" describes the shipped code correctly (I verified `ARC_LOCATE_SEARCH_BEATS = 0.45` and the absence of any drift model). But the numbers "498 of 509 located", "0 of 503 controls" and "24.1% / 7.3% / 1.2%" come from the scratch prototype `e1/proto.py` driven by `e1/eval2.py`, and `proto.py` as it now stands computes its search radius as `LOC_SEARCH_BASE (0.025 s) + LOC_SEARCH_FRAC (0.25) * |centre|` around a 95 ppm drift-model centre, i.e. a 25 to 46 ms window, not +/-0.45 beat. The scratch files were edited after the CSVs were written (the CSVs show `center_ms = 0.0` with `off_ms` up to 83.8, which is arithmetically impossible under proto.py's current formula), so the artefacts cannot confirm which geometry produced the headline numbers. The shipped code's OWN recorded runs are `runcheck_defv4.json` 136/140, `runcheck_dftd.json` 89/92, `runcheck_deftw.json` 156/159, i.e. 381 of 391 located on three mixes; the sept JSON in the scratch directory is a PRE-E1 run (old message, 40.4 s), so the claimed "sept 118/118" for the new code is not evidenced by any artefact I can see. The report's "498 of 509" and its own shipped-code counts (499 boundaries, 489 inspected) do not agree.
+
+**(h) Independent corroboration that these are the real defects.** The builder's scratch directory contains a round-2 revision (`r2_locator_block.py`, `r2_patch.py`, `r2_diag.py`, `r2_measure.py`) that replaces the pinned locator wholesale. Its new constants are named for exactly the failure modes in (a) to (d):
+- `ARC_RIVAL_RANGE_BEATS = 1.1` - "Rivals are looked for across this many beats either side, wider than the search, so a one-beat or half-beat repeat cannot hide outside it."
+- `ARC_MIN_VOTES = 2` - "Votes must agree pairwise within this, and this many are required."
+- `ARC_SHARED_MAX_NCC = 0.6` - "A template that correlates at least this well with another clip's audio around the cut is shared material: ineligible."
+- `_arc_clip_shape_ok` refuses a clip whose `start_relative` is not 0.
+- `ARC_CUT_TOL_BEATS` / `no_cut_clip` - the round-2 locator anchors on an actual clip EDGE at the boundary rather than on a generic audio offset.
+- `ARC_MAX_SOURCE_STRETCH = 4.0` - "wider means broken warp geometry, refused before any allocation."
+- `r2_diag.py` explicitly measures `sh_same` (same-track other clip) versus `sh_other` (other track) correlation, i.e. the self-confusion of (c).
+
+The pinned snapshot is the first attempt, and the builder has already written the fixes. Shipping e9e6021 as-is ships the version the author knows to be wrong.
+
+---
+
+## 3. FAIL is the wrong severity on an arc
+
+**The 2.5 ms location error causes MISSES, not false FAILs.** If the located time is 2.47 ms off, the +/-2 ms window no longer contains the boundary and the metric reads ordinary audio. It does not manufacture a discontinuity. So the "located time can be off by up to 2.5 ms against a 2 ms window" argument is an argument about detection loss, not about false alarms.
+
+**The false-alarm arithmetic is the real problem.** The builder quotes 0 of 503 with a 95 percent upper bound of about 0.6 percent per position. At that bound, with the shipped code's own boundary counts:
+
+| mix | boundaries | P(>=1 false FAIL) at p=0.60% | expected false FAILs |
+|---|---|---|---|
+| sept | 118 | 51.0% | 0.71 |
+| defv4 | 140 | 57.1% | 0.84 |
+| dftd | 92 | 42.6% | 0.55 |
+| deftw | 159 | 61.7% | 0.96 |
+
+Across the four mixes, 1 - 0.490 x 0.429 x 0.574 x 0.383 = 95.4 percent chance of at least one false FAIL somewhere.
+
+That is the bound, not the estimate. The point estimate is 0 and the observed data is 0 of 1001. But a gate whose FAIL means "the mix is not done" cannot carry an unannounced 0.6 percent-per-boundary false-alarm rate and still call itself a gate: at the quoted bound it would block roughly half of all mixes on a coin flip and 95 percent of batches.
+
+Note also that the 0 of 503 control measurement was taken at control beats chosen at least 1.0 beat away from every real boundary (`eval2.py`: `min(abs(b - q) for q in bbeats) >= 1.0`). It therefore does NOT exercise the case that actually produces false FAILs, namely a window placed a couple of milliseconds off a real cut, adjacent to a genuine transition in the arrangement.
+
+The builder reached the same conclusion independently. `r2_patch.py` changes the arc finding from FAIL to WARN with the comment: "WARN on an arc (E1 round 2): the located time can be off by up to ~1.4 ms and the false-alarm evidence is four renders, too little for an automatic production FAIL."
+
+WARN on the arc, FAIL on the flat map, is the right severity split, and it is also consistent with the brief's requirement that the flat path not change.
+
+---
+
+## 4. The report overstates the arc result
+
+Read the strings a reader actually sees.
+
+On a clean arc mix with all boundaries located, the MD contains:
+
+```
+## Coverage
+boundary_click: inspected 140 of 140 boundaries (skipped 0), 0 failed
+
+## Checks run clean
+boundary_click, exposed_solo, grid_fold, ...
+```
+
+The SKIP finding is absent (nothing was unlocated), and `write_report` computes `skipped` only from SKIP findings carrying `skipped_check`, so `boundary_click` lands in "Checks run clean".
+
+Nothing anywhere in `render_check.py` states the detection floor. There is no "sensitivity", no "24%", no "6 dB" string in the module. A reader sees "inspected 140 of 140 boundaries, 0 failed" plus "boundary_click" under "Checks run clean" and will take it as "every boundary was checked and none had a click". The truth is "about a quarter of -6 dB clicks are caught, 7 percent of -12 dB, 1 percent of -20 dB". That is a much weaker statement, and the phrase "0 failed" reads as "no clicks" rather than "no click above the detection threshold".
+
+The specific regression E1 introduces: **before this change an arc mix reported `inspected 0 of 140 boundaries (skipped 140: tempo_arc 140), 0 failed` and `boundary_click` was NOT in "Checks run clean"** (the SKIP finding carried `skipped_check: "boundary_click"`, and `write_report` removes it from the clean list). The reader could not mistake "not looked at" for "looked at and clean". After this change the same arc mix reports "inspected 140 of 140, 0 failed" and `boundary_click` IS in "Checks run clean". The change converts an obviously-uncovered check into a quietly-covered one without adding a single word about the floor. That is the same class of error the coverage-record mechanism exists to prevent, one level down: not "did not run" but "ran approximately".
+
+There is a second, smaller overstatement: **"inspected" conflates two different things.** On the flat path, "inspected" means the +/-2 ms window was exactly on the boundary. On the arc it means "we placed a window at our best estimate of the boundary", whose error is p95 0.4 to 0.7 ms and worst 2.47 ms, i.e. sometimes larger than the 2 ms half-window. The coverage record has one vocabulary for both.
+
+The builder's round 2 fixes both, and the fix is small and cheap:
+- `BOUNDARY_CLICK_ARC_SENSITIVITY` - a plain-words line: "about a quarter of loud synthetic clicks (6 dB under the local peak) are caught and quiet ones (12-20 dB under) are mostly missed, so a clean result is not proof the cuts are click-free".
+- `_arc_coverage_line` - arc wording "no click-shaped discontinuity flagged in N of M boundary windows", never "failed".
+- On an arc, `boundary_click` is removed from "Checks run clean" regardless of outcome.
+
+---
+
+## 5. Tests
+
+**Each new test would fail if its behaviour were removed.** The builder verified this by stashing the source (3 failed, 2 passed) and I agree with the reasoning:
+
+1. `test_e1_arc_click_at_the_real_cut_fails` - without the locator the arc skips every boundary, so no `boundary_click` finding exists and `[f.level for f in hits] == ["FAIL"]` fails. It also pins the sign and magnitude of the offset (`located_offset_ms == approx(30.0, abs=0.5)`) and asserts the finding's time span contains the true boundary. Strong.
+2. `test_e1_arc_clean_render_is_inspected_not_skipped` - without the locator, coverage would be inspected 0 / skipped 2 and the assertion `(1, 1, 0)` fails. It also proves the locator itself does not manufacture a FAIL.
+3. `test_e1_arc_click_at_the_mapped_time_is_not_where_the_cut_is` - a genuine prove-the-test: it shows the mapped time is more than one click-window from the truth and that the same test at the mapped time finds nothing. This is the test that stops a future "simplification" from dropping the offset.
+4. `test_e1_arc_unlocatable_boundary_is_a_named_skip_never_a_pass` - **this is the named-SKIP-never-a-pass test the brief asks for**, in two variants (cut further from the mapped time than the search reaches; source WAV deleted), and it injects a click into the audio to prove no clean pass is reported. It asserts `inspected == 0`, `skipped_by_reason["tempo_arc"] == 1`, no `boundary_click` finding, one SKIP finding with the expected measured keys.
+
+**The flat path is pinned** by the two pre-existing tests cited in section 1, and the arc MD line plus the "never listed clean" assertion are pinned by `test_boundary_click_coverage_tempo_arc_inspects_nothing_skip_unchanged`.
+
+**Gaps that matter, given section 2:**
+
+- **No test ever exercises the multi-track vote.** `_e1_clips()` returns two clips both on track "A" referencing the same source, so `by_track` has exactly ONE key. The agreement rule, the median-of-votes, and the "votes disagree -> refuse" path have ZERO coverage, and the fixture is structurally incapable of producing two votes. The one guard that exists to prevent a wrong lock is entirely untested.
+- **No test with a periodic or repeated source**, which is the one case where the rival check can be defeated (the fixture source is explicitly built aperiodic: "irregular high-band noise bursts: no periodicity, so a correlation can only line up at the one true lag").
+- **No test for a clip whose source is missing while another track's source is present.** The `nosrc` case removes the only source, so it tests "no votes at all", not "a partial vote set".
+- **No test for the arc case that actually occurs in production**: some boundaries located, some not. The arc MD line is only asserted for the all-skipped case. On defv4 the real outcome is 136 of 140 with 4 skipped, and on dftd 89 of 92, deftw 156 of 159.
+- **No test that a located boundary's uncertain window is described as uncertain.**
+
+---
+
+## 6. Performance and safety
+
+**Does it read whole source WAVs into memory?** No. `_clip_audio_at` seeks and reads only the source segment spanning the ~2 s window (`_read_mono_padded(src, floor(pos.min())-2, ceil(pos.max())+3)`). File LENGTH is irrelevant; a 7-minute source costs the same as a 7-second one. (The builder's scratch `measure.py` does `sf.read` the whole file, but that is the prototype, not the shipped code.)
+
+**Could 200 boundaries x 7-minute sources exhaust memory?** No, not through the normal path. Per boundary the working set is one `r_env` of `n + 2*lag_n` samples (about 106k float64, 0.85 MB), one `p_env` per voting track (0.70 MB each), the `fftconvolve` output and its FFT scratch, and `by_track` holding one 88k array per distinct track in range. Nothing accumulates across boundaries; `locate_arc_boundary_offset` is called per boundary and all locals are released. Total is a few MB, constant in the number of boundaries.
+
+**There is one unbounded allocation, though.** `_read_mono_padded` allocates `np.zeros(b - a)` for the source span `pos.max() - pos.min()`, and `pos` comes from `np.interp` over the warp markers. If the warp geometry is broken - markers where a 2-beat span maps to a 30-minute source span - that single call allocates a 635 MB float64 array, and because `fh.read(..., always_2d=True)` on a stereo file returns two channels before `.mean(axis=1)`, the read itself is about 1.27 GB. There is no guard. The round-2 code adds `ARC_MAX_SOURCE_STRETCH = 4.0` explicitly "refused before any allocation", which confirms this was recognised.
+
+**Read-only?** Yes. `sf.SoundFile(str(p), "r")` for every source, `sf.SoundFile(str(render_path), "r")` for the render. Nothing is written to a source file. `locate_arc_boundaries` closes every handle in a `finally` block.
+
+**One operational hazard.** `locate_arc_boundaries` opens one SoundFile handle per distinct resolved sample path and holds them ALL open for the whole run, for every clip in the set, not just those near a boundary. libsndfile on Windows goes through the CRT, whose default open-stream limit is 512. A set with several hundred distinct source files would start failing to open; the code catches that (`handles[p] = None`) and those clips silently contribute nothing, so those boundaries degrade to SKIPs with no hint in the report that the cause was a handle limit rather than a bad match. On the four measured sets the distinct-source count is far below 512, so this is a scale limit rather than a live bug.
+
+---
+
+## What I would change before this ships
+
+1. Take the builder's round-2 locator: widen the rival search beyond the search window (1.1 beats), require a minimum of two agreeing votes, refuse a template that correlates with another clip's material, refuse `start_relative != 0`, anchor on an actual clip edge at the boundary, and guard the source allocation.
+2. Downgrade an arc hit to WARN and leave the flat path at FAIL. State the false-alarm bound somewhere the operator sees it.
+3. Add the arc sensitivity line and the arc-specific coverage wording, and keep `boundary_click` out of "Checks run clean" on an arc.
+4. Add the missing tests: two tracks voting, a periodic source, a missing source on one track only, and a partially-located arc.
+5. Re-measure the "498 of 509" and "0 of 503" numbers against the shipped code, or restate them as prototype numbers. The shipped code's own recorded evidence is 381 of 391 on three mixes; the sept run in the scratch directory is a pre-E1 run and the claimed 118/118 for the new code is not evidenced.
+
+None of this touches the flat path, which is genuinely unchanged.
+
+---
+
+## FOUND UNASKED
+
+1. **The worktree the builder worked in has moved past the pinned commit.** `D:/Worktrees/dj-e1` contains `_locate_arc_votes`, `ARC_UNLOCATED_REASONS`, `_weighted_ncc`, `ARC_MIN_VOTES`, `ARC_SHARED_MAX_NCC` and an arc-specific report writer. The pinned snapshot at e9e6021 has none of these. If anyone reviews "the current state of the branch" they will be reviewing different code than this snapshot. The commit is local and unpushed, so there is a real chance the round-2 work exists only as uncommitted scratch in `e1/` and `r2_patch.py`.
+
+2. **The builder's scratch prototype was edited after the measurements, so the artefacts cannot be used to reproduce the headline numbers.** `e1/proto.py` now uses a drift-model-centred 25 to 46 ms search; the CSVs it supposedly produced (`eval2_real_*.csv`) show `center_ms = 0.0` with `off_ms` up to 83.8, which proto.py's own arithmetic cannot produce. The `inj_*_e2e.csv` files are the only artefacts that genuinely exercise the shipped code end to end through `run_check` - and in every one of them the shipped `E2E` flag agrees with the prototype's `L_hit`, with no disagreement either way. That agreement is worth keeping, but it was measured on injected copies at boundaries the prototype itself had located, so it is not independent of the prototype's locator.
+
+3. **`r2_diag.py` is measuring something the pinned code cannot measure.** It computes `sh_same` (a clip's correlation with another clip on the SAME track) against `sh_other` (a different track) across all lags in the rival range. The pinned E1 locator sums a track's clips into one template and never compares a template against another clip's material, so this class of self-confusion is invisible in the pinned code and was not measured for it.
+
+4. **The arc path's null windows inherit the boundary's offset, but the drift is not constant across the null set.** The drift grows at about 95 ppm of ramp time, so a null beat 16 beats away (about 7.5 s) can sit up to 0.7 ms from where the boundary's offset puts it - roughly a third of the 2 ms half-window. The effect is a slightly noisy null set rather than a bias (the null metric is a max over 88 samples, so a sub-millisecond shift mostly picks a different but statistically similar pair), and it should make the test marginally MORE conservative rather than less. Worth knowing, not worth fixing.
+
+5. **The 1 ms cross-track agreement rule can never fire on the four measured mixes in the way it is meant to.** `by_track` is keyed by `track_index`, and the vote is the sum of a track's clips. Two tracks playing different material are displaced by the same global drift d, so they agree to well under 1 ms by construction - the rule is a consistency check on the locator, not a discriminator between hypotheses. The situations where it would matter (two tracks with genuinely different offsets, which would indicate a per-track timing problem) do not occur in these sets, so the rule has never been observed to do anything. The round-2 `ARC_MIN_VOTES = 2` is the guard that actually adds information, by refusing to act on a single unreplicated observation.
+
+6. **`_read_mono_padded` can be asked for a segment that starts before the file and ends after it, and it allocates the full requested span including the padding.** That is correct behaviour and the padding is needed for the correlation, but combined with the missing stretch guard in section 6 it is the one place where a malformed set turns into an out-of-memory kill rather than a SKIP.
+
+7. **`_resolve_sample_path` prefers `RelativePath` against the ALS's own folder.** Live writes `RelativePath` relative to the folder containing the .als, so this is right for the standard layout, but it means a set that has been MOVED and whose RelativePath is now stale will silently fall through to the absolute `Path`, which on a different machine is also stale. Both fail -> SKIP, which is safe, but the report will say "could not be located from the audio" with no hint that the cause was a moved set. A distinct skip reason for "source file not found at either recorded path" would have separated that from "the match was too weak to trust".
+
+8. **`_arc_envelope` applies `sosfiltfilt` to the full-length render window on every boundary**, with no cache. On the four mixes that is the dominant cost of the new code (17 to 24 s per render, against 40 s for the old code on sept, though the builder rightly notes that comparison is not like for like). Not a correctness issue and not urgent, but if the locator is to run on every render it is the obvious thing to memoize.
+
+9. **`_parse_als_bytes` now collects `warp_markers` for every clip in the set even when the map is flat.** On a large set that is a modest but real memory cost for data the flat path never reads. It is bounded (one tuple pair per marker, thousands of markers per set) and harmless, but it is work done on a path that does not need it.
+
+10. **The `e1/` scratch directory is about 7 GB of `inj_*.wav` copies** and the builder flagged them as deletable. More importantly, the `r2_*.py` scripts in it PATCH `Source/render_check.py` IN PLACE (`open(p, "w").write(s)`). If anyone reruns `r2_patch.py` against the pinned worktree it will rewrite the source file. That is a live foot-gun sitting next to the code it modifies, and it is exactly how the pinned commit and the later worktree state could diverge without a trace.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=53febc0de9e94cababbea3472ef1bf70===
+===SEAT-DONE minimax e1_r1===

@@ -1,0 +1,215 @@
+﻿I have everything. Here is my review.
+
+---
+
+VERDICT: CORRECTION
+
+Files read (SHA-256 first-16 prefixes as listed in `SHA.txt`): `07c8c69f90cd8350` (`stem_grid.py`), `4fc2bc502d88f555` (`test_stem_grid_period.py`), `e24cf2b51dc89d30` (`change_vs_main.diff`). Also read (not in SHA.txt): `change_r2_to_r3.diff`, `BUILDER_REPORT.txt`, `PRIOR_codex_r2.txt`, `regress_v3.csv`, `holdout_v3.csv`, `SHA.txt`, `brief_d21fix2_r3.txt`, and, for cross-checking, the builder's own working files under `Automated DJ Mixes/d21/` (`head_stem_grid.py` = the r2 commit's module, `mut_r3.log`, `mutate_r3.py`, `shape_sweep_r3.py`, `d21-verify/trains.py`, `d21-verify/shape_sweep.py`, `d21/regress_v2.csv`, `d21/holdout_v2.csv`, `d21/commit_msg3.txt`, `d21/hitfrac_v3.log`).
+
+No execution environment was available to me, so every numeric claim below is either read directly from a supplied file or derived by hand from the code. Where I could not execute, I say so.
+
+---
+
+## 1. Requirement A (a passing legacy track must come out identical to main)
+
+**Holds, with one caveat I could not close by execution.**
+
+Reading `change_vs_main.diff` for anything outside the rescue branch:
+
+- `build_grid` was refactored into `_grid_from_b0` with an unchanged body. `build_grid(kicks, period)` still returns exactly `(grid, aidx, atim)` from the same `_robust_period` seed. Byte-identical.
+- `detect_beat_grid` was restructured: the snap moved out of the body and into a `finalize` closure passed to `select_grid`. In the legacy path `select_grid` computes `grid = build_grid(...)`, then `grid = fin(grid)`, i.e. the snap is applied to the same grid at the same point in the sequence. `finalize` is `snap_grid_to_transients(g, snap_to)` with the same `snap_to` as main (`np.asarray(asd_ticks)` for the ASD branch, `tr` for the own-transients branch). Same function, same argument. Identical.
+- `snap_to = np.asarray(asd_ticks)` was hoisted but the value is the same.
+- `flag = ("JIT" if kf > JIT_MS ...)` replaces `flag = ("JIT" if kf > 15 ...)`. `JIT_MS = 15.0`, so the comparison is identical. The unrounded test is preserved exactly as main had it.
+- The new `if chosen != period:` block (recompute `period` and `conf`) is inside the rescued case only: for a passing track `select_grid` returns the original `period` object, so `chosen == period` and the block is skipped. `conf` stays `estimate_period`'s value.
+- `find_downbeat`, `extrapolate_grid`, `_resolve_first_downbeat_offset` all receive the same `grid`, `aidx`, `period` for a passing track.
+
+So for any track whose legacy (post-snap) grid has `kf0` with `round(kf0, 2) <= 15`, the result is byte-identical to main. That is also exactly what the CSV shows (see section 6).
+
+**Caveat (unverified by execution):** the early-return is `if np.isnan(kf0) or not _fails_gate(kf0)`. On main there was no such branch at all, so main's behaviour for a NaN grid was "ship it". Here a NaN grid is also shipped unchanged (the `np.isnan` short-circuit). Identical outcome. But note `_fails_gate` is now the **rounded** predicate while main's implicit JIT flag used the **unrounded** one. For a legacy grid with `kf0` in the window `15.000 < kf0 <= 15.005`, main's flag was `JIT` (unrounded `kf0 > 15`) and the pipeline's hard gate (rounded) did *not* fail the track. In this commit the same track is not rescued (rounded gate says pass) and its flag is still `JIT` (unrounded). So the flag is unchanged. Good. Requirement A is satisfied on this axis.
+
+One narrow inconsistency worth recording, not a requirement-A break: the **rescue's own acceptance test** uses the rounded gate (`_fails_gate(kf)`, i.e. accepts `kf <= 15.005`) while the **JIT flag** uses the unrounded test (`kf > 15.0`). A candidate whose post-snap `kf` lands in `(15.000, 15.005]` passes the rescue's gate check and is shipped, and then the final flag computation sets `JIT` on it. So the rescue can, in principle, ship a grid that is still JIT-flagged. The window is 5 microseconds wide and the values are continuous, so the probability is negligible in practice, but the two predicates are inconsistent by construction. Cheap fix: have the candidate gate use the same unrounded comparison the flag uses, or accept `kf < 15.005` and then also suppress the flag; as written the two disagree.
+
+## 2. The gate predicate
+
+`_fails_gate(kf)` is `round(kf, 2) > JIT_MS` with an explicit `NaN -> False` short-circuit. Python's `round` is banker's rounding on the decimal value of the double, so:
+
+| kf | `round(kf,2)` | `_fails_gate` | pipeline `round(kf,2) > 15` |
+|---|---|---|---|
+| 15.0 | 15.0 | False | False |
+| 15.0025 | 15.0 | False | False |
+| 15.004 | 15.0 | False | False |
+| 15.005 | 15.0 (the double is15.00499999...) | False | False |
+| 15.006 | 15.01 | True | True |
+| NaN | NaN | False (explicit) | False (`nan > 15` is False) |
+| inf | inf | True | True |
+
+So `_fails_gate` is **identical in effect** to `round(kf, 2) > 15` for every finite float, NaN and inf. The explicit NaN branch is redundant (`round(nan,2) > 15` is already False) but harmless and self-documenting.
+
+Empty kick list: `detect_beat_grid` raises `ValueError` before reaching the gate (`period <= 0 or len(kicks) < 8`), same as main. One or two kicks: same, `len(kicks) < 8` raises. `select_grid` called directly with 0 or 1 kicks would raise inside `_grid_from_b0` at `kicks[0]` (IndexError), which is main's behaviour too (`build_grid` -> `_grid_from_b0` -> `kicks[0]`), so not a regression. Two kicks would give `idx` of length 2, `resid`, `keep`, `best` of size at most 1, `aidx` of size 1, `all_idx = np.arange(aidx[0], aidx[1]+1)` -> `aidx[-1]` is fine, `np.interp` path. No new raise.
+
+**Is it right that the JIT flag keeps the unrounded test?** Yes for requirement A (main used the unrounded `kf > 15`), and no legacy flag can change. It is the right call. But see the inconsistency noted in section 1: the rescue's acceptance predicate and the flag predicate now differ, and the rescue's own acceptance window admits grids that the flag will call JIT.
+
+**A real problem in the gate area:** `_fails_gate` is documented as "the DJ pipeline's hard gate (validate_beatgrid: round(kf, 2) > 15.0)". I could not find `Source/validate_beatgrid.py` in this workspace, so I cannot verify that the pipeline really rounds to 2 decimals before comparing, nor that `STEM_KF_FAIL_MS == 15.0`. The whole correctness of the rescue's *entry* condition rests on that external fact. If the pipeline actually compares `round(kf, 2) > 15` on the **reported** `BeatGrid.grid_vs_kick_ms` (which is already `round(kf, 2)`), then rounding twice is idempotent and the claim holds. If the pipeline instead compares the raw value or uses a different constant, the entry gate is wrong. The brief states the gate is "grid-versus-kick above 15 ms, rounded to 2 decimals", so the builder is following the brief, and the brief and the builder agree. I am flagging it only because the pipeline file is not in the snapshot, so the one external dependency the fix rests on is unverified here.
+
+## 3. Wrong rescues
+
+**3a. The guards cannot see the beat phase. This is the real hole.**
+
+Every guard in the rescue is measured against the kicks:
+
+- `grid_vs_kick` measures `|grid line - kick|`. It has no notion of beat index.
+- `_grid_hits` counts kicks within 15 ms of a line. Also no beat index.
+- `_passes_each_segment` calls `grid_vs_kick` on four equal-count runs of kicks. Still no beat index.
+- The shipped-spacing bound constrains the median spacing only.
+
+Meanwhile the grid that is shipped is `spline(aidx, atim)` evaluated at **every integer index** `all_idx = arange(aidx[0], aidx[-1]+1)`. The number of lines the exporter turns into warp markers, and where the bar line falls, are functions of the **anchor index assignment**, not of any of the four guards.
+
+Concretely, the corpus already shows this happening. `regress_v3.csv` line 29, Spiller - Groovejet:
+
+```
+before: bpm 122.81, kick 109.16, JIT, downbeat 0.416, nbeats 911, dboff 0, dbmethod perc-intro, agree 0.47
+after : bpm 122.99, kick   2.98,    , downbeat 0.965, nbeats 914, dboff 2, dbmethod snare+entry, agree 0.67
+```
+
+The rescue moved the **first downbeat by two beats** (0.416 s -> 0.965 s, `dboff` 0 -> 2) and changed the beat count (911 -> 914). All four guards passed. The track now ships with an **empty flag**, i.e. "trust outright", on a grid whose bar one moved by a half bar. The same happens on MEDUZA (line 22: `dboff` 1 -> 0, downbeat 0.603 -> 0.027) and on Pat Premier Radio Edit (line 36: downbeat 0.000 -> 0.018, `dbagree` 0.4 -> 1.0).
+
+The brief records "bar-one position of three rescued tracks is to be checked by ear by the owner" as known, so I will not re-raise the *outcome*. I am raising the *mechanism*, which is not in the known list: **no guard in the rescue constrains the beat phase or the line count, and the guards are structurally incapable of doing so because they are all kick-alignment metrics.** A grid that is on100% of the kicks and has the wrong bar line is, by construction, indistinguishable from a correct one to every guard in this commit. That is the class of wrong rescue the brief is worried about ("a gate-passing grid that is on the wrong beats"), and the guards as written cannot detect it.
+
+If a phase guard is wanted, it needs to compare the candidate's `aidx` phase against the legacy's `aidx` phase (or against the snare cues), and it needs to compare the shipped line count against the legacy line count. Both are cheap: `select_grid` already has `ca` (candidate anchors) and `aidx` (legacy anchors) in hand.
+
+**3b. A beat slip confined to less than half a segment escapes the 4-segment rule.**
+
+`grid_vs_kick` filters out any kick more than half a beat (`median(diff(g))*1000/2`) from any gridline before taking the median. `np.array_split(kicks, 4)` gives four equal-count runs of kicks. Now suppose a candidate grid is correct for kicks0..349 and slipped one beat for kicks 350..399 (the last quarter's first50 kicks).
+
+- Whole-track `grid_vs_kick`: the 50 slipped kicks sit one beat (about 480 ms) from the nearest line, which is above the half-beat filter, so they are dropped from the residual set. The median over the remaining 350 kicks is about 0. **The gate passes.**
+- Coverage floor `_grid_hits`: the 50 slipped kicks are 480 ms from any line, so they do not count. hits = 350/400 = 0.875 >= 0.6. **The floor passes.**
+- Segment 4 of `_passes_each_segment` covers kicks 300..399: 300..349 are on-grid (residual about 0), 350..399 are one beat off and get dropped by the half-beat filter. `res` = 50 values of about 0, median about 0. **The segment passes.**
+
+All four guards pass on a grid that is a full beat wrong for 12.5% of the track. The 4-segment rule only catches a slip that covers *more* than half of a segment. This is precisely the "one eighth of the track sat 62-167 ms off" failure the cold reviewer reported on 54f945b, and it survives r3 whenever the slip is narrower than half a quarter.
+
+The test helper `_worst_eighth_ms` in `test_stem_grid_period.py` measures per-eighth medians, i.e. it would catch this (it uses `kicked`, the true beats, not just the detected kicks). But the shipped guard does not. The gap between "the reviewer's synthetic shape is caught" and "the guard catches the shape" is exactly this: **the reviewer's metric is per-eighth against truth, the guard is per-quarter against kicks.** The mutation log shows `no_segment_rule` was killed by exactly one parameterisation, `test_rescue_that_slips_beats_in_one_section_is_rejected[2]`, so the guard is doing something, but only for that one seeded case.
+
+A cheap strengthening: raise `RESCUE_SEGMENTS` from 4 to 8 (matching the reviewer's eighth granularity), and/or make the segment test use the **fraction of the segment's kicks that land within half a beat** rather than the median of the surviving subset, so that dropped kicks count against the candidate rather than for it. The current design lets the worst failure mode (kicks so far off they get filtered out) look like success.
+
+**3c. Two-tempo, half/double, triplet, swung, long-breakdown, sparse-kick shapes.**
+
+- **Half/double time.** The seed bound (`RESCUE_MAX_MOVE = 0.03` on the seed) and the new shipped-spacing bound (3% on the shipped median spacing) both block a half/double flip, because a double-time grid has a shipped median spacing of about half the period, a 50% move. A half-time grid is a 100% move. A 3:2 grid is a 33% move. All rejected. This part is sound and `test_doubled_tempo_is_never_chosen` plus `test_three_two_related_period_is_never_a_candidate` both have teeth (the 3:2 test fails without the seed bound; the doubled-tempo fixture's legacy grid already passes so the rescue never fires there, which the prior review already noted and which the builder has not fixed, but the shipped-spacing bound now covers that path anyway).
+- **A period 1-3 percent off that fits a long section.** This is the case the rescue is *for* (MEDUZA 126.45 -> 125.00 is a 1.16% move, Robosonic 124.56 -> 123.00 is 1.27%). The guards are consistent with it: the shipped grid is on the kicks, the coverage is high, each segment passes. The danger is the *other* candidate at a similar distance that fits a different long section. The ranking (`most hits`, then lowest `kf`, then smallest shipped move) is a reasonable tie-break, and the corpus evidence (both Pat Premier versions independently land on 130.00; the fresh-separation variants in `d21/variants_v3.log` all land on the same BPM) supports the shipped choice. I could not construct a wrong-period rescue that beats the true period on all four guards: to be 1-3% off and still have 60% of kicks within 15 ms, the wrong period must also fit those kicks, which means the kicks themselves are ambiguous at that scale, which is the D21 case the whole design is built around.
+- **Triplet / swung patterns.** A swung pattern (every 4th kick late by 20-40 ms) is shape T2 in the builder's sweep: "swing 53/53/0 both". A triplet kick pattern has intervals of T/3 or 2T/3, both outside the 0.28-0.70 s single-beat window at dance tempos, so `estimate_period` sees the long intervals and the candidates are all outside the 3% window; the rescue cannot fire. Sound.
+- **Long kickless breakdown.** The r3 sweep says the drift-with-breakdown shape went from 89 fired / 38 right / 51 wrong to 37 fired / 37 right / 0 wrong. That is the single biggest improvement and it is what the coverage floor plus the 4-segment rule were built for. Subject to the caveat in 3b, this shape is now handled.
+- **Sparse kicks (under 30).** This is the least tested area and there is a real gap. `RESCUE_MIN_HIT_FRACTION = 0.6` on, say, 12 kicks means 7.2, i.e. 8 kicks must land within 15 ms of a line. With 12 kicks and4 segments, `np.array_split(kicks, 4)` gives three-kick segments, and `grid_vs_kick` on a 3-kick segment takes the median of at most 3 residuals, with the half-beat filter able to reduce that to 1 or 0 values. A 1-value or 0-value median is a very weak test: with 0 values it returns NaN and the segment fails (safe); with 1 value it is that value, and it can be 0 while the other two kicks in the segment are a full beat off. So the segment rule is weakest exactly where sparse tracks are weakest. There is no test anywhere in the file with fewer than about 293 kicks (the smallest real corpus track is Pat Premier at 293 kicks; the synthetic ones use 300-400). The brief lists "sparse kicks (under 30)" as a shape to check and I can confirm: **it is not tested at all.** `estimate_period` returns `0.0` for fewer than 9 intervals, and `detect_beat_grid` raises for fewer than 8 kicks, so a track must have at least 9 kicks to reach the rescue at all; between 9 and, say, 40 kicks the coverage floor of 0.6 and the 4-segment rule both degenerate into near-vacuous tests while still being able to ship a wrong grid.
+- **Two tempo sections.** Shape T4, "0 fired both" per the builder. The 2% ratio is inside the 3% window, but the legacy grid already passes the gate there (the sweep counts it as legacy-pass), so the rescue never fires and the track is unchanged. Sound, but it also means the 3% bound has not been stress-tested against a genuine two-tempo track that *does* fail the legacy gate.
+
+**3d. The unfixed r2 finding: one invalid candidate trial aborts the whole search.**
+
+`PRIOR_codex_r2.txt` reported: "One invalid trial can discard a valid rescue. With five 24-kick sections separated by 320-beat gaps, the robust trial passed at 6.50 ms and hit all 120 kicks. The next trial produced zero anchors and raised `IndexError` at `stem_grid.py:309`. The search aborted before it could return the valid winner."
+
+`stem_grid.py:309` in the r2 module (`d21/head_stem_grid.py`, verified: line 309 is `all_idx = np.arange(aidx[0], aidx[-1] + 1)`) is the `aidx[0]` access in `_grid_from_b0`, which raises `IndexError` when `best` is empty (no kick has `resid < 0.15 * b`).
+
+**This is not fixed in r3.** `_grid_from_b0` is byte-identical between `d21/head_stem_grid.py` (r2) and the pinned `stem_grid.py` (r3); `change_r2_to_r3.diff` contains no `try`/`except` and no guard around the `_grid_from_b0(kicks, b0)` call in the candidate loop (`stem_grid.py:287`). A candidate seed that produces zero anchors still raises `IndexError` out of `select_grid` and out of `detect_beat_grid`, so a track whose legacy grid would have been returned (JIT-flagged, visible failure) instead **raises** and the track is lost outright.
+
+This is worth flagging clearly because it is the exact failure mode the brief cares about: "a wrong rescue is worse than a failed gate, because the failure is at least visible". An unhandled exception is worse than a failed gate, because nothing is visible at all: the track is not shipped with a JIT flag, it is not in the CSV at all, and the caller sees a traceback. And it is *strictly* a regression introduced by this change: on main, `build_grid` is called once with one seed; if that seed yields zero anchors, main raises too, but main never tries extra seeds. The rescue loop tries up to `2 * len(candidates)` seeds, so it multiplies the number of chances to hit the zero-anchor case, and any one of them kills the search even if an earlier trial already found a valid, guard-passing winner. The r2 reviewer demonstrated a case where the valid rescue was found and then discarded by the next trial's exception.
+
+I could not re-run the r2 reproduction (no execution available), but the code path is unchanged and unguarded, so the finding stands. Minimum fix: wrap the candidate build in `try/except IndexError` (or check `len(aidx) == 0` inside `_grid_from_b0` and return a degenerate result) and `continue` to the next candidate. A rescue that finds nothing must return the legacy grid, which is what the brief wants.
+
+**3e. The `sits closer` condition is dead code (section 5 below covers the mutation argument).**
+
+## 4. The 0.6 floor and the 4-segment rule: are they doing real work?
+
+**The 0.6 floor is not a problem in itself, but it is not evidence of anything either.**
+
+The builder's own numbers (`BUILDER_REPORT.txt`, `d21/hitfrac_v3.log`) are: the five real rescues ship with hit fractions 0.9291 (MEDUZA), 0.8051 (Robosonic), 0.8546 (Spiller), 0.9556 and 0.9573 (Pat Premier x2). The section-only failure case measured 0.27-0.33. So the chosen0.6 sits in a wide empty gap between 0.33 and 0.80. Any threshold in roughly0.35 to 0.78 would classify the available evidence identically. That is reassuring: **0.6 is not finely tuned, and the in-sample nature of the choice does not matter much because the decision boundary is not near either class.** The builder is honest that it is in-sample ("set after measuring the 5 real rescues: lowest 0.80, Robosonic"), and the margin is large enough that this is acceptable.
+
+What the floor genuinely buys: it catches the "rescue fits one section" case, where `grid_vs_kick` ignores the rest. `test_section_only_rescue_is_rejected` fails without it (per `mutate_r3.log`: `no_coverage_floor` is killed by that test). Real teeth.
+
+What the floor does **not** buy, and this is the important part: it cannot detect the failure modes in 3a and 3b, because those are not about *how many* kicks are covered but about *which beats* the grid lands on. The floor is a coverage metric; the failure is a phase metric.
+
+**The holdout does not test the rescue at all.** Confirmed by inspection of `holdout_v3.csv`: 46 rows, every one of them has `kick_before == kick_after`, `gridsha_before == gridsha_after`, and no row has `flag_before == "JIT"`. Zero rescue firings. So the holdout is evidence for requirement A (no passing track was disturbed) and for nothing else. The builder's report says this plainly, which is good.
+
+**The 4-segment rule is doing real work, but it is tuned to the reviewer's synthetic shape and it has the granularity mismatch in 3b.** Evidence it is not decorative: `mutate_r3.log` shows `no_segment_rule` is killed (by `test_rescue_that_slips_beats_in_one_section_is_rejected[2]`), and the builder's sweep reports the drift-with-breakdown shape going from 51 wrong rescues on 54f945b to 0 on 3728848. That is a real effect.
+
+But: the rule is **4 segments** while the reviewer's own metric that motivated it (`_worst_eighth_ms`) is **8 eighths**. `RESCUE_SEGMENTS = 4` was adopted from "the cold reviewer's measured proposal" (`d21/commit_msg3.txt`) without re-deriving it, and the reviewer's proposal was phrased in eighths. That mismatch is precisely what produces 3b: a slip covering12.5% of the track (one eighth) is invisible to a 4-segment rule. Setting `RESCUE_SEGMENTS = 8` would align the shipped guard with the metric it was derived from, and the extra cost is four more `grid_vs_kick` calls per candidate.
+
+And the segment test's use of `grid_vs_kick` inherits the half-beat filter, which is the mechanism that makes a slipped section *look* clean. As written, the rule is weakest exactly in the case it was added for.
+
+**Evidence I would require before trusting the 0.6 floor and the segment rule in production:**
+
+1. A wrong-rescue corpus that is *not* the reviewer's generator. The current evidence is:5 real tracks (all rescued correctly), 300 seeded synthetic tracks per shape from one generator family (`d21/shape_sweep_r3.py`), and 46 holdout tracks on which the rescue never fires. The sweep's "wrong" definition (`worst_eighth > 50 ms`) is measured against the generator's own `truth` beats, which is the right idea, but it is the same generator the reviewer wrote and the same one the segment rule was tuned to. I want a second, independently-shaped generator: real-world-ish shapes with (a) a long kickless breakdown of 100+ beats, (b) a genuine two-tempo track that *fails* the legacy gate, (c) a 9-to-40-kick sparse track, (d) a track whose kick pattern changes from4-on-the-floor to half-time mid-track, (e) a track with a sustained 4% period error, and (f) a track where the kick enters a beat late for a whole section.
+2. For each, a check that the shipped grid is compared against **truth beats** (like `_worst_eighth_ms`), not only against the detected kicks. A rescue that is on 100% of the kicks but a half-bar out is exactly what the current guards call success.
+3. A report of *how many* rescues fired per shape and how many were wrong, per segment count. If `RESCUE_SEGMENTS = 8` fires fewer rescues and drops zero additional wrong ones on real tracks, 8 is strictly better and the current 4 is unjustified conservatism.
+4. The `hitfrac` of every candidate the rescue *rejects*, so the floor's bindingness is visible. The builder has `d21/measure_hitfrac.py`; running it per candidate would show whether the floor ever fires in production.
+5. The bar-one check by ear that is already scheduled, on all five, not three.
+
+## 5. The tests: do they have teeth?
+
+Going through each new test in `test_stem_grid_period.py` against the mutation set in `d21/mutate_r3.log`:
+
+| Test | Would it fail if the behaviour were removed? |
+|---|---|
+| `test_gate_predicate_matches_the_pipeline_rounding` | Yes. Kills `gate_ge` and `gate_unrounded`. Real teeth, and it pins the exact rounding semantics including the 15.0025 case. |
+| `test_grid_the_pipeline_passes_at_15_0025_ms_is_not_rescued` | Yes. Kills `gate_ge`, `gate_unrounded`. Real teeth. This is the r2 finding A, fixed and pinned. |
+| `test_nan_legacy_grid_is_returned_unchanged` | Yes, but vacuously so. The `np.isnan(kf0)` early return is required for the test to pass, but `_fails_gate` already returns False for NaN, so the `or not _fails_gate(kf0)` branch alone would also return unchanged. The test would not distinguish the two. Cheap to make it bite by dropping the `np.isnan` clause from `_fails_gate` and asserting the NaN path specifically. Minor. |
+| `test_shipped_spacing_beyond_the_bound_is_rejected_even_if_the_seed_was_inside` | Yes. Kills `no_shipped_spacing_bound`. Real teeth, and it is a good test: it uses a `finalize` hook that densifies the candidate grid so the seed bound is satisfied but the shipped spacing is not. This is the r2 finding B, fixed and pinned. |
+| `test_section_only_rescue_is_rejected` | Yes. Kills `no_coverage_floor`. Real teeth. |
+| `test_rescue_that_slips_beats_in_one_section_is_rejected[1,2,12,26]` | Weakly. It is conditional (`if not np.array_equal(grid, legacy): assert ...`), so a case where the rescue does not fire asserts nothing. Only `[2]` is shown to kill `no_segment_rule`. `[1]`, `[12]`, `[26]` are unproven. Also note the assertion threshold is `<= 50 ms` while the gate is 15 ms: the test tolerates a much worse grid than the gate does. |
+| `test_refit_seed_is_needed_for_some_rescues` | Yes. Kills `raw_seed_only`. Real teeth. |
+| `test_candidates_are_judged_and_shipped_after_the_timing_snap` | Yes. Kills `no_snap_on_candidates`. Real teeth. |
+| `test_a_candidate_must_hit_more_kicks_than_the_original` | Yes. Kills `drop_hits_more`. Real teeth, though it needs `RESCUE_MIN_HIT_FRACTION` monkeypatched to 0 to be reachable, and it only covers the "original scores highest" direction. |
+| `test_ranking_puts_hits_before_closeness` | Yes. Kills `rank_kf_before_hits_in_key`. Pure unit test of `_rescue_key`, no integration. |
+| `test_ranking_function_is_what_select_grid_uses` | Yes. Kills `rank_kf_before_hits_inline`. Real teeth (it spies on `_rescue_key`, so inlining the key breaks it). |
+| `test_rescued_grid_reports_its_own_bpm_end_to_end` | Yes, after the r3 addition of `assert bg.confidence > 0.9`. Kills `no_conf_recompute`. Real teeth. |
+
+**The "drop the sits closer condition" mutant: the builder's argument is correct, and the condition is provably dead code.**
+
+The condition is `if np.isnan(kf) or _fails_gate(kf) or not kf < kf0: continue`. The candidate is only accepted when `_fails_gate(kf)` is False, i.e. `round(kf, 2) <= 15`, i.e. `kf <= 15.005` (the largest double that rounds to 15.00 or below is 15.00499999999999989). The legacy grid was rejected because `_fails_gate(kf0)` is True, i.e. `round(kf0, 2) > 15`, i.e. `kf0 >= 15.006` (the smallest double that rounds to 15.01). Since `15.00499999999999989 < 15.006`, we get `kf < kf0` **always**, for every candidate that survives the other clauses. `not kf < kf0` is therefore never true, so removing it changes nothing. The builder's claim ("implied by the gate rule") is exactly right, and it holds only because the *rounded* predicate was adopted in r3: under the old unrounded predicate the same argument would also have held (kf <= 15 and kf0 > 15), so the condition was dead in r2 too. The mutation log confirms: `drop_sits_closer` is the one surviving mutant out of 12.
+
+**Should it be deleted as dead code?** My answer: **yes, and it should be deleted together with the claim in the docstring, not left as an unexercised guard.** Leaving it costs nothing at runtime but it is a lie in the safety argument: the code reads as if there is an independent "must sit closer than the original" rule, and the commit message asserts one. If a future change makes the acceptance predicate looser than the legacy's (for example, dropping the `_fails_gate(kf)` clause and relying only on "kf <= 15.005"), the `kf < kf0` clause suddenly becomes load-bearing and nobody would know, because the mutation run says it is provably dead. Two options, both fine: delete the clause and say in the docstring that closeness is implied by the gate (and pin that implication with an assertion or a comment), or keep it and add a test that fails if the implication is ever broken. What should not be done is leave it as an unexercised condition that the commit message advertises as a safety rule.
+
+**The 12-mutant run is honest but thin in two places.** No mutant removes the `np.isnan(kf0)` early return; no mutant removes the `np.isnan(kf)` candidate clause; no mutant removes the `_fails_gate(kf)` candidate clause on its own (only `gate_ge` / `gate_unrounded` change the predicate's shape); no mutant removes the whole `select_grid` early-return path for a passing grid (which is requirement A's core invariant and deserves its own mutant). I would add a mutant that replaces `if np.isnan(kf0) or not _fails_gate(kf0): return ...` with an unconditional fall-through, and one that drops `not _fails_gate(kf)` from the candidate clause, and confirm each is killed.
+
+## 6. The CSVs
+
+I recounted both by reading every row.
+
+**`regress_v3.csv`: 120 data rows (line 1 is the header), `wav_found` True on all 120.**
+
+- Pass before (`kick_before <= 15`): **112**. Pass after: **117**. No pass-to-fail. The three still failing are the known ones: `Kyle Watson - The Afterhours` in `05.10.26 Tech House Selection` (17.38 ms), the same track in `06.10.26 DFTD Tech House` (17.70 ms), and `Arielle Free, Idris Elba - Cause I Can SW V1` (15.18 ms). Matches the builder's claim and the brief's known list.
+- The eight rows that fail before are exactly the five rescued (MEDUZA 104.78, Robosonic 105.22, Spiller 109.16, Pat Premier Radio Edit 99.41, Pat Premier Remix 19.20) plus the three still-failing ones. All five rescues pass after: 5.06, 8.24, 2.98, 3.50, 4.21 ms. The rescue fired on exactly the rows the builder claims, no more.
+- Every one of the 112 rows that passed before is **identical in every column** before vs after: `bpm`, `kick`, `flag`, `downbeat`, `nbeats`, `dboff`, `dbagree`, `dbmethod`, `conf`, `hitfrac`, `p90`, `gridsha`. Only `sec_before`/`sec_after` differ (wall clock). I checked the `gridsha` pair on every row and they are equal throughout, and the full-grid hash is a SHA-1 over the joined beat-time list, so this is a full-grid identity, not a spot check.
+- The five rescued rows are the only rows where any output column differs. Their `gridsha` values differ too, and `nbeats` changes on three of them (MEDUZA 681->673, Robosonic 849->837, Pat Premier Radio Edit 420->426, Spiller 911->914, Pat Premier Remix 653->654). **A changing beat count is a structural change to the exported warp markers, and it is a consequence of the anchor index assignment, which no guard constrains.** That is the same gap as 3a, seen in the corpus.
+- Cross-check against `d21/regress_v2.csv`: for all five rescued rows the `gridsha_before`, `gridsha_after`, `bpm_after`, `kick_after`, `flag_after`, `downbeat_after`, `dboff_after`, `dbagree_after`, `dbmethod_after` values are **identical between r2 and r3**. So the r3 tightening (coverage floor, shipped-spacing bound, 4-segment rule, rounded gate) changed **no real-track outcome at all** versus r2. The builder claims this ("the 5 rescues have grids identical to round 2") and it is true. It is also the sharpest available evidence about how much the new guards are exercised: on the 166 real tracks in this corpus, the new guards never change anything.
+
+**`holdout_v3.csv`: 46 data rows.** All 46 have `kick_before == kick_after`, `gridsha_before == gridsha_after`, and every other output column identical. No row has `flag == "JIT"` before or after. **No rescue fires on the holdout**, so the holdout contributes requirement-A evidence and nothing else. Confirmed independently by comparing to `d21/holdout_v2.csv`, which is likewise all-identical with no JIT rows.
+
+**The CSV counts and identity claims in `BUILDER_REPORT.txt` are accurate.** No pass-to-fail, no unexplained row, no ERROR row in either file.
+
+---
+
+## Summary of what must change
+
+1. **Unfixed r2 finding, highest priority.** An `IndexError` from `_grid_from_b0` (empty anchor set) aborts the rescue search and loses the track entirely. `stem_grid.py:287` calls `_grid_from_b0(kicks, b0)` with no guard, and `_grid_from_b0` is unchanged from r2 where this was reported at line 309. Guard the candidate build and `continue` on failure. A failing gate is visible; an exception is not.
+2. **Add a phase / line-count guard, or accept and document the risk.** All four guards are kick-alignment metrics. A grid on 100% of the kicks with the wrong bar line passes all of them, and the corpus already contains one (Spiller: `dboff` 0 -> 2, downbeat 0.416 s -> 0.965 s, shipped with an empty flag). At minimum, compare the candidate's `aidx` phase and line count against the legacy's.
+3. **Close the granularity gap in the 4-segment rule.** `RESCUE_SEGMENTS = 4` was adopted from a proposal phrased in eighths and is defeated by a slip confined to half a segment (3b). Use 8, and make the segment test count kicks that fall outside the half-beat window as failures rather than dropping them.
+4. **Delete or pin the `not kf < kf0` clause.** It is provably dead under the rounded gate; the commit message advertises it as a live rule. Either delete it and correct the message, or add a test that fails if the implication ever breaks.
+5. **Test the sparse case.** No test anywhere uses fewer than about 293 kicks. Between 9 and 40 kicks the coverage floor and the segment rule both degenerate; add a sparse-track test that asserts either "no rescue" or "the right grid".
+6. **Reconcile the rescue's acceptance gate with the JIT flag.** `_fails_gate` accepts `kf <= 15.005`; the flag fires on `kf > 15.0`. A rescued grid can therefore ship still flagged JIT.
+7. **Optional, cheap:** strengthen the mutation set with a mutant for the passing-grid early return (requirement A's core invariant) and one for the NaN clauses; make `test_nan_legacy_grid_is_returned_unchanged` distinguish the two NaN code paths.
+
+Everything else in this commit is sound: requirement A holds, the gate predicate is exactly the pipeline's rounded gate, the 3% shipped-spacing bound closes the r2 hole B properly, the coverage floor and the segment rule both have teeth on the cases they were built for, and both CSVs are clean and correctly counted.
+
+---
+
+## FOUND UNASKED
+
+- **A candidate that passes every guard can still be shipped with a JIT flag.** The rescue accepts a candidate on `_fails_gate(kf)` = `round(kf, 2) <= 15` (so `kf` up to 15.005), while the final flag uses the unrounded `kf > JIT_MS` (so anything above 15.0 is JIT). The two predicates now disagree over a 5-microsecond band. Rare, but the rescue's whole purpose is to clear the JIT flag, and in this window it does not. Aligning them is a one-line change.
+- **`np.isnan` inside `_fails_gate` is redundant.** `round(nan, 2) > 15.0` is already False in Python. The explicit branch is harmless and documents intent, but it means `test_nan_legacy_grid_is_returned_unchanged` cannot distinguish the two NaN paths (the `or not _fails_gate(kf0)` branch alone would also return the legacy grid unchanged). The test therefore has no teeth against removal of the `np.isnan(kf0)` clause in `select_grid`.
+- **`RESCUE_MIN_HIT_FRACTION` is documented with a stale reference.** The comment says "(D21, set after measuring the 5 real rescues: lowest 0.80, Robosonic)". `d21/hitfrac_v3.log` confirms Robosonic is indeed the lowest at 0.8051, so this is right. But the same log shows the *legacy* grids of the failing tracks had hit fractions of 0.058 to 0.112, and the builder's report says legacy *passing* grids go as low as 0.61. So0.6 sits barely below the worst legacy-passing grid in the corpus. The floor is therefore close to the legacy corpus's own floor, not comfortably below it, and the claim that "the floor never applies to legacy grids" is what keeps it safe. Worth stating that explicitly in the constant's comment, because the next person to touch it will not infer it.
+- **`_grid_hits` and `grid_vs_kick` disagree about what counts as "on the grid"**, by design: `_grid_hits` counts any kick within 15 ms of a line with no half-beat filter, `grid_vs_kick` filters to half a beat first. The coverage floor uses the first and the gate uses the second. This asymmetry is exactly what makes 3b work: a candidate that is one whole beat off in a stretch loses those kicks from the gate's residual set (so the gate median improves) while losing them from the coverage count too (so the floor has to be generous enough to absorb it). The two guards pull in opposite directions on the same failure, and neither is looking at the beat phase.
+- **The r3 tightening changed no real-track outcome at all.** Verified row by row against `d21/regress_v2.csv`: all five rescues have byte-identical `gridsha` between54f945b and 3728848, and the 112 + 46 passing rows are unchanged in both. The new guards (coverage floor, shipped-spacing bound, 4-segment rule, rounded gate) are therefore *unexercised* by the 166 real tracks in this corpus. That is not an argument against them, but it does mean the corpus cannot be cited as evidence that they are safe, only that they are inert here.
+- **The `chosen != period` comparison is a float equality on two independently-computed quantities** (the shipped median grid spacing vs the histogram estimate). It is used to decide whether to recompute `conf`. If a rescued grid's shipped spacing happens to land on exactly the same float as the histogram estimate, `conf` is not recomputed and keeps the histogram's value rather than the shipped-period's. That is benign (the two periods are then equal by definition), but it is an equality test between two different computations and would be cleaner as an explicit `rescued` flag.
+- **Three real rows changed their beat count and two changed their bar one under the rescue**, with every guard satisfied and the track shipping with an empty flag: Spiller 911->914 beats and `dboff` 0->2 (downbeat 0.416 s -> 0.965 s), MEDUZA 681->673 and `dboff` 1->0, Pat Premier Radio Edit 420->426 and `dbagree` 0.4->1.0. The brief lists the bar-one ear check as known; the line-count change and the `dbagree` jump are not on that list, and neither is measurable by any guard in this commit.
+- **The builder's report is accurate on every claim I could check** (CSV counts, the 3 percent largest move, the 0.80-to-0.96 real-rescue hit-fraction range, the 11-of-12 mutant result, the surviving "sits closer" mutant, the three still-failing tracks, Spiller's 35.7 ms p90). The one thing it does not mention at all is the r2 IndexError finding, which is still present in the code.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=d683b66f09f3440989a0670308ef1d20===
+===SEAT-DONE minimax d21fix2_r3===

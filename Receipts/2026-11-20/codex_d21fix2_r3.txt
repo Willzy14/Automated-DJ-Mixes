@@ -1,0 +1,65 @@
+VERDICT: CORRECTION
+
+A 125 BPM track with a 16-bar kickless breakdown ships at **126.57 BPM with an empty flag**. The rescue passes every guard and inserts an extra beat across the breakdown. Requirement A holds for the normal detector paths I checked.
+
+### Wrong rescues
+
+I reproduced the 126.57 BPM result through `detect_beat_grid` using rendered kicks and supplied transient ticks. To reproduce it, place kicks at `2 + 0.480 * i` seconds for beat indices `0..7` and `72..95`. Move every second detected kick 16 ms early and add 3 ms standard deviation Gaussian jitter from `np.random.default_rng(2)`.
+
+- The legacy score was **87.95 ms** and the rescue scored **11.40 ms**. It hit **23/32** kicks, moved **2.50%** from the histogram period, and scored **7.26, 10.26, 8.92, and 11.57 ms** in the four segments.
+- The last kick before the breakdown and the first kick afterward were **66 grid intervals apart**, where the music had **65**. The case also shipped an extra beat with timing snap disabled.
+- With **24 kicks on each side of a 128-beat breakdown**, 18 ms alternating early attacks, and jitter seed 0, the rescue hit **47/48** kicks and every segment scored below **10 ms**. It still inserted a beat. At the true beats inside the gap, the median error was **96 ms**.
+- With **20 kicks**, split 8 and 12 around a 96-beat gap, 22 ms alternating early attacks, and seed 2, the audio detector returned **131.38 BPM** for a 125 BPM track. It passed at **11.19 ms** and inserted **five** beats between the two runs. It reported `LOWC`.
+- With **120 kicks at 125 BPM followed by 12 beats whose period is 3% longer**, the rescue shipped **125.00 BPM**. It hit **119/132** kicks and the worst quarter scored **11.12 ms**, while the final 12 true beats missed by **95.87 ms** at the median. The longer section outvoted the tempo change even within the final quarter.
+
+The 3% bound blocks a half- or double-time jump **relative to the histogram estimate**. The histogram can start on the wrong pulse. A 160-kick train at 0.320 s intervals with 8 ms alternating early attacks and 2 ms jitter (seed 1) rescued to **187.50 BPM**, hitting all 160. The same kick train can be subdivisions of a **93.75 BPM** beat or a 3:2 pulse against a **125 BPM** beat. The kick-only guards have no independent evidence of the intended meter.
+
+### Coverage and holdout
+
+The 0.6 floor does real work against truncated fits. The four-segment rule also earns its place as a guard. Removing it lets drift fixture 2 ship with a **61.85 ms** median error in its worst eighth. The supplied sweep supports the rule on that family of shapes. A kickless gap has no votes, and a short tempo section can lose the median vote in its quarter.
+
+The five rescues are development data, and the holdout exercised **zero rescue attempts**. The 47/48 wrong rescue also scored above all five real rescues on hit fraction, so raising that floor alone cannot separate them. Before trusting unattended rescue, I would freeze the rules and test an independent set of **legacy failures** with hand-checked beat numbers and bar lines. Include sparse drums, breakdowns, short tempo changes, and swung or subdivision-heavy kicks. Score wrong accepts, correct accepts, and refusals, including beat counts across gaps and timing in short sections. Until then, ambiguous beat counts should retain the visible failure.
+
+### Requirement A and gate
+
+I reconstructed main from `change_vs_main.diff` and compared every returned field with r3 using the same onset inputs. Detector timing, supplied ASD ticks, and own-transient timing matched on the passing path. The diff moves timing-source discovery before grid construction. The legacy build and snap still run once, and the early return retains the original anchors and histogram period. Downbeat, confidence, and flag logic consequently receive the same inputs.
+
+`_fails_gate` matches `round(kf, 2) > 15` for the Python floats the metric returns. At exactly 15 both checks pass. Just above 15 through the representable float immediately below 15.005, the pipeline passes and the raw flag says `JIT`. The float `15.005` itself rounds to `15.01`. Preserving the raw flag is correct for Requirement A. NaN passes the legacy gate and is explicitly rejected as a candidate. Positive infinity fails and negative infinity passes, with neither causing `round` to raise. The public detector rejects zero, one, or two kicks before selection because it needs eight usable intervals. Direct `select_grid` calls can raise on empty kicks or when a supplied period leaves zero anchors.
+
+### Tests and CSVs
+
+I ran **25 tests successfully**. The final BPM/confidence test passed with its synthetic onsets supplied directly. I stopped the stock run during the full audio path.
+
+- The rounded predicate and 15.0025 ms tests catch restoring the raw gate. The NaN test still passes when NaN is forced into the search, because the later comparison rejects every trial. Assert that the search was skipped.
+- The shipped-body spacing, coverage, and refit-seed tests each caught removing their guard or path. Of the four drift fixtures, **only index 2** caught removing the segment rule alone.
+- The snap test caught skipping finalization. It passed when candidates were scored on raw grids and then shipped snapped. A fixture whose qualification changes after snap would cover that behavior.
+- The hit-improvement test caught deletion with the floor disabled and a mocked baseline hit count. The ranking tests caught changing tuple priority and bypassing the helper. They missed ranking by seed move, keeping the last candidate, and inverting the winner comparison. On the 48-kick breakdown, inversion actually changed the winner from **47 hits to 40**.
+- The BPM and confidence assertions caught returning the seed and retaining legacy confidence in the onset-fed run. **Delete `not kf < kf0`** at line 305. A finite or infinite baseline that fails the rounded gate must be strictly above a non-NaN candidate that passes it. Keep the explicit candidate NaN rejection.
+
+| CSV | Pass before | Pass after | Pass to fail | Passing rows with every paired field identical |
+|---|---:|---:|---:|---:|
+| `regress_v3.csv` | 112/120 | 117/120 | 0 | 1/112 |
+| `holdout_v3.csv` | 46/46 | 46/46 | 0 | 0/46 |
+
+Every prior pass matched in all result fields, including `gridsha`. The builder's claim of equality in every column is false. `sec` changed on **111/112** regression passes and **46/46** holdout passes.
+
+Verified SHA-256 prefixes for the files read:
+
+```text
+5249be62bff36835  SHA.txt
+07c8c69f90cd8350  stem_grid.py
+4fc2bc502d88f555  test_stem_grid_period.py
+e24cf2b51dc89d30  change_vs_main.diff
+ecbf8266bd4a3d20  change_r2_to_r3.diff
+debd2529415e7c35  PRIOR_codex_r2.txt
+ac552768936eecb5  BUILDER_REPORT.txt
+bb6b556852bc642d  regress_v3.csv
+29ed99903577792e  holdout_v3.csv
+```
+
+### FOUND UNASKED
+
+- **One invalid trial still discards a valid rescue.** Five 24-kick runs at 125 BPM, separated by 320 missing beats and with alternate attacks 13 ms early, produced a trial that hit **120/120** kicks at **6.50 ms** and passed all r3 guards. A later trial had zero anchors and raised `IndexError` at `stem_grid.py:351`, aborting the selection.
+- **The 3% check covers the snapped body.** With a 24-second kickless outro on the 32-kick fixture, the body's median spacing moved **2.51%**, while the extrapolated, millisecond-rounded marker list moved **3.14%**. If the bound is meant to cover exported markers, this case still exceeds it.
+===CODEX-ASK-DONE exit=0 nonce=239a57e14f5d47da80f85771818ef1ea===
+===SEAT-DONE codex d21fix2_r3===

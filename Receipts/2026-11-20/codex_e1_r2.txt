@@ -1,0 +1,66 @@
+VERDICT: CORRECTION
+
+Hold the merge. I reproduced a cut that was **30.00 ms late**. The locator accepted two votes at **72.98 and 72.91 ms**, counted the boundary as inspected, and returned **PASS / exit 0**. The same click test returned **WARN** when I supplied the true cut time. The 17% coverage figure can therefore include windows that missed the cut entirely.
+
+**Snapshot verified.** The three entries in `SHA.txt` match: `render_check.py` `5af5d15e0f9c8e30`, `test_render_check.py` `19d8bf77633c71eb`, and `change_vs_main.diff` `08dbc6f18d55412c`. I also read and hashed `change_r1_to_r2.diff` `d8aa1535bf23aebc`, `PRIOR_codex_r1.txt` `c10c667c8478b786`, `PRIOR_minimax_r1.txt` `5469468bfe828ced`, and `BUILDER_REPORT.txt` `5b7763c764539953`. Both diffs match the supplied source. The pack has no Git metadata or real bounces, so I verified the supplied files and ran synthetic checks in memory.
+
+### 1. Flat tempo
+
+Confirmed against `change_vs_main.diff`. The normal flat path still calls `check_boundary_click` with `offsets_sec=None`. It keeps the same sample centers, null windows, cache keys, EOF handling, FAIL severity, finding text, fields, and coverage record. The Markdown coverage line is unchanged. The flat clip parser does return five additional fields. The flat findings and coverage regression tests passed against both main and the snapshot. `render_check.py:580-611, 1834-1995, 3304-3354, 3508-3545`
+
+### 2. Wrong positions and the round 1 findings
+
+| Round 1 failure | What round 2 closes |
+|---|---|
+| A continuing track, a single vote, or a track-wide sum could place the cut | Only clips ending or starting at the cut can vote. Each supplies its own half-second template, and two votes are required. A continuing track can still supply the audio that both templates match. `1672-1676, 1692-1724, 1768-1797` |
+| A quiet cut under a shifted copy could lock onto the copy | The exact-copy fixture now skips as `shared_material`. The level gate measures the source before clip gain, and the shared test only compares other tracks above its threshold. The reproduction below clears both. `1563-1592, 1709-1719, 1725-1767` |
+| Nonzero `StartRelative` shifted the reconstruction | Explicitly refused. A clip whose first 0.5 s is source silence also cannot vote. Its first 100 ms fail the RMS gate. Silence introduced by a render fade can evade that gate. `1556-1560, 1700-1720` |
+| Two votes 1.8 ms apart could pass | The code now compares the maximum and minimum votes directly. The test fixture actually produces votes **2.09 ms apart**, so it still passes with the old median-distance rule restored. `1793-1797` |
+| A one-beat repeat or a cut beyond the search could alias | The one-beat fixture is refused. An interior peak can still win when the true peak is outside the examined lags. I reproduced a same-file four-beat repeat accepted at **+26.22 ms** for a cut at **+1,940.45 ms**. That is a search-limit stress case. The failure at +30 ms is the merge blocker. `1664-1671, 1768-1797` |
+| Nonlinear timing could bias the fitted lag. Missing files and broken warp spans weakened the evidence | Shorter, weighted templates reduce distant influence. A common local bias still passes. Missing and unreadable sources now have distinct reasons, an unreadable overlapping track can veto a vote, and the source read is bounded before allocation. `1516-1527, 1580-1588, 1627-1657, 1719-1767` |
+
+**Same-source votes can agree for the wrong reason.** Two different regions of one file can provide useful timing evidence. Counting clip objects does not establish that the evidence is independent. In my reproduction, two adjacent clips from one file played at 2.5% gain beneath a continuing track with similar, wider high-band attacks. Both votes followed that louder track. The locator measured the cut clips at their unattenuated source levels.
+
+**Fades can also move the match without moving the cut.** In a second fixture, gain ramps alone moved both votes to **+35.74 ms** for a **+30.00 ms** cut. Each true-time score was about **0.965**, within the required **0.05** of the winning peak. The true lag was only 5.74 ms away, inside the **20 ms** rival exclusion. The click was missed at the accepted time and flagged at the true time. The reconstruction models neither fade curves nor crossfade gains. `render_check.py:1563-1592, 1700-1724, 1782-1786`
+
+### 3. The two correlation thresholds
+
+The **0.9** shared-material cutoff and **0.8** locate cutoff use different statistics. Only the shared test detrends the envelopes. The builder's measured **0.75** for unrelated positive envelopes makes **0.8** a permissive floor. It gives little assurance of identity or timing on its own. In the wrong-track reproduction, the shared scores were **0.690 and 0.569**, and the locate peaks were **0.850 and 0.875**. Both votes cleared the rival margin and agreed within **0.07 ms**. Raising the shared cutoff leaves this failure path open. `render_check.py:1595-1619, 1757-1797`
+
+### 4. What the report tells the reader
+
+The Markdown excludes the arc check from **Checks run clean** and explicitly says a quiet result cannot establish click-free cuts. Locator refusals produce a named, aggregate SKIP with reason counts. A reader can still see **PASS** and take "no click-shaped discontinuity flagged in N of M boundary windows" as evidence about the cuts. In the reproduced case there was no click finding and no SKIP. The locator accepted the wrong time, and the report gave that window the same credit as a correctly placed inspection. Put the estimate and the skipped count first: **85 of 509 estimated boundary windows inspected, 424 skipped, 0 flagged.** `render_check.py:3311-3347, 3369-3378, 3433-3451, 3511-3545`
+
+### 5. Tests
+
+All 14 E1 tests passed in memory. Against the source reconstructed from the round 1 diff, 12 failed. Several failures establish a reporting change rather than isolating the claimed locator guard.
+
+| Test in `test_render_check.py` | What removal it catches |
+|---|---|
+| Real-cut WARN, `3833` | Removing offset application, the hit, or WARN severity fails. |
+| Clean twin, `3853` | Removing inspection or adding a spurious hit fails. Keep it. |
+| Mapped-time negative control, `3866` | Removing the located hit fails. Keep it because the same click misses at mapped time. Both this and the clean twin already worked in round 1. |
+| Named refusals, `3879` | Removing SKIP, the reason field, or the wording fails. An empty reason dictionary passes the subset assertion. |
+| Quiet shifted copy, `3907` | Removing the shared-material guard fails. Round 1 actually found this fixture's true click. |
+| Far cut under repeat, `3927` | Catches the round 1 false inspection. Removing the cut-only filter alone leaves it green. |
+| `StartRelative`, `3942` | Removing minimum-vote enforcement fails. Removing the `StartRelative` guard leaves it green because the silence also blocks the vote. Round 1 already skipped this fixture. |
+| 1.8 ms disagreement, `3956` | Checks the reason. The old agreement rule also rejects this fixture. |
+| Two tracks agree, `3975` | Removing the positive two-track inspection fails. It does not assert either vote separately. |
+| Missing track source, `3991` | Checks `neighbour_unreadable`. It produces zero votes and survives removal of minimum-vote enforcement. |
+| Periodic source, `4012` | Restricting rival detection back to the search range fails. |
+| Partial arc report, `4024` | Removing partial counts, the SKIP detail, or arc wording fails. The SKIP itself keeps the check off the clean list. |
+| Fully located arc report, `4060` | Removing the unconditional arc exclusion from the clean list fails. |
+| Broken warp geometry, `4072` | Removing the source span guard reaches the fixture's forbidden read and fails. |
+
+### 6. Merge judgment
+
+**Keep main until wrong locations become explicit skips.** Seventeen percent could be worthwhile for a WARN-only diagnostic with trustworthy placement. The builder's **0 of 509** controls were away from cuts and used interpolated offsets, so they do not measure wrong placement near a cut. The reported **30%** is conditional on inspection. Across all loud injections, the same counts are **6 of 83 steps** and **1 of 83 seams**. I could verify the arithmetic from the report. The underlying production runs were outside this pack.
+
+The safest coverage change is **one joint match across the cut** using the leaving and entering audio, accounting for fades and levels, and requiring timing evidence on both sides. Measure its placement error against cuts timed independently of source correlation. The proposed single-vote path reaches a nominal 44% by admitting the kind of wrong vote reproduced here.
+
+### FOUND UNASKED
+
+- The rival range is asymmetric. The leaving template looks an extra 0.5 s forward and the entering template an extra 0.5 s backward beyond the stated 1.1 beats. That can add refusals to `repeating_match`. `render_check.py:1664-1687, 1700-1704, 1768-1786`
+- A located arc window past EOF can still emit `eof_truncated_reads` at **FAIL**. WARN applies to click hits. Located windows with unusable audio or too few nulls appear only in coverage, since the named SKIP finding is driven by missing offsets. `render_check.py:1887-1894, 1935-1937, 1984-1995, 3315-3338`
+===CODEX-ASK-DONE exit=0 nonce=e39af227e81243568229ed547b15809e===
+===SEAT-DONE codex e1_r2===

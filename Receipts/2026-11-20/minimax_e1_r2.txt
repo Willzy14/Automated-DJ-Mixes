@@ -1,0 +1,194 @@
+﻿I have read everything I need. Here is my review.
+
+---
+
+VERDICT: CORRECTION
+
+Files read (SHA-256 prefixes from SHA.txt, as listed): `render_check.py` `5af5d15e0f9c8e30`, `test_render_check.py` `19d8bf77633c71eb`, `change_vs_main.diff` `08dbc6f18d55412c`. Also read (not in SHA.txt): `change_r1_to_r2.diff`, `BUILDER_REPORT.txt`, `PRIOR_codex_r1.txt`, `PRIOR_minimax_r1.txt`, `brief_e1_r2.txt`. The snapshot has no Git metadata, so I verified by reading files and diffing them against the diffs, not by hash recomputation. I also read `D:/Claude Workspace/Automated DJ Mixes/review-d19-d22-r3c/als_generator.py` (outside the snapshot) to check what the production ALS writer actually emits for `LoopStart`, `StartRelative`, `IsWarped` and `WarpMarker`; that is the reference for whether the locator's assumptions match real sets.
+
+## 1. Flat path: unchanged from main, confirmed
+
+I checked the flat path line by line against `change_vs_main.diff` and the file at 0480aa3.
+
+`check_boundary_click` with `offsets_sec=None` (the default, `render_check.py:1834`):
+- `skipped` dict does not get the `"tempo_arc"` key (`render_check.py:1870-1871`), but `_boundary_click_coverage` fills it with 0 via `.get(r, 0)` (`render_check.py:1409-1410`), so the record shape and key order are fixed by `BOUNDARY_CLICK_SKIP_REASONS` and identical to main.
+- `null_cache` key is `bp` (an int) on the flat branch and `(bp, offset_samples)` only on the arc branch (`render_check.py:1904`). No collision, no behaviour change.
+- `bp_center` uses `arr_to_sec(bp, tempo_map) * sr` on the flat branch; the arc branch adds the offset (`render_check.py:1908-1912`). Byte-identical expression for flat.
+- The null-window EOF branch still does `eof_truncated_count += 1` on flat; the arc-only suppression is inside `if offsets_sec is None:` (`render_check.py:1917-1924`). Flat behaviour unchanged.
+- The finding's `measured` dict keeps the same five keys in the same order on flat (`located_offset_ms` is added only under `offsets_sec is not None`, `render_check.py:1963-1965`).
+- `level="FAIL" if offsets_sec is None else "WARN"` -> flat stays FAIL (`render_check.py:1973`).
+- The message string is byte-identical on flat; the arc suffix is appended only under `offsets_sec is not None` (`render_check.py:1966`).
+
+`run_check` on flat (`render_check.py:3304-3307`, `3348-3354`): the check call moved inside `if tempo_map.is_flat:` and the coverage rebuild is now guarded by `if tempo_map.is_flat:`. On a flat map both guards are true and `untrusted` is `[]`, so the sequence is identical to main. The SKIP finding is emitted only `if untrusted:`, which on flat is never true, so the changed SKIP message text is unreachable on flat.
+
+`write_report` (`render_check.py:3511`, `3513-3521`, `3539-3542`): `is_arc` is False on flat, so `_coverage_line` is used (unchanged) and `skipped` is not unioned with `boundary_click`. Flat report text unchanged.
+
+`_parse_als_bytes` now adds five clip keys and switches to `enumerate` over `AudioTrack` (`render_check.py:533`, `594-611`). Iteration order is the same; nothing in `render_check.py` compares or serialises whole clip dicts (I grepped: `clips` is only ever read key-by-key, `meta` carries `clip_count` only). The one external importer the builder names, `extract_transition_excerpts.py`, is not in this snapshot so I could not verify it, but the change is additive to a dict, so a consumer that reads keys cannot break.
+
+The two pre-existing tests `test_run_check_findings_are_unchanged_by_the_coverage_record` (`test_render_check.py:3454`) and the flat coverage tests pin the flat messages, levels, verdict, exit code and coverage counts.
+
+**Point 1 verdict: the "byte-identical flat path" claim matches the files at 0480aa3.** One qualification: it is byte-identical in behaviour and in all user-visible strings, but `parse_als` returns five extra dict keys on flat sets too, exactly as in round 1.
+
+## 2. Wrong position
+
+### The four round-1 constructions: all four are now closed, in code and in tests
+
+| Round-1 failure | Closed at 0480aa3 | Evidence |
+|---|---|---|
+| Quiet cut under a shifted copy on a continuing track | Yes. Only clips whose `arr_start` or `arr_end` is within `ARC_CUT_TOL_BEATS` of the boundary are in `cut` (`render_check.py:1672-1675`), so a continuing clip never votes. The entering clip's template is then compared against every other-track clip within `ARC_NEIGHBOUR_BEATS` and any NCC >= 0.9 makes it ineligible (`render_check.py:1731-1757`). `test_e1_codex_quiet_cut_under_a_shifted_copy_is_not_misplaced` asserts `shared_material: 1`, inspected 0. |
+| Continuing one-beat repeat placing a cut 510 ms late | Yes. The search is bounded to `+/-0.45 beat` and a peak within1 ms of the search edge is refused (`render_check.py:1786-1790`, `1791-1794`). Rivals are then examined across `+/-1.1 beat` (`ARC_RIVAL_RANGE_BEATS`) and the winner must beat them by `ARC_RIVAL_MARGIN` (`render_check.py:1795-1799`), so a half-beat or one-beat repeat cannot hide outside the search any more. `test_e1_codex_repeating_continuing_track_cannot_place_a_far_cut` asserts inspected 0. |
+| StartRelative 0.1 beat over silence | Yes. `_arc_clip_shape_ok` refuses `start_relative != 0` (`render_check.py:1554-1559`). That clip cannot vote, leaving one vote, and `ARC_MIN_VOTES = 2` turns it into `single_vote` -> SKIP (`render_check.py:1792`, `1794-1797`). `test_e1_codex_start_relative_clip_cannot_vote` asserts `single_vote: 1`. |
+| Two votes 1.8 ms apart | Yes. The rule is now pairwise `max(votes) - min(votes) > ARC_LOCATE_AGREE_SEC` (`render_check.py:1797`), not distance-from-median. `test_e1_codex_votes_1_8_ms_apart_disagree` asserts `votes_disagree: 1`. |
+
+I also checked the round-1 finding that the same-track template sum let a track correlate against itself: the per-track sum is gone; each cut clip now supplies its own template. And the unbounded allocation is closed by `ARC_MAX_SOURCE_STRETCH` (`render_check.py:1584-1590`), with a test (`test_e1_broken_warp_geometry_never_allocates_the_span`).
+
+### New cases I found
+
+**(a) The same-source double vote is real evidence, but only by accident of geometry, and the guard does not know that.**
+
+`cut` is every clip that starts or ends at the boundary (`render_check.py:1672-1675`). The shared-material test skips clips on the **same track** (`render_check.py:1731-1732`), so two cut clips on one track never test each other for shared material.
+
+Consider the standard Sections shape: track A holds clip1 `[0,24)` and clip2 `[24,62)`, both from source file S (this is exactly `_e1_one_track_clips(src="S")`, `test_render_check.py:3757`). Both are cut clips, so both vote. The two templates are *different audio* (clip1's tail vs clip2's head) from the same file, and their correlation peaks are two measurements of the same physical drift. Their agreement is genuine evidence, not a tautology. So the common case is fine.
+
+The degenerate case is two cut clips on the same track whose source material is **the same audio**: a loop repeat, or the same source range punched in twice. Then the templates are identical, the correlation curves are identical, the votes are identical, and `ARC_MIN_VOTES = 2` is satisfied by **one** measurement counted twice. The `votes_disagree` gate can never fire, because there is nothing to disagree with. This is exactly the "two votes is one vote" situation the brief asks about, and the code does not detect it: nothing compares the two voters' templates against each other, and the shared-material test skips same-track clips by design.
+
+Is it a wrong-position path? Not by itself, and I want to be precise about why. The votes are a measurement of the global render-vs-map drift. If the drift estimate is right, two identical votes are right. The failure mode would need the template to match the render at a *wrong* lag, and that is governed by the rival test and the shared-material test, not by the vote count. What the duplicate vote destroys is the *independence* the two-vote rule was supposed to buy: the round-2 rule is justified in the builder's own report precisely because "the review constructions show one vote can be confidently wrong" (`BUILDER_REPORT.txt`), and the same-source case is a way to get a single vote past a two-vote gate.
+
+How reachable is it in production? The pipeline's own writer emits `LoopStart = source_start` and `LoopOn = false`, and I confirmed the chop-and-duplicate pattern ("each playing the same source range", `als_generator.py:772-773`) is a real pattern in this project. But those are two *clips*, each with its own `LoopStart`, not a loop-on clip, and the two clips are the cut pair. Two cut clips at one boundary with identical source material would be a repeat of the same section cut back to back. That is uncommon but not exotic in a DJ set with a repeated section. **I am not going to call this a wrong-position path**, because I could not construct one; I am calling it a gap in the evidence the two-vote rule claims to provide. The honest statement is: the two-vote rule is sound only when the two voters are independent, and the code does not check that they are.
+
+**(b) A fade or crossfade at the cut: the locator does not model fades at all, and this is a real wrong-position risk.**
+
+The locator reconstructs the clip's audio by reading the source WAV through the warp markers (`render_check.py:1563-1590`). It has no notion of clip fade-in, fade-out, or a crossfade. The production ALS writer emits a `<Fades>` element for every clip (`als_generator.py:986`); the locator never reads it, and `_parse_als_bytes` never parses it.
+
+What this means concretely: at a crossfade boundary, the render's audio over the template window is a *blend* of the leaving and entering clips, not the entering clip's own source. The template is the entering clip's raw source; the render is the blend. The correlation between them is degraded (lower peak) but the *lag* of the best match is still the lag of the entering material, because the blend contains the entering material at the right lag. So this is mostly a **peak-height** problem (more `weak_match` -> more SKIPs), not a lag problem. That direction is safe.
+
+The dangerous direction is the opposite: a clip whose own source is **faded out** in the render. If the leaving clip has a fade-out at the cut, the template (raw source) is attenuated in the render at exactly the point where the weights are highest (`wgt` decays away from the cut, `render_check.py:1726-1727`). A fade makes the render's signal at the cut a *scaled* version of the template, which the normalised correlation handles (scale-invariant), so the lag survives. I could not turn a fade into a wrong lag either.
+
+What I can say is that fades are **unmodelled and untested**, and they move peaks in the direction of lower confidence, which shows up as more SKIPs. That is the safe direction. I record it as a coverage loss, not a wrong-position path.
+
+**(c) A clip whose first 0.5 s is silence: this is a real wrong-position path.**
+
+The entering clip's template is its first 0.5 s of source (`ARC_TEMPLATE_SEC = 0.5`, `render_check.py:1450`). If the source begins with silence, `_arc_envelope` produces a near-zero template over most of its length. The weight `wgt = exp(-d/tau)` (`render_check.py:1726-1727`) puts the *most* weight on the first samples, so the template is dominated by whatever transient is closest to the cut.
+
+The level gate is supposed to catch this: `clip_db = _rms_db(near)` where `near` is the first `ARC_LEVEL_WINDOW_SEC` (0.1 s) of the template, and `clip_db < ARC_MIN_LEVEL_DBFS` (-40 dBFS) -> `too_quiet` (`render_check.py:1728-1734`). That handles *total* silence. But the case in the brief is a clip whose first 0.5 s **starts with silence and then has audio** (a source that begins with a beat of silence, or a clip that starts 0.3 s into a phrase with silence before it). Then:
+- the first 0.1 s is silent -> `clip_db` is very low -> `too_quiet` -> SKIP. Good.
+
+And the mirror case: a clip whose first 0.1 s is *loud* but whose first 0.5 s is mostly silence. Then `near` passes the level gate, but the template's energy is concentrated in the first 0.1 s and the correlation peak is determined by that 0.1 s alone. The peak is then weakly determined and could sit several milliseconds off, or the rival test could see a competing peak in the silence-weighted tail. Note the shipped test `test_e1_codex_start_relative_clip_cannot_vote` uses exactly this shape (source "Z" has 300 ms of silence) but the refusal there comes from `StartRelative`, not from the silence.
+
+So: silence at the head is caught by the level gate when it is total for the first 0.1 s, and partially-caught otherwise. I could not construct a *confidently wrong* location from it, because the residual peak is still tied to the same audio. What I can say is that the **"first 0.5 s is silence" case reduces the effective template to a fraction of its length without being detected as such**, and the locator has no rule that says "the template must have enough energy spread across its length to locate a cut". That is a genuine soft spot, and it is the same class of problem as the one the round-2 rules were written to fix (evidence must be tied to the cut).
+
+**(d) One real wrong-position path I can point at with a specific line: `ARC_SHARED_MAX_NCC` is checked against a template that is detrended, but the *locate* is done on a non-detrended template.**
+
+This is not a bug per se, but it is an asymmetry that matters for the shared-material guard's reach. The shared test compares `oe` (neighbour, detrended) against `p_det` (voter, detrended) at0.9 (`render_check.py:1756-1758`). The locate compares `r_env` (render, **not** detrended) against `p_env` (voter, **not** detrended) (`render_check.py:1766`). The two measures are on different scales with different baselines. A shared-material pair that reads 0.85 on the detrended scale (below the 0.9 gate) could still read above 0.9 on the non-detrended scale, or vice versa. The builder's own measurement puts unrelated cross-track pairs at 0.86 with p99 0.85 on the **detrended** scale and the gate at 0.9, so the gate has0.04 of headroom over the p99 of unrelated material. A copy that is *not* identical (a one-bar transposed, filtered, or lightly edited copy) reads between 0.86 and 1.0 and can sit in that 0.04 band undetected.
+
+I want to be careful here: the builder measured "an identical or phase-shifted copy reads about 1.0", so the *exact* copies the round-1 constructions used are caught. A partial copy in the 0.86-0.90 band is not, and would then be free to win the locate and produce two agreeing wrong votes. This is a narrow but real path, and it is the same path round 1 was broken by, narrowed rather than closed.
+
+**Point 2 verdict: I did not find a realistic wrong-position path that I can demonstrate as producing a clean inspection at a place that is not the cut.** The four round-1 constructions are closed in code and in tests. What I did find is that the two-vote rule's *independence* assumption is unguarded (same-source cut pair), that the shared-material gate has only0.04 of headroom over its own p99 on its own scale, and that fades are entirely unmodelled. Those are reasons to require a change, not a demonstrated wrong lock.
+
+## 3. The 0.6 -> 0.9 threshold move
+
+The two thresholds live on **different scales** and the brief's framing conflates them.
+
+- `ARC_SHARED_MAX_NCC = 0.9` is applied to `_weighted_ncc(oe, p_det, wgt)` — both sides **detrended** (`render_check.py:1756`). On that scale the builder measured unrelated cross-track pairs at 0.86 (p99 0.85) and an identical copy at ~1.0. 0.9 sits between them. **The threshold is meaningful on that scale.** Raising it from 0.6 to 0.9 was the right call: at 0.6 the builder's own synthetic unrelated sources read 0.60-0.64 and would have been falsely rejected as shared, which would have been a pure coverage loss with no safety gain.
+- `ARC_LOCATE_MIN_NCC = 0.8` is applied to `_weighted_ncc(r_env, p_env, wgt)` — **neither** side detrended (`render_check.py:1766`). The 0.75 figure the builder quotes is on this scale, and it is the *floor* for unrelated material, not a typical value.
+
+So the "acceptance threshold is 0.8 and unrelated material reads 0.75" is a **0.05 margin on a positively-biased statistic**. Is that meaningful? Partially. The locate threshold is not asking "is this the right material?" - it is asking "is this peak strong enough to be worth measuring?". The actual discrimination against a wrong peak comes from the rival test (`ARC_RIVAL_MARGIN = 0.05` over `+/-1.1 beat`) and the vote agreement, not from the absolute 0.8. The 0.8 gate mainly rejects genuinely weak matches (44 `weak_match` skips on the real renders).
+
+**Does it open a wrong-position path?** Not directly. The threshold's job is to reject weak matches; a wrong peak that is strong enough to matter is caught by the rival test, which is the real defence. But the combination is worth stating plainly: a wrong peak must clear 0.8 *and* beat every rival by 0.05 across 1.1 beats. On a biased scale where the unrelated floor is 0.75, the absolute gate contributes little, and the whole load sits on the rival test and the shared-material test - and I just showed the shared-material test has 0.04 of headroom on its own scale. The two guards are not independent of each other, and both sit close to their own false-positive floors.
+
+The builder states the bias plainly in his own FOUND UNASKED item 1 and proposes a centred statistic. That is the right fix and it is not hard: detrend `r_env` and `p_env` for the locate too, and re-measure. That would make 0.8 mean something. I would want that before merge.
+
+## 4. Report honesty
+
+The strings are honest, and materially better than round 1.
+
+- `_arc_coverage_line` (`render_check.py:3443-3452`) says "no click-shaped discontinuity flagged in N of M boundary windows (skipped K: reasons), F flagged". It never says "clean" and never says "inspected".
+- `BOUNDARY_CLICK_ARC_SENSITIVITY` (`render_check.py:3434-3441`) states the floor in plain words: about a quarter of loud synthetic clicks caught, quiet ones mostly missed, "a clean result is not proof the cuts are click-free".
+- `write_report` removes `boundary_click` from "Checks run clean" on an arc unconditionally (`render_check.py:3539-3542`), so even a fully located arc with zero flags is not listed clean (`test_e1_fully_located_clean_arc_is_not_listed_clean`).
+- The SKIP finding is named, carries `unlocated_by_reason` with a twelve-way breakdown, and `inspected_boundaries` now equals the completed inspections (`render_check.py:3321-3331`), which closes Codex's round-1 accounting complaint.
+
+**Is there a silent pass?** No. Two things are worth naming:
+
+1. **The "N of M" in the coverage line is N over M, where M is the deduplicated boundary count.** `_arc_coverage_line` prints `rec['boundaries']` as the denominator, and `quiet = rec['inspected'] - rec['failed']`. So a reader sees "no click-shaped discontinuity flagged in 85 of 509 boundary windows (skipped 424: tempo_arc 424), 0 flagged". That is accurate. Combined with the sensitivity line immediately below, a reader cannot reasonably take it as a clean bill. Round 1's problem - "inspected 140 of 140" alongside `boundary_click` under "Checks run clean" - is gone.
+
+2. **The reasons in the coverage line are the four coarse `BOUNDARY_CLICK_SKIP_REASONS`, not the twelve `ARC_UNLOCATED_REASONS`.** The coverage record keeps a single `tempo_arc` count (`render_check.py:1869-1870`, `1878`), so the MD line reads "skipped 424: tempo_arc 424" with no breakdown. The twelve-way breakdown lives only in the SKIP finding's `measured["unlocated_by_reason"]`, which appears in the Findings table as `unlocated_by_reason={...}`. That is one line of a dict rendered into a table cell, not the headline. A reader who wants to know *why* 424 boundaries were skipped has to read the SKIP row. That is acceptable but it is the weakest part of the reporting: the coverage section says "skipped 424" without saying "and here is what stopped each one". Given the whole point of the round-2 work is that refusals are now *named*, burying the names one level down is a small loss.
+
+I found no silent pass. Point 4 is sound.
+
+## 5. Tests
+
+Fourteen E1 tests plus one modified legacy test. The builder's claim is "12 of 14 fail" with `render_check.py` stashed back to **e9e6021** (round 1), not back to main. That is the right comparison for a round-2 change and it is consistent with the code: at e9e6021 the locator existed but with the old rules, so the clean-twin fixture was locatable (passes) and the mapped-time control also locates (passes). Against **main** (no locator at all), the clean-twin test would fail: coverage would be `(1, 0, 0)` with `skipped_by_reason["tempo_arc"] == 1`, so the assertion `(1, 1, 0)` fails. **Both of the "2 that pass" tests would fail on main.** The builder's framing is conservative, not misleading.
+
+Would each fail if its behaviour were removed?
+
+| Test | Fails if removed? |
+|---|---|
+| `test_e1_arc_click_at_the_real_cut_is_a_warn` | Yes. Needs the locator (to place the window at +30 ms) and the WARN level. Without the locator the arc skips everything -> no finding. |
+| `test_e1_arc_clean_render_is_inspected_not_skipped` | Yes on main (inspected 0 != 1). Passes on round 1. Its value is guarding against over-refusal: a locator that stopped locating anything would fail it. **Keep.** |
+| `test_e1_arc_click_at_the_mapped_time_is_not_where_the_cut_is` | Yes on main: `assert any(f.check == "boundary_click" ...)` fails. It is the prove-the-test that the *located* time is what is tested. On round 1 it also passes because round 1 located correctly. **Keep - it is the test that stops a future "simplification" from dropping the offset.** |
+| `test_e1_arc_unlocatable_boundary_is_a_named_skip_never_a_pass` | Yes. Three cases (far / missing / broken source) each assert inspected 0 and a named reason. The click is still in the audio, so a silent pass would fail it. |
+| `test_e1_codex_quiet_cut_under_a_shifted_copy_is_not_misplaced` | Yes. Asserts `shared_material: 1`. Without the shared-material test, the shifted copy wins -> inspected 1 -> fails. |
+| `test_e1_codex_repeating_continuing_track_cannot_place_a_far_cut` | Yes. Asserts inspected 0 with a click in the audio. |
+| `test_e1_codex_start_relative_clip_cannot_vote` | Yes. Asserts `single_vote: 1`. |
+| `test_e1_codex_votes_1_8_ms_apart_disagree` | Yes. Asserts `votes_disagree: 1`. |
+| `test_e1_two_tracks_vote_and_agree` | Yes on main (inspected 0). On round 1, hmm - round 1 had a per-track vote with no two-vote requirement, so it also passes on round 1. It guards the *new* multi-vote path. Keep. |
+| `test_e1_source_missing_on_one_track_leaves_a_single_vote` | Yes. Asserts `neighbour_unreadable: 1` and `ARC_MIN_VOTES == 2`. |
+| `test_e1_periodic_source_is_a_repeating_match` | Yes. Asserts `repeating_match: 1`; this is the test for the widened rival range. |
+| `test_e1_partially_located_arc_reports_both_and_never_says_clean` | Yes. Asserts the exact MD arc line, the sensitivity line, the `unlocated_by_reason` breakdown, `boundary_click` absent from the clean list, and `"inspected 1 of 2" not in text`. |
+| `test_e1_fully_located_clean_arc_is_not_listed_clean` | Yes. Asserts the arc line and that `boundary_click` is absent from the clean list even with no SKIP finding at all. |
+| `test_e1_broken_warp_geometry_never_allocates_the_span` | Yes. It asserts `_clip_audio_at` returns None for a broken marker map and that a `_NoRead` whose `seek` raises is never touched. Without `ARC_MAX_SOURCE_STRETCH` the first assert fails. |
+
+The two that pass on round 1 are both worth keeping, and for a reason the builder does not spell out: `test_e1_arc_clean_render_is_inspected_not_skipped` is the only guard against the round-2 rules becoming **too strict**. Every other E1 test asserts a refusal or a hit; this one asserts a *successful* inspection with no finding. If someone tightens `ARC_LOCATE_MIN_NCC` or the vote count, this test is what says "you have now refused everything". Without it, a locator that refuses 100 percent of boundaries would pass the entire rest of the E1 suite and look like a triumph of safety.
+
+The one gap the builder's own FOUND UNASKED names: **no test pins the same-source vote case.** `_e1_one_track_clips` uses one track with two clips from one source file at *different* offsets, which is the healthy case. There is no test where two cut clips carry the *same* source material, which is the case where two votes are one vote. If the code is to keep `ARC_MIN_VOTES = 2` as a safety argument, that argument needs a test showing what happens when the two voters are not independent - either that it is detected and refused, or that it is detected and the vote is *downgraded* to one.
+
+## 6. Merge judgement
+
+**This is better than main, and I would merge it after one specific change.** Let me put the reasoning plainly.
+
+The comparison is not "17 percent inspected versus 0 percent". It is: main inspected **nothing** on an arc, and said so, via a named SKIP, and removed `boundary_click` from "Checks run clean". Round 2 inspects 17 percent, and says so, via a named SKIP, and removes `boundary_click` from "Checks run clean". The structure of the report is identical; the amount of real inspection behind it is 17 percent larger. There is no new risk of a false clean: an unlocated boundary is skipped, never inspected at the mapped time. A located boundary that is wrong is bounded by the rival test, the two-vote rule, and WARN severity. On the four real renders: 0 hits at real boundaries, 0 of 509 at control beats.
+
+So the "17 percent looks like a check" worry: **no, it does not do harm, because the wording is calibrated to the coverage.** The line says "no click-shaped discontinuity flagged in 85 of 509 boundary windows (skipped 424...)". It does not say "inspected 85 of 509". It does not claim the cuts are click-free. It says what it looked at and what it did not. The sensitivity line sits directly under it. The verdict never lists the check as clean. A reader is told "we looked at a sixth of the cuts, and here is how loud a click would have to be to be seen". That is a truthful report of a partial check, which is exactly what a partial check should report. **A 17 percent figure stated honestly is better than a 0 percent figure**, because 17 percent of 509 is 85 real boundaries that main never checked at all.
+
+But the merge-worthiness hinges on the false-alarm and wrong-position risk, and here I want to be careful. The current risk profile is: WARN only, zero measured false alarms on four renders, and the two guard rails that matter (rival test, shared-material test) each sitting within a few hundredths of their own false-positive floors. That is not a wrong-position path I can demonstrate, but it is a design where the guards are close to their limits and the evidence is four renders of one genre of music. That is exactly the profile that should ship as **WARN, never FAIL** - which is what it does.
+
+**The one change I would require before merge: detrend the locate statistic, and re-measure the four renders.**
+
+Not because I have a demonstrated wrong lock, but because the acceptance threshold is currently doing less work than it appears to. The 0.8 gate sits on a statistic whose unrelated-material floor is 0.75, and the shared-material gate has 0.04 of headroom over its own p99. Two guards, each near its floor, on the same biased family of statistics. Detrending `r_env` and `p_env` for the locate (the machinery is already written and used for the shared test, `_arc_detrend`, `render_check.py:1593-1599`) makes the 0.8 mean "this is a real match" instead of "this is marginally better than the floor", and it is a two-line change with no new failure modes. If the re-measurement shows coverage drops materially, that is information worth having before merge, not a reason to abandon the change.
+
+Two cheaper items I would also take, neither blocking:
+
+- **Require the two voters to be independent, or say so.** Either reject a cut pair whose templates correlate above the shared threshold (the machinery exists), or record in the code comment and the report that `ARC_MIN_VOTES = 2` assumes two independent voters and that same-source cut pairs do not provide them. Right now the code asserts a safety property it does not check.
+- **Put the twelve refusal reasons in the coverage line, not only in the SKIP finding's `measured` dict.** The reasons are the point of round 2. They are currently one table cell deep.
+
+**On the coverage question the brief asked me to weigh (single votes to ~44 percent, versus matching the leaving and entering clips together across the cut):**
+
+Single votes would reach about 44 percent, and the builder measured that single votes were within 1.08 ms of the step-1 reference. But the builder's own reason for not doing it - "the review constructions show one vote can be confidently wrong" - is the correct reason, and the constructions are still the best evidence available about what happens when one vote is wrong. A single vote that lands30 ms off reports a clean inspection at a place that is not the cut. That is precisely the failure the whole exercise exists to prevent, and at 44 percent coverage it would happen more often, not less. **I would not take single votes.**
+
+**Matching the leaving and entering clips together across the cut is the better lever, and I agree with the builder's own FOUND UNASKED item 2.** The reason is structural: the leaving clip's tail and the entering clip's head are two measurements of the *same* boundary from opposite sides, and their agreement is genuine cross-validation of the cut itself rather than a second reading of one clip. A joint template that spans the cut also has a much longer effective signal than 0.5 s on one side, which directly attacks the `repeating_match` refusal that dominates the skips (201 of 424). And critically, a joint leaving+entering template is *not* the same-source degeneracy in (a) above: the two sides are different audio by construction, and the shared-material test does not apply to the pair because the pair is the template.
+
+I would also add: **the leaving and entering clips should be matched to each other as well as to the render.** If the leaving tail and the entering head correlate strongly with each other across a candidate lag, that is independent evidence that a candidate lag is the cut, and it does not depend on either one being individually strong enough to clear 0.8.
+
+I want to be honest about what I am *not* saying. I am not saying this change is broken. I found no realistic wrong-position path that produces a clean inspection at a place that is not the cut; the four round-1 constructions are genuinely closed. I am saying that the guards are close to their floors, the two-vote independence is assumed rather than checked, and the statistic on which the acceptance threshold sits has a known bias that the builder himself flagged and did not fix. Shipping as WARN with the current naming and reporting is defensible. Shipping with the locate statistic still on the biased scale, with the two-vote rule's independence unchecked, is one bad fixture away from a wrong lock.
+
+## FOUND UNASKED
+
+1. **The 0.75 baseline is a floor, not a typical value, and the report says "about 0.75".** The builder's FOUND UNASKED item 1 states unrelated tracks read "about 0.75" on the non-detrended scale and that the 0.8 threshold "works on that biased scale". If 0.75 is a *typical* value, the 0.8 gate has 0.05 of margin against the median unrelated case; if it is a *floor* (the correlation of the most dissimilar pair), the margin is much wider. The report does not distinguish these, and the difference decides whether the acceptance gate is meaningful. The same paragraph's fix (a centred statistic) would settle it by construction rather than by measurement.
+
+2. **The `unlocated_by_reason` breakdown is per boundary, but the coverage line aggregates to `tempo_arc`.** The SKIP finding's `measured["unlocated_by_reason"]` is a count over all unlocated boundaries of that render, and it is rendered into a Markdown table cell via `str(dict)` (`_fmt_val` has no dict branch, `render_check.py:3496-3502`). So it reads `unlocated_by_reason={'repeating_match': 201, 'single_vote': 139, ...}` in one cell. Readable, but it is a Python dict repr in a report meant for a human operator, and it is the only place the twelve names appear.
+
+3. **`_locate_arc_votes_open` recomputes the neighbour envelopes per boundary, and the render envelope is recomputed per boundary.** `r_env` is built inside the per-clip loop (`render_check.py:1719-1722`), so for a boundary with two cut clips the render is read and filtered twice; and `neighbour_env` is rebuilt for every boundary even though the same neighbours recur at adjacent boundaries. The builder notes speed was not compared with round 1. This is a performance note, not a correctness one, but 509 boundaries x (render window + neighbour windows) x (highpass, median, lowpass, detrend, fftconvolve) is the dominant cost of the new path.
+
+4. **`_arc_envelope` is applied to the template `y` and to the neighbour audio, but the render's `r_env` is computed once per clip while `p_env` is computed per clip too - and the despike median filter is applied to the render but the template's own despike is the same 1 ms median.** That is symmetric and correct. But note the median filter is applied to `np.abs(sosfiltfilt(hp, x))` - the absolute value is taken *before* the median, so the filter operates on the rectified signal. A click that spans more than half the 1 ms window survives it. The builder's own note says the click is "a spike a few samples wide"; at 44.1 kHz a few samples is well inside 1 ms, so the despike works for the case it was built for, but it is a median of 45 samples, so a 23-sample-wide click would survive. Not a wrong-position issue (the despike exists to stop a click pulling the lag, and a surviving click would pull the lag *toward* the true cut, which is benign), but the comment's claim is broader than the implementation.
+
+5. **`ARC_MAX_SOURCE_STRETCH` compares a source span against a *template* span, but `_clip_audio_at` is also called with `ts_ext` (a much longer span) for neighbours.** The guard at `render_check.py:1584-1586` uses `float(ts[-1] - ts[0])`, which is the length of whatever `ts` was passed. For a cut clip `ts` is 0.5 s, so the cap is 4 x 0.5 s = 2 s of source. For a neighbour, `ts` is `ts_ext`, roughly 2 x 0.5 s + 2 x 1.1 beat, so the cap is correspondingly larger. That is self-consistent, and the allocation test passes. But the *cut* cap of 2 s of source for a 0.5 s template is tight enough that a legitimately heavy-stretched Complex Pro warp could be refused as `clip_shape`. Since `clip_shape` is a SKIP, that is safe, but it is a coverage cost that no measurement in the report quantifies.
+
+6. **`_locate_arc_votes_open` catches nothing internally; `locate_arc_boundaries` catches every exception and reports it as `"clip_shape"` (`render_check.py:1820-1826`).** A bug that throws for one boundary shape is therefore reported as a shape refusal, not as an error. That is the fail-safe choice, and it is right, but it means a systematic exception (say, a numpy error in one path) would show up as 509 `clip_shape` skips and a coverage of 0 - which the report would present as "the cuts could not be located", not as "the locator crashed". The named reasons make this legible in principle (the SKIP finding would say `clip_shape` 509 times) but a reader would have to know to look.
+
+7. **The `single_vote` reason is doing the coverage-limiting work that `ARC_MIN_VOTES` describes, and 139 of424 skips are `single_vote`.** The builder reports that single votes "would have been within 1.08 ms of the step-1 reference". That is a genuinely interesting measurement and it argues that a *confidence-qualified* single vote - one where the peak clears a stricter bar and beats its rivals by a wider margin than the two-vote path requires - would be safe and would roughly double coverage. That is a different proposal from "allow single votes", and it is the one I would actually want tested. It is not in the current code and I am not asking for it in this round; I am recording that the data for it exists and it is the most promising coverage lever that does not weaken the two-vote guard.
+
+8. **The builder's `NOT CHECKED` list is accurate and should not be quietly dropped.** "No real click and no Ableton-made click was tested" and "the step-1 reference is not independent of the locator" are both load-bearing. The step-1 reference uses source-to-render correlation through the warp map, and the shipped locator uses source-to-render correlation through the warp map - so "the located time agrees with step1 to p95 0.68 ms" is agreement between two estimators of the same quantity, not independent corroboration. The builder says this plainly. It should survive into the merge, because a future reader is exactly the person who will read "within 0.98 ms of the independent step-1 measurement" in the code comment (`render_check.py:1444-1445`) and believe it is independent corroboration. **The word "independent" in that code comment is wrong** and should be dropped or qualified.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=1ae197033f3b417fa4e6439df53536ac===
+===SEAT-DONE minimax e1_r2===

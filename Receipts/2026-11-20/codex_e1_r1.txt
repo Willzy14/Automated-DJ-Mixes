@@ -1,0 +1,51 @@
+VERDICT: CORRECTION
+
+The locator can confidently pick the wrong time and count the boundary as inspected. I reproduced this with a true offset of **+30 ms**, within the reported production drift. The locator picked **-17.99 ms** and returned zero failures. The same click test failed at the true cut.
+
+Read and SHA-256 verified: `change.diff` `ca58a3380f3084a0`, `render_check.py` `3fc62346712e1bfc`, and `BUILDER_REPORT.txt` `0d71668d465649cf`. The source blob matches the diff. The pack has no Git metadata, so verification was limited to the supplied files. I ran the four added tests and the counterexamples in memory. The four real-render measurements remain builder claims.
+
+### 1. Flat path
+
+The flat **click check** is unchanged. The default `offsets_sec=None` keeps the same sample centres, +/-2 ms window, null beats and cache keys, EOF handling, finding message and fields, and coverage. I reversed the diff in memory and got identical findings and coverage on clean audio, a click, an unreadable window, EOF, and zero boundaries. The broader claim of exact parity needs one qualification. `parse_als` returns five extra clip fields on flat sets too (`render_check.py:594`).
+
+### 2. Wrong positions can pass
+
+- **Silent start and source offset.** `_clip_audio_at` uses `loop_start` and ignores `StartRelative`, a clip shape the existing silence check explicitly refuses. In the in-memory case above, a 0.1-beat start offset and 300 ms of source silence let later audio supply a strong match **48 ms away from the cut**. The match cleared every confidence check. A low-level tail can likewise contribute too little to anchor the fit (`render_check.py:1173`, `:1495`).
+- **One vote and shared samples.** Any nearby rebuildable track can place the boundary, including a continuing track with no cut there. A single vote suffices. I reproduced a quiet cut at **+30 ms** getting a **-29.99 ms** locate when the audible track played a phase-shifted copy of the same sample. Two tracks matching the same audible copy can also agree on the same wrong lag. The implementation measures each vote's distance from the median, so two votes **1.80 ms apart** passed the stated 1 ms agreement rule (`render_check.py:1532`, `:1574`).
+- **Loops and repeats.** Loop-on clips supply no template. A full bar repeat is wider than the entire 0.9-beat search, so it cannot compete with an in-range true peak. Shorter subdivisions can compete, and the rival check only sees lags inside the search. I reproduced a continuing track with a one-beat repeat yielding a **+29.94 ms** locate for a cut at **+510 ms**. The repeat was the only strong match in range, and the boundary was counted as inspected.
+- **Warp markers and missing sources.** Nonlinear marker maps are interpolated piecewise, then the locator fits a single lag across two seconds. If the rendered timing error varies across that span, a dominant transient can determine the lag several milliseconds away from the cut. For a missing WAV, the code tries the ALS-relative path first and the recorded path second. With neither available, the clip supplies no vote. The named `boundary_click_skipped_tempo_arc` appears only when no acceptable offset survives, so another track can still place that cut (`render_check.py:1457`, `:1498`, `:1582`).
+
+Require evidence tied to the cut, or a separately validated timing model, before counting an arc boundary as inspected. Unsupported clip geometry and ambiguous matches should produce the named SKIP. Add the wrong-position cases above as regressions.
+
+### 3. Arc severity
+
+Use **WARN pending listening confirmation** for arc hits at the current evidence level. A 2.47 ms location difference can put the true cut outside the +/-2 ms window or assign a nearby discontinuity to that cut. The report's reference timing also comes from source-to-render correlation using the warp map, so the comparison measures agreement between estimators.
+
+Using the builder's `3/503` per-position upper bound, `1 - (1 - 3/503)^N` gives **45.0% for 100 boundaries** and **61.6% for 160**, assuming independent positions at that rate. Those are upper-bound scenarios. The observed control hit rate was zero, and four renders with repeated musical material give limited evidence for mix-level calibration. That evidence is too weak for an automatic production FAIL.
+
+### 4. What the report tells Sam
+
+`boundary_click: inspected N of M boundaries (skipped K), 0 failed` is an accurate description of the counters. Putting `boundary_click` under **Checks run clean**, alongside an overall **PASS**, can read as assurance that the cuts are click-free. Use **No click-shaped discontinuities flagged in N of M boundary windows**. The builder's -6 dB results were 24.1% for synthetic steps and 15.7% for synthetic seams. I also verified a missing-source run with a named SKIP, zero inspections, and overall `PASS` with exit 0. The named SKIP correctly removed `boundary_click` from the clean list. The SKIP message should say that the cut could not be located from the audio. Its claim of tens of milliseconds of drift is unmeasured for that boundary (`render_check.py:3115`, `:3206`, `:3285`).
+
+### 5. Tests
+
+| Added test | What it protects |
+|---|---|
+| Real-cut click fails | Fails on the old code. Requires the offset, click FAIL, and coverage. |
+| Clean render is inspected | Fails on the old code. Requires inspection and zero click findings, but a confidently wrong clean window could satisfy it. |
+| Mapped time misses | Passes on the old code. Useful negative control. The test computes `res` and never asserts on it, so removing arc locating leaves it green. |
+| Unlocatable boundary gives a named SKIP | Passes on the old code. Protects the named SKIP and zero inspections for its missing-source and late-cut fixtures. It leaves the overall verdict and report wording untested. |
+
+The updated legacy assertion checks the SKIP wording. The diff adds no flat-parity test and no tests for wrong strong peaks, competing tracks, or the 1 ms rule.
+
+### 6. Performance and file safety
+
+Source files are opened with `"r"`, cached as handles, and closed in `finally`. With ordinary warp markers, each boundary reads only the source span corresponding to its two-second template. Two hundred boundaries with seven-minute sources do not normally put those full WAVs in memory. A pathological warp segment can still make `pos.min()` to `pos.max()` span a whole file or extend far past it. `_read_mono_padded` allocates that requested span before clamping the file read. Bound the allocation to a plausible source span and reject invalid marker geometry (`render_check.py:1480`).
+
+### FOUND UNASKED
+
+- The builder's end-to-end counts add to **499 inspected out of 509**, while the locator summary says **498 located out of 509**. The source comment also says **497** control positions, while the report says **503**. Reconcile the counts before using them to calibrate the gate.
+- On a partial arc SKIP, the finding's `inspected_boundaries` counts every non-`None` offset. The coverage line counts only completed inspections. They can disagree when a located window is unreadable, past EOF, or has too few null windows (`render_check.py:3092`, `:3112`).
+- The existing quarter-beat deduplication can discard a distinct cut almost **120 ms** from a neighbouring cut at 125 BPM. The reported total is the number of deduplicated boundaries, so even full coverage of that total can leave a separate cut untested (`render_check.py:1057`).
+===CODEX-ASK-DONE exit=0 nonce=85e12af90233412592421c50b07e9044===
+===SEAT-DONE codex e1_r1===

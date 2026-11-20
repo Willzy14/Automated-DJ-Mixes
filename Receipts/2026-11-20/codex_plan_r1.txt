@@ -1,0 +1,89 @@
+VERDICT: CORRECTION
+
+Fix the repeat-boundary defect. Do not build Rule S as written. The evidence establishes 13 loop groups across the three development mixes, but does not establish 13 starts at or after the swap. The proposed guard also misses legacy and explicit-decision loops. I reproduced a case where it would remove a boundary-safe loop and turn a valid 16-bar overlap into an 8-bar MixPlan rejection.
+
+## 1. What Sam made or kept
+
+For the JSONL rows, I used the Sam side of `geometry.out_tail_loops`, `swap_arr_beat`, `swap_out_bar`, `swap_out_on_loop`, and `tail_after_swap_bars`. The records give loop lengths and a swap position, but no loop insertion beat. `on` means the learner marked the swap on an outgoing loop. A true flag on a single group puts its start at or before the recorded swap, assuming the classification is correct. It cannot distinguish the first boundary from a later repeat. A false flag leaves open whether the loop was earlier or later. `bass_swap_reliable` is false on every retained-loop row with `on=true`.
+
+| Mix and transition | Sam's outgoing loop | Start relative to Sam's swap |
+|---|---|---|
+| Core T1 HARTY | 2b x6 | **At, inferred.** The write-up says he kept the loop and swap at source bar 168 and added a repeat. The frozen pipeline insertion maps to bar 168. Sam's insertion beat is absent. |
+| Core T4 Enzo | ~7.4b, built from his last 4b | **After, supported.** The write-up places the swap at 120 and describes an own-ending extension. The exact +16b insertion is absent. |
+| Core T10 Shilla | 4b x2 | **At, inferred.** The write-up says the loop and swap at source bar 168 were kept. The frozen pipeline insertion maps to bar 168. Sam's insertion beat is absent. |
+| September T2 Youngr | 1b x15 | **Unknown.** Swap beat 914, `on=false`, 15.5b after swap. The claimed +0.5b assumes the loop ends at the track end. |
+| September T4 Sorley | 4b x1 | **Unknown.** Swap beat 2192, `on=false`, 16b after swap. The write-up confirms the addition and swap move, with no insertion coordinate. |
+| Defected T1 Selace, first | 1b x7 | **Unknown by group.** Swap beat 640, `on=true` across two groups. The retained shape and unchanged swap do not establish its new insertion beat. |
+| Defected T1 Selace, second | 1b x6 + 0.5b | **Unknown by group.** Same flags. A later start follows if the first group contains the swap and the groups are ordered and disjoint. The raw record does not identify the group at the swap. |
+| Defected T2 Love Regenerator | 8b x2 | **At or before.** Swap beat 1376, `on=true`, 16b after swap. Exact equality requires insertion timing. |
+| Defected T5 Johnny Corporate | 4b x5 | **Unknown.** Swap beat 3600, `on=false`, 40.4b after swap. |
+| Defected T7 Ferreck Dawn | 2b x3 | **At or before.** Swap beat 4840, `on=true`, 9.1b after swap. |
+| Defected T9 Nic Fanciulli & Butch | 4b x2 + 3b | **Unknown.** Swap beat 6264, `on=false`. Kept shape gives no insertion coordinate. |
+| Defected T10 Hannah Wants | 2b x5 | **Unknown.** Swap beat 6956, `on=false`, 34b after swap. |
+| Defected T11 Sam Divine | 4b x4 | **At or before.** Swap beat 7612, `on=true`, 24.6b after swap. |
+| August T1 Demarkus Le | Changed to 1b x16 | **Unknown.** Swap beat 784, Sam `on=false`. The pipeline's earlier loop is marked `on=true`. |
+| August T3 HNTR | Kept 4b x2 | **At or before.** Swap beat 1904, `on=true` for both versions, `swap_out_bar=null`. This is the strongest August counterexample candidate. It is a strict counterexample if `on` excludes the first boundary. The packet omits the learner implementation and insertion beat needed to resolve that. |
+| August T4 Zaro | Added 2b x3 + 1b | **Unclassifiable.** `swap_arr_beat=null` and the correction says `swap_removed`. |
+| August T8 Coldabank | Changed to 1b x8 | **Unknown.** Swap beat 3779.992, `on=false`. |
+| August T11 Yellody | Added 1b x1 | **Unknown.** Swap beat 5463.992, `on=false`. The tail grows from 15b to 16b with the same local entry and swap. |
+
+The three development mixes contain 13 groups on 12 transitions. August adds five groups. I found no independently provable strict pre-swap Sam insertion in this packet. I also could not verify the claimed six exact starts or the claim that every other historical pipeline loop started at or after the swap. The Core write-up marks old T7 "in loop" in addition to T5 and T9. The August, September and Defected records contain other pipeline `on=true` cases, which need insertion beats before they can be counted.
+
+## 2. Root cause and path coverage
+
+The D2 diagnosis fits Core T5. The frozen plan places the loop at beat 2756 with 16-beat chunks, two whole repeats and an 8-beat partial. With the reported swap at 2784, the swap falls 12 beats into repeat two. I ran the supplied validator predicate on that geometry and reproduced the error. The replay report independently names T5 as the failing transition. The frozen MixPlan itself carries no swap beat.
+
+The primary search checks whether the chunk length divides the **rounded** swap gap (`align_engine.py:2061-2065`, `2464-2501`). With a 7-bar gap and a 10-bar target, 1-bar chunks exceed the repeat cap and 7-bar chunks leave a 3-bar remainder. D2 then uses the fallback source search and checks exact target reach and whether the loop ends too early. It never checks the swap against the repeat grid (`2541-2653`). The primary is also imperfect. I ran it with an outro at 92.25 and a swap at 96. It accepted 4-bar repeats against the rounded gap of 4. At the proposed insertion, the validator rejects swap beat 384 between boundaries 369 and 385.
+
+| Path | What the proposed guard covers |
+|---|---|
+| No outro section | Both automatic tail-emission branches require an outro (`2464`, `2565`). A decision can still emit a tail spec without one. |
+| Clean drums sourced outside the outro | Covered in landmark mode. The source window changes, while the planner still uses the outro start for insertion (`2495-2500`, `2574-2583`). Core T1 shows why source and insertion must be kept separate. |
+| Legacy automatic alignment | Bypasses Rule S. `align_pair` selects legacy when both landmark lists are empty (`1658-1659`). The legacy tail path can emit a loop with neither landmark swap check (`2447-2449`, `2565-2653`). |
+| Explicit decision | Bypasses Rule S. `compute_aligned_positions` calls `fills_from_decision` directly. That function checks source, repeat and extension limits, but never checks loop insertion against the swap (`2835-2896`, `2976-2996`). The supplied excerpts omit the consumer that places the decision loop. |
+| Incoming intro loop | By design it prepends material while keeping the locked swap, and consumes loop budget. It does not independently create a pre-swap outgoing tail in this planner. The validator's repeat check selects the outgoing track's loops for the same transition only (`315-343`). The separate clip-boundary check on both roles does not prove the intended source cue survived. Test the final timing with intro loops and cuts in place. |
+
+Check actual arrangement beats after placement. Apply the existing boundary predicate to candidate geometry, try another admissible candidate when needed, and evaluate the no-loop geometry before committing it. A freeze-time check is a useful backstop on certified runs. At the proposed location it runs only when `--mix-plan` is supplied, and a boundary-safe pre-swap loop will pass it.
+
+## 3. A working transition can break
+
+1. Skipping the search avoids the three cited planner raises on that pair. The final overlap check runs later.
+2. The 16-bar floor is checked first on raw alignment and again on final track endpoints (`mix_plan.py:502-511`). An intro cut can move the first playable incoming beat later. In memory, the supplied aligner chose incoming offset 84, outgoing swap 96, and natural end 100. The supplied planner cut 8 bars from the intro and inserted two 4-bar repeats starting at outgoing bar 92. The swap is on a repeat boundary. With the incoming starting at 92, the real MixPlan validator accepted the resulting **16-bar** overlap. Removing just the loop made it **8 bars**, and the validator raised. This is a synthetic geometry test using the supplied functions, without audio or a full ALS build.
+3. `handoff_bar_out <= n_bars` protects the swap instant on the native timeline. It guarantees neither a fade runway nor a named endpoint. The content flag itself depends on the effective end (`931-963`, `3006-3015`). Removing a loop can also remove the very section landing D15 selected. I found no hard requirement for that landing in the supplied MixPlan validator. Replay needs to measure it as an outcome.
+
+Core T5's 52-to-42-bar arithmetic is correct. It does not establish safety for other pairs.
+
+## 4. Make acceptance falsifiable
+
+- **(a)** Keep the Core end-to-end check and pin the exact expected absolute insert and swap beats on both CTRL and NEW. This catches failure on Core, while a Core-specific fix could still pass it.
+- **(b)** The presence scores are valid in-sample checks. They cannot establish start side or generalization. Score individual loop groups and insertion timing where measured. Preserve unknowns. Keep Defected CTRL and the corrected-analysis T7 alignment failure explicit.
+- **(c)** Make policy selection a tested prerequisite. Verify the requested policy reaches both alignment and fill planning. Include a fixture required to change, so an ignored flag cannot pass on a zero diff. Compare actual emitted loops and final overlaps. An align-and-fill replay alone misses the demonstrated final-overlap failure.
+- **(d)** Pin an immutable pre-change snapshot and an independently specified expected diff before refresh. Check the unchanged fields and pair identities against that snapshot. A replay-produced refused set and a freshly generated baseline can agree on the same bug.
+
+**Add a frozen-geometry integration matrix.** Run both policies through the production entry points and inspect the final arrangement. Include primary and D2 paths, a fractional offset, a loop starting before the swap with the swap on a later repeat boundary, starts exactly at and after the swap, legacy, decisions, and an incoming intro edit. Include the 16-to-8 regression and require a valid final arrangement for that fixture. If the revised policy still claims strict Rule S, assert `insert_at_beat >= swap_beats` directly on every covered path. Validator success alone cannot test that claim.
+
+## 5. What the plan defers
+
+Keep the refusals to delete by chunk length or pull every overlap toward 32 bars. The counterexamples are real. Keep automatic retargeting out of the crash fix. Moving an insert to the swap changes the audio being displaced and can change the target and quality result. The asserted six exact starts are unverified, and even six verified starts would not establish that Sam wants a rejected loop moved there.
+
+Do carry forward a narrower experiment on **adding a tail while keeping the swap**. Core T4 kept the outgoing swap while adding an own-ending tail. Defected T10 kept both local swap coordinates and gained a tail. August T11 kept local entry and swap and extended the tail from 15 to 16 bars. Core T4 and August T4 also give two examples of additions on tracks without an outro, though August T4 has no recorded swap. These support testing an optional candidate. They do not supply a universal trigger. The eight addition transitions include both short and substantial original tails, and additions can lengthen or shorten the final blend alongside other edits.
+
+## 6. Questions for Sam
+
+1. Ask what he wants on a concrete boundary-safe pre-swap example, then what he wants when taking the loop out makes the overlap too short. The current choice between straight-through and restarting at the swap omits keeping a usable loop or changing the alignment.
+2. Keep the cap question separate. Ask whether 12 bars is a limit on automatic reach or whether specific hand-directed extensions should be allowed. The Defected examples establish exceptions in his edits, with too little evidence to draw a genre boundary.
+3. A strict musical rule needs one further decision. Does it also apply to explicit hand decisions that satisfy the validator? The narrow boundary repair can proceed without that answer. The fresh Defected replay is separately blocked at T7 if it must use corrected analysis end to end.
+
+## 7. Build split
+
+A and E both edit `plan_fill_or_cut`. Keep them sequential or give one owner the function. B's predicate can be tested alone, but `getattr` only lets report serialization tolerate the missing field. It cannot provide the lane, a real refusal, or verify that the freeze call sees final loop positions and the swap actually used by reconciliation. D can test parsing and prove forwarding with a test policy, then needs A for the real comparison and the arrangement entry point for final geometry. C can test scoring on its own, but needs verified insertion data to score Rule S. A and B have no direct same-function collision as listed.
+
+I read `SHA.txt` and verified the five listed SHA-256 prefixes for `PLAN.md`, `align_engine.py`, `transition_policy.py`, `validate_mix_plan_als.py`, and `mix_plan.py`. I also read both `propose_arrangement_lines*.txt` excerpts and all six `EVIDENCE_*` files. In-memory checks verified the Core boundary failure, the fractional primary-search case, and the final-overlap rejection. No files were written.
+
+## FOUND UNASKED
+
+- **The frozen Core plan and the learner report disagree about intro loops.** The report lists apparent incoming loops at T4 and T9. The frozen plan has no loop IDs on either and contains four outgoing loops total. Use the frozen contract to score pipeline loop presence and verify Sam's placements against his corrected set.
+- **The proposed refusal flag can invent removals.** It fires before discovering whether a candidate exists, fits R3, or passes quality. It can report a refusal on a pair that previously had no loop. Also, `outgoing_loop_abandoned` is set but never reset by `plan_fill_or_cut`, so a reused alignment can carry both reasons.
+- **Freeze the policy identity in the acceptance artifacts.** `MixPlan` already accepts `policy_versions`, and its transition contract has no swap field. Record the actual policy and pin the matching report's swap values so the baseline, replay, and reconciliation are checking the same run.
+===CODEX-ASK-DONE exit=0 nonce=273ff3362978431b9c8cab3022bbc6c5===
+===SEAT-DONE codex plan_r1===

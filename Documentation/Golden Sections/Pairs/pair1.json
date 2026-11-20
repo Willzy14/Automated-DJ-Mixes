@@ -1,0 +1,162 @@
+{
+ "title": "Picture 1 of 6: Back In The Dance into PAX Revelry",
+ "stem_dir": "D:/Claude Workspace/Automated DJ Mixes/d20-replay/proj/_Stem Analysis",
+ "b_starts_at_a_bar": 184,
+ "zoom": [
+  168,
+  248
+ ],
+ "tracks": [
+  {
+   "key": "A",
+   "match": "Back In The Dance",
+   "name": "A: Darius Syrossian & George Smeddles - Back In The Dance",
+   "bpm": 128.0,
+   "n_bars": 209,
+   "sections": [
+    [
+     0,
+     "INTRO"
+    ],
+    [
+     24,
+     "DROP"
+    ],
+    [
+     32,
+     "BREAK"
+    ],
+    [
+     40,
+     "DROP"
+    ],
+    [
+     56,
+     "DROP"
+    ],
+    [
+     72,
+     "BREAK"
+    ],
+    [
+     88,
+     "DROP"
+    ],
+    [
+     104,
+     "DROP"
+    ],
+    [
+     128,
+     "BREAK"
+    ],
+    [
+     152,
+     "DROP"
+    ],
+    [
+     176,
+     "DROP"
+    ],
+    [
+     200,
+     "OUTRO"
+    ]
+   ],
+   "fills": [
+    [
+     23,
+     24
+    ],
+    [
+     54,
+     56
+    ],
+    [
+     102,
+     104
+    ],
+    [
+     110,
+     112
+    ],
+    [
+     119,
+     124
+    ],
+    [
+     174,
+     176
+    ],
+    [
+     183,
+     184
+    ],
+    [
+     199,
+     200
+    ],
+    [
+     207,
+     208
+    ]
+   ]
+  },
+  {
+   "key": "B",
+   "match": "PAX",
+   "name": "B: PAX - Revelry",
+   "bpm": 126.0,
+   "n_bars": 193,
+   "sections": [
+    [
+     0,
+     "INTRO"
+    ],
+    [
+     16,
+     "DROP"
+    ],
+    [
+     48,
+     "DROP"
+    ],
+    [
+     76,
+     "BREAK"
+    ],
+    [
+     80,
+     "DROP"
+    ],
+    [
+     96,
+     "BREAK"
+    ],
+    [
+     128,
+     "DROP"
+    ],
+    [
+     168,
+     "OUTRO"
+    ]
+   ],
+   "fills": [
+    [
+     31,
+     32
+    ],
+    [
+     95,
+     96
+    ],
+    [
+     175,
+     176
+    ]
+   ]
+  }
+ ],
+ "a_loop_to": 215
+}

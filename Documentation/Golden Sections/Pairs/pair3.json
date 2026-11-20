@@ -1,0 +1,134 @@
+{
+ "title": "Picture 3 of 6: Passion (V.I.P Mix) into Ninetoes, Come Back",
+ "stem_dir": "D:/Claude Workspace/Automated DJ Mixes/d20-replay/proj/_Stem Analysis",
+ "b_starts_at_a_bar": 112,
+ "zoom": [
+  96,
+  176
+ ],
+ "switch_at": 128,
+ "tracks": [
+  {
+   "key": "A",
+   "match": "Passion",
+   "name": "A: Murphy's Law & Guy Mac - Passion (V.I.P Mix)",
+   "bpm": 133.02,
+   "n_bars": 144,
+   "sections": [
+    [
+     0,
+     "INTRO"
+    ],
+    [
+     16,
+     "DROP"
+    ],
+    [
+     32,
+     "BREAK"
+    ],
+    [
+     48,
+     "DROP"
+    ],
+    [
+     64,
+     "BREAK"
+    ],
+    [
+     88,
+     "BUILD"
+    ],
+    [
+     96,
+     "DROP"
+    ],
+    [
+     128,
+     "OUTRO"
+    ],
+    [
+     136,
+     "OUTRO"
+    ]
+   ],
+   "fills": [
+    [
+     15,
+     16
+    ],
+    [
+     31,
+     32
+    ],
+    [
+     55,
+     56
+    ],
+    [
+     62,
+     64
+    ],
+    [
+     95,
+     96
+    ],
+    [
+     103,
+     104
+    ],
+    [
+     111,
+     112
+    ],
+    [
+     126,
+     128
+    ]
+   ]
+  },
+  {
+   "key": "B",
+   "match": "Ninetoes",
+   "name": "B: Ninetoes - Come Back",
+   "bpm": 126.05,
+   "n_bars": 192,
+   "sections": [
+    [
+     0,
+     "INTRO"
+    ],
+    [
+     32,
+     "BREAK"
+    ],
+    [
+     48,
+     "DROP"
+    ],
+    [
+     76,
+     "BREAK"
+    ],
+    [
+     112,
+     "DROP"
+    ],
+    [
+     160,
+     "OUTRO"
+    ]
+   ],
+   "fills": [
+    [
+     127,
+     128
+    ],
+    [
+     142,
+     144
+    ]
+   ]
+  }
+ ]
+}

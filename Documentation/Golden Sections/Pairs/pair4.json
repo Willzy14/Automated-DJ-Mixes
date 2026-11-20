@@ -1,0 +1,150 @@
+{
+ "title": "Picture 4 of 6 (your blend): Ninetoes, Come Back into Ashibah, Devotion",
+ "stem_dir": "D:/Claude Workspace/Automated DJ Mixes/d20-replay/proj/_Stem Analysis",
+ "b_starts_at_a_bar": 160,
+ "zoom": [
+  136,
+  216
+ ],
+ "switch_at": 176,
+ "tracks": [
+  {
+   "key": "A",
+   "match": "Ninetoes",
+   "name": "A: Ninetoes - Come Back",
+   "bpm": 126.05,
+   "n_bars": 192,
+   "sections": [
+    [
+     0,
+     "INTRO"
+    ],
+    [
+     32,
+     "BREAK"
+    ],
+    [
+     48,
+     "DROP"
+    ],
+    [
+     76,
+     "BREAK"
+    ],
+    [
+     112,
+     "DROP"
+    ],
+    [
+     160,
+     "OUTRO"
+    ]
+   ],
+   "fills": [
+    [
+     127,
+     128
+    ],
+    [
+     142,
+     144
+    ]
+   ]
+  },
+  {
+   "key": "B",
+   "match": "Ashibah",
+   "name": "B: Ashibah - Devotion (Original Mix)",
+   "bpm": 124.23,
+   "n_bars": 154,
+   "sections": [
+    [
+     0,
+     "INTRO"
+    ],
+    [
+     16,
+     "INTRO"
+    ],
+    [
+     32,
+     "BUILD"
+    ],
+    [
+     40,
+     "DROP"
+    ],
+    [
+     56,
+     "BREAK"
+    ],
+    [
+     74,
+     "DROP"
+    ],
+    [
+     90,
+     "BREAK"
+    ],
+    [
+     106,
+     "DROP"
+    ],
+    [
+     138,
+     "OUTRO"
+    ]
+   ],
+   "fills": [
+    [
+     7,
+     8
+    ],
+    [
+     15,
+     16
+    ],
+    [
+     23,
+     24
+    ],
+    [
+     31,
+     32
+    ],
+    [
+     39,
+     40
+    ],
+    [
+     47,
+     48
+    ],
+    [
+     55,
+     56
+    ],
+    [
+     81,
+     82
+    ],
+    [
+     89,
+     90
+    ],
+    [
+     113,
+     114
+    ],
+    [
+     121,
+     122
+    ],
+    [
+     137,
+     138
+    ]
+   ]
+  }
+ ]
+}

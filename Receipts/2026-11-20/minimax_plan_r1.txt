@@ -1,0 +1,789 @@
+﻿Now I can pin the geometry exactly.
+
+Transition 0 (HARTY→Jones): overlap_start 608 (Jones arr_start), overlap_end 784 (HARTY arr_end). HARTY arr_start 0, arr_end 784 = 196 bars. HARTY's loop: insert 672, 5 reps of 8 beats = 40 beats, so it occupies 672..712. HARTY's natural end without the loop: 784 - 40 = 744 = bar 186. And the V5 doc says HARTY's outro is "kickless 168-186" — so HARTY's natural end is bar 186, and the loop (inserted at bar 168, the outro start) extends it to 196. ✓ **So insert = outro start = bar 168, and the natural end is bar 186, and the swap is at bar 168.**
+
+**Key confirmation: the loop's insert point is `outro.start_bar`, always.** Detlef: arr_start 1120, arr_end 1796 → 169 bars natural? Detlef loop insert 1732 → bar 153, source 624-640 = bars 156-160, 1 rep + 4 beats partial = 20 beats = 5 bars. Natural end = (1796-1120)/4 - 5 = 169 - 5 = 164. V5 doc: Detlef swap at 153 = outro start. ✓
+
+Shilla: arr_start 4656, arr_end 5392 → 184 bars with loop; loop insert 5328 = bar 168, 2 reps of 16 beats = 32 beats = 8 bars. Natural end = 184 - 8 = 176. V5 doc: Shilla swap 168, outro start 168. ✓
+
+So in every case: **loop insert = outro.start_bar = the swap bar**, and the loop extends the outgoing from its natural end (outro.end) back... wait, no. The loop is inserted AT the outro start, meaning material from outro.start to outro.end is repeated and inserted there, pushing the outro's own playback later. Actually the source beats 0-8 (HARTY's intro) are inserted at bar 168.
+
+So the **loop clip is inserted at arrangement beat = arr_start + outro.start_bar*4**, and it repeats. The swap at `arr_start + handoff_bar_out*4`.
+
+**Now the decisive check: is `handoff_bar_out == outro.start_bar` in the healthy cases, and `handoff_bar_out > outro.start_bar` only in the failing case?**
+
+- HARTY T1: handoff 168, outro start 168. Equal. ✓
+- Detlef T3: handoff 153, outro start 153. Equal. ✓
+- Shilla T10: handoff 168, outro start 168. Equal. ✓
+- Jewel Kid T5: handoff 167, outro start 160. **outro.start < handoff.** ✗
+
+This is exactly the plan's Rule S condition. **But note the direction**: in the three healthy cases, the loop starts exactly AT the swap (handoff == outro.start). Rule S as specified allows "outro.start_bar >= handoff_bar_out - 1e-6" — so it permits equality. ✓
+
+Now the CRITICAL question: **could there be a case where `outro.start_bar > handoff_bar_out`?** Then the loop starts AFTER the swap. That's allowed by Rule S and by the validator (the loop plays under the incoming). Fine.
+
+And a case where `outro.start_bar < handoff_bar_out` but the swap happens to land on a repeat boundary? That's the D2 fallback's Core T5 case — the swap at 167 lands at 12 of 16 beats into repeat 2. But could the primary search produce `outro.start < handoff` with the swap on a boundary? Yes! If `locked_swap_gap` (= handoff - outro.start) is a multiple of the chunk length, the primary search places the loop so the swap IS on a boundary. E.g. handoff - outro.start = 8 and chunk length 8 → the swap is on repeat boundary 1. **In that case the loop STARTS BEFORE the swap but the swap is on a boundary and the validator accepts it.**
+
+**Rule S would refuse that loop.** And Rule S's own justification ("Failure A becomes impossible by construction") only needs to prevent the swap-inside-repeat; refusing a boundary-safe pre-swap loop is over-refusal.
+
+Let me check whether such a case exists in the corpus. The plan's own claim "the two pipeline loops which started before it were both removed by him (Core T5, T9)". And the plan says DFTD T1 is a 1-bar loop inserted 1 bar before the swap, and "reconcile passed" — meaning the swap was NOT inside a repeat there. Let me check: DFTD T1, 1-bar loop inserted 1 bar before the swap. With a 1-bar chunk, boundaries are at insert, insert+4 beats, insert+8... so a swap 1 bar after the insert IS on a boundary (the next 1-bar repeat boundary). ✓ **So DFTD T1 is exactly the over-refusal case: a boundary-safe loop that Rule S would refuse and that Sam presumably kept.**
+
+Let me verify the plan's DFTD T1 claim is in the evidence. The evidence files don't include DFTD. But the plan states it in section 1: "Holdouts: DFTD T1 loses its 1bx7 loop". And section 0: "DFTD T1 is such a case (1-bar loop inserted 1 bar before the swap; reconcile passed)."
+
+Now, the crucial issue for point 1 and 5: **the plan's evidence claim "13 of 13 at or after" rests on a measurement I cannot reproduce from the evidence**, and I should check what the jsonl can actually support.
+
+Let me now do the decisive test on the jsonl: can I determine loop start vs swap for each Sam loop? Let me reason about what the learner's `swap_out_on_loop` and `swap_out_bar` mean.
+
+Let me tabulate the Sam-side rows with a tail loop, using: `out_tail_loops[1]`, `swap_out_bar[1]`, `swap_out_on_loop[1]`, `tail_after_swap_bars[1]`, `entry_out_bar[1]`, `overlap_bars[1]`.
+
+I'll compute for each whether the loop's start can be located.
+
+Key insight: `tail_after_swap_bars` = (outgoing's effective end) - (swap). And `overlap_bars` = raw overlap. So `outgoing effective end in outgoing bars` = swap_out_bar + tail_after_swap_bars. And the loop's total length = sum of its chunks.
+
+Let me compute for the Sam rows.
+
+**AUGUST T1** (Demarkus Le → Sam Leagas): out_tail_loops Sam = ["1bx16+0b"], swap_out_bar Sam = 196.0, swap_out_on_loop Sam = false, tail_after_swap Sam = 34.0, entry_out_bar Sam = 180.0, overlap Sam = 50.0.
+- Outgoing effective end (in source bars) = 196 + 34 = 230. And entry_out_bar 180 + overlap 50 = 230 ✓ (overlap_bars = effective end - entry).
+- Loop total = 1 bar × 16 = 16 bars. Natural end (no loop) = 230 - 16 = 214.
+- Sam's swap is at 196, and `swap_out_on_loop` is **false** for Sam. Hmm, but the loop exists. If the loop starts at or after the swap and the swap is not on the loop, then the loop must start strictly after 196. The natural end is 214, so the loop spans [214-16=198 ... ] wait, the loop is inserted at the outgoing's end, extending it. Actually if the loop is inserted at the natural end (214) and repeats 16 times of 1 bar = 16 bars, it extends to 230. Then the swap at 196 is BEFORE the loop → `swap_out_on_loop` false ✓ consistent.
+  So Sam's T1 loop starts at 214 (or wherever), strictly AFTER his swap at 196. **After the swap. ✓**
+  But wait — that contradicts "insert = outro.start_bar". Unless Sam hand-edited it. Sam's edits are hand-made in the ALS, so the geometry can differ from the pipeline's convention. Right — the learner's data is about Sam's hand-edited files, so the insert point is wherever Sam put it.
+  
+  Hmm, but the pipeline side: out_tail_loops [0] = ["2bx7+0b"], swap_out_bar [0] = null, swap_out_on_loop [0] = **true**. tail_after_swap [0] = 32.0, entry_out_bar [0] = 180, overlap [0] = 48. So the pipeline's outgoing effective end = 180+48 = 228. The pipeline's loop = 2bx7 = 14 bars. Natural end = 228-14 = 214. Pipeline swap = ? swap_out_bar null because the swap is ON a loop (can't be expressed as a source bar). tail_after_swap 32 → swap at 228-32 = 196 in the arrangement. So the pipeline's swap is at 196 too, but it's on a loop → the loop spans [214-? ...]. Hmm: if the loop is inserted at bar X and the swap at 196 is on the loop, then X <= 196 <= X+14.
+  
+  Hmm, this is the pipeline's own build, whose insert is outro.start. If the loop insert is at 182 (=214-... no).
+  
+  Let's reason: the pipeline's outgoing natural end is 214 bars. Wait, but a tail loop EXTENDS the outgoing past its natural end, so effective end 228 = natural end 214 + 14 extension. And the loop clip is inserted at outro.start, which is < 214. Then the swap at 196 is "on a loop" — so the loop's span covers 196.
+  
+  If the loop is inserted at bar 168 (say) with 2-bar chunks × 7 = 14 bars, it occupies [168, 182] of inserted material. That's before 196. Hmm.
+  
+  Alternative: the loop is inserted at the outro start = 196? Then the swap at 196 IS the loop's insert point, which the learner would report as on_loop=true but swap_out_bar as 196 not null... 
+  
+  Actually `swap_out_on_loop: true` with `swap_out_bar: null` likely means "the swap falls strictly inside a repeated region" (not at its start), so it can't be mapped to a single source bar. That's consistent with the plan's claim that the pipeline's T5-like loops put the swap inside the repeat.
+
+OK. I've done enough reverse-engineering. Let me now be precise about what the jsonl CAN and CANNOT support, which is the heart of point 1.
+
+The jsonl fields available per transition:
+- `geometry.out_tail_loops`: [pipeline, sam] lists of loop shape strings like "1bx7+0b"
+- `geometry.swap_out_bar`: [pipeline, sam] the swap's outgoing source bar, null when the swap is on a loop
+- `geometry.swap_out_on_loop`: [pipeline, sam] boolean
+- `geometry.tail_after_swap_bars`: [pipeline, sam]
+- `geometry.entry_out_bar`: [pipeline, sam]
+- `geometry.overlap_bars`: [pipeline, sam]
+- `geometry.swap_arr_beat`: [pipeline, sam] the ABSOLUTE arrangement beat of the swap
+
+**The loop's insert beat / start bar is NOT recorded anywhere in the jsonl.** `out_tail_loops` gives shape only. So the question "does the loop start before, at, or after the swap" is NOT directly answerable for Sam's rows.
+
+Can it be inferred? Only if we assume the loop's start = outgoing effective end minus total loop length (i.e. the loop is a tail appended at the end). Let's test that assumption on the pipeline rows where we KNOW the insert convention (insert = outro.start):
+
+Core T1 HARTY: pipeline loop 2bx5 (10 bars), effective end 196, natural end 186, insert at 168. So insert != natural_end - total (186-10 = 176 ≠ 168). **The "appended at the end" model is WRONG for the pipeline.** So we can't use it to infer Sam's inserts either.
+
+Therefore: **the "13 of 13 at or after" claim is NOT derivable from the EVIDENCE_* files given.** The plan says it came "via `learn_from_correction._geometry_side` on the three Sam sets" — that is a learner-side measurement of Sam's ALS files, not present here. The plan presents this as "Verified by reading files or read-only replays" in section 0, which over-claims: the derivation is not in the packet and cannot be checked.
+
+Now let me check the plan's specific per-transition claims against what the jsonl actually shows, and find the counter-examples.
+
+The plan's 13 groups:
+- "at the swap": Core T1 (HARTY 2bx6), Core T10 (Shilla 4bx2), Defected T1 (1bx7), T2 (8bx2), T7 (2bx3), T11 (4bx4)  → 6
+- "after the swap": Defected T1 second loop (+8.5 bars), T5 (+12), T9 (+15), T10 (+15), Sept T2 (+0.5), Sept T4 (+4), Core T4 (+16)  → 7
+
+Let me check the "at the swap" ones against the jsonl `swap_out_on_loop` for Sam:
+- Defected T1: swap_out_on_loop Sam = **true**, swap_out_bar Sam = **null**. 
+- Defected T2: swap_out_on_loop Sam = **true**, swap_out_bar Sam = **null**.
+- Defected T7: swap_out_on_loop Sam = **true**, swap_out_bar Sam = **null**.
+- Defected T11: swap_out_on_loop Sam = **true**, swap_out_bar Sam = **null**.
+- Sept T2: swap_out_on_loop Sam = **false**, swap_out_bar Sam = 2.0 (!!)
+- Sept T4: swap_out_on_loop Sam = **false**, swap_out_bar Sam = 176.0
+
+Interesting: Defected T1/T2/T7/T11 have Sam's swap_out_on_loop = TRUE. If "on_loop = true" means the swap coincides with a loop region, then "at the swap" is at best "the swap is at a loop boundary" — the flag cannot distinguish "the loop starts exactly at the swap" from "the swap is on the SECOND repeat boundary of a loop that started earlier."
+
+**That is the killer.** For Defected T1 (Sam's loops: 1bx7 AND 1bx6+0.5b), the learner reports on_loop=true with swap_out_bar=null. A swap on a repeat boundary of a loop that started BEFORE the swap is exactly the case the plan wants to distinguish from "at the swap", and the field cannot distinguish it.
+
+Let's compute Defected T1 concretely. Sam: entry_out_bar 152, overlap 23, tail_after_swap 15. Effective end = 152 + 23 = 175. Sam's loops: 1bx7 (7 bars) + 1bx6+0.5b (6 bars + 0.5 = 6.5) = 13.5 bars total. So natural end = 175 - 13.5 = 161.5. Hmm, that's less than the swap? The swap is at 175 - 15 = 160. So the swap is at bar 160 and the natural end is 161.5. A 13.5-bar tail loop inserted somewhere near 161.5 extending to 175. The swap at 160 is 1.5 bars BEFORE the natural end. If the loop were inserted at the natural end 161.5, the swap at 160 is before it → on_loop should be false. But it's TRUE. So the loop must start at or before 160.
+
+**So Defected T1's Sam loop appears to START AT OR BEFORE the swap, and with swap_out_on_loop=true and swap_out_bar=null, we CANNOT tell whether the swap is the loop's first boundary or a later one.** The plan asserts "at the swap" with confidence (+8.5 bars for the second loop). That's an unverifiable claim from this packet, and it is the load-bearing claim.
+
+Let me now check whether the plan's offsets are internally consistent with the jsonl, which would let me at least test them.
+
+Defected T1: swap at 160 (computed), effective end 175, tail_after_swap 15 ✓ (175-160=15 ✓). First loop 1bx7 = 7 bars. Second loop 1bx6+0.5b. Plan says the second loop starts +8.5 bars after the swap → at 168.5. 168.5 + 6.5 = 175 ✓ = effective end. So: first loop spans [?, ?] of 7 bars, second [168.5, 175]. If the first loop is [161.5, 168.5] (i.e. starting at the natural end 161.5) then the swap at 160 is 1.5 bars before it → on_loop false. But it's true. If the first loop is [160, 167] starting exactly at the swap, then the second starts at 167... but the plan says 168.5. If first is [161.5, 168.5] and the swap at 160... 
+
+Hmm, let's reconsider. Maybe the tail_after_swap is measured in the arrangement and the swap is on the loop. Let's define: the swap's arrangement position = 160 (source bar). Loop 1 occupies some source range; loop 2 occupies [168.5, 175]. If loop 1 = [161.5, 168.5] (7 bars), the swap at 160 is before it → not on loop. Contradiction with on_loop=true.
+
+Alternative: loop 1 = [158, 165] (starting 2 bars before the swap at 160) — then the swap at 160 IS on loop 1 but not at its boundary. But the validator forbids the swap being inside a repeat... though Sam's hand-edited file isn't necessarily validator-clean. Then loop 2 at 168.5? Gap between 165 and 168.5.
+
+Actually the more natural reading: the two loops are sequential in the outgoing's tail. Loop 1 spans [X, X+7], loop 2 spans [168.5, 175]. If loop 2 starts right after loop 1, X+7 = 168.5 → X = 161.5. And the swap at 160 is 1.5 bars before loop 1. Then on_loop should be false...
+
+Unless the "tail_after_swap_bars" is measured differently, or the swap_out_bar=null means something else (e.g. the swap is in the LOOP-EXTENDED region so it has no single source bar). Let me reconsider: for the pipeline side of Defected T1, out_tail_loops[0] = ["1bx7+0b"], swap_out_bar[0] = null, on_loop[0] = true, tail_after_swap[0] = 24, entry 152, overlap 32 → effective end 184, natural end 184-7 = 177, swap at 184-24 = 160. Pipeline: loop 1bx7 = 7 bars inserted at the outro start. Effective end 184 = natural end 177 + 7 ✓. So the loop is inserted at the outro start, which is <= 177. If the outro start = 170 (say), the loop occupies [170, 177] inserted at 170, and the swap at 160 is before → on_loop should be false but it's true.
+
+Hmm. So maybe on_loop=true means "the outgoing track's swap point lies within a looped region of the arrangement" i.e. the outgoing's own clip is a repeated clip so the swap's SOURCE bar is ambiguous. For the pipeline, the loop is inserted at the outro start and the outro start < swap → the swap's source bar is ambiguous because the material at that arrangement position comes from the repeated clip. YES. That's the right reading: `swap_out_on_loop = true` ⟺ the outgoing's clip at the swap position is a loop clip ⟺ the loop's insert is at or before the swap.
+
+**And that immediately gives us: `swap_out_on_loop = true` implies the loop starts AT OR BEFORE the swap — exactly what Rule S forbids — and it does NOT tell us whether it starts AT the swap or before it.**
+
+Now let's apply this to SAM's rows:
+- Sam rows with on_loop=true: Defected T1, T2, T7, T11 (and August T3).
+- Sam rows with on_loop=false: everything else (Core T1/T4/T10, Sept T2/T4, Defected T5/T9/T10, August T1/T8/T11).
+
+on_loop=false for Sam means the swap is NOT in a loop clip → the loop starts strictly AFTER the swap. ✓ Consistent with the plan's "after the swap" list for those (Sept T2 +0.5, Sept T4 +4, Defected T5, T9, T10, August...).
+
+on_loop=true for Sam (Defected T1, T2, T7, T11, August T3) means the loop starts AT OR BEFORE the swap. **The plan claims these 5 are "at the swap" (T1, T2, T7, T11) — the jsonl cannot distinguish at from before, and the plan's own claim rests on an un-shipped measurement.**
+
+**And August T3 is a strict counter-example candidate**: Sam KEPT the pipeline's 4bx2 unchanged (out_tail_loops [0] == [1] == ["4bx2+0b"]), on_loop=true for BOTH sides, swap_out_bar=null for both. Sam did NOT delete it and did NOT change it. If the loop started before the swap, Sam kept a pre-swap-starting loop → direct counter-example to Rule S. The plan does not list August T3 among the 13 at all — the plan's 13 covers Core/Sept/Defected only, and says "Every other pipeline loop in the Core, Sept, Defected CTRL, DFTD, Tech House Selection and August plans starts at or after the swap" — which is about PIPELINE loops, not Sam's.
+
+Let me verify the plan's claim about pipeline loops across August: August T1 pipeline on_loop=true (2bx7), T3 on_loop=true, T6 on_loop=true, T7 on_loop=true, T9 pipeline on_loop=false, T11 pipeline on_loop=false. So the pipeline has August loops with on_loop=true (swap inside/after a loop) — T1, T3, T6, T7. The plan says "Every other pipeline loop in the ... August plans starts at or after the swap" — but by the on_loop=true reading, the August T1/T3/T6/T7 pipeline loops have the swap ON a loop, i.e. the loop starts at or before the swap. So **the plan's blanket claim about August pipeline loops is contradicted by the jsonl itself**, unless the plan means something narrower.
+
+Let me verify by listing all pipeline-side on_loop=true rows across the three mixes + August.
+
+August: T1 (true), T3 (true), T6 (true), T7 (true), T9 (false), T11 (false). Also T4 pipeline on_loop=false.
+Sept: T1 (false), T2 (false), T3 (false), T4 (false), T5 (false), T6 (false), T7 (**true**).
+Defected: T1 (true), T2 (false), T3 (false), T4 (true), T5 (false), T6 (false), T7 (false), T8 (true), T9 (false), T10 (false), T11 (false).
+
+Now cross-check with the plan's section 0 claim: "Pipeline loops: the 22.09 build had loops before the swap on T5 (-5 bars) and T9 (-1 bar); Sam removed both. DFTD T1 is -1 bar. Every other pipeline loop in the Core, Sept, Defected CTRL, DFTD, Tech House Selection and August plans starts at or after the swap."
+
+From the jsonl, pipeline-side on_loop=true rows in Sept/Defected/August: Sept T7 (4bx3), Defected T1 (1bx7), Defected T4 (1bx8), Defected T8 (2bx4), August T1 (2bx7), August T3 (4bx2), August T6 (8bx4), August T7 (none — August T7 has out_tail_loops [[],[]] and on_loop true... let me recheck).
+
+August T7: out_tail_loops [[],[]], swap_out_on_loop [false,false]. Let me re-read. From the jsonl line 7: "swap_out_on_loop": [false, false]. Yes false.
+
+Let me re-read the August rows carefully for on_loop values.
+
+August T1: "swap_out_on_loop": [true, false]  (pipeline true, Sam false)
+August T2: [false, false]
+August T3: [true, true]
+August T4: [false, false]
+August T5: [false, false]
+August T6: [true, false]
+August T7: [false, false]
+August T8: [false, false]
+August T9: [false, false]
+August T10: [false, false]
+August T11: [false, false]
+
+Sept T1: [false,false]; T2: [false,false]; T3: [false,false]; T4: [false,false]; T5: [false,false]; T6: [false,false]; T7: [true,false].
+
+Defected T1: [true,true]; T2: [false,true]; T3: [false,false]; T4: [true,false]; T5: [false,false]; T6: [false,false]; T7: [false,true]; T8: [true,false]; T9: [false,false]; T10: [false,false]; T11: [false,true].
+
+**So Sam-side on_loop=true: Defected T1, Defected T2, Defected T7, Defected T11, August T3.**
+
+Now for each of those, the plan claims "at the swap":
+- Defected T1: two loop groups (1bx7, and 1bx6+0.5b). Plan says first at swap, second +8.5.
+- Defected T2: 8bx2 "at the swap".
+- Defected T7: 2bx3 "at the swap".
+- Defected T11: 4bx4 "at the swap".
+- **August T3: 4bx2 — NOT in the plan's list at all.** Sam kept it unchanged (both sides identical), on_loop=true. The plan omits the August mix from the 13 entirely.
+
+So the plan's 13 = Core T1, Core T4, Core T10, Sept T2, Sept T4, Defected T1(x2), T2, T5, T7, T9, T10, T11 = 13 groups. It omits August entirely, which has 5 Sam tail-loop groups (T1 1bx16, T3 4bx2, T4 2bx3+1b, T8 1bx8, T11 1bx1). **The brief asked to find counter-examples "including in the August mix" and the plan simply never counted August.**
+
+Now let's check whether August T3 is a counter-example. August T3: HNTR → Zaro. out_tail_loops [0] == [1] == ["4bx2+0b"]. swap_out_bar [null, null]. on_loop [true, true]. Sam made NO change to the loop. So Sam KEEPS a loop whose swap is on/inside a loop clip. If the loop started strictly before the swap, Sam kept a pre-swap-starting loop → Rule S counter-example. If it starts exactly at the swap → consistent.
+
+Can I determine it? Let's compute August T3's geometry. entry_out_bar Sam = 136, overlap Sam = 48 → effective end = 184. Sam's loop 4bx2 = 8 bars. Natural end = 184 - 8 = 176. tail_after_swap Sam = 16 → swap at 184 - 16 = 168. Pipeline: entry 132, overlap 52 → effective end 184; loop 4bx2 = 8 → natural end 176; tail_after_swap 16 → swap at 168. **Same natural end and same swap, 168.**
+
+Loop 1bx... no, 4bx2 = 8 bars. For the swap at 168 to be ON the loop (on_loop=true), the loop must span 168. The outgoing's natural end is 176 and the effective end 184. If the loop is inserted at the outro start and the outro start is, say, 168, then the loop clip [168, 176) is inserted at 168 and the swap at 168 is at the loop's FIRST boundary. That's "at the swap" ✓ and the validator would accept it.
+
+Alternatively the outro start is 160, the loop [160,168) inserted at 160, and the swap at 168 = the boundary between the loop region and the natural tail → also "on the loop" in the sense the swap's position is at the loop's end boundary.
+
+Either way, **on_loop=true does not distinguish "starts at the swap" from "starts before the swap"**. That's the fundamental evidentiary gap, and it applies to 5 of Sam's 13 groups (Defected T1, T2, T7, T11, and August T3).
+
+Now, let me check the plan's offset arithmetic for the "after the swap" ones to see if they're self-consistent, since a self-consistent set suggests the measurement exists but isn't shipped.
+
+Sept T2 (Youngr → HARTY): Sam added "1bx15+0b" = 15 bars. swap_out_bar Sam = 2.0 (!!), on_loop Sam = false, tail_after_swap Sam = 15.5, entry Sam = 116, overlap Sam = 28.5. Effective end = 116 + 28.5 = 144.5. Natural end = 144.5 - 15 = 129.5. Swap at 144.5 - 15.5 = 129. But swap_out_bar Sam = 2.0?! That's clearly a degenerate value (probably a parse artifact of a 1-bar loop). **swap_out_bar = 2.0 for Sam is nonsense** — the swap is at ~129, not bar 2. So this row's swap_out_bar is unreliable, which the plan's evidence table doesn't flag. The plan says Sept T2 is "+0.5 after the swap" — with the loop starting at 129.5 and the swap at 129, that's +0.5 ✓ consistent with the plan's number. Good — so the plan's numbers ARE derivable by this arithmetic, but they are NOT in the jsonl.
+
+Let me verify Sept T4: Sam added 4bx1 = 4 bars. entry Sam = 160, overlap Sam = 32 → effective end 192. Natural end = 192 - 4 = 188. tail_after_swap Sam = 16 → swap at 176. Plan says "+4 after the swap" → loop starts at 180. But natural end is 188, and the loop of 4 bars would then span [188, 192]. That's +12, not +4. ✗
+
+Hmm. Let me redo. Maybe the loop is inserted at a point that isn't the natural end. Plan says the loop starts 4 bars after the swap = 180, so the loop occupies [180, 184]. Then the natural material continues 184..188 and the effective end is 188? But effective end = 192. Hmm.
+
+Alternatively "after the swap" offsets might be measured on the ARRANGEMENT or relative to something else. Let's try: loop at [188,192], swap at 176 → offset 12. Plan says +4. Or relative to the natural end 188: swap at 176 is 12 before the end.
+
+Let me try Sept T2 again with the "loop inserted at natural end" model: natural end 129.5, loop [129.5, 144.5], swap at 129. Offset from swap = +0.5 ✓ matches the plan's "+0.5". 
+
+So for Sept T4 with that model: natural end 188, loop [188, 192], swap at 176 → offset +12, but the plan says +4. Let me recheck Sept T4's numbers. From the jsonl: Sept T4: out_tail_loops [[], ["4bx1+0b"]], swap_out_bar [160.0, 176.0], swap_out_on_loop [false,false], tail_after_swap_bars [24.0, 16.0], entry_out_bar [144.0, 160.0], overlap_bars [40.0, 32.0].
+
+Sam: entry 160, overlap 32, effective end = 192. Sam's loop 4bx1 = 4 bars. Natural end = 188. swap at 192 - 16 = 176. 
+Offset of loop start (188) from swap (176) = +12. Plan says +4. ✗
+
+Hmm. Let me try: maybe "overlap_bars" is not effective_end - entry. Let me check with the pipeline side of Sept T4: entry 144, overlap 40 → 184 effective end. Pipeline has NO tail loop (out_tail_loops[0] = []). So effective end = natural end = 184. Raw overlap = n_bars - arr_offset = 40 → n_bars = 184 ✓. Consistent.
+
+Sam side: entry 160, overlap 32 → effective end 192. Raw overlap (pre-loop) = n_bars - arr_offset. Sam's own file: n_bars for Sorley = ? Sam's swap moved to 176 and entry to 160, so arr_offset such that... hmm, in Sam's file the geometry is his own.
+
+Let's define in Sam's file: outgoing natural end = N, arr_offset A (entry). overlap_bars[1] = 32 = (N + loop_ext) - A? If the loop is 4 bars and effective end = N + 4 (appended), then N + 4 - 160 = 32 → N = 188. And swap at 176 (swap_out_bar[1] = 176). So the swap is 12 bars before the natural end. Loop at [188, 192]: offset +12 from swap.
+
+Plan says "+4". Maybe the plan's offsets are in a different unit or refer to the loop's END minus the swap, or the loop start minus the natural end, or... 192 - 176 = 16 (that's tail_after_swap). 188 - 176 = 12. Neither is 4.
+
+Alternatively maybe "after the swap" is measured as the distance from the swap to the START of the loop *measured in the incoming's bars*, or the plan's numbers come from a different tool (`_geometry_side` on the ALS) than the jsonl summary. Likely: `_geometry_side` computes the actual loop clip's insert beat from the ALS and compares to the swap's arrangement beat. The jsonl's `out_tail_loops` is a summarized shape list, and the offsets in the plan come from the ALS directly.
+
+That is entirely consistent with the plan's provenance note ("via learn_from_correction._geometry_side on the three Sam sets"). But it means **the EVIDENCE packet does not contain the data that supports the plan's central claim.** The reviewer cannot verify "13 of 13 at or after". That's a legitimate criticism but not necessarily a fatal one IF the measurement is reproducible from the real Sam ALS files (which exist on disk outside this packet). But the plan lists it under "Verified", and the brief's evidence set is what's offered.
+
+Let me now be very careful and fair: the brief says "Check the evidence yourself from the EVIDENCE files". So the question is whether the EVIDENCE supports it. It partially does (via my reconstruction of natural end / swap / effective end), and for several rows the reconstruction DOES determine the answer. Let me do that systematically for the Sam-side rows where on_loop=false (swap not on a loop → the loop starts after the swap, so those are "after"):
+
+If on_loop=false for Sam, the swap is not in a loop clip, so the loop starts strictly after the swap (the loop is at/after the outgoing's tail). Let me verify one: Sept T4 Sam, on_loop=false → loop after swap at 176 ✓ (loop at 188). Sept T2 Sam on_loop=false → loop at 129.5 > swap 129 ✓. Defected T5 Sam on_loop=false: out_tail_loops Sam ["4bx5+0b"], entry 160, overlap 72 → effective end 232; loop 20 bars → natural end 212; tail_after_swap 40.4 → swap at 191.6. Loop at 212 > 191.6 ✓ after. Defected T9 Sam on_loop=false: loops identical [["4bx2+3b"],["4bx2+3b"]], entry 232, overlap 45 → effective end 277; loop 11 bars → natural end 266; tail_after_swap 29 → swap at 248. Loop at 266 > 248 ✓ after. Defected T10 Sam: ["2bx5+0b"], entry 173, overlap 50 → effective end 223; loop 10 → natural 213; tail_after_swap 34 → swap at 189. 213 > 189 ✓. August T1 Sam: computed above, loop at 214 > 196 ✓. August T4 Sam: ["2bx3+1b"], entry 116, overlap 23 → effective end 139; loop 7 → natural 132; swap_out_bar Sam = null, on_loop false; swap_removed correction (Sam removed the swap!). tail_after_swap Sam = null. **August T4 Sam removed the swap entirely** — "swap_removed". So Rule S's premise (a swap exists) doesn't even hold there. August T8 Sam: ["1bx8+0b"], entry 72, overlap 34 → effective end 106; loop 8 → natural 98; tail_after_swap 18 → swap at 88. 98 > 88 ✓ after. August T11 Sam: ["1bx1+0b"], entry 137, overlap 32 → effective end 169; loop 1 → natural 168; tail_after_swap 16 → swap at 153. 168 > 153 ✓ after.
+
+Great — so for the 8-9 Sam rows with on_loop=false, the loop provably starts after the swap. ✓
+
+For the 5 with on_loop=true (Defected T1, T2, T7, T11, August T3), the loop provably starts AT OR BEFORE the swap; whether exactly AT is not derivable from the jsonl. Let me at least check whether the numbers are consistent with "at" (i.e. is there any arithmetic that forces it?).
+
+Defected T2 Sam: out_tail_loops ["8bx2+0b"] = 16 bars. entry 168, overlap 40 → effective end 208. natural end = 208 - 16 = 192. tail_after_swap 16 → swap at 192. **The swap is at 192 = the natural end, and the loop spans [192, 208].** So the loop starts EXACTLY at the swap! ✓ "at the swap" confirmed by arithmetic.
+
+Defected T7 Sam: ["2bx3+0b"] = 6 bars. entry 150, overlap 33 → effective end 183. natural end = 183 - 6 = 177. tail_after_swap 9.1 → swap at 173.9. Loop at [177, 183]. Swap at 173.9 < 177 → the loop starts AFTER the swap?! But on_loop=true for Sam. Contradiction!
+
+Hmm. Let me re-read Defected T7: out_tail_loops [[], ["2bx3+0b"]], swap_out_bar [182.0, null], swap_out_on_loop [false, true], tail_after_swap_bars [3.0, 9.1], entry_out_bar [150.0, 150.0], overlap_bars [35.0, 33.1], outro_cut_bars 8.0, swap_moved_in -8bars.
+
+Sam: entry 150, overlap 33.1 → effective end 183.1. Natural end = 183.1 - 6 = 177.1. swap at 183.1 - 9.1 = 174. Loop at [177.1, 183.1] > 174 → after the swap. But on_loop=true and swap_out_bar=null.
+
+Unless the "overlap_bars" for Sam isn't effective_end - entry. Let me reconsider: maybe overlap_bars[1] = sam_overlap_bars = 33.05080785100313 and the geometry overlap_bars[1] = 33.1 (rounded). And the loop changes the overlap... In Sam's file, the outgoing ends at 183.1? Let me reconsider: Sam also did "outro_cut 8 bars". If Sam CUT 8 bars off the outro AND added a 6-bar loop, then natural end (after cut) = N - 8, and effective = N - 8 + 6.
+
+Let's define N = the outgoing's original bar length (unchanged). Pipeline side: entry 150, overlap 35 → effective end 185 = N (no pipeline loop) → N = 185. Sam: cut 8 → 177, plus loop 6 → 183. overlap = 183 - 150 = 33 ✓✓. 
+
+So Sam's outgoing plays to bar 177 (cut from 185), then a 6-bar loop extends to 183. Where is the loop inserted? If at the outro start... Sam's swap is at 174 (from tail_after_swap 9.1 = 183 - 173.9). on_loop=true says the swap position is covered by a loop clip.
+
+If the loop clip is inserted at bar 171 (say) and spans 6 bars of repeated material, then the material from 171 shifts later. Ugh, this is getting deep. The key point stands: **on_loop=true with swap_out_bar=null means the swap sits inside a repeated clip region, and the loop's insert is at or before the swap.**
+
+So for Defected T7, if the loop's insert is at 174 (the swap) it's "at"; if at 171 it's "before". Not derivable.
+
+Hmm wait, but there's another possibility I should check: `swap_out_on_loop` might mean "the outgoing's swap coincides with a repeat boundary in the sense the validator cares about" — the learner may compute it as "swap is inside/at the loop's span". Let me check the plan's own claim about the pipeline: "the 22.09 build had loops before the swap on T5 (-5 bars) and T9 (-1 bar); Sam removed both." In the jsonl (Sept/Defected/August only) the pipeline-side on_loop=true rows include Sept T7 (4bx3, Sam REMOVED it - tail_loop_removed), Defected T1 (1bx7, Sam kept+changed), Defected T4 (1bx8, Sam REMOVED), Defected T8 (2bx4, Sam REMOVED), August T1 (2bx7, Sam CHANGED to 1bx16), August T3 (4bx2, Sam KEPT), August T6 (8bx4, Sam REMOVED).
+
+Interesting: the plan says the only pre-swap pipeline loops Sam removed were Core T5 and T9. But the jsonl shows pipeline on_loop=true on Sept T7, Defected T4, Defected T8, August T6 — all of which Sam REMOVED (tail_loop_removed). Under the on_loop reading, those pipeline loops ALSO had the swap on/inside the loop, i.e. started at or before the swap, and Sam removed all of them. That's 4 more, plus Defected T1 (kept) and August T1 (changed) and August T3 (kept). So "2 of 2 pipeline pre-swap loops removed by him" is a serious understatement — and more importantly, the corpus of pre-swap pipeline loops is much bigger than 2, and **Sam did NOT remove all of them: he kept Defected T1's 1bx7 and August T3's 4bx2 unchanged.** That is a counter-example to the plan's supporting claim, unless the swap is exactly at the loop start in those two.
+
+OK. Let me now be decisive about the verdict. Let me consolidate the findings and check a few remaining code items (point 2 paths, point 7 build split), then write.
+
+Let me check: can the legacy non-landmark path be reached in production? `align_pair` chooses `_align_pair_landmark_aware` if `o.musical_landmarks or i.musical_landmarks`. If neither track has landmarks, legacy alignment is used, giving `alignment_policy="legacy_v1"` (the Alignment default). `plan_fill_or_cut` then has `landmark_mode = al.alignment_policy in LANDMARK_POLICIES` = False. In legacy mode, the branch at 2447-2449 computes `nxt` from the incoming's sections, and the loop at 2565+ uses `pick_clean_drum_loop(o, outro["start_bar"], outro["end_bar"], pref, insert_bar=outro["start_bar"])`. **No swap-boundary check at all in legacy mode** — the `landmark_mode and ...` guards at 2635-2643 skip the "ends before the swap" check, and there's never a boundary check. So legacy mode can leave the swap inside a repeat, and Rule S as specified (landmark-mode only) does not catch it.
+
+Is legacy reachable? Only if a track lacks musical_landmarks entirely. The corpus replay (380/353 aligned pairs) presumably all have landmarks. But it's a real path. The plan's section 2 says "In landmark mode, if ...". So legacy is explicitly out of scope — that's a real gap the brief asked about.
+
+Let me verify the legacy path can produce a pre-swap loop. In legacy mode `nxt = next((arr + s["start_bar"] for s in i.sections if (arr + s["start_bar"]) > o.n_bars + 1), None)`. The loop's insert = outro["start_bar"], and the swap = al.handoff_bar_out which in legacy mode is a section boundary of the outgoing chosen by `_handoff_candidates` — could be before the outro start. So the loop could start before the swap. Also the "round up" leniency (`if partial >= 2 and not landmark_mode: reps += 1`) makes legacy loops overshoot. And the legacy path has no `locked_swap_gap` at all. So yes, legacy is unguarded, and Rule S as specified does not apply to it.
+
+Now the decisions path. I established it's safe (handoff_out <= o.n_bars enforced; loop inserted at o.n_bars). Let me double check the loop's insert point for decisions: `target_marker_bar=float(o.n_bars) + ext` and the source is `s0..s1` with `s1 <= o.n_bars`. The consumer (not in packet) presumably inserts at the outgoing's natural end (o.n_bars in arrangement beats) or at "BEFORE the outro" per the V5 doc's note about R4. Hmm — "consumer in propose_arrangement.py:907-919 inserts 'BEFORE the outro'". So even for decisions, the insert could be at the outro start, which could be BEFORE handoff_out!
+
+Let me reconsider. For decisions, `handoff_out = arr_offset + swap_in` and it's enforced `<= o.n_bars`. The outro start could be much earlier than handoff_out (e.g. swap at bar 192 of a 200-bar track with outro at 170). If the decision's tail_loop is inserted "BEFORE the outro" at bar 170, the swap at 192 would be inside the repeated region → the same validator failure. **And Rule S as specified would not catch it**, because Rule S lives in `plan_fill_or_cut`, which the decisions path never calls.
+
+That's a real, specific hole: **the decisions path (propose_arrangement --decisions) can produce exactly the failure Rule S is supposed to make impossible, and Rule S as specified cannot touch it.** Whether the insert is at o.n_bars or at the outro start depends on the consumer, which is not in the packet — but the plan's own V5-doc reference says the consumer inserts "BEFORE the outro". Actually that reference is about R4 (the no-outro own-ending tail), not about decision loops. I should flag it as unverified but plausible, and note the plan never mentions the decisions path at all.
+
+Hmm, actually, let me reconsider the more likely consumer behavior: the FillCutSpec for outgoing_tail has `source_start_bar`, `source_end_bar`, `target_marker_bar`, and the consumer inserts the loop clip at the outgoing's END (arrangement_end) to extend it. For the Core T5 JK loop: source 644-660 = bars 161-165, insert_at_beat 2756 = bar 160. The outgoing's natural end = 173.23 bars → arr beat 2116 + 692.9 = 2808.9. But insert is at 2756 (bar 160), which is NOT the natural end. Hmm, so the insert is at the outro start (160). And the loop extends the outgoing from 173 to 183 (2756+... ). Let's verify: effective end bar = (arrangement_end_beat - arr_start)/4 = (2848-2116)/4 = 183. Natural end 173 → extension 10 bars = 4bx2 (8 bars) + 8 beats (2 bars) = 10 ✓. So the loop clip is INSERTED at bar 160 (the outro start) and the material from bar 160 onwards is pushed later by 10 bars.
+
+So the loop clip is inserted at the outro start. If a decision loop is inserted the same way (at the outgoing's outro start), and the swap is later, the swap lands inside the repeat. **So the decisions path CAN produce the failure.** And Rule S as specified doesn't apply.
+
+Also: does the pipeline's own outgoing_tail loop ALWAYS insert at the outro start? In the D2 fallback (Core T5) the chunk came from `o.loop_windows` (a clean drum window elsewhere) but the insert is still `outro["start_bar"]` (the `insert_bar` passed to `pick_clean_drum_loop` is `outro["start_bar"]`). And in the primary path `insert_bar=float(outro["start_bar"])` too. So yes, **the insert point is always `outro["start_bar"]` in landmark mode.** Good — which means Rule S's condition `outro.start_bar < handoff_bar_out` is a faithful proxy for "the loop starts before the swap" IN LANDMARK MODE ONLY, and only if the consumer inserts at outro.start (which the Core MIX_PLAN confirms for the pipeline's own loops).
+
+That's an important confirmation for the plan: **in landmark mode, Rule S's condition does exactly capture "the outgoing tail loop starts before the swap"** for pipeline-generated loops. Good.
+
+Now the incoming intro loop interacting with the swap. The validator's repeat check filters `loop["track_instance_id"] == transition["out_track_instance_id"]` — so only OUTGOING loops are checked. The incoming intro loop is on the incoming track, so it can't trigger "swap inside outgoing repeat". But the incoming intro loop does consume `loop_budget` and could suppress the outgoing loop (budget exhaustion) — a behavioural change, not a validator failure. And `al.swap_beats` is computed independently of the intro loop, so the swap beat doesn't move. But note: the intro loop is inserted at the incoming's start, which is BEFORE the swap in arrangement time — does it shift the swap's arrangement beat? `swap_beats = prev + handoff_bar_out*4 - contraction` is computed from the outgoing's position, and the incoming's start is `arr_pos[k] = prev + arr_offset*4 - contraction`. The intro loop is prepended to the incoming's clips, so the incoming's audio starts earlier... no, the loop is inserted at the incoming's arrangement_start_beat, pushing the incoming's own material later by the loop length — which would move the SWAP's absolute beat if the swap is positioned on the incoming's timeline. Let me check: the swap beat is `prev + handoff_bar_out*4 - contraction` — computed from the OUTGOING's timeline, so it doesn't move when the incoming grows. But the incoming's material at the swap shifts later by the intro loop length. That's a real hazard: the bass swap's audio alignment changes. It's beyond Rule S though.
+
+Hmm, one more thing: does the incoming intro loop shift the OUTGOING's arrangement_end? No, the outgoing comes before the incoming. But it does shift the incoming's clips, and the MixPlan's overlap_end_beat = out_track.arrangement_end_beat, unaffected. OK, the intro loop mainly risks the swap's audio timing, not the validator rule. I'll note it as "must be tested in the frozen geometry" rather than a hard hole.
+
+Now point 3, the "cannot create a new raise" claim. The plan's three reasons:
+1. "the refusal returns before candidate search (so the ValueErrors at 2526, 2619, 2640 cannot be reached for that pair)" — TRUE for the landmark path, given the guard is placed before the candidate search and sets skip_outgoing_loop=True, which makes candidate_nxt stay None, so the D2 fallback at 2541 doesn't fire and the `if nxt is not None and outro is not None` block at 2565 doesn't fire. ✓ BUT: if the refusal sets `skip_outgoing_loop = True` BEFORE the target lists are computed (as the plan specifies: "after the R1 block and before the target lists"), then `section_targets`/`landmark_targets` stay empty, `candidate_nxt` stays None, `nxt` stays None. ✓ Confirmed.
+
+   BUT there's a subtlety: the plan says "Mutually exclusive with outgoing_loop_abandoned and outgoing_loop_not_needed." `outgoing_loop_abandoned` is set at 2663 if `candidate_nxt is not None and not any(outgoing_tail spec)`. With the refusal, candidate_nxt is None → abandoned is NOT set ✓. And `outgoing_loop_not_needed` is reset at 2285 and set only by R1 (2439) and R3 (2534) — the refusal path skips both (R1 already ran and set it? If R1 fired, skip_outgoing_loop is already True and the plan's guard `not skip_outgoing_loop` prevents the refusal from firing — so they'd be exclusive ✓; but then `outgoing_loop_not_needed` is set and `outgoing_loop_refused` is None, which is fine).
+   
+   Also note: `al.outgoing_loop_abandoned` is NEVER RESET (only `outgoing_loop_not_needed` is reset at 2285). So on a reused Alignment, abandoned can be stale. Minor.
+
+2. "the raw overlap already passed the 16-48 bar window" — the raw overlap check happens in align_pair (PHRASE_GRID=16 <= overlap). But the FINAL MixPlan overlap is `out_arr_end - in_arr_start`, and final = raw + ext. Removing the loop makes final = raw ≥ 16 ✓. **UNLESS** an intro cut on the incoming pushes `in_arr_start` later, reducing final below raw. Let me check: `in_track.arrangement_start_beat` — is that the incoming's track start or its first kept clip? In `mix_plan.py`, `arrangement_start_beat` comes from the arrangement plan's track contract, and `expected_geometry = (in_track.arrangement_start_beat, out_track.arrangement_end_beat, overlap_beats)`. Whether an intro cut moves arrangement_start_beat depends on the arrangement-plan builder (not in packet). If the intro cut removes the first N bars of the incoming's intro, the incoming's first clip starts at arrangement_start + N bars → arrangement_start_beat might advance → final overlap shrinks by the cut.
+
+   Actually hold on. The overlap window: `overlap_start_beat` in the Core plan for transition 0 is 608 = Jones's arrangement_start_beat. If an intro cut trimmed Jones's intro, Jones's arrangement_start might still be 608 (the track starts there) with the first clip starting later. Then `in_track.arrangement_start_beat` = 608 still, and overlap = out_end - 608 unchanged. So the cut wouldn't change the MixPlan overlap. Hmm, but the plan's own Core T5 arithmetic says the overlap goes 52 -> 42 when the loop is refused, which is exactly raw(42) + ext(10) = 52. And raw = 42 ≥ 16 ✓.
+
+   So for Core T5 the claim holds. But the plan asserts it generally. The general risk: raw overlap could be as low as 16, and if the loop was the thing that pushed it over... no, the loop only ADDS. Final ≥ raw always. So the MixPlan 16-bar floor can never be breached by REMOVING a loop. ✓ Reason 2 is sound as far as the overlap floor goes.
+
+   **BUT** reason 2 misses a different floor: `MAX_SWAP_PROGRESS`/`MIN_SWAP_PROGRESS` and the `outgoing_has_post_swap_content` flag. The plan's reason 3 says "handoff_bar_out <= n_bars means the outgoing still plays past the swap". But `_outgoing_has_post_swap_content` returns `(end - swap_bar) > MIN_REMAINING_CONTENT_BARS` where end = effective_end = max(n_bars, loop target). With the loop, effective_end > n_bars; without, effective_end = n_bars. If n_bars - handoff_bar_out <= 1.0 bar, the flag flips True → False. `outgoing_has_post_swap_content=False` means "genuine cold ending" — and apply_automation's margin check treats it differently (per the docstring at 946: "left to fade through once the swap is within MIN_REMAINING_CONTENT_BARS of it"). So the flag going False is not necessarily a raise, but it IS a behaviour change: the outgoing may be faded differently. Also, apply_automation has a QUICK_SWAP margin rule ("Rule 1's own boundary-margin test already pins that anything tighter is a hard error"). So a transition whose outgoing had only 1 bar of post-swap content WITH the loop's help (because the loop extended it) could now hard-error.
+
+   Let me reason concretely: the loop extends the outgoing from n_bars to n_bars+ext. The swap is at handoff ≤ n_bars. Post-swap content with the loop = n_bars + ext - handoff; without = n_bars - handoff. If n_bars - handoff > 1.0, no change. If n_bars - handoff <= 1.0, the flag flips. Can handoff == n_bars? `handoff_bar_out` is a cue bar from `_mix_cues` which includes `add(track.n_bars, "track_end", 5)` — so yes, handoff can be exactly n_bars! In that case the outgoing's natural end IS the swap, and the loop is what gives it any post-swap runway at all. Removing the loop → zero runway → "cold ending" → apply_automation's margin check likely hard-errors.
+
+   **This is the concrete hole in point 3 that the plan's three reasons do not cover.** The plan's reason 3 asserts "handoff_bar_out <= n_bars means the outgoing still plays past the swap" — but `<=` includes equality, and equality means the outgoing does NOT play past the swap. The code comment at 2471-2473 says "the swap always sits on a bar the outgoing itself still plays (handoff_bar_out <= n_bars held for 354/354 aligned corpus pairs)" — but "<= n_bars" is precisely the case where it plays NOTHING past the swap.
+
+   Is it reachable? `_mix_cues` adds `track_end` at weight 5, so n_bars is a legitimate outgoing cue. `_search_anchors` iterates `outgoing.items()` including n_bars. And `progress = incoming_anchor/overlap` with overlap = n_bars - arr_offset; if handoff = n_bars then arr_offset = n_bars - incoming_anchor... and progress = incoming_anchor/overlap. For the swap to be at n_bars, the incoming anchor would be at the very end of the overlap → progress near 1.0 → rejected by MAX_SWAP_PROGRESS=0.95 unless overlap is small. E.g. overlap = 20 bars, incoming_anchor = 19 → progress 0.95 ✓ allowed. Then handoff = arr_offset + 19 = n_bars - 20 + 19 = n_bars - 1. So handoff = n_bars - 1 is achievable, giving post-swap content of exactly 1.0 bar → `> MIN_REMAINING_CONTENT_BARS (1.0)` is False → cold ending. With the loop (ext ≥ 2), effective_end = n_bars + ext → content = 1 + ext > 1 → True. **So removing the loop flips `outgoing_has_post_swap_content` from True to False on such a pair.** Whether that's a hard error depends on apply_automation (not in packet), but the plan's own claim "it cannot create a new raise" and "handoff_bar_out <= n_bars ... means the outgoing still plays past the swap" is demonstrably wrong at the boundary.
+
+   Also there's the *fade runway* dimension: the outgoing's usable post-swap material drops by the loop length. For Core T5, the outgoing's post-swap material with the loop was 173→183 = 10 bars, and without the loop it's 173-167 = 6 bars. Fine. But for a pair where the loop is the difference between a usable fade and none, it's a hole.
+
+   Additionally: the plan says the overlap drops from 52 to 42 for Core T5. But the MixPlan overlap also feeds `overlap_policy`: transition 4's overlap_policy is "named_landmark_64" with max 64 bars. 42 is fine. But what about `MIN_OVERLAP_BEATS`? 42 bars = 168 beats ≥ 64 ✓.
+
+   And there's a **timing/contraction** effect: the outgoing's arrangement_end_beat shrinks, so the NEXT track's arrangement_start_beat shrinks, so the whole downstream timeline shifts left by the loop length. That changes every subsequent transition's absolute arrangement beats (though not the relative geometry). The plan's acceptance test (a) says "every other track position unchanged" — **that is FALSE**: removing JK's 10-bar loop shortens JK by 10 bars, moving Zaro and everything after 10 bars earlier. The plan says "overlap_bars 52 to 42" but doesn't mention the downstream shift. Actually, hmm: does it? "Report diff against today's: only T5 changes (out_tail_loop gone, overlap_bars 52 to 42, outgoing_loop_refused set); T1, T3, T10 loops byte-identical; every other track position unchanged." — "every other track position unchanged" is impossible if JK's length changes. Let me double-check: is JK's arrangement_end_beat derived from its own content length (independent of the next track) or from the mix timeline? `mix_plan.py:502`: `overlap_beats = out_track.arrangement_end_beat - in_track.arrangement_start_beat`. And `expected_geometry = (in_track.arrangement_start_beat, out_track.arrangement_end_beat, overlap_beats)` — the check at 512-516 presumably asserts in_arr_start == overlap_start and out_arr_end == overlap_end. So out_arr_end and in_arr_start are both pinned. If JK's arrangement_end_beat shrinks by 10 bars (40 beats) then Zaro's arrangement_start must also shrink by 40 beats to keep the same overlap... but the overlap is supposed to become 42 bars (it was 52). So overlap_start = Zaro's arr start and overlap_end = JK's arr end. JK's arr end shrinks by 40 beats, Zaro's arr start shrinks by 40 beats (to keep the tracks contiguous) → the OVERLAP stays 52?! No wait.
+
+   Let's think about it concretely in the current plan: transition 4: overlap_start 2640 (Zaro arr_start), overlap_end 2848 (JK arr_end), overlap 208 beats = 52 bars. JK's natural end (no loop) would be 2848 - 40 = 2808 (bar 173). And Zaro's arr_start = 2640 = JK arr_start (2116) + 131*4 = 2116+524 = 2640 ✓. So Zaro starts at JK bar 131. Raw overlap = 173 - 131 = 42 bars ✓ = 168 beats. With the loop, JK's end = 2848 → overlap 52 bars.
+   
+   So: without the loop, JK arr_end = 2808, Zaro arr_start = 2640 (unchanged, since arr_offset is unchanged), overlap = 168 beats = 42 bars ✓. And Zaro's arrangement_end = its own content end, which doesn't depend on JK. But Zaro's START doesn't move either (2640). So the downstream timeline does NOT shift! Because arr_pos[k] = prev + arr_offset*4 - contraction, and prev is the previous track's arr_pos, not its end. Tracks OVERLAP, so a shorter outgoing doesn't move the incoming's start. But the outgoing's arr_end DOES shrink, and `mix_plan`'s `expected_geometry` pins overlap_end = out_arr_end. So the only change is JK's arrangement_end_beat (2848 → 2808) and the transition's overlap_beats (208 → 168). Downstream tracks keep their positions ✓. Good — the plan's "every other track position unchanged" is right, with the caveat that JK's own end and the overlap numbers change (which the plan does say).
+
+   Hmm, but wait: does the outgoing's arrangement_end_beat get computed from its content (including the loop) or is it pinned to the next track's start? Let me check `mix_plan.py` around 490-520 for how arrangement_end_beat is validated. The tracks' `arrangement_end_beat` for JK is 2848 and for Zaro 3168. Zaro arr_start 2640, arr_end 3168 → Zaro is 528 beats = 132 bars. And Zaro's start = 2640 = JK arr_start + 524. So arr_pos[k] = prev_arr_pos + arr_offset*4 where prev_arr_pos = JK's arr_start = 2116 and arr_offset = 131 → 2116 + 524 = 2640 ✓.
+
+   So if JK's loop is removed, JK's arrangement_end becomes 2808 (its content shrank). Does that break the check at 512-516? `expected_geometry = (in_track.arrangement_start_beat, out_track.arrangement_end_beat, overlap_beats)` — this is presumably compared against `transition.overlap_start_beat`, `transition.overlap_end_beat`, `transition.overlap_beats` to make sure they're consistent. If the transition record still says overlap_end 2848 but JK's arr_end is now 2808, the validator would catch a stale value → raise. So the arrangement plan must be regenerated consistently. That's fine but it's a consistency requirement the plan doesn't spell out.
+
+   **The crucial new point:** JK's arrangement_end_beat shrinking to 2808 while Zaro's arrival stays at 2640 means Zaro now overlaps JK for only 42 bars — fine. But does any downstream gate require the outgoing's END to land on something? The MixPlan has `expected_geometry` but no section-line requirement (I checked validate_mix_plan; it checks loop times, swap boundaries, clip boundaries). Let me grep for whether the arrangement_end must equal a section line... The plan's risk 3 says "The outgoing ends off a section line (D15's complaint returns)". So the plan acknowledges it.
+
+Let me now check one more thing for point 2: is there any path where the primary search produces a loop that starts before the swap AND leaves the swap inside a repeat, other than the D2 fallback? The primary search's `required_boundary_bars % length == 0` uses `int(round(locked_swap_gap))`. If `locked_swap_gap` is fractional (fractional outro start), round() can admit a length that doesn't divide the true gap → the swap lands off-boundary → validator error. Let me verify the outro start can be fractional in practice: the V5 doc says JK n_bars 173.23. Sections come from the stem detector in seconds → bars, so yes fractional. So the primary path has a latent boundary defect too, and **Rule S as specified would NOT catch it** — because Rule S only refuses when `outro.start_bar < handoff_bar_out`. If outro.start = 160.4 and handoff = 164.4 (gap 4.0 exactly) fine; but if outro.start = 160.4 and handoff = 164 (gap 3.6), round(3.6)=4 → 4%4==0 → a 4-bar chunk is admitted, but the true gap 3.6 is not a multiple of 4 → the swap at 3.6 bars into a 4-bar repeat is INSIDE the repeat → validator error. **Rule S's condition `160.4 < 164` is TRUE → it WOULD refuse. Hmm, so Rule S catches it anyway in that case.** 
+
+   But the case where the gap is > 0 but the loop is otherwise fine... Let me think about when Rule S's condition is FALSE (outro.start >= handoff) yet the swap is inside a repeat. If outro.start >= handoff, the loop starts at or after the swap → the swap is at or before the loop's start → never inside the repeat ✓. So **in landmark mode, Rule S's condition is exactly the right guard**, and it's strictly stronger than needed (it also refuses boundary-safe pre-swap loops like DFTD T1's).
+
+   Wait, is that right? If outro.start < handoff, the loop starts before the swap, and the swap could be at a repeat boundary (safe) or inside (unsafe). Rule S refuses BOTH. So Rule S is sufficient but over-refusing. Good. That means: **Rule S as specified does make the Core-style failure impossible in landmark mode** — but at the cost of refusing every boundary-safe pre-swap loop, and it does NOT cover legacy mode or the decisions path.
+
+   Hold on, one more: could the loop's insert point ever be EARLIER than outro.start_bar in landmark mode? The insert is set by the consumer (propose_arrangement) — the Core MIX_PLAN shows insert_at_beat = arr_start + outro.start_bar*4 for all four loops. If the consumer instead inserts at the outgoing's natural end for some cases, Rule S's proxy would be wrong. The evidence (Core MIX_PLAN) supports outro.start. And the plan asserts "R4's consumer in propose_arrangement.py:907-919 inserts 'BEFORE the outro'". OK.
+
+   Also — what about a loop whose source is NOT the outro (e.g. HARTY's intro drums)? The insert is still at outro.start_bar (the `insert_bar` argument to `pick_cue_bounded_drum_loop` is `outro["start_bar"]`, and Core T1's HARTY loop has source 0-8 = intro, insert 672 = bar 168 = outro start ✓). Confirmed: source and insert are independent. Rule S's condition (on outro.start) still correctly captures the insert position ✓. This is a point in the plan's favour and worth stating.
+
+Now let me reconsider the D2 fallback's specific hole once more, because the plan's root-cause claim needs to be precisely right: the plan says the fallback "only checks 'does not end before the swap' (:2635-2643)". Looking at the code: the `elif (landmark_mode and float(outro["start_bar"]) + used + partial < float(al.handoff_bar_out) - 1e-6)` at 2635-2643 — this is the check. And it's guarded by `via_d2_fallback` (else raise). ✓ The plan's characterisation is accurate.
+
+And the primary search at 2061-2063 enforces `required_boundary_bars % length != 0 → skip`. ✓ Accurate, with the rounding caveat.
+
+Now: **the plan says "the primary search enforces swap-on-a-repeat-boundary (around lines 2061-2063 and 2469)".** True. **"and the fallback (around 2541-2653) does not."** True. ✓
+
+But the plan MISSES that the primary search's enforcement is only as good as its `int(round(...))`, and more importantly it misses that **Rule S as specified does not cover the legacy path or the decisions path**, both of which can place a loop before the swap.
+
+Let me verify the legacy path reachability in production. `align_pair`: `if o.musical_landmarks or i.musical_landmarks: return _align_pair_landmark_aware(...)`. `musical_landmarks` come from the kick-detector analysis. Every analysed track in these mixes has landmarks. But a track analysed by an older pipeline, or one where the kick detector found nothing, would have none. Then align_pair falls to the legacy branch → alignment_policy="legacy_v1" → plan_fill_or_cut's landmark_mode False → the legacy outgoing-tail path with NO swap checks at all. The plan does not mention legacy mode. That's a genuine gap (point 2).
+
+Also `visualize_transition` at 3069 calls `plan_fill_or_cut(o, i, al)` with no policy — defaults to INTERIM_V1. That's a tooling path.
+
+Now, the acceptance tests (point 4). Let me assess:
+(a) Core builds through Phase 3, report diff: only T5 changes. CAN this fail? Yes — if the rule is implemented wrongly, T1/T3/T10 loops change or the build fails. It's a decent regression test. But it cannot detect an implementation that refuses MORE than intended as long as it also refuses T5 (e.g. refusing all outgoing loops would change T1/T3/T10 → caught). Good. It also can't detect a rule that's too lax (a rule that only refuses when the swap would be inside the repeat) — but that's fine, it's a superset.
+  But (a) as written cannot detect the decision-path/legacy-path holes because Core has no decisions and is landmark mode.
+
+(b) Truth scorer on the SAME three mixes the rule was derived from, with PREDICTED scores written into the plan ("Core 7/10 to 8/10; Sept 4/7 to 4/7; Defected 4/11 to 4/11; total 15/28 to 16/28"). Problem 1: in-sample — the scorer can only confirm that the rule doesn't make things worse on data the rule was fitted to. It CAN fail (if the counts come out different), which is good. Problem 2: the truth file is built from the same pair_history the rule was derived from, and the "prediction" numbers are pre-written in the plan — so the test is really "does the implementation reproduce the plan's claimed counts". That's a valid regression test. Problem 3: the scoring metrics (loop present/absent, chunk class, total class) DON'T MEASURE Rule S AT ALL. Rule S is about where the loop starts relative to the swap; the scorer measures whether a loop exists and its size. **A completely wrong implementation of Rule S (e.g. "refuse every outgoing loop") would change loop presence and thus the score — so it might fail. But an implementation of "refuse only loops starting before the swap" vs "refuse loops whose source starts before the swap" vs "refuse loops shorter than 4 bars" could score identically.** More importantly, the scorer NEVER checks the property Rule S is supposed to guarantee (swap not inside a repeat). **Test (b) cannot fail on the actual defect.** That's the key weakness.
+
+(c) Corpus replay with `--policy NAME`: (i) the tool doesn't take a policy today (the plan's own FOUND UNASKED #11 says so), so piece D must add it — and if D is buggy and ignores the policy, the "before" and "after" runs are identical → 0 diff → "pass" trivially. **The test as specified has no fixture that MUST change.** The plan's (c) says "every changed row has loop_starts_before_swap=true in 'before' and goes from a loop to 'refused'" — if there are ZERO changed rows, that passes vacuously. Need a positive control: a known pair that MUST be refused (Jewel Kid) must appear in the diff.
+  (ii) The replay is align+fill only (the plan says "align_pair and plan_fill_or_cut"); it does NOT compute the final arrangement or run the validator. So it cannot detect the final-overlap floor being breached, nor the actual validator error. The plan's (c) claim "0 new raises" is about align raises, not the MixPlan validator's errors.
+  (iii) "raise and align_raise rows identical to today's 'before' (re-measure today, do not trust October's counts)" — good discipline.
+
+(d) Baseline: "with the flag off pytest Tests/test_alignment_baseline.py stays green and byte-identical after pieces A and B merge" — that IS a strong test of the flag-off path ✓. But then "At the production flip the diff may touch only plan and overlap_policy, only on exactly the pair set piece D refused" — this is where it gets weak: (i) "may touch" is permissive; (ii) it compares against a refreshed baseline, so a wrong implementation that changes pairs in a way D also reports passes; (iii) it doesn't pin WHICH fields may change in a way that catches e.g. arr_offset_bars moving — actually it does: "arr_offset_bars, paired_cues, overlap_bars, swap_progress must not move". Good. But note the plan lists `overlap_bars` among the must-not-move fields while ALSO saying the diff "may touch only plan and overlap_policy" — and Rule S necessarily changes overlap_bars (52→42) for refused pairs. **Contradiction in the plan's own acceptance criteria**: (d) forbids `overlap_bars` from moving, but (a) requires it to move 52→42 on T5. Unless (d) applies only to the flag-off state and the flip allows it — the sentence structure is ambiguous and needs fixing.
+
+**The test I would add:** a *geometry property* test on the frozen plan, not a scorer. Specifically: for every transition in every built set and in the corpus replay, assert the invariant the plan actually cares about — `swap_beats` is not strictly inside any outgoing loop's repeated span, computed from the MixPlan's own `insert_at_beat`, `source_beat_start/end`, `repeat_count`, `partial_beats` using the validator's own predicate (validate_mix_plan_als.py:322-343), for BOTH policies and for the Core MIX_PLAN fixture. Plus the negative control: a deliberately WRONG implementation (e.g. one that refuses every loop, and one that refuses nothing) must make this test fail — proving the test has teeth. And a second property: `insert_at_beat >= swap_beats` for every outgoing tail loop, asserted directly on the frozen plan (not inferred), so the Rule S claim itself is tested rather than its proxy. Plus a third: the plan's "13 of 13" must be re-derivable from a SHIPPED fixture (an insert beat per loop) — otherwise the claim stays unauditable.
+
+And critically: a **frozen-geometry matrix** that runs the rule through the real entry points (not just plan_fill_or_cut) on synthetic geometries that cover: primary path, D2 fallback path, legacy path, decisions path, no-outro track, non-outro loop source, fractional outro start, loop exactly at the swap, loop after the swap, loop before the swap on a later repeat boundary, incoming intro loop present, and a transition whose final overlap would fall under 16 bars if the loop were removed. Assert: (1) the validator predicate passes on the resulting plan for all of them; (2) the property `insert_at_beat >= swap_beats` holds for all outgoing loops on all paths that Rule S claims to cover; (3) every transition that currently builds still builds (no new MixPlan raise), asserted by running the actual MixPlan validator's overlap check on the resulting geometry.
+
+Now point 5, the refusals.
+- "Sam deletes 1-2 bar stutter loops does NOT hold: he kept several of those and deleted 4-bar ones." Check: kept 1-2 bar: Defected T1 1bx7, Core T1 2bx6, August T8 1bx8 (and 1bx6 pipeline side), August T11 1bx1, Defected T7 2bx3, Defected T10 2bx5, August T4 2bx3+1b, August T3 4bx2... Deleted 4-bar: Core T3 (4bx1), Core T5 (4bx2), Sept T7 (4bx3), Core T7 (4bx3). Also deleted 1-2 bar: Defected T4 1bx8, Defected T8 2bx4, Core T2 8bx3, Core T9 2bx4. So the plan's framing is right: he deleted BOTH 1-2 bar AND 4-bar loops. The brief's proposed rule "he deletes short stutter loops" is genuinely contradicted by the kept set. ✓ The plan is right to refuse it. But the plan's own evidence in section 0 says "Sam removed the pipeline's 1-2 bar stutter tail loops (T4, T8)" in Defected — while also keeping Defected T1's 1bx7. So it's chunk length AND context. Plan is right to refuse a length-keyed rule. ✓
+- "Pull every overlap toward 32 bars" — the plan's own numbers: Sam's overlaps within 32±2 on 15 of 28 (Core 6/10, Sept 4/7, Defected 5/11). Hmm, 6+4+5 = 15 of 28 ✓. And it says range 17.4 to 72.4. Let me verify from the jsonl sam_overlap_bars: Core 46,32,32,39,37,64,32,32,33,32; Sept 20.1,28.5,30,32,32,32.1,17.4; Defected 23,40,30,33.1,72.4,33,33.1,32,45,50,48.6. Within 32±2 (30-34): Core 32,32,32,32,33,32 = 6 ✓; Sept 30,32,32,32.1 = 4 ✓; Defected 30,33.1,33,33.1,32 = 5 ✓. Total 15/28 ✓. The plan's numbers check out. And "would fight about 13 of 28" — 28-15 = 13 ✓. Refusal is justified ✓ (though "about half" in the summary vs 13/28=46% is fine).
+  BUT: note the plan's section 4 says "A target would fight about 13 of 28" and section 1 point 8 says "would fight about half his transitions". Consistent. ✓
+
+- The missed rule with as much support as Rule S: the brief asks specifically about Sam's 8 ADDED tail loops. The plan defers all of them. Let me look for one with comparable support and a clean trigger:
+  Added: Core T4 (own-last-4 tail, no outro), Sept T2 (1bx15, tail+0.5), Sept T4 (4bx1, tail+4), Defected T2 (8bx2, at swap), Defected T5 (4bx5, +12), Defected T7 (2bx3, at swap), Defected T10 (2bx5, +15), Defected T11 (4bx4, at swap).
+  The plan itself lists a candidate: "Loop starting at the swap that lengthens a short post-swap tail: Defected T2, T7, T11" with counter-examples Core T5, August T5, T7.
+  A cleaner, better-supported candidate the plan does NOT list: **"extend the outgoing's tail so the outgoing ends on an incoming section line"** — the V5 doc's R1 is the inverse. Hmm.
+  Another: **the 12-bar reach cap (R3) is contradicted by Defected T2 (16 bars), T5 (20 bars), T11 (16 bars)** — the plan does flag this (open question 2, and "R3 in production is contradicted three times on Defected"). Good.
+  A candidate the plan MISSES: **"Sam adds a tail when the outgoing's post-swap tail is short"** — i.e. tail_after_swap below some threshold triggers an added loop. Evidence: Defected T2 pipeline tail 8 → Sam 16; Defected T5 pipeline 24 → Sam 40.4 (added); Defected T7 pipeline 3 → Sam 9.1 (added); Defected T10 pipeline 21 → 34 (added); Defected T11 pipeline 8 → 24.6 (added); Sept T2 pipeline 13 → 15.5 (added); Sept T4 pipeline 24 → 16 (added 4bx1, tail went DOWN); Core T4 pipeline 16 → 23.4 (added). Hmm mixed.
+  Actually the cleanest supportable rule the plan misses: **"when the outgoing's own tail after the swap is short, extend it"** — Sam's post-swap tails in the added cases: 16, 40.4, 9.1, 34, 24.6, 15.5, 16, 23.4. Not a tight target.
+  Let me instead consider: **the 16-bar "blend shape" rule (Sam's "16 in, 16 out")** from the V5 doc. Post-swap tails: Core 30,16,16,23.4,5.7,32,16,16,17,16 → median 16, 7 of 10 within 15-18. And the pipeline's post-swap tails are wild (2, 48, 24, ...). A rule "post-swap tail ≈ 16 bars (15-18)" has strong support on the Core (n=10) and is checkable in the jsonl via tail_after_swap_bars. Let me count across all three mixes + August: Sam's tail_after_swap: Core 46?,... I don't have Core in the jsonl. Sept: 8.1, 15.5, 22, 16, 16, 16.1, 9.4. Defected: 15, 16, 14, 17.1, 40.4, 17, 9.1, 24, 29, 34, 24.6. August: 34, 16, 16?? Let me list August: T1 34, T2 16, T3 16, T4 null, T5 5, T6 14.9, T7 7, T8 18, T9 18, T10 13, T11 16. So August: 34,16,16,5,14.9,7,18,18,13,16.
+  Count within 15-18: Sept 4 (15.5,16,16,16.1); Defected 5 (15,16,14?no 14 is outside; 17.1, 17, 16) → 15,16,17.1,17,16 = 5; August 5 (16,16,18,18,16). Total 14 of 28 non-null. That's about half — comparable to the "within 32±2" count of 15/28. So "post-swap tail ≈ 16 bars" has about the same support as the overlap rule, and the plan defers it without listing it. Worth naming.
+  Actually the plan DOES mention "Short tail hold after the swap (SLV tail_hold, with MiniMax C2): Sept T2 (1); Sept T4 needs his moved swap" and "Loop starting at the swap that lengthens a short post-swap tail: Defected T2, T7, T11". So it's not entirely missed, but the framing is as "loop shape" rather than as a measurable post-swap-tail target. I'll note it as the closest candidate and say the plan should at least MEASURE it in the same replay.
+
+- "Do not re-target a refused loop to start at the swap yet (needs a mid-track insert point)." Is this the right call given 6 of 13 start exactly at the swap? Let me check the evidence for whether Sam re-targets. The plan says "it also closes the D2 fallback gap (under Rule S the locked swap gap is always 0)". Hmm — "the locked swap gap is always 0" is FALSE as stated: `locked_swap_gap = handoff - outro.start`, and Rule S fires only when outro.start < handoff, i.e. when the gap is POSITIVE. Rule S REFUSES exactly the cases with gap > 0; the cases it allows have gap <= 0. So "under Rule S the locked swap gap is always 0" is wrong — it can be negative (outro.start > handoff). Minor but it's a stated invariant that's incorrect. Actually if outro.start >= handoff then gap <= 0, so "always <= 0". The plan says "always 0". Sloppy.
+
+  Now: is refusing right? The evidence: Sam's 6 "at the swap" loops are the ones Rule S would ALLOW (they start at the swap, not before). The ones Rule S refuses are the pre-swap ones, and the plan's evidence (the 22.09 build's T5/T9) says Sam removed those. So refusing is consistent with the (weak) evidence. But: the plan also says "Do not re-target the refused loop to start at the swap yet" — this is a DIFFERENT question from whether to refuse. And the answer matters for the actual defect: refusing Core T5's loop changes the mix from 52 to 42 bars and leaves JK's ending 6 bars after the swap, whereas Sam's own Core T5 correction was 37 bars with the swap 2.5 bars LATER and JK running 5.7 bars past the swap. Interesting! Sam's JK post-swap = 5.7 bars; Rule S's no-loop JK post-swap = 173 - 167 = 6 bars. **That's remarkably close to Sam's 5.7.** So the plan's refusal actually lands near Sam for T5. Good point in the plan's favour that it doesn't make.
+  The deeper issue with "don't re-target": if you re-target the loop to start at the swap, you'd need an insert point at the swap in the middle of the track — the consumer supports "BEFORE the outro" only, per the V5 doc. The plan's reason is stated as "needs a mid-track insert point", which is a real engineering cost but not a correctness argument. And there's a soundness argument: re-targeting changes the material displaced (the outro's own body vs the loop's body), so it's a different edit. The brief asks: "is 'do not re-target a refused loop to start at the swap' the right call given six of his 13 loops start exactly at the swap?" My answer: the six "at the swap" are cases Rule S ALLOWS; the refusal set is the pre-swap ones, which Rule S REMOVES rather than moves. But the deeper point is that removing the loop is a DIFFERENT edit from moving it, and the plan's own evidence (the 22.09 T5/T9 removals) supports removal for those two. So the call is defensible, but it must not be presented as "under Rule S the gap is always 0". And the "needs a mid-track insert point" reason is an engineering-cost statement dressed as a principle.
+
+Now point 6, the open questions.
+Q1: "When a track's outro starts before the bass-swap point, should the pipeline play the outro straight through with no loop, or loop starting at the swap?" — This is the right question in spirit but it PRESUMES the binary, and it omits the third option the plan itself relies on: move the swap (or re-anchor), which Sam did on Core T3, T8, Core T5 (swap 165→167.5). Also it omits "keep the loop where it is but change the loop length so the swap lands on a repeat boundary" — i.e. the actual minimal fix for the failing transition: choose a chunk length that divides the 7-bar gap (7 bars: a 7-bar chunk, 1 rep; or 1-bar x 7 which is what the primary search's length list includes). Wait — the primary search's length list is (8,4,7,6,5,3,2,1) and the gap is 7 with required_boundary 7. Let me redo: gap_bars (candidate gap) = 10 and required_boundary_bars = 7. For length 7: repeats = 10//7 = 1, remainder = 3 → `remainder > 1` → skip. For length 1: repeats = 10, remainder 0, but 10 > max_loop_repeats (8) → skip. length 2: repeats 5, remainder 0, required 7 % 2 = 1 → skip. length 4: repeats 2, rem 2, 7%4=3 → skip. So no length works → primary returns None → D2 fallback. Right, matches the plan.
+  BUT: the candidate gap of 10 is the distance from the outgoing's END (173) to the target (183). The swap gap (from outro start 160) is 7. If the target had been at 180 (gap 7), then length 7 with required 7: repeats = 7//7 = 1, remainder 0 ✓, required 7%7=0 ✓ → a 7-bar chunk x1 works, and the swap would be exactly at the loop's end boundary. So the failure is really "the chosen target (a landmark 10 bars out) doesn't admit a chunk that lands the swap on a boundary". The **minimal, evidence-preserving fix** is to pick a target/chunk pair such that the swap lands on a repeat boundary — i.e. add the missing boundary check to the D2 fallback (or make the primary search's gap/target consistent) — NOT to throw the loop away. That's the fix the plan does not consider, and it's the one that preserves the mix (52 bars, and the outgoing reaching the incoming's landmark).
+  This is my strongest single technical criticism of the plan's *decision*, separate from Rule S: **the plan proposes removing the loop when the actual defect is that the D2 fallback doesn't check the boundary; the fix belongs in the fallback's candidate selection (choose a chunk length whose repeats land on the swap boundary, or choose a target that admits one), not in a blanket pre-swap refusal.** Rule S would also refuse the DFTD T1 loop that is perfectly valid.
+  So my third question for Sam: "When the outgoing's loop is needed to reach the incoming's next section but the current chunk length cannot land your swap on a repeat boundary, do you want (a) a different chunk length or a different target that lands the swap on a boundary (keeping the outgoing extended), or (b) no loop at all (the outgoing ends early)?" — that's the actual decision the plan is making on his behalf.
+  Plus: "does the rule apply to hand-authored decisions?" — the plan's own F4 (fills_from_decision) is a live path and the plan never mentions it.
+
+Point 7, build split:
+- A edits `align_engine.plan_fill_or_cut` (reset + guard) + `Alignment` field + `transition_policy.py`.
+- E "the SLV section 4.4 `candidates_assessed` honesty fix (same function as A)" — the plan itself says "same function as A" and puts E after A merges. ✓ Correctly sequenced. But the plan lists E under "After A merges" — so it's not a parallel-conflict; the plan is honest. ✓
+- B edits `propose_arrangement.py`: a new `_assert_swaps_clear_of_outgoing_loops` before `build_mix_plan` (~1825), serialisation of `outgoing_loop_refused` (~2270-2272), CLI choices (~2400). Does B collide with A? No different file. But: B's guard "applies whatever the policy" — i.e. it checks the FROZEN plan, and raises in Phase 2. It needs to know the final arrangement beats and the loop insert beats. `plan.mix_plan = build_mix_plan(...)` at 1823 — so the guard must run AFTER build_mix_plan, and the plan says "called just before `build_mix_plan` (:1825)". At that point the MixPlan doesn't exist yet, so the guard must re-derive the geometry from the arrangement plan — duplicating the validator's arithmetic. Better: run it after build_mix_plan, or reuse the MixPlan's own loop contracts. The plan's own wording is thus fragile; it should call the shared predicate.
+  Bigger issue: **B "raises in Phase 2 with a hint naming the lane" but "applies whatever the policy"**. If the guard applies to ALL policies (including interim_v1 before the flip), then merging B breaks EVERY build that has a pre-swap loop — including the current failing Core build (which the plan wants to keep reproducible for comparison) and the DFTD holdout. The plan's (a) acceptance runs the Core with `--transition-policy interim_v1_tailsafe`, fine. But the corpus replay and the "before" measurement would break. And the plan says "Production: set the field True in INTERIM_V1 in its own commit ... only after every check in section 3 passes" — so between merging B and flipping INTERIM_V1, the production default (interim_v1) would FAIL the new guard on any mix with a pre-swap loop. That's a broken intermediate state. B must be gated on the policy flag (or on a "warn only" mode) until the flip.
+- D (replay tool) can be tested alone ✓ (parsing + forwarding with a test policy) but the plan's own text already says this.
+- C (truth scorer) can be tested alone ✓ but it cannot score Rule S without insert beats → needs data the packet doesn't have. So C's fixture `Tests/fixtures/sam_loop_truth.json` must include insert beats, and the plan says "Truth file built by script from pair_history.jsonl for Sept and Defected; Core from the measurement above plus the d26 REPORT rows" — **pair_history.jsonl does NOT contain insert beats**, so the script cannot build the truth file from it. The plan's own instruction is unbuildable as written. That's a concrete defect in piece C.
+- D "cannot be tested alone" — it can be tested alone for parsing; the plan admits it needs A for the real comparison.
+- A and B: A adds the field to `Alignment` and `transition_policy`; B reads it with getattr ✓ no collision.
+- A and the `Alignment` dataclass: adding `outgoing_loop_refused: dict | None = None` to a dataclass with defaults is fine (it's after fields with defaults) ✓. But `Alignment` is constructed positionally in some places? `Alignment(o.name, i.name, bar, "fallback", bass_in, arr_offset, overlap, 0)` at line ~1717 — positional, 8 args, then keyword-ish defaults after. Adding a new field at the END with a default is safe ✓. But the plan says "Add `outgoing_loop_refused: dict | None = None` to `Alignment` next to `:795`, `:805`" — i.e. in the MIDDLE of the dataclass, before `outgoing_loop_not_needed`? That would be fine too since all have defaults. ✓
+- One more: the plan says A's test should be "in the synthetic style of Tests/test_outro_loop_simplify.py:44-143" — those test files aren't in the packet; can't verify.
+- Piece B's parity test "runs both on the same fixtures" — good idea, but the two implementations could both be wrong in the same way if the fixture doesn't include a case where they should differ (e.g. the partial-repeat edge the plan's own FOUND UNASKED #10 mentions).
+
+Let me also double check the plan's claim that Rule S "changes nothing else in the three corrected mixes" and "Effect on the three corrected mixes: Core T5 only". Does the rule change anything in Sept or Defected? Under my analysis: the rule refuses when outro.start < handoff. For Sept and Defected, the pipeline's loops on those mixes: Sept T7 (4bx3) — pipeline on_loop=true → the pipeline's swap is on a loop → outro.start <= handoff → Rule S WOULD REFUSE it. Sept T7's pipeline loop is 4bx3, and Sam REMOVED it (tail_loop_removed). So refusing it matches Sam ✓. But the plan says "Effect on the three corrected mixes: Core T5 only" and "It changes nothing else in the three corrected mixes." **That's false**: Rule S would also refuse the pipeline's Sept T7 loop (4bx3), which today exists and which Sam removed. Refusing it changes Sept T7's output (loop gone, overlap shorter) — though it moves TOWARD Sam. Similarly Defected T4 (1bx8, Sam removed), Defected T8 (2bx4, Sam removed), August T6 (8bx4, Sam removed), August T1 (2bx7 pipeline side; Sam CHANGED it to 1bx16 — and if the pipeline's 2bx7 starts before the swap, Rule S removes it entirely rather than producing Sam's 1bx16 → the rule would NOT reproduce Sam's change). And Defected T1's pipeline 1bx7 (Sam kept + extended).
+
+So "changes nothing else in the three corrected mixes" is wrong for Sept T7 and Defected T4/T8, and possibly Defected T1. The plan's own (b) prediction says "Sept 4/7 to 4/7" and "Defected 4/11 to 4/11" — no change — but if the rule removes Sept T7's 4bx3 and Defected T4's 1bx8 and Defected T8's 2bx4, the loop-presence score SHOULD change (from "present" to "absent"), and those changes would move TOWARD Sam (Sam removed them) → the score should IMPROVE, not stay flat. **The plan's own predicted numbers are internally inconsistent with its own rule.** That's a strong, checkable contradiction.
+
+Wait, let me be careful. The scorer compares the PIPELINE's loop presence against SAM's. If Rule S removes Sept T7's loop and Sam also has no loop there, the pipeline's presence goes from wrong (has loop, Sam doesn't) to right (no loop) → Sept should go 4/7 → 5/7, not 4/7 → 4/7. Same for Defected T4 and T8 → Defected should improve. And Defected T1's pipeline 1bx7: Sam KEPT 1bx7 (plus another) → if the rule removes the pipeline's 1bx7 there, the pipeline goes from right to wrong → Defected would get WORSE. The plan says "none worse". **So the plan's predicted (b) numbers cannot be right given the rule.** Either the rule fires on more pairs than the plan thinks, or the plan's (b) predictions are fabricated.
+
+Unless... the pipeline's Sept T7 loop does NOT start before the swap. Let's check: Sept T7 pipeline on_loop=true means the swap is in a loop clip. That happens if the loop's insert is at or before the swap. The insert = outro.start. So outro.start <= handoff → Rule S fires. So yes it fires. Unless `swap_out_on_loop` means something else. Hmm.
+
+Let me sanity-check the semantics of `swap_out_on_loop` against a case where I KNOW the answer: Core T5 pipeline (the failing one) — but Core isn't in the jsonl. Let me use the plan's own data: the plan says the 22.09 build had pre-swap loops on T5 and T9, and today's build has only T5. The plan also says for today's Core: "only T5 raises" and "T9 has no loop".
+
+Another angle: the V5 doc says for the OLD build "T5 | JK 129 / 165 (inside loop) / IN 52" and "T7 | Freejak 132 / 148 (in loop) / IN 48" and "T9 | TCTS 120 / 136 (in loop) / IN 40". So the OLD (22.09) build had THREE swaps inside loops (T5, T7, T9). The plan says only T5 and T9 were pre-swap and Sam removed both; it doesn't mention T7 — but the V5 doc says T7's swap was "in loop" too, and Sam's fix for T7 was "Removed 15-bar loop; cut Freejak at bar 156.5 (its last kick, dropout 157-165); staggered swap (RSq rise at Freejak 141, kill at 148)" — a DIFFERENT fix (he kept a stagger). So the plan's "2 of 2" is not the full picture: the old build had at least 3 in-loop swaps per the V5 doc. **The plan omits Core T7 from the pre-swap evidence.** That's a factual gap in section 0's evidence list, and it matters because Core T7 is the case where Sam did NOT simply delete the loop (he staggered the swap).
+
+Let me verify the V5 doc statement: "T7 | Freejak 132 / 148 (in loop) / IN 48" and in the per-transition table: "V5: entry / swap / out end = Freejak 132 / 148 (in loop) / IN 48 ... Out loops V5 -> Sam: 4b x3+3b -> none". So the V5 (22.09) build's T7 had its swap inside a loop, and Sam removed that loop too (and did more). So Core T7 is a third pre-swap case, and the plan's "2 of 2 pipeline pre-swap loops removed by him (Core T5, T9)" is incomplete — it should be at least 3 (T5, T7, T9) on Core alone.
+
+Hmm, but "in loop" might mean "in the loop's span" in the same sense. And "T9 | TCTS 120 / 136 (in loop)" — the V5 doc's out-loops table says "2b x4 (src 149-151) -> none". So T9's loop was removed too. So Core alone had 3 pre-swap/in-loop cases (T5, T7, T9) and Sam removed all 3. That actually STRENGTHENS the plan's core hypothesis (3 of 3 removed) but shows the plan's evidence list is wrong/incomplete — and, more importantly, it changes the acceptance math: Rule S would ALSO change Core T7 and T9, so the plan's (a) "only T5 changes" is false.
+
+Let me verify: today's build (per the replay report and the MIX_PLAN) has Core T5 with a 4bx2 loop and the swap inside it; T7's loop was removed by R3 (reach cap 15 > 12) and T9's by R1. So TODAY only T5 has the bad loop. Rule S changes only T5 today ✓ (the plan's claim is about today's build). And (b)'s scoring is against SAM's set, i.e. the pipeline's output vs Sam's file — for Sept T7 the pipeline TODAY still has the 4bx3 loop (the replay report says "NEW still has them on ... September T7 (4bx3)"). So Rule S WOULD change Sept T7. And (a)'s "only T5 changes" is scoped to the Core build, which is fine. But section 1's "It changes nothing else in the three corrected mixes" and (b)'s "Sept 4/7 to 4/7; Defected 4/11 to 4/11" are inconsistent with Rule S firing on Sept T7 (and probably Defected T4, T8). **This is a solid, checkable internal contradiction.** Let me double check Sept T7's pipeline loop really is pre-swap. Sept T7: BUTCH & Santos → All Is Fine. out_tail_loops[0] = ["4bx3+0b"], swap_out_bar[0] = null, swap_out_on_loop[0] = **true**, tail_after_swap[0] = 24, entry[0] = 225, overlap[0] = 32. Effective end = 225+32 = 257; loop 12 bars → natural end 245; swap at 257-24 = 233. So the swap is at bar 233 and the natural end is 245. A 12-bar loop inserted somewhere; for the swap to be "on" the loop, the loop's span must cover 233. If the loop is inserted at the outro start (say 233) the swap is at its start ✓ ("at the swap", boundary-safe!) — in which case on_loop=true and Rule S does NOT fire (outro.start == handoff). If inserted at 221 (outro start), the swap at 233 is the loop's end boundary → on_loop=true, and Rule S DOES fire.
+  Which is it? For the PIPELINE, insert = outro.start. Is Sept's BUTCH outro start 233 or 221? The V5 doc's August section says "August 'keep loops of the outgoing's own last 1-2 bars'". Hmm. BUTCH's structure: intro_1, drop_1, break_1, drop_2, build_1, drop_3, break_2, drop_3, drop_4, drop_5, outro_1 (from the jsonl out_structure). The loop source 4bx3 means a 4-bar chunk x3 = 12 bars. The outro is the last section. If the outro is 233-245 (12 bars) then outro.start = 233 = handoff = the swap → Rule S does NOT fire, and the loop is "at the swap" ✓ and the swap is on the loop's first boundary ✓ validator-safe.
+  That's plausible: a 4-bar chunk x3 = 12 bars = exactly the outro length. **And that's exactly why on_loop=true with swap_out_bar=null: the swap is at the loop's insert, which the learner can't express as a plain source bar because the clip there is a loop clip.**
+
+Hmm, so on_loop=true may mean "the swap sits at/inside a loop clip" — which includes "exactly at the insert". Then for the Core T5 failure: swap at 167, loop insert at 160, swap inside the repeat (not at the insert). Both give on_loop=true. **So on_loop=true is consistent with BOTH "at the swap" and "inside the repeat"** — confirming that the flag cannot distinguish, which is the core evidentiary problem.
+
+Let me test my "insert = outro.start" theory against Sept T7: if outro.start = 233 and the loop is inserted there, then the outgoing's material from 233-245 is pushed later, and the effective end = 245 + 12 = 257 ✓ (matches overlap 32 with entry 225: 225+32 = 257 ✓). And the swap at 233 = the loop's insert = first boundary ✓ validator-safe. Great, self-consistent.
+
+And for the Core T5 case: outro.start 160, insert 160, the loop is 4x2+2bars = 10 bars, so the effective end = 173 + 10 = 183 ✓ (arr beat 2116 + 732 = 2848 ✓). The swap at 167 is 7 bars into a 10-bar loop = inside repeat 2 ✓. Consistent.
+
+So: for the pipeline, the swap sits at the loop's insert when outro.start == handoff, and inside the repeat when outro.start < handoff (with the primary search's chunk chosen to divide the gap, or inside when it doesn't).
+
+**Now, the decisive question for the plan: are there pipeline loops where outro.start < handoff AND the primary search found a chunk that divides the gap (so the swap is on a boundary, validator-safe, but the loop starts before the swap)?** That's DFTD T1 per the plan (1-bar loop 1 bar before the swap, reconcile passed). Rule S would refuse it. Is refusing it harmful? It removes a loop Sam presumably kept (the plan says "DFTD T1 loses its 1bx7 loop"). The plan flags this as risk 1. So the plan KNOWS Rule S over-refuses and accepts the cost.
+
+OK. I now have a complete picture. Let me also quickly verify the plan's claim about `transition_policy.py:51-52` and `131-141` line references, and the validator's `315-355`.
+
+transition_policy.py:51-52 → `skip_outgoing_loop_when_on_section_line: bool = False` / `max_outgoing_reach_bars: float | None = None` ✓ (lines 51-52). And 131-141 → INTERIM_V1 definition ✓ roughly. Plan says "beside transition_policy.py:51-52" ✓.
+`POLICIES` at 163-166: the file shows `POLICIES: dict[str, TransitionPolicy] = {` around line 163 ✓.
+mix_plan.py:551 → `if loop_len <= 0 or loop.repeat_count < 0 or loop.repeat_count > MAX_LOOP_REPEATS:` ✓ that's line 551. The plan says "MixPlan repeat cap mix_plan.py:551" ✓.
+validate_mix_plan_als.py:315-355 ✓ the swap/loop-boundary block. Plan's FOUND UNASKED #10 says the validator reports a swap at the loop's end-with-partial as "inside" (322-343). Looking at the code: `loop_boundaries` uses `range(loop["repeat_count"] + 1)` → boundaries at insert + r*len for r in 0..repeat_count, NOT including the partial end. And `swap_inside_loop` includes `+ loop["partial_beats"]`. So a swap exactly at insert + count*len + partial is "inside" but NOT a boundary → error. ✓ The plan's edge claim is correct. And this matters for Rule S: if a refused loop is re-inserted exactly at the swap with a partial, the swap at the loop's very start is boundary r=0 ✓ fine.
+
+Also the plan cites `align_engine.py:2061-2063` for the primary check ✓ (verified: 2061-2063 is the `if required_boundary_bars:` block). And `:2469` = `required_boundary_bars = int(round(locked_swap_gap))` ✓. And `:2541-2564`, `:2574-2583`, `:2635-2643` ✓ all verified in the ranges I read.
+
+Now let me finalize the verdict.
+
+The stop rule: "SOUND if the 13-of-13 evidence holds, Rule S as specified makes the failure impossible on every path that can place an outgoing tail loop, and it cannot break a transition that works today."
+
+- The 13-of-13 evidence: NOT verifiable from the EVIDENCE packet, and the packet contains a case (August T3) the plan omits entirely and where the flag cannot distinguish "at" from "before". Also the plan's own stated derivation (from the ALS via _geometry_side) is not shipped. → FAILS the first condition as stated (at minimum, unproven).
+- Rule S as specified makes the failure impossible on every path: NO. It is scoped to landmark mode inside plan_fill_or_cut. It does not cover (i) the legacy non-landmark path (align_pair falls back when no landmarks), (ii) the decisions path (fills_from_decision, whose tail loops have no swap check at all and whose insert point is at/after the outro start which may precede the swap). → FAILS the second condition.
+- Cannot break a transition that works today: NOT ESTABLISHED. The plan's three reasons each have a hole: reason (iii) is false at handoff == n_bars (the outgoing plays NOTHING past the swap); removing a loop flips `outgoing_has_post_swap_content` to False and can flip apply_automation's margin behaviour; the primary search's own boundary enforcement is only as strong as `int(round(...))`; and the plan's own acceptance criteria (d) contradict (a) on `overlap_bars`. → FAILS the third condition as stated.
+
+Plus: the plan's internal contradictions (b) predicted scores; the "13" omitting August; "the locked swap gap is always 0" being wrong; "only T5 changes" vs Sept T7/Defected T4/T8.
+
+So the verdict is CORRECTION: the plan's core insight (a pre-swap loop is the mechanism; Sam's evidence supports it) is sound and worth building, but the plan as specified does not satisfy the stop rule and has specific defects.
+
+Should it be DROP? No — the direction is right, the fix is a narrow boundary-repair rather than a blanket refusal. CORRECTION.
+
+Let me do a couple more verifications to be safe on the legacy path claim and the decisions-path insert.
+
+Actually, one more check on the decisions path: I want to be fair. `fills_from_decision` creates a FillCutSpec(kind="outgoing_tail", source_start_bar=s0, source_end_bar=s1, reps, partial_bars, target_marker_bar=float(o.n_bars) + ext). The consumer (propose_arrangement, not in packet) inserts the loop somewhere. For the pipeline's own outgoing_tail specs, the consumer inserts at the outro start (per the Core MIX_PLAN: insert_at_beat = arr_start + outro.start_bar*4, where the outgoing's natural end is arr_start + n_bars*4 and the loop extends beyond it). Hmm wait — that's confusing. If the loop were inserted AT the outro start, the outgoing's material from outro.start to n_bars would be pushed later, and the arrangement_end would be arr_start + n_bars*4 + ext. For JK: arr_start 2116, n_bars 173 → 2116+692 = 2808, ext 10 bars = 40 beats → 2848 ✓ matches arrangement_end_beat 2848. And insert_at_beat 2756 = 2116 + 160*4 = 2116+640 = 2756 ✓ = outro.start 160. ✓✓ Great, fully consistent: **insert = outro.start, arrangement_end = natural_end + ext.**
+
+So for a decision tail_loop with source s0..s1 (s1 <= n_bars), where does the consumer insert it? If it follows the same rule (insert before the outro / at the outro start), and the decision's handoff_out is after the outro start, the swap would land inside the decision's repeated region → the same validator error, unreachable by Rule S. If it inserts at n_bars (the natural end), then the swap (≤ n_bars) is before the loop ✓ safe.
+
+I can't resolve this without propose_arrangement.py. But I CAN say: the decisions path has NO check of any kind, and Rule S does not reach it; whether it is safe depends on the consumer's insert rule, which the plan never examines. That's a legitimate "must be checked before the claim 'impossible by construction' can be made". And there's a concrete live case: the Defected mix was built with a decisions file (T5 only) per the replay report, and the plan says the Defected T5 decision is "no longer needed" under the corrected analysis — so the decisions path IS live.
+
+Also note the plan's FOUND UNASKED #9: "SAM_V1 does not have R1 or R3". So the new lane INTERIM_V1_TAILSAFE = replace(INTERIM_V1, ...) inherits R1 and R3 ✓, but SAM_V1 does not — meaning any A/B on SAM_V1 loses R1/R3 AND would lose the new rule unless also added. The plan doesn't add the new rule to SAM_V1. Minor but worth noting: the new lane is a third policy and the plan's claim "changes nothing else" only holds for the lane in question.
+
+One more: the plan's proposed lane name `INTERIM_V1_TAILSAFE` with `replace(INTERIM_V1, name="interim_v1_tailsafe", outgoing_tail_after_swap_only=True)` — `dataclasses.replace` on a frozen dataclass works ✓. And `POLICIES` registration ✓. And `sorted(POLICIES)` for the CLI choices ✓ — but note `propose_arrangement.py`'s `--transition-policy` choices become dynamic; the plan says "change to `sorted(POLICIES)`" — argparse `choices` accepts a list ✓.
+
+Let me also double-check the plan's claim that the refusal is placed "after the R1 block (:2428-2442) and before the target lists (:2443-2445)" — the R1 block is 2428-2442 ✓ and target lists at 2443-2445 ✓. If the refusal is placed between them and sets `skip_outgoing_loop = True`, then `if not skip_outgoing_loop:` at 2443 is skipped so section_targets/landmark_targets stay EMPTY, and at 2464 `if landmark_mode and outro is not None and not skip_outgoing_loop:` is skipped → candidate_nxt stays None → the D2 fallback at 2541 doesn't fire → no loop ✓. And `nxt` stays None (set at 2446 `nxt = None` inside the landmark branch — note 2446 executes regardless of skip) ✓. Then at 2565 `if nxt is not None and outro is not None:` → nxt is None → skipped ✓. Good: the refusal works as designed. But it also means `al.outgoing_loop_not_needed` is NOT set (the refusal sets `outgoing_loop_refused`), and the plan's risk-4 test wants the three fields mutually exclusive ✓ by construction (R1 sets not_needed and skip; R3 sets not_needed only when candidate_nxt is None and capped_candidate — but if the refusal fired, we never reach 2534 → not_needed stays None ✓).
+
+Hmm, but one ordering subtlety: if R1 fires (skip_outgoing_loop=True) the refusal doesn't fire (the plan conditions the refusal on `not skip_outgoing_loop`) ✓ and not_needed is set ✓ — but then `outgoing_loop_refused` is None and the R1 reason is recorded. Fine.
+
+But what if the refusal fires and `al.outgoing_loop_abandoned` was set from a PREVIOUS call on the same Alignment? `outgoing_loop_abandoned` is never reset. Minor.
+
+Finally, the "13 of 13" — let me make sure I state precisely what IS derivable, and what isn't, and whether there's an actual counter-example. Given on_loop semantics ambiguity, I cannot produce a PROVEN counter-example from the packet. But August T3 is a candidate that the plan omits and where the answer matters. I'll present it as "unresolved and omitted, not proven counter-example", and note the plan's own claim about August pipeline loops is contradicted by the jsonl's on_loop=true rows (August T1, T3, T6).
+
+Hmm, let me reconsider one thing on August T6: out_tail_loops[0] = ["8bx4+0b"], on_loop[0] = true, and Sam's out_tail_loops[1] = [] (removed). swap_out_bar[0] = null. tail_after_swap[0] = 48, entry 146, overlap 64 → effective end 210; loop 8bx4 = 32 bars → natural end 178; swap at 210-48 = 162. If the insert is at the outro start: for the swap at 162 to be on the loop, outro.start <= 162. Natural end 178, so the outro spans some range ending at 178. If outro.start = 146 (say, a 32-bar outro), the loop (8 four-bar chunks = 32 bars) inserted at 146 spans [146,178] and the swap at 162 is INSIDE repeat 4 → a validator failure in the August build! And Sam removed it. That's a fourth pre-swap case.
+
+Interesting: so the plan's claim "Every other pipeline loop in the ... August plans starts at or after the swap" appears FALSE — August T1, T3, T6 pipeline-side all have on_loop=true, which under the insert=outro.start model means the loop starts at or before the swap.
+
+Hold on, though: for August T3 the swap was at 168 and the natural end 176, loop 8 bars → the outro would need to start at <= 168. Fine, plausible.
+For August T1: swap 196, natural end 214, loop 14 bars → outro start <= 196. Plausible.
+For August T6: swap 162, natural end 178, loop 32 bars → outro start <= 162.
+
+So under the model, three August pipeline loops start at or before the swap, contradicting the plan's blanket claim. And Sam: T1 changed the shape, T3 kept it, T6 removed it. **August T3 (kept unchanged, on_loop=true) is the cleanest counter-example candidate in the whole packet.** If the loop starts before the swap and Sam KEPT it, Rule S is refuted by the very evidence the plan cites.
+
+Good. That's the headline for point 1. I'll present it as: the packet contains a case the plan omits (August T3) that, under the plan's own insert-at-outro-start model, has the swap inside/on the loop and that Sam kept unchanged; and the packet cannot distinguish at-vs-before for the 4 other on_loop=true Sam rows. So "13 of 13 at or after" is unproven, and the plan's "every other pipeline loop ... starts at or after the swap" is contradicted.
+
+Let me do one last sanity check on the "at the swap" reading of on_loop=true for a row where I'm confident: the plan itself says the pipeline's T5 loop is 7 bars before the swap and the swap is INSIDE the repeat (12 of 16 beats into repeat 2). If on_loop=true meant "the swap is at the loop's insert", T5 would report swap_out_bar=167 (not null). It reports null. So on_loop=true covers both "at the insert" and "inside a repeat" — the flag is "the swap's position is entangled with a loop clip". Confirmed: the flag cannot distinguish. ✓ And Core isn't in the jsonl so I can't check T5 there, but the semantics are clear from the field's name and the null pairing.
+
+Hmm, actually let me double-check the "null" pairing once more. August T4 pipeline: swap_out_bar [116.0, null], on_loop [false, false]. Here pipeline swap_out_bar = 116.0 (not null) with on_loop=false; Sam's is null with on_loop=false. So null does NOT always pair with on_loop=true (August T4 Sam: null swap bar, on_loop false — because the swap was REMOVED, "swap_removed"). ✓ consistent: null means "no determinable swap source bar", which happens for on_loop=true OR for a removed swap. Fine.
+
+Now let me also double check the Sept T2 anomaly I flagged: swap_out_bar Sam = 2.0 with on_loop false and a tail_after_swap of 15.5. My reconstruction says the swap should be at ~129. A swap at bar 2 with a 1-bar loop ×15... Actually for a 1-BAR loop, the learner might be reporting the source bar of the LOOP (bar 2 of the source) rather than the swap. Or the swap beat maps to source bar 2 because the loop's material is at the start. Either way it's a degenerate value that the plan's table treats as meaningful ("Sept T2 (+0.5)"). I'll note it as a data-quality caveat that the truth-file builder (piece C) must handle, and it reinforces that the jsonl is a lossy summary.
+
+Let me now also address point 4's "name the test you would add". I'll give a concrete, named test.
+
+And FOUND UNASKED — I should add items the architect didn't find. Let me collect my own:
+1. The plan's own (b) predicted scores are inconsistent with its rule: Rule S would also fire on the pipeline's Sept T7 (4bx3) and Defected T4 (1bx8) and Defected T8 (2bx4) loops, all of which the replay report confirms still exist today, so Sept should improve 4/7 → 5/7 and Defected should change, not stay 4/11 → 4/11. Also Defected T1's pipeline 1bx7 (Sam kept it) would be removed → a transition gets WORSE, contradicting "none worse".
+2. `swap_out_on_loop` cannot distinguish "loop starts at the swap" from "swap inside a repeat"; it is true for both the failing Core T5 shape and for benign "loop inserted exactly at the swap" shapes (Sept T7's 4bx3). So the learner's boolean is not the measurement Rule S needs; the packet needs an insert beat per loop.
+3. The plan's claim "under Rule S the locked swap gap is always 0" is wrong; Rule S fires exactly when the gap is POSITIVE. The correct invariant is gap <= 0.
+4. The rule as specified OVER-refuses: it also forbids a pre-swap loop whose repeats land the swap exactly on a boundary (DFTD T1's 1-bar loop, 1 bar before the swap, reconcile passed). The minimal defect is in the D2 fallback's chunk/target choice, not in the loop's position. The fix that preserves the mix: make the fallback pick a chunk length that divides the swap gap (or a target that admits one) instead of discarding the loop.
+5. `outgoing_loop_abandoned` is never reset by plan_fill_or_cut (only `outgoing_loop_not_needed` is, at 2285). Any reuse of an Alignment carries a stale abandoned reason; the plan's "three fields mutually exclusive" unit test should cover it.
+6. Piece C's instruction is unbuildable: "Truth file built by script from pair_history.jsonl" cannot produce insert beats, because pair_history.jsonl has no insert field; the loop-presence part is derivable but Rule S is not.
+7. The validator's partial-repeat edge (the plan's own #10) interacts with Rule S: a loop inserted exactly AT the swap with a non-zero partial_beats puts the swap at boundary r=0 ✓, but the plan's proposed freeze-time guard should use the validator's own predicate, not a re-derived one, or it will disagree on that edge.
+8. `handoff_bar_out == o.n_bars` is reachable (the track_end cue has weight 5 in `_mix_cues`), so "the outgoing still plays past the swap" is false at the boundary and `outgoing_has_post_swap_content` can flip True→False when the loop is refused, changing apply_automation's fade/margin behaviour on that pair.
+9. The plan's "13" omits the August mix entirely (5 more Sam loop groups) and the Core Sample is not in pair_history.jsonl at all (per the replay report's FOUND UNASKED #2), so "13 of 13 across three mixes" is really "13 groups over 12 transitions in two mixes that have learner records plus one mix reconstructed by hand".
+10. Under the pipeline's insert-at-outro-start model, three AUGUST pipeline loops (T1, T3, T6) have the swap on a loop, contradicting the plan's claim that every other August pipeline loop starts at or after the swap.
+11. `al.swap_beats` is computed BEFORE plan_fill_or_cut runs (line 2990 vs 2996), so the frozen swap beat does not move when a pre-swap loop is inserted; the validator then compares a pre-insert swap beat against a post-insert loop span. The plan's Found Unasked #3 gestures at this but does not state the mechanism, and it means the fix could also be "compute the swap AFTER the loop" rather than "refuse the loop".
+12. The plan's section 3(d) forbids `overlap_bars` from moving, but section 3(a) requires it to move 52→42 on T5; the acceptance criteria are self-contradictory as written.
+
+Also: the plan says "It also closes the D2 fallback gap (under Rule S the locked swap gap is always 0)" — the fallback gap closes because the fallback is unreachable when skip_outgoing_loop is True ✓ (candidate_nxt stays None). That part is right.
+
+Also worth noting: `plan_fill_or_cut` is called at line 3069 (visualize_transition / main) without a policy → defaults to INTERIM_V1. So a policy-gated rule wouldn't apply there. Minor.
+
+Let me also double-check one thing: the plan claims "the primary search enforces swap-on-a-repeat-boundary (around lines 2061-2063 and 2469)". Verified ✓. But I should note the primary search's enforcement is on the ROUNDED gap. Let me make sure that's a real defect and not just theoretical. `locked_swap_gap = max(0.0, handoff - outro.start)`. `required_boundary_bars = int(round(locked_swap_gap))`. The chunk length must divide required_boundary_bars. The true boundary condition is: the swap's offset from the loop's insert (in bars) must be an exact multiple of the chunk length. The loop's insert = outro.start (in source bars), and the swap = handoff (source bars). So the true offset = handoff - outro.start = locked_swap_gap (unrounded). If locked_swap_gap = 7.4 and round → 7, a 7-bar chunk passes (7%7==0) but the true offset 7.4 is not a multiple of 7 → the swap is 0.4 bars into the next repeat → INSIDE → validator error. **Real defect, and it is in the PRIMARY path, not just the fallback.** And Rule S's condition `outro.start < handoff` would fire (160.4 < 167) → refuse → safe. But in the case where locked_swap_gap is fractional and the ROUNDED value makes Rule S... no, Rule S fires whenever gap > 0. So Rule S covers it. But the plan attributes the root cause solely to the fallback; the primary's rounding is a second, independent defect that Rule S happens to mask in landmark mode but which would remain in any path where Rule S doesn't apply. Worth flagging as part of "the root cause is not fully characterised".
+
+Let me sanity check that fractional outro starts are real: the V5 doc says "JK `n_bars` 173.23 is non-integer" and "Zaro's whole layout" differs. Sections come from the stem detector with float bars (e.g. 92.25 per the earlier reviewer). And `outro["start_bar"]` is used raw at 2467/2637. So yes.
+
+OK. I also want to double check the "13 groups over 12 transitions" count and which transitions.
+Plan list: Core T1, Core T4, Core T10, Sept T2, Sept T4, Defected T1 (x2 groups), Defected T2, Defected T5, Defected T7, Defected T9, Defected T10, Defected T11.
+Transitions: Core T1, T4, T10 (3); Sept T2, T4 (2); Defected T1, T2, T5, T7, T9, T10, T11 (7). Total 12 transitions, 13 groups ✓ (Defected T1 has 2).
+Now compare to the jsonl's SAM-side outgoing tail loops:
+Sept: T1 has out_tail_loops[1] = [] (only an INCOMING loop 1bx15). T2 = ["1bx15+0b"] ✓. T4 = ["4bx1+0b"] ✓. So Sept contributes T2 and T4 ✓ (2).
+Defected: T1 = ["1bx7+0b","1bx6+0.5b"] (2 groups) ✓, T2 = ["8bx2+0b"] ✓, T3 = [] , T4 = [] (removed), T5 = ["4bx5+0b"] ✓, T6 = [], T7 = ["2bx3+0b"] ✓, T8 = [] (removed), T9 = ["4bx2+3b"] ✓, T10 = ["2bx5+0b"] ✓, T11 = ["4bx4+0b"] ✓. That's 8 groups over 7 transitions ✓.
+Core (not in jsonl; from the V5 doc): T1 2bx6 ✓, T4 own-last-4 ✓, T10 4bx2 ✓. 3 groups.
+Total 13 ✓. Consistent with the plan. Good — the COUNT is right; the issue is the classification and the omission of August.
+
+Let me also note: Defected T1's second group "1bx6+0.5b" — the plan says "+8.5 bars" after the swap. And it counts this as group 2 of 13. ✓
+
+Now, the plan's grouping "at the swap: Core T1, Core T10, Defected T1, T2, T7, T11" = 6 groups at, 7 after. And 6/13 at the swap. The brief says "six of his 13 loops start exactly at the swap" ✓ consistent.
+
+Alright. One more consideration for the verdict: should I recommend DROP? No. The plan's central mechanism (a pre-swap outgoing loop is what puts the swap inside a repeat; Sam's kept/added loops are at-or-after; the pipeline's two in-loop swaps were removed by him) is sound. The defects are: scope (landmark only), the over-refusal of boundary-safe pre-swap loops, the unproven/omitted evidence, the missing edge (rounding), the acceptance suite that cannot fail on the actual defect, the internal contradictions, and the missing decisions/legacy paths. Those are corrections, not a drop.
+
+Let me write the answer now. It must be plain ASCII, no em dash, first line exactly "VERDICT: CORRECTION", end with FOUND UNASKED.
+
+Let me be careful about length: this is a detailed review, so it will be long, but I should keep it tight and useful. Let me structure it by the 7 points plus FOUND UNASKED.
+
+Let me double check a couple of specific line numbers I'll cite:
+- align_engine.py:2061-2063 primary boundary check ✓
+- align_engine.py:2465-2469 locked_swap_gap / required_boundary_bars ✓
+- align_engine.py:2541-2564 D2 fallback entry ✓ (2541 `if nxt is None and outro is not None and candidate_nxt is not None:`)
+- align_engine.py:2574-2583 o.loop_windows tier ✓
+- align_engine.py:2635-2643 the "ends before locked swap" check ✓
+- align_engine.py:2428-2442 R1 ✓, 2443-2445 target lists ✓
+- align_engine.py:2464 the landmark+outro guard ✓
+- align_engine.py:2285 `al.outgoing_loop_not_needed = None` ✓
+- align_engine.py:2993-2996 decision vs plan_fill_or_cut dispatch ✓
+- align_engine.py:2835-2896 fills_from_decision ✓
+- align_engine.py:2800-2803 handoff_out <= o.n_bars enforcement (around 2799-2802) ✓
+- align_engine.py:1657-1659 legacy dispatch `if o.musical_landmarks or i.musical_landmarks` ✓
+- align_engine.py:3069 plan_fill_or_cut called without policy ✓
+- align_engine.py:931-963 _outgoing_has_post_swap_content, 928 MIN_REMAINING_CONTENT_BARS ✓
+- align_engine.py:3006-3015 effective_end computation ✓ (3013-3017)
+- align_engine.py:1018-1019 add(0,...) add(n_bars, "track_end", 5) ✓
+- mix_plan.py:502-511 overlap window ✓, 551 repeat cap ✓
+- validate_mix_plan_als.py:322-343 boundary predicate ✓
+- transition_policy.py:51-52, 163-166 ✓
+
+Good. Writing now.</mm:think>VERDICT: CORRECTION
+
+Files read: `PLAN.md`, `SHA.txt`, `align_engine.py`, `transition_policy.py`, `validate_mix_plan_als.py`, `mix_plan.py`, `propose_arrangement_lines1800-1835.txt`, `propose_arrangement_lines2380-2410.txt`, `EVIDENCE_core_v5_analysis.md`, `EVIDENCE_september.md`, `EVIDENCE_defected.md`, `EVIDENCE_replay_report.txt`, `EVIDENCE_pair_history_sept_defected_august.jsonl`, `EVIDENCE_core_MIX_PLAN.json`, `brief_plan_r1.txt` (the brief), and `codex_plan_r1.txt.log` (a prior review log; I used it only to cross-check, and disagree with it in places, noted below).
+
+The plan's central mechanism is right and worth building. The plan as written does not meet its own stop rule, and it has defects that would be expensive to discover after the build.
+
+---
+
+## 1. The evidence, re-derived from the files
+
+### What the jsonl can and cannot tell you
+
+Each jsonl row has, per transition, `geometry.out_tail_loops` (a list of loop SHAPE strings, e.g. `"1bx7+0b"`), `geometry.swap_out_bar`, `geometry.swap_out_on_loop`, `geometry.tail_after_swap_bars`, `geometry.entry_out_bar`, `geometry.overlap_bars`, `geometry.swap_arr_beat`.
+
+**There is no field anywhere in the packet that records a loop's insert beat or start bar.** `out_tail_loops` gives shape only. So "starts before / at / after the swap" is not a readable quantity; it must be reconstructed. I reconstructed it as follows, from the pipeline's own insert convention (verified below): effective end = `entry_out_bar + overlap_bars`; natural end = effective end minus the loop's total length; swap = effective end minus `tail_after_swap_bars`. That reconstruction reproduces the plan's own "+0.5" for Sept T2 exactly, so the plan's offsets come from an equivalent calculation run against Sam's ALS files (its stated source, `learn_from_correction._geometry_side`), which is **not in the packet**. The offsets are therefore unauditable here.
+
+### The decisive field, and what it cannot distinguish
+
+`swap_out_on_loop: true` pairs with `swap_out_bar: null` in every row where both appear. I read it as: the outgoing's clip at the swap position is a loop clip, so the swap has no single source bar. That covers **two different situations**:
+
+- the loop is inserted **exactly at** the swap (swap = the loop's first repeat boundary), and
+- the loop is inserted **before** the swap and the swap falls **inside** a repeat (the Core T5 defect).
+
+The flag cannot tell them apart, and `swap_out_bar: null` removes the fallback. This is the single most important gap in the evidence.
+
+I confirmed the insert convention from `EVIDENCE_core_MIX_PLAN.json` (all four loops):
+
+| Transition | Outgoing | arr_start | loop insert_at_beat | source bar | outro start (= swap) | natural end | effective end |
+|---|---|---|---|---|---|---|---|
+| T1 | HARTY | 0 | 672 | 1-2 (intro!) | 168 | 186 | 196 |
+| T3 | Detlef | 1120 | 1732 | 156-160 | 153 | 164 | 169 |
+| T5 | Jewel Kid | 2116 | **2756** | 161-165 | **160** | 173 | 183 |
+| T10 | Shilla | 4656 | 5328 | 172-176 | 168 | 176 | 184 |
+
+`insert_at_beat = arr_start + outro_start_bar*4` in every case, and `arrangement_end_beat = arr_start + (n_bars + ext)*4`. So the loop clip is inserted at the **outro start**, and the source window is independent of the insert (HARTY's loop is built from its intro and inserted at its outro start). That last point is a point in the plan's favour: Rule S's condition on `outro.start_bar` is the right proxy for the insert position in landmark mode.
+
+### Every Sam outgoing tail loop, and what the data supports
+
+Sam side only. "at/before/after" = relative to Sam's swap.
+
+| Mix / T | Sam's outgoing loop | Sam `swap_out_on_loop` | Sam `swap_out_bar` | What the packet supports |
+|---|---|---|---|---|
+| Core T1 HARTY | 2bx6 | (ALS only) | (ALS only) | At. V5 doc: kept loop, swap at 168, insert maps to 168. |
+| Core T4 Enzo | own-last-4 | (ALS only) | (ALS only) | After. Own-ending extension, no outro section. |
+| Core T10 Shilla | 4bx2 | (ALS only) | (ALS only) | At. Insert 5328 = bar 168 = swap. |
+| Sept T2 Youngr | 1bx15 | false | **2.0** (degenerate) | After. Reconstructed swap 129, loop at 129.5 (matches the plan's +0.5). The recorded `swap_out_bar` of 2.0 is meaningless and the plan does not flag it. |
+| Sept T4 Sorley | 4bx1 | false | 176.0 | After. Swap 176, natural end 188, loop at 188. **Plan says "+4", my reconstruction says +12.** The plan's offsets are not reproducible from the jsonl. |
+| Defected T1 Selace g1 | 1bx7 | **true** | null | **At or before, not distinguishable.** |
+| Defected T1 Selace g2 | 1bx6+0.5b | **true** | null | **At or before, not distinguishable.** |
+| Defected T2 Love Regen | 8bx2 | **true** | null | **At or before.** Reconstructed: swap 192 = natural end, loop [192,208], so it is at the swap, but the flag cannot prove it. |
+| Defected T5 Johnny Corp | 4bx5 | false | 192.0 | After. Swap 191.6, loop at 212. |
+| Defected T7 Ferreck | 2bx3 | **true** | null | **At or before, not distinguishable.** Reconstructed swap 173.9, natural end 177.1 (after an 8-bar outro cut), loop [177.1,183.1]; that reconstruction puts the loop AFTER the swap, which contradicts `on=true`, so the reconstruction is not reliable here either. |
+| Defected T9 Nic F | 4bx2+3b | false | 248.0 | After. Swap 248, loop at 266. |
+| Defected T10 Hannah | 2bx5 | false | 189.0 | After. Swap 189, loop at 213. |
+| Defected T11 Sam Divine | 4bx4 | **true** | null | **At or before, not distinguishable.** |
+| **August T1 Demarkus** | 1bx16 | false | 196.0 | After. Swap 196, loop at 214. |
+| **August T3 HNTR** | **4bx2, UNCHANGED from the pipeline** | **true** | null | **At or before, not distinguishable. NOT IN THE PLAN'S 13.** |
+| **August T4 Zaro** | 2bx3+1b | false | null (swap removed) | **No swap exists.** "swap_removed". Rule S's premise does not hold. |
+| **August T8 Coldabank** | 1bx8 | false | 88.0 | After. Swap 88, loop at 98. |
+| **August T11 Yellody** | 1bx1 | false | 153.0 | After. Swap 153, loop at 168. |
+
+### Answers to the brief's questions
+
+**Does "13 of 13 at or after" hold?** Not as a verified fact, and not from this packet.
+
+- The 13 groups are correctly enumerated for Core + Sept + Defected (12 transitions, 13 groups, Defected T1 holding two). The count is right.
+- **The August mix is excluded entirely from the 13.** August contributes five further Sam loop groups (T1, T3, T4, T8, T11). The brief asked specifically about August. The plan's own section 1 quotes August T8's kept 1bx6 loop as evidence for a different point, so August was in scope and simply not counted.
+- For the 4 Defected rows where `on=true` (T1, T2, T7, T11) plus August T3, **the packet cannot distinguish "at the swap" from "before the swap"**. That is 5 of the plan's 13, and it is exactly the distinction Rule S turns on. The plan asserts it from a measurement whose artifact is not shipped, and lists it under "Verified by reading files or read-only replays".
+- **August T3 is the strongest counter-example candidate in the packet and the plan omits it.** Sam KEPT the pipeline's 4bx2 byte-identically, and both sides report `swap_out_on_loop: true`. Under the plan's own insert-at-outro-start model, `on=true` on the pipeline side means the pipeline's loop started at or before the swap. Sam did not touch it. If that loop started even one bar before the swap, Rule S is refuted by the plan's own evidence file. The packet cannot settle it, and the plan never asks.
+
+**Is the plan's companion claim about the pipeline's loops right?** Section 0 says "Every other pipeline loop in the Core, Sept, Defected CTRL, DFTD, Tech House Selection and August plans starts at or after the swap." The jsonl contradicts this for August: pipeline-side `on=true` on **August T1, August T3 and August T6**. Under the insert model, all three start at or before their swap. So the claim is not merely unproven, it is contradicted by the file the plan cites.
+
+**Does the plan's "the two pipeline loops which started before it were both removed by him" survive?** No, as stated. The V5 write-up says the 22.09 build had the swap **in loop** on **three** Core transitions: T5 (`JK 129 / 165 (inside loop)`), T7 (`Freejak 132 / 148 (in loop)`) and T9 (`TCTS 120 / 136 (in loop)`), and Sam removed the loop on all three (T7 he also staggered the swap). The plan counts two. That is a third piece of supporting evidence the plan leaves on the floor, and it also shows Sam has a second response (restructure, not just delete) that the plan does not consider.
+
+---
+
+## 2. Root cause and path coverage (the brief's uncertain point)
+
+**The plan's root-cause claim is correct as far as it goes.** Verified in the code:
+
+- Primary search, `align_engine.py:2061-2063`: `if required_boundary_bars % length != 0 or remainder > 1: continue`, with `required_boundary_bars = int(round(locked_swap_gap))` at `:2469`. This does force the chunk length to divide the swap gap.
+- D2 fallback, `:2541-2564` (re-target to `candidate_nxt`) and `:2574-2583` (the `o.loop_windows` source tier): the only swap-related check is `:2635-2643`, `outro.start_bar + used + partial < handoff_bar_out`, which asks "does the loop END after the swap", not "is the swap on a repeat boundary".
+- Core T5 reproduces exactly: gap 7, candidate gap 10. In `pick_cue_bounded_drum_loop` with `gap_bars=10, required_boundary_bars=7`: length 8 (7%8!=0), 4 (7%4=3), 7 (remainder 10%7=3 > 1), 6, 5, 3, 2 all fail on the modulo, and length 1 fails on `repeats=10 > max_loop_repeats=8`. `lengths` is empty, the primary returns None, and D2 takes over. D2 then finds the (161,165) chunk from `loop_windows`, computes 2 reps + 2 bars partial = 10 bars, and its only check is "ends after the swap": 160+8+2 = 170 >= 167, so it passes. Boundaries 2756/2772/2788, swap 2784 -> inside. **The plan's diagnosis is right.**
+
+**But the plan's root-cause statement is incomplete, and there is a second, independent defect in the primary path.**
+
+`int(round(locked_swap_gap))` rounds a quantity that need not be an integer. `outro["start_bar"]` is used raw at `:2467` and `:2637`; section bars come from the stem detector and are fractional (the V5 write-up records JK `n_bars` 173.23, and section boundaries in this data are not all on integers). If `locked_swap_gap` is 7.4, `round` gives 7, a 7-bar chunk passes `7 % 7 == 0`, and the swap lands 0.4 bars **inside** the next repeat. **The primary search is not strictly boundary-safe; its check is only as strong as its rounding.** The plan says the primary "enforces swap-on-a-repeat-boundary". It enforces it up to a rounding error. (This defect is masked in landmark mode once Rule S lands, but it is live today and it is a second root cause, not the same one.)
+
+**Paths that Rule S, as specified, does not cover.** The plan scopes the rule to "inside landmark mode" in `plan_fill_or_cut`. That misses at least three places where an outgoing tail loop can be emitted:
+
+**(a) The legacy non-landmark path.** `align_pair` dispatches to `_align_pair_landmark_aware` only `if o.musical_landmarks or i.musical_landmarks` (`align_engine.py:1657-1659`). Otherwise it returns an `Alignment` with `alignment_policy="legacy_v1"` (the dataclass default), and `plan_fill_or_cut`'s `landmark_mode` is False. In legacy mode:
+- `nxt` comes from `:2447-2449` (the incoming's next section past the outgoing's end) with **no** `locked_swap_gap` computed at all;
+- the two swap-related guards at `:2630-2643` are both `landmark_mode and ...`, so they never run;
+- `:2565-2566` uses `pick_clean_drum_loop(o, outro.start_bar, outro.end_bar, pref, insert_bar=outro.start_bar)`, and the legacy "round the remainder UP" leniency (`:2601-2603`, `if partial >= 2 and not landmark_mode`) makes legacy loops overshoot deliberately.
+
+There is no boundary check of any kind on this path. Rule S as written does not touch it. Whether it is reachable in production depends on whether any analysed track has no musical landmarks, which the plan never establishes (the "354/354 aligned corpus pairs" comment at `:2472-2474` is about the landmark path).
+
+**(b) The decisions path.** `compute_aligned_positions` calls `fills_from_decision(o, i, decision)` **instead of** `plan_fill_or_cut` (`:2993-2996`). `fills_from_decision` (`:2835-2896`) validates the source range, the repeat count and the extension cap, and checks `s1 > o.n_bars`, but it **never** compares the loop against `handoff_bar_out`. `alignment_from_decision` does enforce `handoff_out <= o.n_bars` (`:2799-2802`), so the swap is at or before the outgoing's natural end. Whether that is enough depends on where the consumer inserts the decision loop: if it follows the pipeline's own rule (insert at the outro start, per the Core MixPlan), and the decision's swap is later than the outro start, the decision's own loop puts the swap inside a repeat and Rule S cannot see it. **The decisions path is live** (the replay report records the Defected build running with `Hints/arrangement_decisions.json`). The plan never mentions it.
+
+**(c) A track with no outro section.** Both automatic tail branches require `outro is not None` (`:2464`, `:2565`), so today no loop is emitted for a no-outro track. Safe today. But the plan's own deferred R4 (own-ending tail on a no-outro track, Core T4 and August T4) would introduce a loop on exactly those tracks. R4's consumer is specified to "insert BEFORE the outro" (per the V5 doc) or at the track end. Either way R4 needs its own Rule S check, and the plan does not say so.
+
+**Paths that are fine, for the record:**
+
+- **A loop source that is not the outro** (HARTY's intro drums; the `o.loop_windows` tier at `:2574-2583`). The insert point is still `outro.start_bar`; only the source moves. Rule S's condition still captures the insert position correctly. Core T1 is the proof (source = intro, insert = outro start).
+- **The incoming intro loop.** The validator's boundary predicate filters `loop["track_instance_id"] == transition["out_track_instance_id"]` (`validate_mix_plan_als.py:318-320`), so an incoming-side loop cannot trip the outgoing rule. It does consume `loop_budget` and can suppress the outgoing loop, which is a behaviour change, not a validator failure. It also shifts the incoming's own material past the swap, which is worth one test in the frozen geometry but is outside Rule S.
+- **The decisions path's own geometry** is safe *if* the consumer inserts at the outgoing's natural end. That needs checking, not assuming.
+
+**Conclusion for point 2:** Rule S as specified makes the Core-style failure impossible **in the landmark automatic path only**. It does not make it impossible on the legacy path, does not reach the decisions path, and does not address the primary search's rounding defect. "Impossible by construction" is therefore an overclaim.
+
+---
+
+## 3. "It cannot create a new raise" (the brief's other uncertain point)
+
+The plan gives three reasons. Testing each against the code:
+
+**Reason 1: "the refusal returns before candidate search, so the ValueErrors at `:2526`, `:2619`, `:2640` cannot be reached for that pair."** **Correct.** With `skip_outgoing_loop = True` set between `:2442` and `:2443`, `section_targets`/`landmark_targets` stay empty, the `if landmark_mode and outro is not None and not skip_outgoing_loop` block at `:2464` is skipped, `candidate_nxt` stays None, so the D2 fallback at `:2541` cannot fire, `nxt` stays None, and the `if nxt is not None and outro is not None` block at `:2565` cannot fire. All three ValueErrors are unreachable. I also confirmed the mutual exclusivity falls out: `outgoing_loop_abandoned` is only set at `:2663` under `candidate_nxt is not None`, which is false on the refusal path, and `outgoing_loop_not_needed` is only set by R1 (`:2439`, which requires `not skip_outgoing_loop`) or R3 (`:2534`, inside the skipped block). Good.
+
+**Reason 2: "the raw overlap already passed the 16-48 bar window."** **Correct for the floor.** `final_overlap = raw_overlap + ext` (the MixPlan computes `out_track.arrangement_end_beat - in_track.arrangement_start_beat`, `mix_plan.py:502-511`, and the extension is added to the outgoing's end). Removing the loop can only lower the final overlap back down to the raw value, which already cleared `PHRASE_GRID = 16` in `align_pair`. A loop can never be what pushes a pair over the 16-bar floor. This reason holds.
+
+**Reason 3: "`handoff_bar_out <= n_bars` (`:2472-2474`) means the outgoing still plays past the swap."** **This is wrong at the boundary, and it is the reason the whole "cannot create a new raise" claim rests on.**
+
+`<=` includes equality, and at equality the outgoing plays **nothing** past the swap. `handoff_bar_out == o.n_bars` is reachable: `_mix_cues` adds `add(track.n_bars, "track_end", 5)` (`align_engine.py:1019`), so the track end is a first-class outgoing cue. It can also be reached at `n_bars - 1` (progress 0.95 on a 20-bar overlap clears `MAX_SWAP_PROGRESS`).
+
+The consequence is concrete. `_outgoing_has_post_swap_content` returns `(effective_end - swap_bar) > MIN_REMAINING_CONTENT_BARS` (`:962-963`, floor 1.0 bar), and `effective_end` is `max(o.n_bars, outgoing_tail.target_marker_bar)` (`:3013-3017`). With the loop, effective end = `n_bars + ext` and the flag is True. Without the loop, effective end = `n_bars`, and on a pair with `n_bars - handoff <= 1.0` the flag **flips to False**. That flag is exactly what `apply_automation` uses to decide between a fade runway and a "cold ending" hard error, and it is documented as such at `:924-927` ("Rule 1's own boundary-margin test already pins that anything tighter is a hard error"). So the plan's own code comments identify a hard-error path that the refusal can newly expose, and the plan's reason 3 asserts it cannot happen.
+
+There is a second, softer version of the same problem that applies to **every** refused pair, not just the boundary ones: refusing the loop removes `ext` bars of outgoing runway after the swap, and removes the outgoing's landing on the incoming's chosen section line. The plan's own risk 3 admits the second ("the outgoing ends off a section line") but treats it as a listen-risk; it is also a geometry change that the D15 target logic chose deliberately.
+
+**Is there a transition that today succeeds only because of its pre-swap loop?** I cannot exhibit one from the packet, and the plan's Core T5 arithmetic (52 -> 42, well above 16) is right. But the packet also cannot exhibit one that is safe. The right statement is not "it cannot create a new raise"; it is "**it cannot create a new align raise, and it can newly expose a MixPlan overlap-floor raise or a cold-ending margin error on pairs whose outgoing ends within 1 bar of the swap, and it removes the outgoing's landing on a section line on every refused pair**". Piece D, as specified, measures none of those three things: its new fields are `outro_start_bar`, `handoff_bar_out`, `loop_starts_before_swap`, `outgoing_loop_refused`. It does not record `n_bars - handoff_bar_out`, the `outgoing_has_post_swap_content` flag, or the distance from the natural end to the nearest incoming section start (which the plan's own risk 3 asks for but does not list among the tool's fields).
+
+**One more thing the plan misses about Core T5's own arithmetic.** The plan says the refusal makes the overlap "52 to 42". It also makes the outgoing's post-swap runway 6 bars (173 - 167). Sam's own Core T5 has Jewel Kid running **5.7 bars** past the swap. So the refusal lands remarkably close to Sam on this pair. The plan does not say this, and it is the strongest single piece of evidence that Rule S's fallback (play the outro straight through) is the musically right answer when the loop is refused. It should be said, because it is what turns Rule S from "safe" into "probably right".
+
+---
+
+## 4. Are the acceptance tests able to fail?
+
+**(a) Core builds, report diff shows only T5 changed.** This can fail, and it is the best of the four. It would catch a rule that refuses too much (T1, T3, T10 would change) or that fails to fix T5. It cannot catch a rule that is wrong in the other direction, and it cannot see the legacy or decisions paths because Core has neither. Acceptable as a regression test, insufficient as the primary gate.
+
+**(b) Truth scorer on the three mixes the rule was derived from.** In-sample by construction. Worse, the metrics are loop presence, chunk class and total class. **None of those measure where the loop starts relative to the swap.** A scorer that never looks at the insert beat cannot fail on the defect Rule S exists to prevent. It can only fail on a change in presence or size.
+
+And the predicted numbers in the plan are internally inconsistent with the rule. The replay report says the pipeline still emits Sept T7 (4bx3), Defected T4 (1bx8) and Defected T8 (2bx4) today, and all three have pipeline-side `swap_out_on_loop: true`, so Rule S fires on all three. Sam removed all three. So the pipeline's score should **improve** on Sept T7 and on Defected T4/T8, not stay flat at "Sept 4/7 to 4/7" and "Defected 4/11 to 4/11". And Defected T1's pipeline 1bx7, which Sam **kept**, has `on=true` on the pipeline side, so Rule S would remove it and make that transition **worse**, contradicting "none worse". The plan's own (b) predictions cannot both be right and match its own rule. Either the rule fires on more pairs than the plan thinks, or the numbers are invented. Either way, (b) as written does not test Rule S.
+
+**(c) Corpus replay with `--policy NAME`.** The tool does not take a policy today (the plan says so itself). Once it does, the specified pass criteria are: "0 new raises; raise and align_raise rows identical; every changed row has `loop_starts_before_swap=true` in before and goes from a loop to `refused`". **This passes vacuously if the diff is empty.** If the `--policy` plumbing is broken, or the replay does not reach `plan_fill_or_cut`, before and after are identical and every criterion holds. There is no fixture that must change. There is also no check that the policy reached the planner, and the replay is align-and-fill only, so it never computes the final arrangement and never runs the validator whose rule Rule S is protecting.
+
+**(d) Baseline.** "Flag off, the baseline stays byte-identical" is a genuinely strong test of the flag-off path and I would keep it. The flip-time criteria are where it goes soft: "the diff may touch only `plan` and `overlap_policy`" is permissive about *which* values, and the comparison is against a **refreshed** baseline, so a wrong implementation and a wrong baseline can agree. The plan's own risk 5 ("a baseline refresh hides an unrelated change") names this and proposes comparing the refreshed pair set against the replay's refused set. That is a good mitigation, but it only works if the replay's refused set is independently derived, which today it is not.
+
+And there is a plain contradiction in the plan's own criteria: (d) says `overlap_bars` "must not move", while (a) requires `overlap_bars` to move 52 -> 42 on T5. As written the two acceptance criteria cannot both be satisfied. That is a drafting error that will be found during the build.
+
+### The test I would add
+
+**A frozen-geometry property test on the MixPlan, not a scorer.** Name it `Tests/test_outgoing_loop_insert_vs_swap.py`.
+
+For every built set and every corpus replay row, compute from the MixPlan's own loop contracts the invariant the plan actually claims:
+
+```
+for every outgoing loop L of transition T:
+    assert L.insert_at_beat >= T.swap_beats      # Rule S, asserted directly
+    assert swap_beats not strictly inside L's repeated span   # the validator's predicate
+```
+
+using `validate_mix_plan_als.py:322-343`'s own arithmetic (import it; do not re-derive it). Assert it for the Core Sample, for the three corrected mixes, for the corpus replay, and for the two holdouts, under both `interim_v1` and `interim_v1_tailsafe`.
+
+Then the part that makes it able to fail: **three negative controls in the same test file.**
+1. A deliberately wrong implementation that refuses *every* outgoing loop must make the "no transition gets worse" assertion fail. If it does not, the scorer is toothless.
+2. A deliberately wrong implementation that refuses only loops whose *source* starts before the swap (rather than whose *insert* does) must make the direct `insert_at_beat >= swap_beats` assertion fail. That is the distinction Rule S is actually about, and no presence/size metric can see it.
+3. A frozen fixture of the Core T5 geometry (insert 2756, source 644-660, 2 reps + 8 beats partial, swap 2784) must be asserted to FAIL the validator predicate before the rule and PASS after, so the test is known to be sensitive to the defect it exists to prevent.
+
+**Add a second test: the frozen-geometry matrix.** Run the rule through the **real entry points** (not `plan_fill_or_cut` in isolation) on synthetic geometries that cover: primary path, D2 fallback path, legacy path, decisions path, a no-outro track, a non-outro loop source, a fractional outro start, a loop exactly at the swap, a loop after the swap, a pre-swap loop whose repeats land the swap on a later boundary, an incoming intro loop present, and a pair whose final overlap would fall below 16 bars if the loop were removed. For every row assert: (1) the validator predicate passes on the resulting plan; (2) `insert_at_beat >= swap_beats` for every outgoing loop on every path Rule S claims to cover; (3) every pair that builds today still builds (assert the MixPlan overlap window check passes). Row 13 of that matrix is the one I expect to fail the plan as written, and finding that out before the production flip is the whole point of writing it.
+
+---
+
+## 5. The refusals
+
+**"Sam deletes short stutter loops" does NOT hold. The plan is right.** Verified from the jsonl: Sam **kept** 1-bar and 2-bar loops (Defected T1 1bx7, Core T1 2bx6, August T1 1bx16, August T8 1bx8, August T11 1bx1, Defected T7 2bx3, Defected T10 2bx5, August T4 2bx3+1b) and **deleted** 1-bar and 2-bar loops (Defected T4 1bx8, Defected T8 2bx4, Core T9 2bx4). Chunk length has zero predictive power in either direction. Refusing a length-keyed rule is correct.
+
+**"Pull every overlap toward 32 bars" does NOT hold. The plan is right, and its arithmetic checks out.** Sam's overlaps within 32 +/- 2: Core 6/10 (32, 32, 32, 32, 33, 32), Sept 4/7 (30, 32, 32, 32.1), Defected 5/11 (30, 33.1, 33, 33.1, 32). 15 of 28, range 17.4 to 72.4, so a target would fight 13 of 28. Correctly refused.
+
+**Is there a rule with as much support as Rule S that the plan missed?** The plan's own section 1 table lists several deferrals. Two of them are under-rated:
+
+- **The post-swap tail length.** The V5 write-up's finding 2 is "16 in, 16 out": Sam's post-swap tails are 30, 16, 16, 23.4, 5.7, 32, 16, 16, 17, 16 on Core, a median of 16 with 7 of 10 inside 15-18. The jsonl's `tail_after_swap_bars` corroborates across the other three mixes: Sept 4 of 7 inside 15-18, Defected 5 of 11, August 5 of 10. That is **14 of 28**, the same order of support as the "within 32 +/- 2" count (15 of 28) that the plan treats as a solid rule. The pipeline's post-swap tails, by contrast, range 2 to 48 bars. A rule "the outgoing's tail after the swap should be about 16 bars" is measurable in the same field the plan already reads, and it is the rule that would let the pipeline *produce* Sam's shape rather than merely avoid breaking it. The plan mentions a fragment of it ("Loop starting at the swap that lengthens a short post-swap tail: Defected T2, T7, T11") but files it under "loop shape" and defers it, and it never states the tail-length distribution as a target in its own right.
+- **The 12-bar reach cap (R3) is contradicted three times on Defected** (T2 16 bars, T5 20 bars, T11 16 bars). The plan does flag this, in open question 2 and in Found Unasked 6, but leaves it as a "production risk, not created here" rather than as an open contradiction of a shipped rule. It is shipped, it is on by default in `INTERIM_V1` (`max_outgoing_reach_bars=12.0`, `transition_policy.py:142`), and Sam overrides it three times in one mix.
+
+**Is "do not re-target a refused loop to start at the swap" the right call?**
+
+The plan's reasoning here is muddled and should be rewritten. The six "at the swap" loops are the ones Rule S **allows**; they are not evidence about the refused set at all. The real question is: when the rule refuses a pre-swap loop, should the pipeline delete it or move it to the swap? The plan says delete, and says "do not re-target... yet (needs a mid-track insert point)".
+
+That reason is an engineering-cost statement dressed as a principle, and the cost is smaller than stated: the consumer already inserts a clip at a mid-track position (HARTY's loop is inserted at bar 168 of a 196-bar track, and its source is at bars 1-2). What a swap-anchored loop actually needs is (i) source material at or after the swap, and (ii) an insert point exactly at the swap, which changes what gets displaced. That is a genuine design question, not an impossibility.
+
+The evidence leans one way and the plan does not use it: **on the one real case, deleting is right.** Core T5's no-loop fallback gives Jewel Kid 6 bars past the swap; Sam's own version has Jewel Kid 5.7 bars past the swap. And the two pipeline loops Sam deleted on the 22.09 build (T5, T9) were deleted, not moved. So "delete, do not move" is supported. But the plan should say that, with these numbers, instead of "needs a mid-track insert point". It should also note that moving the loop changes the displaced material and the target, which is a real reason to keep it out of a crash fix. (The prior review in the packet reached the same conclusion on this point by a different route; I reached it from the V5 write-up's own numbers, which the plan had not used.)
+
+**One refusal is wrong on the evidence.** Section 4's "Any removal rule keyed on chunk length (contradicted)" is right, but section 4 also says "Changing R3's 12-bar cap" is not being built. Given three direct contradictions on Defected in one mix, that refusal needs at least a *measurement* in piece D (count the corpus pairs where R3 refuses a loop Sam would keep), not a flat no.
+
+---
+
+## 6. The open questions for Sam
+
+**Question 1 is the right question but is framed as a false binary.** "Should the pipeline play the outro straight through with no loop, or loop starting at the swap?" omits the third option the plan itself relies on elsewhere: move the swap, or re-anchor (Sam did exactly this on Core T3, Core T8 and, on Core T5 itself, moved the swap 2.5 bars later). It also does not mention the option the plan should actually be offering, which is neither of the two: **keep the loop and choose a chunk length or a target that lands the swap on a repeat boundary.**
+
+**Question 2 (the 12-bar cap, genre-scoped or not) is the right second question but is framed backwards.** The Defected examples do not establish a genre boundary; three counterexamples in one mix establish that the cap is wrong sometimes. The productive question is "is 12 a limit on automatic reach, or only on automatic reach without a hand-directed target?", not "tech house or not".
+
+**There is a third question the build cannot proceed without, and it is the one that actually decides Core T5:**
+
+> When the outgoing's tail loop is needed to reach the incoming's next section, but the chunk length available cannot place your bass swap on a repeat boundary, do you want (a) a different chunk length or a different target that lands the swap on a boundary, keeping the outgoing extended, or (b) no loop at all, with the outgoing ending early?
+
+That is the decision the plan is making on Sam's behalf, and the plan's Rule S silently picks (b) for every such pair. The two options are audibly different. The plan cannot claim "the evidence supports this rule" while choosing one of the two branches of this question without asking.
+
+**And a fourth, narrower one that only blocks the completeness claim:** does the rule also apply to hand-authored decisions (`--decisions`) that satisfy the validator? The plan builds a guard in `propose_arrangement` that "applies whatever the policy", which implies yes; the plan never says so.
+
+---
+
+## 7. The build split
+
+**A and E both edit `align_engine.plan_fill_or_cut`.** The plan says so and sequences E after A merges. That is correct handling, not a defect, but the plan should say explicitly in section 6 that E is not a parallel piece and that A and E must not be in flight at once, since both would touch the same function and the same `skip_outgoing_loop` variable.
+
+**B has a real problem.** "A new `_assert_swaps_clear_of_outgoing_loops` called just before `build_mix_plan` (`:1825`)" cannot work there: at that point the MixPlan does not exist yet, so the guard must re-derive the arrangement geometry and the loop insert beats by hand, duplicating the validator's arithmetic a second time. Two implementations of one rule will drift. It should run **after** `build_mix_plan`, against the MixPlan's own loop contracts, using the validator's own predicate imported from one place. The plan's own line "same arithmetic as `validate_mix_plan_als.py:315-343`" is an instruction to write the rule twice.
+
+**B as specified also breaks the intermediate state.** It "raises in Phase 2 with a hint naming the lane" but "applies whatever the policy". If B merges before the INTERIM_V1 flip (which the plan schedules as a separate, later commit), then the production default `interim_v1` fails B's own guard on every mix containing a pre-swap loop, including the Core build the plan needs to keep reproducible for the before/after comparison, and including the DFTD holdout. B must be gated on the policy flag (or on a "warn only" mode) until the flip. The plan does not say this.
+
+**C cannot be built as instructed.** "Truth file built by script from `pair_history.jsonl` for Sept and Defected" is not executable: `pair_history.jsonl` contains no insert beat, so the script cannot produce the field Rule S is about. The presence/shape part is derivable; the Rule S part is not. C's fixture must be built from Sam's ALS geometry (or the rule must be scored against a field that exists, which is a different and weaker score), and the plan should say which.
+
+**D can be tested alone for plumbing** (the plan says so). It cannot produce the number section 2 depends on ("if piece D shows the rule affects more than 10 percent of looping corpus pairs") until A exists. Section 6 lists D as parallel; it is not parallel for that purpose.
+
+**A and B do not collide** (different files), and B's `getattr` tolerance for the missing `outgoing_loop_refused` field is the right call for decoupling. But `getattr` tolerance is only safe if B's guard does not depend on the field. B's guard works on the frozen plan, so it does not. Good.
+
+**A's own test list has a gap.** "Flag off identical to today" and "field resets between calls" are right, but the reset list should include `outgoing_loop_abandoned`, which `plan_fill_or_cut` **never resets** (only `outgoing_loop_not_needed` is reset, at `:2285`; `outgoing_loop_abandoned` is only ever assigned at `:2663`). Any reused `Alignment` carries a stale abandoned reason, which would corrupt the "three fields mutually exclusive" test the plan asks for in risk 4.
+
+---
+
+## FOUND UNASKED
+
+- **The plan's own predicted scores in 3(b) contradict its own rule.** Rule S also fires on the pipeline's Sept T7 (4bx3), Defected T4 (1bx8) and Defected T8 (2bx4) loops, which the replay report confirms still exist today, and Sam removed all three, so Sept should improve rather than stay 4/7 and Defected should change rather than stay 4/11. Worse, Defected T1's pipeline 1bx7, which Sam **kept**, has pipeline-side `swap_out_on_loop: true`, so Rule S would remove it and make that transition worse, contradicting "none worse". Either the rule fires on more pairs than the plan thinks or the numbers are invented.
+- **`swap_out_on_loop` is not the measurement Rule S needs.** It is true both for a benign loop inserted exactly at the swap (Sept T7's 4bx3: the loop is inserted at the swap, so the swap is on the loop's first boundary) and for the Core T5 defect (swap inside repeat 2). The packet needs an **insert beat per loop** to score this rule at all. Adding `insert_at_beat` (or the outgoing source bar at which the loop is inserted) to the learner's geometry record would make this whole class of question answerable, and would be a small, one-off change.
+- **There is a second, independent root cause the plan does not name: the primary search's rounding.** `required_boundary_bars = int(round(locked_swap_gap))` (`:2469`) tests a rounded value against a possibly fractional `outro.start_bar`. A fractional outro start can make the primary search place the swap 0.x bars inside a repeat, with no D2 fallback involved. Rule S happens to mask this in the landmark path, but it is live today and it will outlive Rule S if the rule is ever scoped more narrowly.
+- **`al.swap_beats` is computed before the loop is planned.** `compute_aligned_positions` sets `al.swap_beats = prev + al.handoff_bar_out * 4.0 - contraction` at `:2990` and only then calls `plan_fill_or_cut` at `:2996`. The frozen swap beat is therefore a pre-insert position, while the validator compares it against a post-insert loop span. That is the actual mechanism of the bug, and it suggests a second, less invasive fix the plan never considers: **recompute the swap beat after the loops are placed**, rather than forbidding the loop. The plan's own Found Unasked 3 gestures at the symptom ("the paired swap landmark moves from 2784 to 2824") without naming the cause.
+- **"Under Rule S the locked swap gap is always 0" is wrong.** Rule S fires exactly when `outro.start_bar < handoff_bar_out`, i.e. when `locked_swap_gap` is **positive**. The invariant it establishes is `locked_swap_gap <= 0`, not `== 0`. As written the sentence is a false claim that a reader will check.
+- **`handoff_bar_out == o.n_bars` is reachable** (`_mix_cues` adds the track end as a weight-5 cue, `:1019`), so the plan's reason 3 ("the outgoing still plays past the swap") is false exactly at the boundary, and `outgoing_has_post_swap_content` can flip True -> False when a loop is refused. That is the one mechanism by which the refusal can turn a working transition into a hard error in `apply_automation`, and piece D's proposed fields do not measure it.
+- **Piece D's field list is missing three of the plan's own risk items.** The plan asks for "distance from the natural end to the nearest incoming section start for refused pairs" (risk 3) and implies the post-swap runway (risk 2), but the tool's new fields are only `outro_start_bar`, `handoff_bar_out`, `loop_starts_before_swap`, `outgoing_loop_refused`. Add `n_bars`, `handoff_bar_out` distance to the natural end, `outgoing_has_post_swap_content`, and the section-line distance, or the replay cannot answer the plan's own risks.
+- **`outgoing_loop_abandoned` is never reset** by `plan_fill_or_cut` (only `outgoing_loop_not_needed` is, at `:2285`). A reused `Alignment` carries a stale reason. Add it to the reset and to the mutual-exclusivity test.
+- **The Core write-up shows three in-loop swaps on the 22.09 build, not two.** The V5 doc records T5 `165 (inside loop)`, T7 `148 (in loop)` and T9 `136 (in loop)`, and Sam removed the loop on all three. That is one more piece of support for Rule S than the plan claims, and it is also the clearest example of Sam's **second** response (on T7 he restructured the swap as well as deleting the loop), which the plan's model of Sam (delete the loop, nothing else) does not represent.
+- **The Core Sample is not in `pair_history.jsonl` at all** (the replay report's own Found Unasked 2). So "13 of 13 across his three corrected mixes" is 13 groups over 12 transitions in **two** mixes with learner records plus one mix reconstructed by hand from a write-up. The truth fixture for Core cannot be script-built from anything in the packet.
+- **The `legacy_v1` alignment policy exists and is reachable** (`align_pair` falls back when neither track has musical landmarks, `:1657-1659`), and `plan_fill_or_cut` on that path has **no** swap check of any kind, including the "does the loop end before the swap" check. The plan should state, with a measurement, whether any corpus pair lands there. If none does, say so and gate the path; if some do, Rule S has to cover it.
+- **`plan_fill_or_cut` is also called with no policy at `:3069`** (the visualisation path), which defaults to `INTERIM_V1`. A policy-gated rule would silently not apply there. Harmless today, worth a comment.
+- **`SAM_V1` has neither R1 nor R3** (the plan's Found Unasked 9) and would not get the new rule either unless it is added. Any A/B on `sam_v1` therefore measures a different rule set than the one being shipped. The new lane should be added to `SAM_V1` too, or the omission should be stated on the lane's face.
+- **The Core Sample's frozen MixPlan and the learner's report disagree about loop presence** (the prior review found this; I confirmed it independently). The frozen plan carries exactly four outgoing loops (T1, T3, T5, T10) and no incoming loops at all, while the learner report for the same mix lists apparent incoming loops at T4 and T9. Any truth table for Core must be built from the frozen contract and the corrected set, not from the learner's mislabelled rows, or the scorer will be scoring the wrong thing.
+
+**Where I differ from the prior review in this packet.** It concluded the evidence establishes 13 loop groups but not 13 starts at or after the swap, and it read `swap_out_on_loop` as unable to distinguish the first boundary from a later repeat. I agree with both. I reach a firmer conclusion on two points than it does: first, the jsonl *does* let you classify the eight `on=false` Sam rows as "after the swap" by reconstructing the natural end, and I did so (Sept T2, Sept T4, Defected T5, T9, T10, August T1, T8, T11 all come out strictly after their swap, consistent with the plan); second, the plan's own (b) predicted scores are not merely weak but arithmetically inconsistent with the plan's own rule, which is a sharper defect than "in-sample". I also reach the conclusion by the opposite route on the fix: the prior review recommended a narrower boundary repair; I agree that the *minimal* correct fix belongs in the D2 fallback's chunk and target selection rather than in a blanket refusal, and I would build Rule S as the fallback guard with that narrower repair underneath it, not instead of it.
+
+**Recommended shape of the correction, in one paragraph.** Keep Rule S, but (1) re-scope its claim: it is the guard for the landmark automatic path, not a global impossibility; (2) add the legacy path and the decisions path to the audit, or gate them, before claiming completeness; (3) fix the primary search's rounding, which is a second root cause; (4) replace "delete the loop" with the narrower repair in the D2 fallback first (choose a chunk length or target that lands the swap on a boundary), and let Rule S be the backstop that fires only when no such chunk exists; (5) re-derive the "13 of 13" from a shipped fixture that includes insert beats, and count August, and separate "at the swap" from "before the swap" using that fixture rather than the `swap_out_on_loop` boolean; (6) fix the (a)/(d) contradiction on `overlap_bars` and re-derive the (b) predictions from the rule rather than asserting them; (7) add the insert-beat-versus-swap property test with its three negative controls; (8) put the "different chunk or no loop" question to Sam as a question, because that is the branch the plan is choosing silently.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=037ec4ebef944c3c85a734e65496e505===
+===SEAT-DONE minimax plan_r1===
