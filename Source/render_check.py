@@ -1414,44 +1414,103 @@ def _boundary_click_coverage(boundaries: int, inspected: int,
 
 
 # --------------------------------------------------------------------------- #
-# Tempo-arc boundary locator (burn list E1, 2026-11-20)                        #
+# Tempo-arc boundary locator (burn list E1, 2026-11-20, round 2)               #
 # --------------------------------------------------------------------------- #
 #
 # On a tempo arc the mapped boundary time is not where Live put the cut. E1
 # measured it on four real arc bounces (September Mix V4 Sams Tweaks,
 # Defected V4 Mix, DFTD Tech House V4 MIX, Defected V4 Sam Tweaks): true
-# minus mapped time reached 23, 84, 69 and 83 ms, staying constant through
-# flat-tempo stretches and growing through every ramp at a steady ~95 ppm of
-# ramp time (fitted 95.1-95.7 ppm on all four; mechanism unknown, NOT used
-# here). Far past the +/-2 ms click window, so the mapped time cannot be used.
-# A +/-90 ms window around the mapped time was also measured: it caught none
-# of 490 injected clicks, because the null windows then hold every hat and
-# kick. So each boundary is LOCATED from the audio instead: every track
-# playing near the boundary is rebuilt from its own source WAV (through its
-# warp markers and the map), and the render's high-band envelope is
-# cross-correlated against it. Measured: 498 of 509 real boundaries located,
-# agreeing with an independent per-clip measurement to 0.4-0.7 ms at p95.
+# minus mapped time reached 23, 84, 69 and 83 ms. A +/-90 ms window around
+# the mapped time caught none of 490 injected clicks, so each boundary is
+# LOCATED from the audio instead, under rules that tie the evidence to THE
+# CUT (Codex review of e9e6021 reproduced confident wrong locates without
+# them):
+#   - only a clip that STARTS or ENDS at the boundary votes. Its template is
+#     its own audio abutting the cut (the entering clip's first audio, the
+#     leaving clip's last audio), weighted toward the cut. A continuing clip
+#     never votes;
+#   - a clip shape this does not model (looped, unwarped, StartRelative not
+#     0, broken warp geometry), or one whose audio at the cut is too quiet to
+#     anchor a fit, is ineligible;
+#   - a template whose material also plays, at any lag in reach, in a clip
+#     on another track around the cut is ineligible (a shared or phase-shifted copy would
+#     win the match);
+#   - the winning peak must beat every rival lag across +/-1.1 beats (wider
+#     than the search, so beat and half-beat repeats are exposed);
+#   - at least ARC_MIN_VOTES votes must agree pairwise (max minus min).
+# Anything else is a named SKIP. The reason for each skip is recorded.
+# Measured with these rules on the four renders (round 2): 85 of 509
+# boundaries located (17%), each within 0.98 ms of the independent step-1
+# measurement (p95 0.68 ms); 138 more had exactly one vote, 278 none.
 
-#: Seconds of audio either side of the boundary used to locate it.
-ARC_LOCATE_HALF_SEC = 1.0
-#: Lag search either side of the mapped time, in beats. Under half a beat on
-#: purpose: further out the kick lattice itself repeats and the peak is no
-#: longer unique. Covers the largest measured drift (84 ms) about 2.5x over
-#: at 128 BPM; a boundary beyond it lands at the search edge and is refused.
+#: Template length on the clip's own side of the cut, and the decay of the
+#: weight away from the cut: the match is decided by the audio next to the
+#: cut, so a timing error further along the clip cannot pull the lag.
+ARC_TEMPLATE_SEC = 0.5
+ARC_WEIGHT_TAU_SEC = 0.15
+#: Running-median width applied before the envelope (see _arc_envelope).
+ARC_DESPIKE_SEC = 0.001
+#: Lag search either side of the mapped time, in beats (under half a beat:
+#: further out the kick lattice repeats). A peak at the edge is refused.
 ARC_LOCATE_SEARCH_BEATS = 0.45
-#: A track's correlation must reach this normalised peak to count...
-ARC_LOCATE_MIN_NCC = 0.9
-#: ...and beat its best rival lag (further than ARC_LOCATE_UNIQUE_EXCL_SEC
-#: away) by this margin, so a periodic loop cannot lock onto the wrong repeat.
-ARC_LOCATE_UNIQUE_MARGIN = 0.02
-ARC_LOCATE_UNIQUE_EXCL_SEC = 0.02
-#: When more than one track locates the boundary they must agree this well,
-#: or the boundary is refused rather than averaged.
+#: Rivals are looked for across this many beats either side, wider than the
+#: search, so a one-beat or half-beat repeat cannot hide outside it.
+ARC_RIVAL_RANGE_BEATS = 1.1
+ARC_RIVAL_EXCL_SEC = 0.02
+#: Weighted normalised correlation the winning peak must reach, and its
+#: margin over every rival peak.
+ARC_LOCATE_MIN_NCC = 0.8
+ARC_RIVAL_MARGIN = 0.05
+#: Running-mean width removed from envelopes before the shared test.
+ARC_DETREND_SEC = 0.05
+#: A template that correlates at least this well (detrended envelopes, see
+#: _arc_detrend) with a clip on ANOTHER
+#: track around the cut (any lag in rival range) is shared material:
+#: ineligible. The clip's own track is left to the rival test: whatever that
+#: track plays near the cut is in the render, where a repeat shows as a
+#: rival peak.
+#: Measured (E1 round 2, detrended): cut clips against clips on other
+#: tracks in four real renders peak at 0.86 (99th percentile 0.85); an
+#: identical or phase-shifted copy reads about 1.0.
+ARC_SHARED_MAX_NCC = 0.9
+#: The clip's own audio over the ARC_LEVEL_WINDOW_SEC next to the cut must
+#: reach ARC_MIN_LEVEL_DBFS and come within ARC_MIN_REL_LEVEL_DB of the
+#: render around the mapped cut, or it cannot anchor a fit.
+ARC_LEVEL_WINDOW_SEC = 0.1
+ARC_MIN_LEVEL_DBFS = -40.0
+ARC_MIN_REL_LEVEL_DB = -15.0
+#: Votes must agree pairwise within this, and this many are required.
 ARC_LOCATE_AGREE_SEC = 0.001
-#: A clip is used when it plays within this many beats of the boundary.
-ARC_LOCATE_SPAN_BEATS = 4.0
-#: A clip must cover at least this fraction of the locate window.
-ARC_LOCATE_MIN_ACTIVE = 0.05
+ARC_MIN_VOTES = 2
+#: A clip edge this close (beats) to the boundary is a cut at it.
+ARC_CUT_TOL_BEATS = 1e-3
+#: Other clips within this many beats are checked for shared material.
+ARC_NEIGHBOUR_BEATS = 4.0
+#: Source span a template may read, as a multiple of its own length: wider
+#: means broken warp geometry, refused before any allocation.
+ARC_MAX_SOURCE_STRETCH = 4.0
+
+#: Why an arc boundary was not located, in pipeline order (a boundary is
+#: reported under the furthest stage any of its clips reached).
+#:   no_cut_clip           no clip starts or ends at the boundary
+#:   source_missing        a cut clip's WAV is at neither recorded path
+#:   source_open_failed    the WAV exists but could not be opened
+#:   clip_shape            looped, unwarped, StartRelative not 0, or broken
+#:                         warp geometry (source span over the stretch cap)
+#:   too_quiet             the clip's audio at the cut is below the level gate
+#:   neighbour_unreadable  another track plays near the cut but cannot be
+#:                         rebuilt, so shared material cannot be ruled out
+#:   shared_material       another track plays the same material in reach
+#:   weak_match            best peak in the search under ARC_LOCATE_MIN_NCC
+#:   search_edge           best peak at the edge of the search
+#:   repeating_match       a rival lag within +/-1.1 beat comes too close
+#:   single_vote           only one eligible vote (ARC_MIN_VOTES is 2)
+#:   votes_disagree        votes spread wider than ARC_LOCATE_AGREE_SEC
+ARC_UNLOCATED_REASONS = ("no_cut_clip", "source_missing",
+                         "source_open_failed", "clip_shape", "too_quiet",
+                         "neighbour_unreadable", "shared_material",
+                         "weak_match", "search_edge", "repeating_match",
+                         "single_vote", "votes_disagree")
 
 
 def _resolve_sample_path(clip: dict, als_dir: Path | None) -> Path | None:
@@ -1472,9 +1531,16 @@ def _arc_envelope(x: np.ndarray, sr: float) -> np.ndarray:
     """High band (> 1.5 kHz) amplitude envelope, smoothed at 400 Hz: transient
     timing without pitch, so a warped (Complex Pro) clip still lines up with
     its plain resampled source."""
+    from scipy.ndimage import median_filter
     hp = butter(2, 1500.0, btype="high", fs=sr, output="sos")
     lp = butter(2, 400.0, btype="low", fs=sr, output="sos")
-    return sosfiltfilt(lp, np.abs(sosfiltfilt(hp, x)))
+    # A 1 ms running median first: a click AT the cut is a spike a few
+    # samples wide that would otherwise pull the lag toward itself (and the
+    # boundary most worth inspecting would go unlocated); music transients
+    # are wider and survive it.
+    size = max(3, int(round(ARC_DESPIKE_SEC * sr)) | 1)
+    return sosfiltfilt(lp, median_filter(np.abs(sosfiltfilt(hp, x)),
+                                         size=size, mode="nearest"))
 
 
 def _read_mono_padded(fh: sf.SoundFile, a: int, b: int) -> np.ndarray:
@@ -1487,131 +1553,281 @@ def _read_mono_padded(fh: sf.SoundFile, a: int, b: int) -> np.ndarray:
     return out
 
 
+def _arc_clip_shape_ok(clip: dict) -> bool:
+    wm = clip.get("warp_markers") or []
+    return (not clip.get("loop_on") and clip.get("is_warped")
+            and float(clip.get("start_relative", 0.0) or 0.0) == 0.0
+            and len(wm) >= 2)
+
+
 def _clip_audio_at(clip: dict, tempo_map: TempoMap, ts: np.ndarray,
                    src: sf.SoundFile) -> np.ndarray | None:
     """The clip's own source audio at render times `ts`, placed through the
     MAPPED tempo map (zero where the clip is not playing). None for a clip
-    shape this does not model: looped, unwarped, or without warp markers."""
-    wm = clip.get("warp_markers") or []
-    if clip.get("loop_on") or not clip.get("is_warped") or len(wm) < 2:
+    shape this does not model (see _arc_clip_shape_ok) or a warp geometry
+    that would read an implausible span of the source."""
+    if not _arc_clip_shape_ok(clip):
         return None
-    w = np.asarray(sorted(wm), dtype=np.float64)
+    w = np.asarray(sorted(clip["warp_markers"]), dtype=np.float64)
     beats = tempo_map.sec_to_beat(ts)
     active = (beats >= clip["arr_start"]) & (beats < clip["arr_end"])
     src_beat = clip["loop_start"] + (beats - clip["arr_start"])
     src_sec = np.interp(src_beat, w[:, 0], w[:, 1], left=np.nan, right=np.nan)
     ok = active & np.isfinite(src_sec)
-    if ok.sum() < ARC_LOCATE_MIN_ACTIVE * len(ts):
-        return None
+    out = np.zeros(len(ts))
+    if not ok.any():
+        return out
     pos = src_sec[ok] * src.samplerate
+    span = float(pos.max() - pos.min())
+    if (span > ARC_MAX_SOURCE_STRETCH * float(ts[-1] - ts[0])
+            * src.samplerate + 2.0
+            or pos.min() < -src.samplerate
+            or pos.max() > src.frames + src.samplerate):
+        return None
     a = int(np.floor(pos.min())) - 2
     seg = _read_mono_padded(src, a, int(np.ceil(pos.max())) + 3)
     i = np.floor(pos).astype(int) - a
     f = pos - np.floor(pos)
-    out = np.zeros(len(ts))
     out[ok] = seg[i] * (1.0 - f) + seg[i + 1] * f
     return out
 
 
-def locate_arc_boundary_offset(fh: sf.SoundFile, tempo_map: TempoMap,
-                               clips: list[dict], beat: float,
-                               sources: dict) -> float | None:
-    """Seconds by which the render's true boundary at `beat` sits after its
-    mapped time, or None when it cannot be located with confidence.
+def _arc_detrend(env: np.ndarray, sr: float) -> np.ndarray:
+    """Envelope minus its ARC_DETREND_SEC running mean. Two unrelated
+    envelopes are both positive, so their plain normalised correlation reads
+    high (about 0.75 measured between different tracks); with the slow part
+    removed only shared transient patterns correlate."""
+    from scipy.ndimage import uniform_filter1d
+    size = max(3, int(round(ARC_DETREND_SEC * sr)))
+    return env - uniform_filter1d(env, size=size, mode="nearest")
 
-    `sources` maps a resolved sample path (or None for "unavailable") to an
-    open SoundFile per clip id; the caller owns and closes the handles. Every
-    track playing near the boundary is rebuilt from its clips; each track
-    correlation that is strong, unique and away from the search edge votes,
-    and the votes must agree within ARC_LOCATE_AGREE_SEC."""
+
+def _weighted_ncc(r_env: np.ndarray, p_env: np.ndarray,
+                  w: np.ndarray) -> np.ndarray:
+    """Weighted normalised correlation of template p (weights w) slid over r:
+    sum(w p r) / sqrt(sum(w p^2) * sum(w r^2)) at every valid lag."""
+    num = fftconvolve(r_env, (w * p_env)[::-1], mode="valid")
+    den_r = fftconvolve(r_env ** 2, w[::-1], mode="valid")
+    den_p = float(np.sum(w * p_env ** 2))
+    out = np.zeros(len(num))
+    if den_p <= 0 or not np.any(den_r > 0):
+        return out
+    # Lags where the slid-over signal is (near) silent carry no evidence;
+    # dividing FFT round-off by a near-zero energy would read as a match.
+    live = den_r > 1e-6 * float(np.max(den_r))
+    out[live] = num[live] / np.sqrt(den_r[live] * den_p)
+    return out
+
+
+def _rms_db(x: np.ndarray) -> float:
+    return float(20.0 * np.log10(max(float(np.sqrt(np.mean(x ** 2)))
+                                     if len(x) else 0.0, 1e-10)))
+
+
+def _locate_arc_votes(fh: sf.SoundFile, tempo_map: TempoMap,
+                      clips: list[dict], beat: float,
+                      paths: dict) -> tuple[float | None, str, list]:
+    """(offset or None, reason, votes) for the boundary at `beat`. offset is
+    seconds the real cut sits after its mapped time; reason is "ok" or one of
+    ARC_UNLOCATED_REASONS. `paths` maps id(clip) to its resolved sample Path
+    (None when not found). Files are opened for this boundary only and closed
+    before returning, so a large set never holds every source open."""
+    opened: dict = {}
+    try:
+        return _locate_arc_votes_open(fh, tempo_map, clips, beat, paths,
+                                      opened)
+    finally:
+        for h in opened.values():
+            if h is not None:
+                h.close()
+
+
+def _open_source(clip: dict, paths: dict, opened: dict):
+    """(SoundFile or None, reason or None) for a clip's source."""
+    path = paths.get(id(clip))
+    if path is None:
+        return None, "source_missing"
+    if path not in opened:
+        try:
+            opened[path] = sf.SoundFile(str(path), "r")
+        except Exception:
+            opened[path] = None
+    if opened[path] is None:
+        return None, "source_open_failed"
+    return opened[path], None
+
+
+def _locate_arc_votes_open(fh: sf.SoundFile, tempo_map: TempoMap,
+                           clips: list[dict], beat: float, paths: dict,
+                           opened: dict) -> tuple[float | None, str, list]:
     sr = float(fh.samplerate)
     t_pred = float(tempo_map.beat_to_sec(beat))
-    search = ARC_LOCATE_SEARCH_BEATS * 60.0 / tempo_map.bpm_at(beat)
-    n = int(round(2 * ARC_LOCATE_HALF_SEC * sr))
-    ts = t_pred - ARC_LOCATE_HALF_SEC + np.arange(n) / sr
-    by_track: dict = {}
-    for c in clips:
-        if not (c["arr_start"] < beat + ARC_LOCATE_SPAN_BEATS
-                and c["arr_end"] > beat - ARC_LOCATE_SPAN_BEATS):
-            continue
-        src = sources.get(id(c))
-        if src is None:
-            continue
-        y = _clip_audio_at(c, tempo_map, ts, src)
-        if y is None or not np.any(y):
-            continue
-        k = c.get("track_index", c.get("track"))
-        by_track[k] = y if k not in by_track else by_track[k] + y
-    if not by_track:
-        return None
-    lag_n = int(round(search * sr))
-    a0 = int(round((t_pred - ARC_LOCATE_HALF_SEC) * sr)) - lag_n
-    r_env = _arc_envelope(_read_mono_padded(fh, a0, a0 + n + 2 * lag_n), sr)
-    c2 = np.concatenate([[0.0], np.cumsum(r_env ** 2)])
-    r_norm = np.sqrt(np.maximum(c2[n:] - c2[:-n], 1e-30))
-    excl = int(round(ARC_LOCATE_UNIQUE_EXCL_SEC * sr))
+    beat_sec = 60.0 / tempo_map.bpm_at(beat)
+    lag_n = int(round(ARC_RIVAL_RANGE_BEATS * beat_sec * sr))
+    search_n = int(round(ARC_LOCATE_SEARCH_BEATS * beat_sec * sr))
+    tn = int(round(ARC_TEMPLATE_SEC * sr))
+    lvl_n = int(round(ARC_LEVEL_WINDOW_SEC * sr))
+    excl = int(round(ARC_RIVAL_EXCL_SEC * sr))
     edge = max(1, int(round(0.001 * sr)))
+    cut = [c for c in clips
+           if abs(c["arr_start"] - beat) <= ARC_CUT_TOL_BEATS
+           or abs(c["arr_end"] - beat) <= ARC_CUT_TOL_BEATS]
+    if not cut:
+        return None, "no_cut_clip", []
+    stage = 0
+
+    def reach(reason):
+        nonlocal stage
+        stage = max(stage, ARC_UNLOCATED_REASONS.index(reason))
+
+    # The render, and every neighbouring clip's audio, over the template
+    # span widened by the rival range either side.
+    ext0 = int(round(t_pred * sr)) - tn - lag_n
+    ext_len = 2 * tn + 2 * lag_n
+    ts_ext = (ext0 + np.arange(ext_len)) / sr
+    r_env = None
+    r_lvl_db = None
+    neighbour_env: dict = {}
     votes = []
-    for y in by_track.values():
+    for c in cut:
+        src, why = _open_source(c, paths, opened)
+        if src is None:
+            reach(why)
+            continue
+        if not _arc_clip_shape_ok(c):
+            reach("clip_shape")
+            continue
+        entering = abs(c["arr_start"] - beat) <= ARC_CUT_TOL_BEATS
+        # Template span: [cut, cut + T) entering, [cut - T, cut) leaving,
+        # placed inside ts_ext at offset tn + lag_n (entering) or lag_n.
+        t0_idx = (tn + lag_n) if entering else lag_n
+        ts = ts_ext[t0_idx:t0_idx + tn]
+        y = _clip_audio_at(c, tempo_map, ts, src)
+        if y is None:
+            reach("clip_shape")
+            continue
+        near = y[:lvl_n] if entering else y[-lvl_n:]
+        if r_lvl_db is None:
+            r_full = _read_mono_padded(fh, ext0, ext0 + ext_len)
+            r_env = _arc_envelope(r_full, sr)
+            mid = tn + lag_n
+            r_lvl_db = _rms_db(r_full[mid - search_n - lvl_n:
+                                      mid + search_n + lvl_n])
+        clip_db = _rms_db(near)
+        if (clip_db < ARC_MIN_LEVEL_DBFS
+                or clip_db < r_lvl_db + ARC_MIN_REL_LEVEL_DB):
+            reach("too_quiet")
+            continue
         p_env = _arc_envelope(y, sr)
-        p_norm = float(np.sqrt(np.sum(p_env ** 2)))
-        if not p_norm > 0:
+        d = np.arange(tn) / sr
+        wgt = np.exp(-(d if entering else d[::-1]) / ARC_WEIGHT_TAU_SEC)
+        p_det = _arc_detrend(p_env, sr)
+        # Shared material: the same audio elsewhere around the cut. A
+        # neighbour on another track that plays inside the extended window
+        # but cannot be rebuilt leaves this blind, so the clip cannot vote.
+        shared = False
+        blind = False
+        t_lo, t_hi = float(ts_ext[0]), float(ts_ext[-1])
+        for o in clips:
+            if (o.get("track_index") == c.get("track_index")
+                    or not (o["arr_start"] < beat + ARC_NEIGHBOUR_BEATS
+                            and o["arr_end"] > beat - ARC_NEIGHBOUR_BEATS)):
+                continue
+            if id(o) not in neighbour_env:
+                plays = (float(tempo_map.beat_to_sec(o["arr_start"])) < t_hi
+                         and float(tempo_map.beat_to_sec(o["arr_end"]))
+                         > t_lo)
+                osrc = _open_source(o, paths, opened)[0] if plays else None
+                yo = (_clip_audio_at(o, tempo_map, ts_ext, osrc)
+                      if osrc is not None else None)
+                if not plays:
+                    neighbour_env[id(o)] = None
+                elif yo is None:
+                    neighbour_env[id(o)] = "blind"
+                else:
+                    neighbour_env[id(o)] = (
+                        _arc_detrend(_arc_envelope(yo, sr), sr)
+                        if np.any(yo) else None)
+            oe = neighbour_env[id(o)]
+            if isinstance(oe, str):
+                blind = True
+                break
+            if oe is None:
+                continue
+            vo = _weighted_ncc(oe, p_det, wgt)
+            vo = vo[np.isfinite(vo)]
+            if len(vo) and float(vo.max()) >= ARC_SHARED_MAX_NCC:
+                shared = True
+                break
+        if blind:
+            reach("neighbour_unreadable")
             continue
-        v = fftconvolve(r_env, p_env[::-1], mode="valid") / (r_norm * p_norm)
-        i = int(np.argmax(v))
-        peak = float(v[i])
-        rival = np.ones(len(v), dtype=bool)
-        rival[max(0, i - excl):i + excl + 1] = False
-        second = float(v[rival].max()) if rival.any() else 0.0
-        if (not np.isfinite(peak) or peak < ARC_LOCATE_MIN_NCC
-                or second > peak - ARC_LOCATE_UNIQUE_MARGIN
-                or i < edge or i > len(v) - 1 - edge):
+        if shared:
+            reach("shared_material")
             continue
-        lo, mid, hi = v[i - 1], v[i], v[i + 1]
-        curv = lo - 2.0 * mid + hi
+        v = _weighted_ncc(r_env, p_env, wgt)
+        # v[k] places the template k samples into ts_ext; the mapped
+        # position is t0_idx, so lag = k - t0_idx.
+        lags = np.arange(len(v)) - t0_idx
+        inside = np.abs(lags) <= search_n
+        vi = np.where(inside, v, -np.inf)
+        k = int(np.argmax(vi))
+        peak = float(v[k])
+        if not np.isfinite(peak) or peak < ARC_LOCATE_MIN_NCC:
+            reach("weak_match")
+            continue
+        if abs(lags[k]) > search_n - edge:
+            reach("search_edge")
+            continue
+        rival = np.isfinite(v).copy()
+        rival[max(0, k - excl):k + excl + 1] = False
+        if rival.any() and float(v[rival].max()) > peak - ARC_RIVAL_MARGIN:
+            reach("repeating_match")
+            continue
+        lo, mid_v, hi = v[k - 1], v[k], v[k + 1]
+        curv = lo - 2.0 * mid_v + hi
         frac = 0.5 * (lo - hi) / curv if curv != 0 else 0.0
-        votes.append((i + frac - lag_n) / sr)
+        votes.append((lags[k] + frac) / sr)
     if not votes:
-        return None
-    med = float(np.median(votes))
-    if max(abs(v - med) for v in votes) > ARC_LOCATE_AGREE_SEC:
-        return None
-    return med
+        return None, ARC_UNLOCATED_REASONS[stage], []
+    if len(votes) < ARC_MIN_VOTES:
+        return None, "single_vote", votes
+    if max(votes) - min(votes) > ARC_LOCATE_AGREE_SEC:
+        return None, "votes_disagree", votes
+    return float(np.median(votes)), "ok", votes
+
+
+def locate_arc_boundary_offset(fh: sf.SoundFile, tempo_map: TempoMap,
+                               clips: list[dict], beat: float,
+                               paths: dict) -> float | None:
+    """Seconds by which the real cut at `beat` sits after its mapped time, or
+    None when it cannot be located under the rules above."""
+    return _locate_arc_votes(fh, tempo_map, clips, beat, paths)[0]
 
 
 def locate_arc_boundaries(render_path: Path, boundaries_sec: list[float],
                           tempo_map: TempoMap, clips: list[dict],
-                          als_path: Path | None) -> list[float | None]:
+                          als_path: Path | None,
+                          reasons: list | None = None) -> list[float | None]:
     """locate_arc_boundary_offset for every boundary, one open handle per
-    file. None where a boundary cannot be located."""
+    file. None where a boundary cannot be located; if `reasons` is given it
+    receives "ok" or the ARC_UNLOCATED_REASONS entry per boundary."""
     als_dir = Path(als_path).parent if als_path is not None else None
-    handles: dict[Path, sf.SoundFile | None] = {}
-    sources: dict = {}
+    paths = {id(c): _resolve_sample_path(c, als_dir) for c in clips}
     out: list[float | None] = []
-    try:
-        for c in clips:
-            p = _resolve_sample_path(c, als_dir)
-            if p is None:
-                continue
-            if p not in handles:
-                try:
-                    handles[p] = sf.SoundFile(str(p), "r")
-                except Exception:
-                    handles[p] = None
-            if handles[p] is not None:
-                sources[id(c)] = handles[p]
-        with sf.SoundFile(str(render_path), "r") as fh:
-            for t in boundaries_sec:
-                try:
-                    out.append(locate_arc_boundary_offset(
-                        fh, tempo_map, clips, sec_to_arr(t, tempo_map),
-                        sources))
-                except Exception:
-                    out.append(None)
-    finally:
-        for h in handles.values():
-            if h is not None:
-                h.close()
+    why: list[str] = []
+    with sf.SoundFile(str(render_path), "r") as fh:
+        for t in boundaries_sec:
+            try:
+                off, reason, _ = _locate_arc_votes(
+                    fh, tempo_map, clips, sec_to_arr(t, tempo_map), paths)
+            except Exception:
+                off, reason = None, "clip_shape"
+            out.append(off)
+            why.append(reason)
+    if reasons is not None:
+        reasons.clear()
+        reasons.extend(why)
     return out
 
 
@@ -1751,8 +1967,13 @@ def check_boundary_click(render_path: Path, boundaries_sec: list[float],
                     measured["located_offset_ms"] = offset * 1000.0
                     msg += (f", boundary located {offset * 1000.0:+.1f} ms "
                             "from its mapped time on a tempo arc")
+                # WARN on an arc (E1 round 2): the located time is a
+                # measurement (up to ~1 ms from the step-1 reference) and
+                # the false-alarm evidence is four renders, too little for
+                # an automatic production FAIL.
                 findings.append(Finding(
-                    check="boundary_click", level="FAIL",
+                    check="boundary_click",
+                    level="FAIL" if offsets_sec is None else "WARN",
                     t0=t0,
                     t1=max(t0 + 0.01, t_sec + 0.005),
                     beat0=bb - 0.01, beat1=bb + 0.01,
@@ -3078,8 +3299,8 @@ def run_check(render_path: Path, report_path: Path,
         # located time. A boundary that cannot be located is skipped by name
         # as tempo_arc, never inspected at the mapped time - that would
         # return falsely clean, the failure this skip exists to prevent.
-        # FAIL, as on a flat map: E1 measured 0 hits at 497 located control
-        # positions and 0 at 498 located real boundaries.
+        # A hit is WARN on an arc, FAIL on a flat map (see
+        # check_boundary_click).
         if tempo_map.is_flat:
             trusted, untrusted = list(boundaries_sec), []
             if trusted:
@@ -3087,8 +3308,10 @@ def run_check(render_path: Path, report_path: Path,
                                                  tempo_map,
                                                  coverage=click_checked)
         else:
+            arc_reasons: list = []
             offsets = locate_arc_boundaries(render_path, boundaries_sec,
-                                            tempo_map, clips, als_path)
+                                            tempo_map, clips, als_path,
+                                            reasons=arc_reasons)
             trusted = [t for t, o in zip(boundaries_sec, offsets)
                        if o is not None]
             untrusted = [t for t, o in zip(boundaries_sec, offsets)
@@ -3098,6 +3321,15 @@ def run_check(render_path: Path, report_path: Path,
                                              coverage=click_checked,
                                              offsets_sec=offsets)
         if untrusted:
+            measured = {"skipped_check": "boundary_click",
+                        "skipped_boundaries": len(untrusted),
+                        "inspected_boundaries": click_checked["inspected"],
+                        "from_sec": min(untrusted),
+                        "click_half_window_sec": CLICK_HALF_WINDOW_SEC}
+            if not tempo_map.is_flat:
+                measured["unlocated_by_reason"] = {
+                    r: arc_reasons.count(r) for r in ARC_UNLOCATED_REASONS
+                    if arc_reasons.count(r)}
             # A NAMED skip, never a silent pass. skipped_check lets the report
             # keep boundary_click out of "Checks run clean" - without it the
             # operator is told the very check that did not run came back
@@ -3107,16 +3339,11 @@ def run_check(render_path: Path, report_path: Path,
                 t0=min(untrusted), t1=max(untrusted),
                 beat0=sec_to_arr(min(untrusted), tempo_map),
                 beat1=sec_to_arr(max(untrusted), tempo_map),
-                measured={"skipped_check": "boundary_click",
-                          "skipped_boundaries": len(untrusted),
-                          "inspected_boundaries": len(trusted),
-                          "from_sec": min(untrusted),
-                          "click_half_window_sec": CLICK_HALF_WINDOW_SEC},
+                measured=measured,
                 msg=(f"boundary_click skipped for {len(untrusted)} of "
                      f"{len(boundaries_sec)} boundaries: on a tempo arc the "
-                     "mapped time drifts tens of ms from the real cut (far "
-                     "past the +/-2 ms click window) and these boundaries "
-                     "could not be located from the audio"),
+                     "mapped time is not trusted and the cut could not be "
+                     "located from the audio"),
             ))
         if tempo_map.is_flat:
             # A flat map hands every boundary to the check: tempo_arc is 0.
@@ -3203,6 +3430,27 @@ def _round_finding(f: Finding) -> dict:
     }
 
 
+#: Plain-words sensitivity of boundary_click, measured in E1 on four real
+#: arc renders with synthetic clicks at the true cut (the same test at the
+#: exact time does no better, so this is the test's own limit).
+BOUNDARY_CLICK_ARC_SENSITIVITY = (
+    "boundary_click sensitivity (measured, E1): about a quarter of loud "
+    "synthetic clicks (6 dB under the local peak) are caught and quiet ones "
+    "(12-20 dB under) are mostly missed, so a clean result is not proof the "
+    "cuts are click-free - see BURN_LIST.md item E1.")
+
+
+def _arc_coverage_line(name: str, rec: dict) -> str:
+    """Tempo-arc wording: says what was looked at, never "clean"."""
+    reasons = ", ".join(f"{r} {n}" for r, n in rec["skipped_by_reason"].items()
+                        if n)
+    skipped = f"skipped {rec['skipped']}" + (f": {reasons}" if reasons else "")
+    quiet = rec["inspected"] - rec["failed"]
+    return (f"{name} (tempo arc): no click-shaped discontinuity flagged in "
+            f"{quiet} of {rec['boundaries']} boundary windows ({skipped}), "
+            f"{rec['failed']} flagged")
+
+
 def _coverage_line(name: str, rec: dict) -> str:
     """One plain line, e.g. `boundary_click: inspected 97 of 101 boundaries
     (skipped 4: null_set_too_small 4), 0 failed`."""
@@ -3260,10 +3508,15 @@ def write_report(result: CheckResult, render_path: Path,
     # How much each check really inspected. Sits BEFORE "Checks run clean" on
     # purpose: a reader (and the tests) take everything after that heading as
     # the clean list. Omitted only when no audio check ran at all.
+    is_arc = not (result.meta.get("tempo_map") or {}).get("is_flat", True)
     if result.coverage:
         md.append("\n## Coverage\n")
         for name, rec in result.coverage.items():
-            md.append(_coverage_line(name, rec))
+            if is_arc and name == "boundary_click":
+                md.append(_arc_coverage_line(name, rec))
+                md.append(BOUNDARY_CLICK_ARC_SENSITIVITY)
+            else:
+                md.append(_coverage_line(name, rec))
 
     all_checks = {"hard_silence", "boundary_click", "level_cliff",
                   "loop_exit_jump", "loop_period", "exposed_solo",
@@ -3284,6 +3537,10 @@ def write_report(result: CheckResult, render_path: Path,
     # only safeguard the skip provides (Codex review 2026-08-27).
     skipped = {f.measured.get("skipped_check") for f in result.findings
                if f.level == "SKIP" and f.measured.get("skipped_check")}
+    if is_arc:
+        # On an arc boundary_click only ever reports what it looked at, in
+        # the Coverage section above; "run clean" would overstate it.
+        skipped = skipped | {"boundary_click"}
     if result.meta.get("checks_ran", True):
         clean = sorted(all_checks - fired - skipped - {"kick_flam"})
     else:

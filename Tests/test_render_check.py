@@ -3332,12 +3332,13 @@ def test_boundary_click_coverage_tempo_arc_inspects_nothing_skip_unchanged(tmp_p
     assert sk.level == "SKIP"
     assert sk.msg == (
         "boundary_click skipped for 2 of 2 boundaries: on a tempo arc the "
-        "mapped time drifts tens of ms from the real cut (far past the "
-        "+/-2 ms click window) and these boundaries could not be located "
-        "from the audio")
+        "mapped time is not trusted and the cut could not be located from "
+        "the audio")
     assert set(sk.measured) == {"skipped_check", "skipped_boundaries",
                                 "inspected_boundaries", "from_sec",
-                                "click_half_window_sec"}
+                                "click_half_window_sec",
+                                "unlocated_by_reason"}
+    assert sk.measured["unlocated_by_reason"] == {"source_missing": 2}
     assert sk.measured["skipped_check"] == "boundary_click"
     assert sk.measured["skipped_boundaries"] == 2
     assert sk.measured["inspected_boundaries"] == 0
@@ -3346,9 +3347,11 @@ def test_boundary_click_coverage_tempo_arc_inspects_nothing_skip_unchanged(tmp_p
 
     md_path, _ = render_check.write_report(res, wav, tmp_path / "out.json")
     text = md_path.read_text(encoding="utf-8")
-    assert _cov_md_line(text) == (
-        "boundary_click: inspected 0 of 2 boundaries (skipped 2: tempo_arc 2), "
-        "0 failed")
+    # E1 round 2: on an arc the line says what was looked at, never clean.
+    assert ("boundary_click (tempo arc): no click-shaped discontinuity "
+            "flagged in 0 of 2 boundary windows (skipped 2: tempo_arc 2), "
+            "0 flagged") in text
+    assert render_check.BOUNDARY_CLICK_ARC_SENSITIVITY in text
     # Still never listed clean (existing guard, unaffected by the new line).
     assert "boundary_click" not in text.split("## Checks run clean", 1)[1]
 
@@ -3643,13 +3646,14 @@ def test_boundary_click_coverage_inf_click_still_fails_and_is_inspected(tmp_path
     assert cov["skipped_by_reason"]["window_unreadable"] == 0
 
 
-
 # --------------------------------------------------------------------------- #
-# E1: boundary_click on a tempo arc - locate each boundary from the audio,     #
-# then run the same +/-2 ms test there. Live puts the real cut tens of ms      #
-# from the mapped time on an arc (23-84 ms measured on four real bounces), so  #
-# these fixtures render the audio a known amount LATE of the map, the way a    #
-# real arc render is, and reference a real source WAV through warp markers.   #
+# E1: boundary_click on a tempo arc - locate each cut from the audio, then    #
+# run the same +/-2 ms test there. Live puts the real cut tens of ms from the  #
+# mapped time on an arc (23-84 ms measured on four real bounces), so these     #
+# fixtures render each clip a known amount LATE of the map, the way a real arc #
+# render is, from real source WAVs referenced through warp markers. Several    #
+# cases are Codex's review constructions (2026-11-20) in which the e9e6021     #
+# locator confidently picked the wrong time and counted the cut as inspected.  #
 # --------------------------------------------------------------------------- #
 
 _E1_SR = 44100
@@ -3659,11 +3663,14 @@ _E1_ARC = [(0.0, 124.0), (64.0, 128.0)]
 _E1_BOUNDARY = 24.0
 
 
-def _e1_source(path, seconds=40.0):
-    """A tone bed plus irregular high-band noise bursts: no periodicity, so a
-    correlation can only line up at the one true lag."""
+def _e1_source_audio(kind, seconds=40.0):
+    """S/S2/S3: tone bed plus irregular high-band bursts (no periodicity, a
+    different seed each). P: the same kind of bursts repeating every source
+    beat (0.5 s) - a one-beat loop. Z: S with 300 ms of silence starting at
+    source beat 40 (where the second clip enters)."""
     from scipy.signal import butter as _butter, sosfilt as _sosfilt
-    rng = np.random.default_rng(11)
+    seed = {"S": 11, "S2": 23, "S3": 37, "P": 41, "Z": 11}[kind]
+    rng = np.random.default_rng(seed)
     n = int(seconds * _E1_SR)
     t = np.arange(n) / _E1_SR
     y = 0.1 * np.sin(2 * math.pi * 220.0 * t)
@@ -3671,12 +3678,30 @@ def _e1_source(path, seconds=40.0):
                              output="sos"), rng.standard_normal(n))
     noise /= np.max(np.abs(noise))
     env = np.zeros(n)
-    for start in np.sort(rng.uniform(0, seconds, size=int(seconds * 6))):
+    if kind == "P":
+        starts = np.concatenate([k * 0.5 + np.array([0.0, 0.11, 0.27, 0.36])
+                                 for k in range(int(seconds * 2))])
+        period = int(0.5 * _E1_SR)
+        noise = np.tile(noise[:period], n // period + 1)[:n]
+    else:
+        starts = np.sort(rng.uniform(0, seconds, size=int(seconds * 6)))
+    # Each aperiodic source has its own burst shape, so two of them share no
+    # transient pattern (detrended envelopes of S against S2 correlate far
+    # under ARC_SHARED_MAX_NCC); S and Z share theirs on purpose.
+    decay = {"S2": 0.004, "S3": 0.035}.get(kind, 0.015)
+    for start in starts:
         i0 = int(start * _E1_SR)
+        if i0 >= n:
+            continue
         m = min(n - i0, int(0.08 * _E1_SR))
-        env[i0:i0 + m] += np.exp(-np.arange(m) / (0.015 * _E1_SR))
+        bump = np.exp(-np.arange(m) / (decay * _E1_SR))
+        if kind == "S3":
+            bump *= np.minimum(1.0, np.arange(m) / (0.01 * _E1_SR))
+        env[i0:i0 + m] += bump
     y = y + 0.05 * noise * env
-    sf.write(str(path), np.stack([y, y], axis=1), _E1_SR, subtype="PCM_24")
+    if kind == "Z":
+        i0 = int((_E1_SRC_ANCHOR + 40 * 60.0 / _E1_SRC_BPM) * _E1_SR)
+        y[i0:i0 + int(0.3 * _E1_SR)] = 0.0
     return y
 
 
@@ -3684,7 +3709,7 @@ def _e1_warp(src_beat):
     return _E1_SRC_ANCHOR + np.asarray(src_beat) * 60.0 / _E1_SRC_BPM
 
 
-def _e1_write_als(path, clips, src_name, src_abs, tempo_envelope=_E1_ARC):
+def _e1_write_als(path, clips, src_paths, tempo_envelope=_E1_ARC):
     """Like _als_xml, plus what Live writes for a warped audio clip: the
     SampleRef FileRef (relative and absolute) and one warp marker per beat."""
     root = Element("Ableton")
@@ -3705,12 +3730,14 @@ def _e1_write_als(path, clips, src_name, src_abs, tempo_envelope=_E1_ARC):
             SubElement(loop, "LoopStart").set("Value", str(c["src_start"]))
             SubElement(loop, "LoopEnd").set(
                 "Value", str(c["src_start"] + c["arr_end"] - c["arr_start"]))
-            SubElement(loop, "StartRelative").set("Value", "0")
+            SubElement(loop, "StartRelative").set(
+                "Value", str(c.get("start_relative", 0)))
             SubElement(loop, "LoopOn").set("Value", "false")
             SubElement(clip, "IsWarped").set("Value", "true")
+            src_path = src_paths[c.get("src", "S")]
             fref = SubElement(SubElement(clip, "SampleRef"), "FileRef")
-            SubElement(fref, "RelativePath").set("Value", src_name)
-            SubElement(fref, "Path").set("Value", str(src_abs))
+            SubElement(fref, "RelativePath").set("Value", src_path.name)
+            SubElement(fref, "Path").set("Value", str(src_path))
             wms = SubElement(clip, "WarpMarkers")
             for b in range(0, 80):
                 wm = SubElement(wms, "WarpMarker")
@@ -3728,77 +3755,109 @@ def _e1_write_als(path, clips, src_name, src_abs, tempo_envelope=_E1_ARC):
     path.write_bytes(gzip.compress(tostring(root, encoding="utf-8")))
 
 
-def _e1_clips():
+def _e1_one_track_clips(src="S"):
     """One track, two clips meeting at beat 24 with a jump in the source (the
-    shape of a Sections arrangement), on a ~30 s render."""
+    shape of a Sections arrangement): two cut clips, so two votes."""
     return [
-        {"track": "A", "arr_start": 0, "arr_end": int(_E1_BOUNDARY),
-         "src_start": 0},
-        {"track": "A", "arr_start": int(_E1_BOUNDARY), "arr_end": 62,
-         "src_start": 40},
+        {"track": "A", "arr_start": 0, "arr_end": 24, "src_start": 0,
+         "src": src},
+        {"track": "A", "arr_start": 24, "arr_end": 62, "src_start": 40,
+         "src": src},
     ]
 
 
-def _e1_case(tmp_path, tag, *, late_sec, click=False, seconds=30.0,
-             drop_source=False):
-    """Source + ALS + a render placed `late_sec` after the arc map predicts,
-    then run_check. Returns (res, true boundary time in s)."""
-    src_path = tmp_path / f"{tag}_src.wav"
-    src = _e1_source(src_path)
-    clips = _e1_clips()
+def _e1_build(tmp_path, tag, clips, *, late_sec, click_beats=(),
+              seconds=30.0, missing=(), broken=()):
+    """Sources + ALS + a render in which every clip sits `late_sec` (plus its
+    own `late_extra`) after the arc map, a +0.7 click at each true cut in
+    `click_beats`; then the sources named in `missing` are deleted and those
+    in `broken` overwritten with bytes no reader can open. Runs run_check.
+    Returns (res, tempo_map, wav)."""
+    keys = sorted({c.get("src", "S") for c in clips})
+    src_paths, audio = {}, {}
+    for k in keys:
+        src_paths[k] = tmp_path / f"{tag}_{k}.wav"
+        audio[k] = _e1_source_audio(k)
+        sf.write(str(src_paths[k]), np.stack([audio[k], audio[k]], axis=1),
+                 _E1_SR, subtype="PCM_24")
     als = tmp_path / f"{tag}.als"
-    _e1_write_als(als, clips, src_path.name, src_path)
+    _e1_write_als(als, clips, src_paths)
     tmap = render_check.parse_als(als)[0]
     assert not tmap.is_flat, "fixture must be an arc"
     n = int(seconds * _E1_SR)
-    tt = np.arange(n) / _E1_SR - late_sec
-    beats = tmap.sec_to_beat(np.maximum(tt, 0.0))
     y = np.zeros(n)
     for c in clips:
+        tt = np.arange(n) / _E1_SR - late_sec - c.get("late_extra", 0.0)
+        beats = tmap.sec_to_beat(np.maximum(tt, 0.0))
         on = (tt >= 0) & (beats >= c["arr_start"]) & (beats < c["arr_end"])
-        pos = _e1_warp(c["src_start"] + beats[on] - c["arr_start"]) * _E1_SR
-        y[on] = np.interp(pos, np.arange(len(src)), src)
-    t_true = float(tmap.beat_to_sec(_E1_BOUNDARY)) + late_sec
-    if click:
-        y[int(round(t_true * _E1_SR))] += 0.7
+        sb = (c["src_start"] + c.get("start_relative", 0)
+              + beats[on] - c["arr_start"])
+        src = audio[c.get("src", "S")]
+        y[on] += c.get("gain", 1.0) * np.interp(_e1_warp(sb) * _E1_SR,
+                                                np.arange(len(src)), src)
+    for b in click_beats:
+        y[int(round((float(tmap.beat_to_sec(b)) + late_sec) * _E1_SR))] += 0.7
     wav = tmp_path / f"{tag}.wav"
     sf.write(str(wav), np.stack([y, y], axis=1), _E1_SR, subtype="PCM_24")
     rpt = tmp_path / f"{tag}.json"
     _write_report(rpt)
-    if drop_source:
-        src_path.unlink()
-    return render_check.run_check(wav, rpt, als), t_true
+    for k in missing:
+        src_paths[k].unlink()
+    for k in broken:
+        src_paths[k].write_bytes(b"not audio" * 100)
+    return render_check.run_check(wav, rpt, als), tmap, wav
 
 
-def test_e1_arc_click_at_the_real_cut_fails(tmp_path):
+def _e1_skip(res):
+    skips = [f for f in res.findings
+             if f.check == "boundary_click_skipped_tempo_arc"]
+    assert len(skips) <= 1
+    return skips[0] if skips else None
+
+
+def _e1_never_wrong(res, late_sec):
+    """The refusal rule: a cut is either a named SKIP (never inspected) or,
+    if inspected, its click was found at the right place. A cut counted as
+    inspected with no finding for the click sitting in it is the failure."""
+    cov = res.coverage["boundary_click"]
+    _cov_balanced(cov)
+    hits = [f for f in res.findings if f.check == "boundary_click"]
+    assert cov["inspected"] == len(hits), (cov, [(f.check, f.msg)
+                                                 for f in res.findings])
+    for f in hits:
+        assert f.measured["located_offset_ms"] == pytest.approx(
+            late_sec * 1000.0, abs=1.0)
+    return cov
+
+
+def test_e1_arc_click_at_the_real_cut_is_a_warn(tmp_path):
     """FAILS BEFORE E1 (the arc skipped every boundary): a click at the real
     cut, 30 ms after the mapped time - outside the +/-2 ms window around the
-    mapped time - is found once the boundary is located from the audio."""
-    res, t_true = _e1_case(tmp_path, "click", late_sec=0.030, click=True)
+    mapped time - is found once the cut is located from the audio. WARN, not
+    FAIL, on an arc (E1 round 2)."""
+    res, _, _ = _e1_build(tmp_path, "click", _e1_one_track_clips(),
+                          late_sec=0.030, click_beats=[_E1_BOUNDARY])
     hits = [f for f in res.findings if f.check == "boundary_click"]
-    assert [f.level for f in hits] == ["FAIL"], \
+    assert [f.level for f in hits] == ["WARN"], \
         [(f.check, f.level, f.msg) for f in res.findings]
     assert hits[0].measured["located_offset_ms"] == pytest.approx(30.0,
                                                                   abs=0.5)
-    assert hits[0].t0 <= t_true <= hits[0].t1
-    assert "located +30.0 ms" in hits[0].msg
+    assert "located +30." in hits[0].msg
     cov = res.coverage["boundary_click"]
     _cov_balanced(cov)
     assert (cov["boundaries"], cov["inspected"], cov["failed"]) == (1, 1, 1)
-    assert not any(f.check == "boundary_click_skipped_tempo_arc"
-                   for f in res.findings)
-    assert res.verdict == "FAIL"
+    assert _e1_skip(res) is None
+    assert res.verdict == "WARN"
 
 
 def test_e1_arc_clean_render_is_inspected_not_skipped(tmp_path):
     """FAILS BEFORE E1: the clean twin is INSPECTED (coverage 1 of 1, no
-    skip finding) and raises nothing - the click above is not a side effect
-    of the locator itself."""
-    res, _ = _e1_case(tmp_path, "clean", late_sec=0.030)
+    skip finding) and raises nothing."""
+    res, _, _ = _e1_build(tmp_path, "clean", _e1_one_track_clips(),
+                          late_sec=0.030)
     cov = res.coverage["boundary_click"]
     _cov_balanced(cov)
     assert (cov["boundaries"], cov["inspected"], cov["failed"]) == (1, 1, 0)
-    assert cov["skipped_by_reason"]["tempo_arc"] == 0
     assert not any(f.check.startswith("boundary_click")
                    for f in res.findings), \
         [(f.check, f.level, f.msg) for f in res.findings]
@@ -3806,31 +3865,237 @@ def test_e1_arc_clean_render_is_inspected_not_skipped(tmp_path):
 
 def test_e1_arc_click_at_the_mapped_time_is_not_where_the_cut_is(tmp_path):
     """Prove-the-test: the located time, not the mapped one, is what gets
-    tested. The same +/-2 ms test at the MAPPED time misses this click."""
-    res, t_true = _e1_case(tmp_path, "mapped", late_sec=0.030, click=True)
-    tmap = render_check.parse_als(tmp_path / "mapped.als")[0]
+    tested. run_check finds the click; the same +/-2 ms test at the MAPPED
+    time does not."""
+    res, tmap, wav = _e1_build(tmp_path, "mapped", _e1_one_track_clips(),
+                               late_sec=0.030, click_beats=[_E1_BOUNDARY])
+    assert any(f.check == "boundary_click" for f in res.findings)
     t_mapped = float(tmap.beat_to_sec(_E1_BOUNDARY))
-    assert abs(t_true - t_mapped) > render_check.CLICK_HALF_WINDOW_SEC
-    at_mapped = render_check.check_boundary_click(
-        tmp_path / "mapped.wav", [t_mapped], tmap)
+    assert 0.030 > render_check.CLICK_HALF_WINDOW_SEC
+    at_mapped = render_check.check_boundary_click(wav, [t_mapped], tmap)
     assert not any(f.check == "boundary_click" for f in at_mapped)
 
 
 def test_e1_arc_unlocatable_boundary_is_a_named_skip_never_a_pass(tmp_path):
-    """A boundary that cannot be located - here the cut sits further from its
-    mapped time than the search reaches, or the source WAV is gone - is
-    skipped by name (tempo_arc) with the click still in the audio: never a
-    clean pass, never a verdict at the mapped time."""
-    for tag, kwargs in (("far", dict(late_sec=0.40)),
-                        ("nosrc", dict(late_sec=0.030, drop_source=True))):
-        res, _ = _e1_case(tmp_path, tag, click=True, **kwargs)
+    """REFUSAL CORPUS: a cut that cannot be located - further from its mapped
+    time than the search reaches, its source WAV gone, or the WAV present but
+    unreadable - is skipped by name (tempo_arc) with the click still in the
+    audio: never counted as inspected, never a verdict at the mapped time,
+    and the reason is named."""
+    cases = (("far", dict(late_sec=0.40), {"weak_match", "search_edge"}),
+             ("nosrc", dict(late_sec=0.030, missing=("S",)),
+              {"source_missing"}),
+             ("broken", dict(late_sec=0.030, broken=("S",)),
+              {"source_open_failed"}))
+    for tag, kwargs, reasons in cases:
+        res, _, _ = _e1_build(tmp_path, tag, _e1_one_track_clips(),
+                              click_beats=[_E1_BOUNDARY], **kwargs)
         cov = res.coverage["boundary_click"]
         _cov_balanced(cov)
         assert (cov["inspected"], cov["skipped_by_reason"]["tempo_arc"]) == \
             (0, 1), (tag, cov)
         assert not any(f.check == "boundary_click" for f in res.findings), tag
-        skips = [f for f in res.findings
-                 if f.check == "boundary_click_skipped_tempo_arc"]
-        assert len(skips) == 1 and skips[0].level == "SKIP", tag
-        assert skips[0].measured["skipped_boundaries"] == 1
-        assert skips[0].measured["inspected_boundaries"] == 0
+        sk = _e1_skip(res)
+        assert sk is not None and sk.level == "SKIP", tag
+        assert sk.measured["skipped_boundaries"] == 1
+        assert sk.measured["inspected_boundaries"] == 0
+        assert set(sk.measured["unlocated_by_reason"]) <= reasons, \
+            (tag, sk.measured)
+        assert "could not be located from the audio" in sk.msg
+
+
+def test_e1_codex_quiet_cut_under_a_shifted_copy_is_not_misplaced(tmp_path):
+    """Codex construction 1 (fails on e9e6021): a quiet entering clip whose
+    sample an audible continuing track plays 60 ms ahead. The continuing
+    track has no cut there and may not vote, and the entering clip's
+    template matches the other track's material: shared, so a named SKIP,
+    never an inspection at the copy's time."""
+    clips = [
+        {"track": "B", "arr_start": 0, "arr_end": 62, "src_start": 16.12,
+         "src": "S"},
+        {"track": "A", "arr_start": 24, "arr_end": 62, "src_start": 40,
+         "src": "S", "gain": 0.3},
+    ]
+    res, _, _ = _e1_build(tmp_path, "shared", clips, late_sec=0.030,
+                          click_beats=[_E1_BOUNDARY])
+    cov = _e1_never_wrong(res, 0.030)
+    assert cov["inspected"] == 0
+    assert _e1_skip(res).measured["unlocated_by_reason"] == {
+        "shared_material": 1}
+
+
+def test_e1_codex_repeating_continuing_track_cannot_place_a_far_cut(
+        tmp_path):
+    """Codex construction 2 (fails on e9e6021): the real cut sits 510 ms
+    late, past the search, while a louder continuing track repeats every
+    beat, so one repeat lands inside the search. A continuing clip never votes; the
+    cut clips find nothing in range: a named SKIP."""
+    clips = [dict(c, gain=0.25) for c in _e1_one_track_clips()] + [
+        {"track": "B", "arr_start": 0, "arr_end": 62, "src_start": 0,
+         "src": "P"}]
+    res, _, _ = _e1_build(tmp_path, "rep", clips, late_sec=0.510,
+                          click_beats=[_E1_BOUNDARY])
+    cov = _e1_never_wrong(res, 0.510)
+    assert cov["inspected"] == 0 and cov["skipped_by_reason"]["tempo_arc"] == 1
+
+
+def test_e1_codex_start_relative_clip_cannot_vote(tmp_path):
+    """Codex construction 3 (fails on e9e6021): the entering clip starts 0.1
+    beat into its loop (StartRelative) over 300 ms of source silence. The
+    locator does not model StartRelative, so that clip may not vote and the
+    leaving clip alone is one vote: a named SKIP, not a fit 48 ms off."""
+    clips = _e1_one_track_clips(src="Z")
+    clips[1]["start_relative"] = 0.1
+    res, _, _ = _e1_build(tmp_path, "srel", clips, late_sec=0.030,
+                          click_beats=[_E1_BOUNDARY])
+    cov = _e1_never_wrong(res, 0.030)
+    assert cov["inspected"] == 0
+    assert _e1_skip(res).measured["unlocated_by_reason"] == {"single_vote": 1}
+
+
+def test_e1_codex_votes_1_8_ms_apart_disagree(tmp_path):
+    """Codex construction 4 (fails on e9e6021, whose rule compared each vote
+    with the median): two cut clips on different tracks whose audio sits
+    1.8 ms apart. Pairwise max minus min is 1.8 ms > 1 ms: a named SKIP."""
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": 24, "src_start": 0,
+         "src": "S"},
+        {"track": "B", "arr_start": 24, "arr_end": 62, "src_start": 40,
+         "src": "S2", "late_extra": 0.0018},
+    ]
+    res, _, _ = _e1_build(tmp_path, "dis", clips, late_sec=0.030,
+                          click_beats=[_E1_BOUNDARY])
+    cov = res.coverage["boundary_click"]
+    _cov_balanced(cov)
+    assert cov["inspected"] == 0
+    assert _e1_skip(res).measured["unlocated_by_reason"] == {
+        "votes_disagree": 1}
+
+
+def test_e1_two_tracks_vote_and_agree(tmp_path):
+    """Two cut clips on different tracks (one leaving, one entering) are two
+    votes; they agree, so the cut is located and the click found. Without
+    the second vote (see the missing-source test) the same cut is skipped."""
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": 24, "src_start": 0,
+         "src": "S"},
+        {"track": "B", "arr_start": 24, "arr_end": 62, "src_start": 40,
+         "src": "S2"},
+    ]
+    res, _, _ = _e1_build(tmp_path, "two", clips, late_sec=0.030,
+                          click_beats=[_E1_BOUNDARY])
+    cov = _e1_never_wrong(res, 0.030)
+    assert (cov["inspected"], cov["failed"]) == (1, 1)
+
+
+def test_e1_source_missing_on_one_track_leaves_a_single_vote(tmp_path):
+    """The same two-track cut with the entering track's WAV gone. The
+    leaving clip could still match, but it cannot be checked for shared
+    material against a track that cannot be rebuilt, and one vote would not
+    be enough anyway (ARC_MIN_VOTES 2): a named SKIP, reason
+    neighbour_unreadable, although that vote alone would have been right."""
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": 24, "src_start": 0,
+         "src": "S"},
+        {"track": "B", "arr_start": 24, "arr_end": 62, "src_start": 40,
+         "src": "S2"},
+    ]
+    res, _, _ = _e1_build(tmp_path, "one", clips, late_sec=0.030,
+                          click_beats=[_E1_BOUNDARY], missing=("S2",))
+    cov = _e1_never_wrong(res, 0.030)
+    assert cov["inspected"] == 0
+    assert _e1_skip(res).measured["unlocated_by_reason"] == {
+        "neighbour_unreadable": 1}
+    assert render_check.ARC_MIN_VOTES == 2
+
+
+def test_e1_periodic_source_is_a_repeating_match(tmp_path):
+    """Cut clips cut from a one-beat loop: the template matches one beat away
+    as well as at the cut, so it locates nothing (repeating_match), even
+    though the true lag is inside the search."""
+    res, _, _ = _e1_build(tmp_path, "per", _e1_one_track_clips(src="P"),
+                          late_sec=0.030, click_beats=[_E1_BOUNDARY])
+    cov = _e1_never_wrong(res, 0.030)
+    assert cov["inspected"] == 0
+    assert _e1_skip(res).measured["unlocated_by_reason"] == {
+        "repeating_match": 1}
+
+
+def test_e1_partially_located_arc_reports_both_and_never_says_clean(
+        tmp_path):
+    """Two cuts: beat 24 (two agreeing votes) is located and inspected; beat
+    40 cannot be checked for shared material because the entering track's
+    WAV is gone. Coverage, the SKIP finding and the report all say 1 of 2,
+    the report uses the arc wording and the sensitivity line, and
+    boundary_click is never listed under Checks run clean on an arc."""
+    clips = [
+        {"track": "A", "arr_start": 0, "arr_end": 24, "src_start": 0,
+         "src": "S"},
+        {"track": "B", "arr_start": 24, "arr_end": 40, "src_start": 40,
+         "src": "S2"},
+        {"track": "C", "arr_start": 40, "arr_end": 62, "src_start": 8,
+         "src": "S3"},
+    ]
+    res, _, wav = _e1_build(tmp_path, "part", clips, late_sec=0.030,
+                            missing=("S3",))
+    cov = res.coverage["boundary_click"]
+    _cov_balanced(cov)
+    assert (cov["boundaries"], cov["inspected"], cov["failed"]) == (2, 1, 0)
+    assert cov["skipped_by_reason"]["tempo_arc"] == 1
+    sk = _e1_skip(res)
+    assert sk.measured["skipped_boundaries"] == 1
+    assert sk.measured["inspected_boundaries"] == 1
+    assert sk.measured["unlocated_by_reason"] == {"neighbour_unreadable": 1}
+    md_path, _ = render_check.write_report(res, wav, tmp_path / "out.json")
+    text = md_path.read_text(encoding="utf-8")
+    assert ("boundary_click (tempo arc): no click-shaped discontinuity "
+            "flagged in 1 of 2 boundary windows (skipped 1: tempo_arc 1), "
+            "0 flagged") in text
+    assert render_check.BOUNDARY_CLICK_ARC_SENSITIVITY in text
+    assert "BURN_LIST.md item E1" in text
+    assert "boundary_click" not in text.split("## Checks run clean", 1)[1]
+    assert "inspected 1 of 2" not in text
+
+
+def test_e1_fully_located_clean_arc_is_not_listed_clean(tmp_path):
+    """Every cut located and nothing flagged: still not "run clean" on an
+    arc (no SKIP finding exists to keep it off that list)."""
+    res, _, wav = _e1_build(tmp_path, "full", _e1_one_track_clips(),
+                            late_sec=0.030)
+    assert _e1_skip(res) is None
+    md_path, _ = render_check.write_report(res, wav, tmp_path / "out.json")
+    text = md_path.read_text(encoding="utf-8")
+    assert "no click-shaped discontinuity flagged in 1 of 1" in text
+    assert "boundary_click" not in text.split("## Checks run clean", 1)[1]
+
+
+def test_e1_broken_warp_geometry_never_allocates_the_span(tmp_path):
+    """A warp marker map that sends half a second of arrangement across
+    hours of source is refused before any read (ARC_MAX_SOURCE_STRETCH),
+    not turned into a gigabyte allocation."""
+    class _NoRead:
+        samplerate = 44100
+        frames = 44100 * 3600 * 10
+
+        def seek(self, *_a):
+            raise AssertionError("must not read")
+
+        def read(self, *_a, **_k):
+            raise AssertionError("must not read")
+
+    tm = render_check.TempoMap(np.array([0.0, 64.0]),
+                               np.array([124.0, 128.0]), 124.0)
+    clip = {"arr_start": 0.0, "arr_end": 62.0, "loop_start": 0.0,
+            "loop_on": False, "is_warped": True, "start_relative": 0.0,
+            "warp_markers": [(0.0, 0.0), (1.0, 20000.0)]}
+    ts = 0.1 + np.arange(int(0.5 * 44100)) / 44100.0
+    assert render_check._clip_audio_at(clip, tm, ts, _NoRead()) is None
+    sane = dict(clip, warp_markers=[(0.0, 0.0), (64.0, 32.0)])
+
+    class _Zeros(_NoRead):
+        def seek(self, *_a):
+            pass
+
+        def read(self, n, **_k):
+            return np.zeros((n, 2))
+    assert render_check._clip_audio_at(sane, tm, ts, _Zeros()) is not None
