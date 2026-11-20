@@ -84,5 +84,22 @@
    "not_judged": "A3 (bar 40), A4/A5 (61, 66), A6/A7 (99, 102): Sam did not comment; Claude doubts them",
    "mix_notes": "Mixing OUT: start the incoming when fill F3 finishes (bar 153, 4:54); bass swap at the outro start (bar 177, 5:40)."
   }
+ },
+ "fresh_mix_20_11_26": {
+  "transition_5_PAX_into_Cruel_Intentions": {
+   "pipeline_built": {
+    "entry_bar": 176,
+    "swap_bar": 192,
+    "overlap_bars": 17,
+    "note": "swap at the very end of PAX's outro, after its bass has gone"
+   },
+   "owner": "technically works but weak: an intro into an outro; the bass is only brought in, nothing handed over",
+   "owner_prefers": {
+    "swap": "PAX A6 (outro start, bar 177, 0-based 176) with Cruel Intentions B1 (bar 17, 0-based 16)",
+    "so_entry": "about 16 bars before PAX bar 177, i.e. 0-based entry about 160",
+    "why": "from the exciting bass before A6 straight into the exciting bass after B1"
+   },
+   "status": "Sam, from the picture only, not heard"
+  }
  }
 }
