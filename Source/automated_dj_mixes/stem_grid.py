@@ -38,10 +38,10 @@ def _lazy_stem_audio(wav, *args, **kwargs):
     `kick_model_adapter` (2026-08-20) already took Demucs from 21 s to 3.5 s
     for the kick-model pass, but the beat-grid detector ran its OWN separation
     through this hook and the cache never served it. Same model, same file,
-    twice. Since 2026-11-20 both separation call sites pass shifts=0, so the
-    same model and file give a bit-identical stem on every run; before that
-    Demucs applied an unseeded random time shift, the stems differed per run,
-    and the cache froze whichever separation was written last.
+    twice. Both separation call sites pass shifts=0, so Demucs applies no
+    random time shift. On the one machine measured (RTX 3050) repeated
+    separations of one file were bit-identical; identity across machines,
+    devices (CPU vs GPU) or sample-rate paths is not established.
 
     The toolkit's `detect_beat_grid` does `drums, _bass, sr = _stem_separator(...)`
     and discards the bass, so a drums-only cache satisfies it completely - the
