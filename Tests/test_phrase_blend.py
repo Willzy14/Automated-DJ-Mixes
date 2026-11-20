@@ -355,7 +355,7 @@ def test_plan_has_the_documented_fields():
               "in_intro_looped_bars", "stretches", "why"):
         assert hasattr(p, f)
     assert p.why and all(isinstance(w, str) for w in p.why)
-    assert not any("—" in w for w in p.why)
+    assert not any(chr(0x2014) in w for w in p.why)
 
 
 def test_candidates_are_ranked_best_first_and_deterministic():
