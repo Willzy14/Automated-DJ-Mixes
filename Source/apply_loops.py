@@ -30,6 +30,7 @@ import html
 import json
 import math
 import re
+import secrets
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,6 +53,14 @@ def decompress_als(als_path: Path) -> list[str]:
     return content.splitlines(keepends=True)
 
 
+def _unique_partial(output_path: Path) -> Path:
+    """A staging name no other call can share: `<name>.<8 hex>.partial`. Two
+    writers aimed at the same output each get their own file, so one can never
+    validate its bytes and have the other's renamed onto the output. The
+    `.partial` suffix stays last, so cleanup and Dropbox ignore patterns match."""
+    return output_path.with_name(f"{output_path.name}.{secrets.token_hex(4)}.partial")
+
+
 def _discard_partial(partial: Path) -> None:
     """Best-effort removal of a `.partial` file; never raises, so cleanup can
     not mask the error that is already on its way out."""
@@ -61,18 +70,14 @@ def _discard_partial(partial: Path) -> None:
         pass
 
 
-def compress_als(lines: list[str], output_path: Path) -> Path:
-    """Write, validate, THEN publish. The ALS is written to a sibling
-    `.partial` file and renamed onto `output_path` only if it validates, so a
-    rejected build never leaves an invalid Sections V<N>.als behind for a
-    resumed run (or Ableton) to pick up (burn list D22). The partial is
-    removed on every outcome. A failed final rename (a read-only or locked
-    output) is reported as ValueError, like a validation failure, and leaves
-    any existing output intact."""
+def stage_als(lines: list[str], output_path: Path) -> Path:
+    """Write `lines` to this call's own `.partial` beside `output_path` and
+    validate THAT file; return its path (not published). A rejected build
+    removes the partial and raises ValueError, leaving `output_path` alone."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     content = "".join(lines)
-    partial = output_path.with_name(output_path.name + ".partial")
+    partial = _unique_partial(output_path)
     try:
         with gzip.open(partial, "wb") as f:
             f.write(content.encode("utf-8"))
@@ -82,12 +87,39 @@ def compress_als(lines: list[str], output_path: Path) -> Path:
             raise ValueError(
                 f"ALS validation failed for {output_path.name}: {errors[0]}"
             )
-        try:
-            partial.replace(output_path)
-        except OSError as exc:
-            raise ValueError(
-                f"ALS write failed for {output_path.name}: {exc}"
-            ) from exc
+    except BaseException:
+        _discard_partial(partial)
+        raise
+    return partial
+
+
+def publish_staged_als(partial: Path, output_path: Path) -> Path:
+    """Rename a staged, validated `partial` onto `output_path`. A failed
+    rename (a read-only or locked output) is reported as ValueError and
+    leaves any existing output intact. The partial is not removed here."""
+    output_path = Path(output_path)
+    try:
+        Path(partial).replace(output_path)
+    except OSError as exc:
+        raise ValueError(
+            f"ALS write failed for {output_path.name}: {exc}"
+        ) from exc
+    return output_path
+
+
+def compress_als(lines: list[str], output_path: Path) -> Path:
+    """Write, validate, THEN publish. The ALS is written to this call's own
+    `.partial` file (unique per call, so two writers aimed at one output can
+    not swap each other's bytes) and renamed onto `output_path` only if it
+    validates, so a rejected build never leaves an invalid Sections V<N>.als
+    behind for a resumed run (or Ableton) to pick up (burn list D22). That
+    same partial is removed on every outcome. A failed final rename (a
+    read-only or locked output) is reported as ValueError, like a validation
+    failure, and leaves any existing output intact."""
+    output_path = Path(output_path)
+    partial = stage_als(lines, output_path)
+    try:
+        publish_staged_als(partial, output_path)
     finally:
         _discard_partial(partial)
     return output_path
@@ -538,6 +570,14 @@ def shift_named_clip(lines: list[str], track_start: int, track_end: int,
     return changed
 
 
+def _quoted_number_re(prefix: str):
+    """`<prefix>"n"` or `<prefix>'n'` (either XML quote style): group `pre` is
+    the text up to and including the opening quote, `num` the number, `q` the
+    quote that closes it."""
+    return re.compile(
+        rf"(?P<pre>{re.escape(prefix)}(?P<q>[\"']))(?P<num>{_XML_NUMBER})(?P=q)")
+
+
 def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
                           clip_name: str, trim_beats: float) -> int:
     """Trim the FRONT of a named clip by `trim_beats`: move its start later in
@@ -583,37 +623,44 @@ def trim_named_clip_front(lines: list[str], track_start: int, track_end: int,
 
     def _first_value(tag: str):
         for k in range(clip_open_idx, clip_close_idx + 1):
-            m_val = re.search(rf'<{tag} Value="({_XML_NUMBER})"', lines[k])
+            m_val = _quoted_number_re(f"<{tag} Value=").search(lines[k])
             if m_val:
-                return float(m_val.group(1))
+                return float(m_val.group("num"))
         return None
 
     # Same two windows validate_als checks for zero/negative length: the
-    # arrangement window and the source window.
+    # arrangement window and the source window. A window whose start this
+    # function is about to move must have a readable end: otherwise the trim
+    # could empty it unseen, so refuse before any edit.
     for lo_tag, hi_tag in (("CurrentStart", "CurrentEnd"), ("LoopStart", "LoopEnd")):
         lo, hi = _first_value(lo_tag), _first_value(hi_tag)
-        if lo is not None and hi is not None and trim_beats >= (hi - lo) - 1e-6:
+        if lo is not None and hi is None:
+            raise ValueError(
+                f"trim_named_clip_front: clip '{clip_name}' has a readable "
+                f"{lo_tag} but no readable {hi_tag}; refusing to trim blind")
+        if lo is not None and trim_beats >= (hi - lo) - 1e-6:
             raise ValueError(
                 f"trim_named_clip_front: trimming {trim_beats:g} beats would empty "
                 f"clip '{clip_name}' ({hi_tag} - {lo_tag} = {hi - lo:g} beats)")
+
+    def _moved(rx, line):
+        old = float(rx.search(line).group("num"))
+        return rx.sub(
+            lambda mm: f"{mm.group('pre')}{old + trim_beats}{mm.group('q')}",
+            line, count=1)
+
     changed = 0
-    m = re.search(rf'Time="({_XML_NUMBER})"', lines[clip_open_idx])
-    if m:
-        lines[clip_open_idx] = re.sub(
-            rf'Time="{_XML_NUMBER}"', f'Time="{float(m.group(1)) + trim_beats}"',
-            lines[clip_open_idx], count=1)
+    time_rx = _quoted_number_re("Time=")
+    if time_rx.search(lines[clip_open_idx]):
+        lines[clip_open_idx] = _moved(time_rx, lines[clip_open_idx])
         changed += 1
     # ONLY the start fields move (keep the end). CurrentStart + LoopStart shift
     # together to preserve the 1:1 source->arrangement mapping.
     for k in range(clip_open_idx, clip_close_idx + 1):
-        line = lines[k]
         for tag in ("CurrentStart", "LoopStart"):
-            m = re.search(rf'<{tag} Value="({_XML_NUMBER})"', line)
-            if m:
-                lines[k] = re.sub(
-                    rf'(<{tag} Value="){_XML_NUMBER}(")',
-                    rf'\g<1>{float(m.group(1)) + trim_beats}\g<2>', line, count=1)
-                line = lines[k]
+            start_rx = _quoted_number_re(f"<{tag} Value=")
+            if start_rx.search(lines[k]):
+                lines[k] = _moved(start_rx, lines[k])
                 changed += 1
     return changed
 

@@ -13,6 +13,7 @@ import gzip
 import math
 import os
 import re
+import secrets
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -62,6 +63,14 @@ def decompress_als(als_path: Path) -> list[str]:
     return content.splitlines(keepends=True)
 
 
+def _unique_partial(output_path: Path) -> Path:
+    """A staging name no other call can share: `<name>.<8 hex>.partial`. Two
+    writers aimed at the same output each get their own file, so one can never
+    validate its bytes and have the other's renamed onto the output. The
+    `.partial` suffix stays last, so cleanup and Dropbox ignore patterns match."""
+    return output_path.with_name(f"{output_path.name}.{secrets.token_hex(4)}.partial")
+
+
 def _discard_partial(partial: Path) -> None:
     """Best-effort removal of a `.partial` file; never raises, so cleanup can
     not mask the error that is already on its way out."""
@@ -93,7 +102,7 @@ def compress_als(lines: list[str], output_path: Path,
     output_path = Path(output_path)
     content = "".join(lines)
     raw_bytes = content.encode("utf-8")
-    partial = output_path.with_name(output_path.name + ".partial")
+    partial = _unique_partial(output_path)
     try:
         # The gzip header records the file name; give it the FINAL name, not
         # "<name>.partial", so a valid write is byte-identical to the old
