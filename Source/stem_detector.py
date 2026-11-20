@@ -35,7 +35,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import matplotlib
@@ -816,19 +818,51 @@ def _ascii(value) -> str:
     return str(value).encode("ascii", "backslashreplace").decode()
 
 
-def _check_cached_sections(path: Path, wav_stem: str, allow_unverified: bool = False):
-    """Judge a cached SECTIONS_STEM json for --write-hints.
+KICK_ON, KICK_OFF, PROV_ABSENT, PROV_MALFORMED = "kick_on", "kick_off", "absent", "malformed"
+_ENERGY_SRC = "stem-energy-threshold"
+_MODEL_SRC = "kick-detector-v3"
 
-    Returns (result_dict, note). result_dict is None when the file is not
-    usable and note is then the reason. A usable result may carry a note (only
-    with allow_unverified, when the kick-detector provenance is missing).
+
+def _kick_provenance(res) -> str:
+    """The ONE trust function: did this SECTIONS_STEM result use the kick detector?
+
+    Used by both the --write-hints reader and the overwrite guard.
+      KICK_ON   analysis.kick_model is True and the source is not the energy
+                threshold; or no analysis key and source == kick-detector-v3.
+      KICK_OFF  analysis.kick_model is False; or no analysis key and source ==
+                stem-energy-threshold.
+      ABSENT    no analysis key and no kick_presence_source.
+      MALFORMED anything else (analysis not a dict, kick_model not a bool,
+                analysis true while the source says energy threshold, an
+                unknown source value, a non-dict result).
     """
+    if not isinstance(res, dict):
+        return PROV_MALFORMED
+    signals = res.get("signals")
+    source = signals.get("kick_presence_source") if isinstance(signals, dict) else None
+    if "analysis" in res:
+        analysis = res["analysis"]
+        if not isinstance(analysis, dict):
+            return PROV_MALFORMED
+        flag = analysis.get("kick_model")
+        if flag is True:
+            return PROV_MALFORMED if source == _ENERGY_SRC else KICK_ON
+        if flag is False:
+            return KICK_OFF
+        return PROV_MALFORMED
+    if source is None:
+        return PROV_ABSENT
+    if source == _MODEL_SRC:
+        return KICK_ON
+    if source == _ENERGY_SRC:
+        return KICK_OFF
+    return PROV_MALFORMED
+
+
+def _check_cached_sections_inner(path: Path, wav_stem: str, allow_unverified: bool):
     if not path.exists():
         return None, f"missing {path.name}"
-    try:
-        res = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 - any read/parse failure is "unusable"
-        return None, f"unreadable {path.name}: {type(exc).__name__}: {exc}"
+    res = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(res, dict):
         return None, f"{path.name} is not a JSON object"
     if res.get("track") != wav_stem:
@@ -840,46 +874,82 @@ def _check_cached_sections(path: Path, wav_stem: str, allow_unverified: bool = F
     sections = res.get("sections")
     if not isinstance(sections, list) or not sections:
         return None, f"{path.name} has no sections"
-    try:
-        hints_from_stem_result(res)
-    except Exception as exc:  # noqa: BLE001 - any failure means the file is unusable
-        return None, f"{path.name} cannot yield hints: {type(exc).__name__}: {exc}"
+    hints = hints_from_stem_result(res)
+    ends = []
+    for sec in sections:
+        end = sec.get("end_sec") if isinstance(sec, dict) else None
+        if (isinstance(end, (int, float)) and not isinstance(end, bool)
+                and math.isfinite(end) and end > 0):
+            ends.append(end)
+    if not ends:
+        return None, f"{path.name} has no section with a finite positive end_sec"
+    track_end = max(ends)
+    for key, val in hints.items():
+        if not (isinstance(val, (int, float)) and math.isfinite(val)
+                and 0 < val <= track_end + 0.01):
+            return None, (f"{path.name} gives an invalid hint {key}={val!r} "
+                          f"(track ends at {track_end:.2f}s)")
 
-    analysis = res.get("analysis")
-    if analysis is not None:
-        verified = isinstance(analysis, dict) and analysis.get("kick_model") is True
-    else:
-        signals = res.get("signals")
-        verified = (isinstance(signals, dict)
-                    and signals.get("kick_presence_source") == "kick-detector-v3")
-    if verified:
+    state = _kick_provenance(res)
+    if state == KICK_ON:
         return res, None
-    if allow_unverified:
-        return res, (f"{path.name} is not known to come from the kick detector "
+    if state == PROV_ABSENT and allow_unverified:
+        return res, (f"{path.name} has no kick-detector provenance "
                      f"(accepted by --allow-unverified-cache)")
+    if state == KICK_OFF:
+        return None, f"{path.name} was written WITHOUT the kick detector"
+    if state == PROV_MALFORMED:
+        return None, f"{path.name} has malformed or contradictory kick provenance"
     return None, f"{path.name} is not known to come from the kick detector"
+
+
+def _check_cached_sections(path: Path, wav_stem: str, allow_unverified: bool = False):
+    """Judge a cached SECTIONS_STEM json for --write-hints.
+
+    Returns (result_dict, note). result_dict is None when the file is not
+    usable and note is then the reason. Any exception is a refusal for this
+    track only, never a crash that hides the other tracks.
+    """
+    try:
+        return _check_cached_sections_inner(path, wav_stem, allow_unverified)
+    except Exception as exc:  # noqa: BLE001 - one bad track must not stop the report
+        return None, f"cannot use {path.name}: {type(exc).__name__}: {exc}"
+
+
+def _write_hints_atomic(out: Path, hints: dict) -> None:
+    """Serialise first (strict JSON), then write a sibling temp file and replace."""
+    text = json.dumps(hints, indent=2, allow_nan=False)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=".track_hints.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _may_overwrite_sections_json(path: Path, kick_model_on: bool) -> bool:
     """Overwrite guard for SECTIONS_STEM_*.json.
 
-    The pipeline's Phase 1a writes this file WITH the Kick Detector; the
-    arrangement phase reads it afterwards. A later no-kick-model run (for
-    example the documented --write-hints without --kick-model) must not
-    silently replace it with a different analysis. A file with no
-    analysis.kick_model key is legacy: it is overwritten as before. An
-    unreadable file is also overwritten (nothing trustworthy to protect).
+    A kick-off write must not replace a file whose provenance is KICK_ON,
+    legacy (no analysis key, source kick-detector-v3) included. Everything
+    else, an unreadable or malformed file too, is overwritten as before.
     """
     if kick_model_on or not path.exists():
         return True
     try:
         prior = json.loads(path.read_text(encoding="utf-8"))
-        prior_kick = bool((prior.get("analysis") or {}).get("kick_model", False))
-    except (ValueError, AttributeError, OSError) as exc:
+        state = _kick_provenance(prior)
+    except Exception as exc:  # noqa: BLE001 - nothing trustworthy to protect
         print(f"  [warn] could not read existing {_ascii(path.name)} for the overwrite guard: "
               f"{type(exc).__name__}: {_ascii(exc)}; overwriting")
         return True
-    if prior_kick:
+    if state == KICK_ON:
         print(f"  [WARN] {_ascii(path.name)} was written WITH the kick model; this run has it off, "
               f"so the file was NOT overwritten")
         return False
@@ -1569,6 +1639,13 @@ def main():
     wavs = [audio / args.track] if args.track else sorted(audio.glob("*.wav"))
 
     if args.write_hints:
+        if args.track:
+            tp = audio / args.track
+            if (Path(args.track).name != args.track or tp.suffix.lower() != ".wav"
+                    or not tp.is_file()):
+                print(f"  [REFUSED] --track {_ascii(args.track)} is not a .wav file in "
+                      f"{_ascii(audio)}")
+                sys.exit(2)
         # Pure read of the Phase 1a analysis: never runs detect(), never writes
         # a SECTIONS_STEM json. All tracks must be usable or nothing is written.
         hints, bad = {}, []
@@ -1593,10 +1670,12 @@ def main():
                   "with --sections-layout --stem-sections --stem-grid --kick-model), "
                   "then re-run --write-hints.")
             sys.exit(2)
-        hints_dir = args.project / "Hints"
-        hints_dir.mkdir(parents=True, exist_ok=True)
-        out = hints_dir / "track_hints.json"
-        out.write_text(json.dumps(hints, indent=2), encoding="utf-8")
+        out = args.project / "Hints" / "track_hints.json"
+        try:
+            _write_hints_atomic(out, hints)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [REFUSED] could not write hints: {type(exc).__name__}: {_ascii(exc)}")
+            sys.exit(2)
         print(f"Wrote {len(hints)} hints -> {_ascii(out)}")
         return
 

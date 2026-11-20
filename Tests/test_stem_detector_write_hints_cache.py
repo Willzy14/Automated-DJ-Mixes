@@ -115,6 +115,21 @@ BAD_SHAPES = {
     "invalid_json": "{not json",
     "kick_model_false": json.dumps(_cached(kick=False)),
     "legacy_no_provenance": json.dumps(_cached(kick=None)),
+    "bpm_nan": json.dumps(_bad(bpm=float("nan"))),
+    "bpm_huge_int": json.dumps(_bad(bpm=10 ** 400)),
+    "analysis_null": json.dumps(_bad(analysis=None)),
+    "analysis_list": json.dumps(_bad(analysis=[])),
+    "analysis_string": json.dumps(_bad(analysis="yes")),
+    "kick_model_not_bool": json.dumps(_bad(analysis={"kick_model": "yes"})),
+    "analysis_true_but_energy_source": json.dumps(
+        _bad(signals={"kick_presence_source": "stem-energy-threshold"})),
+    "unknown_source_legacy": json.dumps(
+        {**_cached(kick=None), "signals": {"kick_presence_source": "mystery"}}),
+    "no_finite_section_end": json.dumps(
+        _bad(sections=[{"label": "drop", "start_sec": 0.0, "end_sec": None}])),
+    "hints_beyond_track_end": json.dumps(
+        _bad(sections=[{"label": "intro", "start_bar": 0, "end_bar": 5,
+                        "start_sec": 0.0, "end_sec": 10.0}])),
 }
 
 
@@ -140,11 +155,26 @@ def test_legacy_file_with_energy_source_is_refused(tmp_path, monkeypatch):
     _run_refused(tmp_path, monkeypatch)
 
 
-def test_allow_unverified_accepts_kick_off_with_warn(tmp_path, monkeypatch, capsys):
-    _project(tmp_path, cache=_cached(kick=False))
+def test_allow_unverified_accepts_absent_provenance_with_warn(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, cache=_cached(kick=None))
     hints = _run_ok(tmp_path, monkeypatch, extra=("--allow-unverified-cache",))
     assert "T.wav" in hints
     assert "[WARN]" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["kick_model_false", "analysis_null", "analysis_list",
+                                  "kick_model_not_bool", "analysis_true_but_energy_source",
+                                  "unknown_source_legacy"])
+def test_allow_unverified_never_accepts_kick_off_or_malformed(tmp_path, monkeypatch, name):
+    _project(tmp_path, raw=BAD_SHAPES[name])
+    _run_refused(tmp_path, monkeypatch, extra=("--allow-unverified-cache",))
+
+
+def test_legacy_energy_source_not_accepted_even_with_flag(tmp_path, monkeypatch):
+    d = _cached(kick=None)
+    d["signals"]["kick_presence_source"] = "stem-energy-threshold"
+    _project(tmp_path, cache=d)
+    _run_refused(tmp_path, monkeypatch, extra=("--allow-unverified-cache",))
 
 
 def test_allow_unverified_still_refuses_track_mismatch(tmp_path, monkeypatch):
@@ -207,3 +237,169 @@ def test_guard_prints_warn_naming_file(tmp_path, capsys):
     jp = _project(tmp_path, cache=_cached(kick=True))
     stem_detector._may_overwrite_sections_json(jp, False)
     assert "SECTIONS_STEM_T.json" in capsys.readouterr().out
+
+
+# ---- round 3 ----
+
+def test_signals_key_absent_with_analysis_true_is_accepted(tmp_path, monkeypatch):
+    d = _cached(kick=True)
+    del d["signals"]
+    _project(tmp_path, cache=d)
+    assert "T.wav" in _run_ok(tmp_path, monkeypatch)
+
+
+def test_signals_key_absent_without_analysis_is_absent_provenance(tmp_path, monkeypatch):
+    d = _cached(kick=None)
+    del d["signals"]
+    _project(tmp_path, cache=d)
+    _run_refused(tmp_path, monkeypatch)
+    assert "T.wav" in _run_ok(tmp_path, monkeypatch, extra=("--allow-unverified-cache",))
+
+
+def test_two_bad_tracks_give_exactly_two_refused_lines(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, cache=_cached(kick=True))
+    _project(tmp_path, raw="{bad", stem="U")
+    _project(tmp_path, stem="V")
+    _run_refused(tmp_path, monkeypatch)
+    out = capsys.readouterr().out
+    assert out.count("[REFUSED]") == 2
+    assert "SECTIONS_STEM_U.json" in out and "SECTIONS_STEM_V.json" in out
+
+
+def test_one_track_exception_does_not_stop_the_others_being_reported(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, raw=BAD_SHAPES["bpm_huge_int"], stem="A")
+    _project(tmp_path, raw=BAD_SHAPES["signals_null"], stem="B")
+    _run_refused(tmp_path, monkeypatch)
+    assert capsys.readouterr().out.count("[REFUSED]") == 2
+
+
+def test_no_wav_files_exits_2_and_leaves_existing_hints(tmp_path, monkeypatch):
+    (tmp_path / "Audio").mkdir()
+    (tmp_path / "Hints").mkdir()
+    existing = tmp_path / "Hints" / "track_hints.json"
+    existing.write_text('{"old": 1}', encoding="utf-8")
+    before = _sha(existing)
+    _run_refused(tmp_path, monkeypatch)
+    assert _sha(existing) == before
+
+
+def test_two_tracks_written_with_wav_names_and_matching_content(tmp_path, monkeypatch):
+    ca, cb = _cached(kick=True), _cached(kick=True)
+    cb["bpm"] = 126.0
+    cb["sections"] = [{**x, "start_sec": x["start_bar"] * 4 * 60.0 / 126.0,
+                       "end_sec": x["end_bar"] * 4 * 60.0 / 126.0} for x in _sections()]
+    ca["track"], cb["track"] = "Alpha", "Beta"
+    _project(tmp_path, cache=ca, stem="Alpha")
+    _project(tmp_path, cache=cb, stem="Beta")
+    hints = _run_ok(tmp_path, monkeypatch)
+    assert sorted(hints) == ["Alpha.wav", "Beta.wav"]
+    assert hints["Alpha.wav"] == stem_detector.hints_from_stem_result(ca)
+    assert hints["Beta.wav"] == stem_detector.hints_from_stem_result(cb)
+
+
+@pytest.mark.parametrize("track", ["Nope.wav", "T.txt", "..\\T.wav", "sub/T.wav"])
+def test_bad_track_arg_refused_before_any_cache_lookup(tmp_path, monkeypatch, track):
+    _project(tmp_path, cache=_cached(kick=True))
+    hints_dir = tmp_path / "Hints"
+    hints_dir.mkdir()
+    existing = hints_dir / "track_hints.json"
+    existing.write_text('{"old": 1}', encoding="utf-8")
+    before = _sha(existing)
+
+    def no_lookup(*a, **k):
+        raise AssertionError("cache must not be consulted for a bad --track")
+
+    monkeypatch.setattr(stem_detector, "_check_cached_sections", no_lookup)
+    _run_refused(tmp_path, monkeypatch, extra=("--track", track))
+    assert _sha(existing) == before
+
+
+def test_good_track_arg_writes_only_that_track(tmp_path, monkeypatch):
+    _project(tmp_path, cache=_cached(kick=True))
+    _project(tmp_path, stem="U")  # no cache, but not requested
+    hints = _run_ok(tmp_path, monkeypatch, extra=("--track", "T.wav"))
+    assert list(hints) == ["T.wav"]
+
+
+def test_failed_atomic_write_leaves_old_file_and_no_temp(tmp_path, monkeypatch):
+    _project(tmp_path, cache=_cached(kick=True))
+    hints_dir = tmp_path / "Hints"
+    hints_dir.mkdir()
+    existing = hints_dir / "track_hints.json"
+    existing.write_text('{"old": 1}', encoding="utf-8")
+    before = _sha(existing)
+
+    def failing_replace(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(stem_detector.os, "replace", failing_replace)
+    _run_refused(tmp_path, monkeypatch)
+    assert _sha(existing) == before
+    assert [p.name for p in hints_dir.iterdir()] == ["track_hints.json"]
+
+
+def test_write_failing_midway_leaves_old_file_and_no_temp(tmp_path, monkeypatch):
+    hints_dir = tmp_path / "Hints"
+    hints_dir.mkdir()
+    existing = hints_dir / "track_hints.json"
+    existing.write_text('{"old": 1}', encoding="utf-8")
+    before = _sha(existing)
+    real_fdopen = stem_detector.os.fdopen
+
+    class _Dies:
+        def __init__(self, fh):
+            self.fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.fh.close()
+
+        def write(self, text):
+            self.fh.write(text[:5])
+            raise OSError("died midway")
+
+    monkeypatch.setattr(stem_detector.os, "fdopen", lambda *a, **k: _Dies(real_fdopen(*a, **k)))
+    with pytest.raises(OSError):
+        stem_detector._write_hints_atomic(existing, {"a.wav": {"first_drop_sec": 1.0}})
+    assert _sha(existing) == before
+    assert [p.name for p in hints_dir.iterdir()] == ["track_hints.json"]
+
+
+def test_nan_in_hints_is_not_serialised(tmp_path):
+    out = tmp_path / "Hints" / "track_hints.json"
+    with pytest.raises(ValueError):
+        stem_detector._write_hints_atomic(out, {"a.wav": {"first_drop_sec": float("nan")}})
+    assert not out.exists()
+
+
+def test_guard_protects_legacy_kick_on_file(tmp_path):
+    d = _cached(kick=None)
+    d["signals"]["kick_presence_source"] = "kick-detector-v3"
+    jp = _project(tmp_path, cache=d)
+    assert stem_detector._may_overwrite_sections_json(jp, False) is False
+    assert stem_detector._may_overwrite_sections_json(jp, True) is True
+
+
+def test_guard_overwrites_legacy_energy_and_malformed_files(tmp_path):
+    d = _cached(kick=None)
+    d["signals"]["kick_presence_source"] = "stem-energy-threshold"
+    jp = _project(tmp_path, cache=d)
+    assert stem_detector._may_overwrite_sections_json(jp, False) is True
+    jp.write_text(json.dumps(_bad(analysis=[])), encoding="utf-8")
+    assert stem_detector._may_overwrite_sections_json(jp, False) is True
+    jp.write_text("{broken", encoding="utf-8")
+    assert stem_detector._may_overwrite_sections_json(jp, False) is True
+
+
+def test_reader_and_guard_share_one_trust_function(tmp_path):
+    cases = {
+        "on": (_cached(kick=True), stem_detector.KICK_ON),
+        "off": (_cached(kick=False), stem_detector.KICK_OFF),
+        "absent": (_cached(kick=None), stem_detector.PROV_ABSENT),
+        "mal": (_bad(analysis="x"), stem_detector.PROV_MALFORMED),
+    }
+    for name, (d, want) in cases.items():
+        assert stem_detector._kick_provenance(d) == want, name
+    assert stem_detector._kick_provenance([1]) == stem_detector.PROV_MALFORMED
