@@ -1,4 +1,8 @@
-"""Synthetic key-estimation and Camelot tests."""
+"""Synthetic key-estimation and Camelot tests.
+
+The synthetic triads prove plumbing and mappings only, not accuracy on real
+music. Real-music accuracy comes from the holdout evaluation, not from here.
+"""
 
 import sys
 from pathlib import Path
@@ -20,7 +24,7 @@ from automated_dj_mixes.sequencer import CAMELOT_WHEEL
 from Tools.eval_key_estimate import classify_relation
 
 SR = 22050
-LOW_CONFIDENCE = 0.20
+LOW_SUPPORT = 0.20
 
 
 def _triad(
@@ -68,7 +72,7 @@ def test_sustained_triads(tmp_path, profile, tonic, minor, expected):
     assert result.second_best is not None
     assert result.second_best != result.key
     assert result.margin > 0
-    assert LOW_CONFIDENCE < result.confidence <= 1
+    assert LOW_SUPPORT < result.support_score <= 1
 
 
 @pytest.mark.parametrize("profile", PROFILE_NAMES)
@@ -83,7 +87,7 @@ def test_equal_length_i_iv_v_progression(tmp_path, profile):
 
 
 @pytest.mark.parametrize("kind", ["noise", "clicks", "silence"])
-def test_unpitched_audio_has_low_confidence(tmp_path, kind):
+def test_unpitched_audio_has_low_support(tmp_path, kind):
     samples = np.zeros(SR * 4)
     if kind == "noise":
         samples = np.random.default_rng(19).normal(0.0, 0.10, len(samples))
@@ -92,7 +96,7 @@ def test_unpitched_audio_has_low_confidence(tmp_path, kind):
         for start in range(0, len(samples) - len(click), SR // 4):
             samples[start : start + len(click)] = click
     result = estimate_key(_wav(tmp_path, samples))
-    assert 0 <= result.confidence < LOW_CONFIDENCE
+    assert 0 <= result.support_score < LOW_SUPPORT
 
 
 @pytest.mark.parametrize("profile", PROFILE_NAMES)
@@ -157,7 +161,7 @@ def test_kk_profiles_are_the_published_values():
     assert _KK[1] == (6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
 
 
-def test_confidence_calibration_constants_are_valid():
+def test_support_calibration_constants_are_valid():
     from automated_dj_mixes import key_estimate as ke
 
     assert list(ke._CAL_EDGES) == sorted(ke._CAL_EDGES)
@@ -215,3 +219,91 @@ def test_rejects_non_finite_audio(tmp_path):
     samples[len(samples) // 2] = np.nan
     with pytest.raises(ValueError):
         estimate_key(_wav(tmp_path, samples))
+
+
+def test_calibration_constants_are_pinned_exactly():
+    from automated_dj_mixes import key_estimate as ke
+
+    assert ke._CAL_EDGES == (0.05, 0.113, 0.19, 0.283)
+    assert ke._CAL_VALUES == (0.35, 0.38, 0.62, 0.70, 0.70)
+    assert (ke._GATE_ZERO, ke._GATE_FULL, ke._TIER_HIGH) == (0.07, 0.15, 0.62)
+    assert (ke._SHARE_ZERO, ke._SHARE_FULL) == (0.02, 0.10)
+    assert ke._MAX_BLOCKS == 10
+
+
+def test_silence_and_constant_signal_are_unknown(tmp_path):
+    for samples in (np.zeros(SR * 12), np.full(SR * 12, 0.5)):
+        result = estimate_key(_wav(tmp_path, samples))
+        assert result.key is None and result.camelot is None
+        assert result.tier == "unknown" and result.support_score == 0.0
+        assert np.isfinite(result.margin)
+
+
+def test_non_finite_features_give_unknown(tmp_path, monkeypatch):
+    from automated_dj_mixes import key_estimate as ke
+
+    bad = np.full(12, np.nan)
+    monkeypatch.setattr(ke, "_analyse", lambda *a, **k: (bad, np.zeros(12), 0.0, 1.0))
+    result = estimate_key(_wav(tmp_path, _triad(60, False)))
+    assert result.key is None and result.tier == "unknown" and np.isfinite(result.margin)
+
+
+def test_tier_follows_support_score(tmp_path):
+    from automated_dj_mixes.key_estimate import _TIER_HIGH
+
+    result = estimate_key(_wav(tmp_path, _triad(60, False)))
+    assert result.tier == ("high" if result.support_score >= _TIER_HIGH else "low")
+
+
+def test_per_frame_normalisation_makes_every_frame_count_equally(tmp_path):
+    # 2 s very loud C major, then 10 s quiet D minor. With per-frame
+    # normalisation the longer quiet passage wins; without it the loud one would.
+    loud = 1.0 * _triad(60, False, seconds=2.0, bass=False)
+    quiet = 0.03 * _triad(62, True, seconds=10.0, bass=False)
+    result = estimate_key(_wav(tmp_path, np.concatenate([loud, quiet])), start_frac=0, end_frac=1)
+    assert result.key == "D minor"
+
+
+def test_crop_is_applied(tmp_path):
+    edge = _triad(60, False, seconds=16.0, bass=False)
+    middle = _triad(66, True, seconds=8.0, bass=False)
+    path = _wav(tmp_path, np.concatenate([edge, middle, edge]))
+    assert estimate_key(path, start_frac=0.4, end_frac=0.6).key == "F# minor"
+    assert estimate_key(path, start_frac=0.0, end_frac=0.3).key == "C major"
+
+
+def test_bass_bonus_changes_a_tie_by_the_bass_note(tmp_path):
+    # C-E-G-A is ambiguous between C major and A minor; the bass note decides.
+    time = np.arange(SR * 10) / SR
+    chord = sum(0.2 * np.sin(2 * np.pi * 440 * 2 ** ((m - 69) / 12) * time) for m in (60, 64, 67, 69))
+
+    def bass_at(midi):
+        return 0.4 * np.sin(2 * np.pi * 440 * 2 ** ((midi - 69) / 12) * time)
+
+    a_bass = _wav(tmp_path, chord + bass_at(33))
+    c_bass = tmp_path / "c.wav"
+    sf.write(c_bass, chord + bass_at(36), SR, subtype="FLOAT")
+    assert estimate_key(a_bass, bass_weight=0.5).key == "A minor"
+    assert estimate_key(c_bass, bass_weight=0.5).key == "C major"
+
+
+def test_analysed_audio_is_capped_regardless_of_track_length(tmp_path):
+    from automated_dj_mixes import key_estimate as ke
+
+    rate = 8000
+    path = tmp_path / "long.wav"
+    with sf.SoundFile(path, "w", samplerate=rate, channels=1, subtype="PCM_16") as out:
+        for _ in range(25):  # 25 minutes of low-level noise
+            out.write(np.random.default_rng(1).normal(0, 0.01, rate * 60))
+    blocks = list(ke._blocks(path, 0.15, 0.85, rate))
+    assert len(blocks) == ke._MAX_BLOCKS
+    assert sum(len(b) for b in blocks) <= ke._MAX_BLOCKS * ke._BLOCK_SECONDS * rate
+
+
+@pytest.mark.parametrize(
+    ("spelling", "code"),
+    [("A min", "8A"), ("Amin", "8A"), ("Abmaj", "4B"), ("Ab maj", "4B"), ("F#min", "11A"),
+     ("C Maj", "8B"), ("Bbmin", "3A"), ("Dminor", "7A")],
+)
+def test_short_mode_spellings(spelling, code):
+    assert to_camelot(spelling) == code

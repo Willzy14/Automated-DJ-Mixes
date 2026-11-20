@@ -1,4 +1,8 @@
-"""Measure key estimates against a CSV of reference keys."""
+"""Measure key estimates against a CSV of reference keys.
+
+Requires Python 3.10 or later; on 3.14 and later the thread pool also uses
+bounded read-ahead (map buffersize).
+"""
 
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ from typing import NoReturn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Source"))
 
 from automated_dj_mixes.key_estimate import (
+    _TIER_HIGH,
     DEFAULT_PROFILE,
     PROFILE_NAMES,
     estimate_key,
@@ -26,7 +31,7 @@ from automated_dj_mixes.key_estimate import (
 
 _FIELDS = (
     "path", "expected", "estimated", "camelot_expected", "camelot_estimated",
-    "relation", "confidence", "margin", "seconds",
+    "relation", "support_score", "margin", "seconds",
 )
 _WEIGHTS = {"exact": 1.0, "fifth": 0.5, "relative": 0.3, "parallel": 0.2, "other": 0.0}
 _COMPATIBLE = {"exact", "fifth", "relative"}
@@ -82,7 +87,7 @@ def _evaluate(
             result["estimated"] = from_camelot(predicted) or ""
             result["camelot_estimated"] = predicted or ""
             result["relation"] = _relation(reference, predicted)
-            result["confidence"] = f"{estimate.confidence:.8f}"
+            result["support_score"] = f"{estimate.support_score:.8f}"
             result["margin"] = f"{estimate.margin:.8f}"
     result["seconds"] = f"{time.perf_counter() - started:.3f}"
     return result
@@ -112,8 +117,8 @@ def _read_results(path: Path) -> dict[str, dict[str, str]]:
                 raise ValueError(f"Incomplete results row at line {reader.line_num}")
             relation = row["relation"]
             if relation in _WEIGHTS:
-                if not 0 <= float(row["confidence"]) <= 1:
-                    raise ValueError(f"Invalid confidence at line {reader.line_num}")
+                if not 0 <= float(row["support_score"]) <= 1:
+                    raise ValueError(f"Invalid support_score at line {reader.line_num}")
             elif relation not in _SKIPS:
                 raise ValueError(f"Invalid relation at line {reader.line_num}")
             rows[row["path"]] = row
@@ -146,15 +151,21 @@ def _summary(rows: list[dict[str, str]], resumed: int) -> None:
 
     bands = [Counter() for _ in range(5)]
     for row in scored:
-        band = bisect_right(_BOUNDS, float(row["confidence"]))
+        band = bisect_right(_BOUNDS, float(row["support_score"]))
         bands[band][row["relation"]] += 1
-    print("\nConfidence band      N       Exact   Compatible")
+    print("\nSupport score band   N       Exact   Compatible")
     for index, band_counts in enumerate(bands):
         n = sum(band_counts.values())
         hits = sum(band_counts[relation] for relation in _COMPATIBLE)
         close = "]" if index == 4 else ")"
         interval = f"[{index / 5:.1f}, {(index + 1) / 5:.1f}{close}"
         print(f"{interval:<18}{n:>5}{_percent(band_counts['exact'], n):>12}{_percent(hits, n):>13}")
+    print("\nTier (support_score cut at %.2f)   N       Exact   Compatible" % _TIER_HIGH)
+    for label, keep in (("high", lambda v: v >= _TIER_HIGH), ("low", lambda v: v < _TIER_HIGH)):
+        group = [row for row in scored if keep(float(row["support_score"]))]
+        hits = sum(1 for row in group if row["relation"] in _COMPATIBLE)
+        exact = sum(1 for row in group if row["relation"] == "exact")
+        print(f"{label:<30}{len(group):>5}{_percent(exact, len(group)):>12}{_percent(hits, len(group)):>13}")
 
 
 class _AsciiParser(argparse.ArgumentParser):
@@ -201,7 +212,8 @@ def main(argv: list[str] | None = None) -> int:
                     writer.writeheader()
                     output.flush()
                 with ThreadPoolExecutor(max_workers=args.workers) as pool:
-                    for row in pool.map(work, pending, buffersize=2 * args.workers):
+                    extra = {"buffersize": 2 * args.workers} if sys.version_info >= (3, 14) else {}
+                    for row in pool.map(work, pending, **extra):
                         writer.writerow(row)
                         output.flush()
                         completed[row["path"]] = row
