@@ -114,16 +114,21 @@ def score(mode, top=0, detail=False, out=print):
         plan = pb.plan_blend(o, n, r6=r6)
         sam = sam_numbers(b, o)
         mine = plan.key() if plan else (None, None, None)
-        ok = plan is not None and all(abs(x - y) < 1e-6 for x, y in zip(mine, sam))
+        # EXACT also needs no incoming loop (Sam's six have none): same key can play other bars
+        ok = (plan is not None and plan.in_intro_looped_bars == 0
+              and all(abs(x - y) < 1e-6 for x, y in zip(mine, sam)))
         exact += ok
         sp = _sam_plan(o, n, sam, r6)
         rows.append({"i": i, "ok": ok, "mine": mine, "sam": sam, "plan": plan, "sam_plan": sp})
         out("%d. %s -> %s" % (i, b["out"][:30], b["in"][:30]))
+        if plan is None:
+            out("   planner: NO PLAN")
+            continue
         out("   planner: in %g  switch %g  end %g  cost %.2f  flat runs: %s" % (
             mine + (plan.cost, _fmt_runs(plan.flat_runs))))
         out("   Sam    : in %g  switch %g  end %g  cost %.2f  flat runs: %s   -> %s" % (
             sam + (sp.cost, _fmt_runs(sp.flat_runs), "EXACT" if ok else "MISS")))
-        if not ok and r6 == pb.R6_BE:
+        if not ok and r6 == pb.R6_BE and plan is not None:
             out("      cost breakdown, term by term (no weight was changed to flip this):")
             out(_breakdown("planner's pick", plan))
             out(_breakdown("Sam's placement", sp))
@@ -153,6 +158,40 @@ def score(mode, top=0, detail=False, out=print):
     return exact, rows
 
 
+def headline(out=print):
+    """The two facts that limit what the six blends prove, computed live, not asserted."""
+    key = json.loads(KEY.read_text(encoding="utf-8"))
+    content = json.loads(CONTENT.read_text(encoding="utf-8"))
+    gaps = [b["bass_switch_out_bar"] - b["in_starts_at_out_bar"] for b in key["blends"]]
+    base = _count(key, content, "BOTTOM END")
+    saved = pb.W_FLAT_RUN
+    pb.W_FLAT_RUN = 0.0
+    try:
+        off = _count(key, content, "BOTTOM END")
+    finally:
+        pb.W_FLAT_RUN = saved
+    out("HEADLINE (computed now):")
+    out("  switch minus entry in Sam's six blends: %s -> %s" % (
+        gaps, "ALL EXACTLY %g bars: the six say almost nothing about the switch rule" % gaps[0]
+        if len(set(gaps)) == 1 else "not all equal"))
+    out("  BOTTOM END score %d of 6; with W_FLAT_RUN = 0 (R6 cost removed) %d of 6 -> R6 and the "
+        "measured content are %s on these six; the score comes from geometry" % (
+            base, off, "INERT" if base == off else "NOT inert"))
+    out("")
+
+
+def _count(key, content, mode):
+    r6 = MODES[mode][1]
+    n_ok = 0
+    for b in key["blends"]:
+        o = prepare(key["tracks"][b["out"]], b["out"], mode, content)
+        n = prepare(key["tracks"][b["in"]], b["in"], mode, content)
+        p = pb.plan_blend(o, n, r6=r6)
+        sam = sam_numbers(b, o)
+        n_ok += bool(p and p.in_intro_looped_bars == 0 and all(abs(x - y) < 1e-6 for x, y in zip(p.key(), sam)))
+    return n_ok
+
+
 def table(out=print):
     res = {m: score(m, out=lambda *_: None)[1] for m in MODES}
     names = list(MODES)
@@ -162,7 +201,7 @@ def table(out=print):
         cells = []
         for m in names:
             r = res[m][i]
-            cells.append("%-24s" % ("EXACT" if r["ok"] else "MISS %g/%g/%g" % r["mine"]))
+            cells.append("%-24s" % ("EXACT" if r["ok"] else ("NO PLAN" if r["plan"] is None else "MISS %g/%g/%g" % r["mine"])))
         out("%5d | %s" % (i + 1, " | ".join(cells)))
     out("total | " + " | ".join("%-24s" % ("%d of 6" % sum(r["ok"] for r in res[m])) for m in names))
     out("")
@@ -171,12 +210,13 @@ def table(out=print):
         for m in names:
             r = res[m][i]
             out("  blend %d  %-12s Sam: %-28s planner: %s" % (
-                i + 1, m, _fmt_runs(r["sam_plan"].flat_runs), _fmt_runs(r["plan"].flat_runs)))
+                i + 1, m, _fmt_runs(r["sam_plan"].flat_runs), _fmt_runs(r["plan"].flat_runs) if r["plan"] else "no plan"))
 
 
 if __name__ == "__main__":
     top = int(sys.argv[sys.argv.index("--top") + 1]) if "--top" in sys.argv else 0
     detail = "--detail" in sys.argv
+    headline()
     for m in MODES:
         score(m, top, detail)
     table()
