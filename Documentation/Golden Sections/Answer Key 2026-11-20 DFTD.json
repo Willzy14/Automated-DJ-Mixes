@@ -24,10 +24,6 @@
      "DROP"
     ],
     [
-     56,
-     "DROP"
-    ],
-    [
      72,
      "BREAK"
     ],
@@ -36,19 +32,11 @@
      "DROP"
     ],
     [
-     104,
-     "DROP"
-    ],
-    [
      128,
      "BREAK"
     ],
     [
      152,
-     "DROP"
-    ],
-    [
-     176,
      "DROP"
     ],
     [
@@ -105,10 +93,6 @@
     ],
     [
      16,
-     "DROP"
-    ],
-    [
-     48,
      "DROP"
     ],
     [
@@ -273,10 +257,6 @@
      "INTRO"
     ],
     [
-     16,
-     "INTRO"
-    ],
-    [
      32,
      "BUILD"
     ],
@@ -386,10 +366,6 @@
     ],
     [
      112,
-     "DROP"
-    ],
-    [
-     144,
      "DROP"
     ],
     [
@@ -586,5 +562,46 @@
     }
    ]
   }
- ]
+ ],
+ "section_rule": "Sam, 2026-11-20 (Double Dutch, then asked directly about Ashibah 17 and Eli Brown 145: 'No, drop both'): a fill end is a phrase point for mixing but NOT a section unless the kick or bass state changes there. Lines that Claude had proposed where only a vocal or music layer changes after a fill were removed; they are kept in removed_lines.",
+ "removed_lines": {
+  "Ashibah - Devotion (Original Mix)": [
+   {
+    "bar": 16,
+    "label": "INTRO",
+    "decided": "by Sam directly"
+   }
+  ],
+  "Eli Brown - Better When": [
+   {
+    "bar": 144,
+    "label": "DROP",
+    "decided": "by Sam directly"
+   }
+  ],
+  "Darius Syrossian & George Smeddles - Back In The Dance": [
+   {
+    "bar": 56,
+    "label": "DROP",
+    "decided": "by Claude applying Sam's rule; same kind (after a fill, only a vocal or music layer changes, kick and bass unchanged). Sam has not been asked about these one by one."
+   },
+   {
+    "bar": 104,
+    "label": "DROP",
+    "decided": "by Claude applying Sam's rule; same kind (after a fill, only a vocal or music layer changes, kick and bass unchanged). Sam has not been asked about these one by one."
+   },
+   {
+    "bar": 176,
+    "label": "DROP",
+    "decided": "by Claude applying Sam's rule; same kind (after a fill, only a vocal or music layer changes, kick and bass unchanged). Sam has not been asked about these one by one."
+   }
+  ],
+  "PAX - Revelry": [
+   {
+    "bar": 48,
+    "label": "DROP",
+    "decided": "by Claude applying Sam's rule; same kind (after a fill, only a vocal or music layer changes, kick and bass unchanged). Sam has not been asked about these one by one."
+   }
+  ]
+ }
 }
