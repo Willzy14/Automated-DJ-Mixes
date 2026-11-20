@@ -39,7 +39,7 @@
     "by": "Sam, from the waveform at the start of the file, 2026-11-20 evening",
     "said": "it just starts with a kick, nothing special",
     "reading": "the file starts on a kick, so bar one is the start of the file; this supports the conservative bar-one rule that moves nothing (a 3 beat move would have been wrong)",
-    "open": "the grid places its first downbeat at 0.360 s, not at 0.000 s; whether that 0.36 s is a real offset or just the first beat the grid kept was not checked"
+    "open": "RESOLVED by Sam: all his masters carry a short stretch of silence at the front, so the first downbeat at 0.360 s is the first kick, not a fault"
    }
   }
  },
