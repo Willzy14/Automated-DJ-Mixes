@@ -52,10 +52,6 @@ FILL_MAX_BARS_BASS_HELD = 6   # NOT owner-stated: the owner says fills are one o
                               # exception (a kick-out up to 6 bars stays a fill while the bass holds
                               # through it) is fitted to ONE key case, Back In The Dance 119-124.
                               # Set it to SHORT_FILL_BARS to drop the exception.
-FULL_STOP_FILL_BARS = 2   # a fill this long with no kick heard and no bass is a full stop of the
-                          # rhythm section and resets the phrase. Fitted to Back In The Dance
-                          # 54-56, 102-104, 174-176; Eli Brown's light-kick fills and fills over a
-                          # held bass are the counter-cases that stay ornament
 FILL_LEAD_BARS = 2        # a kick drop at most this many bars before a phrase point is the fill INTO
                           # that phrase; the section starts at the phrase point (Eli Brown 30-32)
 TRAIL_DROP_FRAC = 0.5     # inside a soft break, a beat at under half the break's own median drum
@@ -80,10 +76,10 @@ BAR_ONE_PHASE_SHARE = 0.75  # this share of them on the same off-bar beat, befor
                             # reported as sitting at a fractional bar offset
 
 # Evidence ranks for MIN_LINE_GAP_BARS: a kick return is the strongest line,
-# then a break start, a bass change, a tail stop, a full-stop fill, and last the
+# then a break start, a bass change, a tail stop, the one-minute fill, and last the
 # older energy/width cues.
 RANK = {"kick_return": 5, "outro": 5, "break_start": 4, "bass_change": 4, "tail": 3,
-        "full_stop": 2, "minute_fill": 2, "cue": 1}
+        "minute_fill": 2, "cue": 1}
 
 
 # --- small helpers ---------------------------------------------------------------
@@ -218,15 +214,21 @@ def clip_fills_to_lines(spans, lines):
     return clean
 
 
-def drop_changes_after_outro(cands, bass_changes, o_start):
+def drop_changes_after_outro(cands, bass_changes, o_start, kinds=None):
     """After the bass has left, a bass residue coming and going cuts nothing:
-    bass-change candidates after the outro start are dropped (Reachin 194)."""
+    the bass-change evidence after the outro start is dropped (Reachin 194).
+    A bar that also has other evidence (e.g. the kick stopping, Bad Behaviours
+    143) keeps its line at the rank of that other evidence."""
     out = dict(cands)
     if o_start is None:
         return out
     for b in bass_changes:
-        if b > o_start and out.get(b) == RANK["bass_change"]:
-            del out[b]
+        if b > o_start and b in out:
+            other = [RANK[k] for k in (kinds or {}).get(b, set()) if k != "bass_change"]
+            if other:
+                out[b] = max(other)
+            else:
+                del out[b]
     return out
 
 
@@ -261,12 +263,13 @@ def keep_strongest(cands, n_bars):
 
 # --- structure ---------------------------------------------------------------------
 
-def groove_structure(full_beat, bass_on, n_bars, heard_kick=None):
+def groove_structure(full_beat, bass_on, n_bars):
     """Section lines and fills from the rhythm section (kick + bass).
 
       * A kick-down run is a FILL when short: up to SHORT_FILL_BARS always, up
         to FILL_MAX_BARS_BASS_HELD while the bass holds through it. A fill never
-        makes a line by itself (the full-stop rule below is the one exception).
+        makes a line by itself (Sam: a fill end is a phrase point for mixing,
+        not a section, unless the kick or bass state changes there).
       * A longer kick-down run is a BREAK: lines at its start and where the full
         kick returns. The start line goes to the next phrase point (4 bar steps
         from the previous line) when that is at most FILL_LEAD_BARS ahead.
@@ -277,8 +280,6 @@ def groove_structure(full_beat, bass_on, n_bars, heard_kick=None):
         before, new state for MIN_SECTION_BARS after) is a line. When the change
         falls inside a fill of at most SHORT_FILL_BARS, or at its end, the line
         goes at the fill end.
-      * A fill of FULL_STOP_FILL_BARS or more with no kick heard and no bass at
-        all is a full stop: line at its end.
       * Kick returns are not snapped to a grid (pickups, Ashibah 74).
     """
     bass_on = np.asarray(bass_on, bool)[:n_bars]
@@ -286,8 +287,11 @@ def groove_structure(full_beat, bass_on, n_bars, heard_kick=None):
     cands, fills, breaks, lead_fills, bass_changes = {}, [], [], set(), []
     head_end = tail_start = None
 
+    kinds = {}
+
     def add(bar, kind):
         cands[bar] = max(cands.get(bar, 0), RANK[kind])
+        kinds.setdefault(bar, set()).add(kind)
 
     for s, e in sd._regions(~full_bar):
         if s == 0:
@@ -347,19 +351,11 @@ def groove_structure(full_beat, bass_on, n_bars, heard_kick=None):
             add(line, "bass_change")
             bass_changes.append(line)
 
-    if heard_kick is not None:
-        hk = np.zeros(n_bars * 4, bool)
-        hk[:min(len(hk), len(heard_kick))] = np.asarray(heard_kick, bool)[:len(hk)]
-        for s, e in fills:
-            if e - s < FULL_STOP_FILL_BARS or e >= n_bars or in_break[s]:
-                continue
-            if hk[4 * s:4 * e].mean() <= 0.25 and not bass_on[s:e].any():
-                add(e, "full_stop")
-
     fills = sorted(set((int(s), int(e)) for s, e in fills))
     return {"cands": cands, "lines": keep_strongest(cands, n_bars), "fills": fills,
             "breaks": breaks, "lead_fills": lead_fills, "head_end": head_end,
-            "tail_start": tail_start, "full_bar": full_bar, "bass_changes": bass_changes}
+            "tail_start": tail_start, "full_bar": full_bar, "bass_changes": bass_changes,
+            "kinds": kinds}
 
 
 def bass_leave_bar(bass_on):
@@ -586,7 +582,7 @@ def groove_detect(*, wav, project, envs, hop_t, bpm, downbeat, sec_per_bar, n_ba
     bass_beat = per_beat(envs["bass"], hop_t, bpm, downbeat, n_beats)
     bass_on, bass_source = bass_state_per_bar(bass_beat, low_bar, fb_bar)
 
-    groove = groove_structure(full_beat, bass_on, n_bars, heard_kick=kick_on)
+    groove = groove_structure(full_beat, bass_on, n_bars)
 
     if bass_source == "low_band":
         low_ref, low_vals, low_frac = sd._solid_kick_level(low_bar), low_bar, LOW_ON_FRAC
@@ -620,7 +616,7 @@ def groove_detect(*, wav, project, envs, hop_t, bpm, downbeat, sec_per_bar, n_ba
             spans.append(list(t))
     fill_end_bars = sorted(set(int(round(ke / 4.0)) for _, ke in spans))
 
-    cands = drop_changes_after_outro(groove["cands"], groove["bass_changes"], o_start)
+    cands = drop_changes_after_outro(groove["cands"], groove["bass_changes"], o_start, groove["kinds"])
     if o_start is not None:
         if 0 < o_start < n_bars:
             cands[o_start] = max(cands.get(o_start, 0), RANK["outro"])

@@ -22,9 +22,8 @@ def beats(bars):
     return np.repeat(np.asarray(bars, bool), 4)
 
 
-def struct(full_bars, bass_bars, heard=None):
-    return gs.groove_structure(beats(full_bars), np.asarray(bass_bars, bool), len(full_bars),
-                               heard_kick=None if heard is None else beats(heard))
+def struct(full_bars, bass_bars):
+    return gs.groove_structure(beats(full_bars), np.asarray(bass_bars, bool), len(full_bars))
 
 
 def run_detect(monkeypatch, tmp_path, kick, bass, mode="groove", provider=None, **kw):
@@ -239,16 +238,12 @@ def test_a_bass_change_needs_four_bars_of_the_old_state():
     assert struct([1] * 48, [1] + [0] * 47)["lines"] == []
 
 
-def test_two_bar_full_stop_fill_resets_the_phrase():
+def test_two_bar_fill_with_kick_and_bass_gone_is_not_a_section():
+    # Sam 2026-11-20: a fill end is not a section unless the kick or bass state
+    # changes there (the old full-stop rule, fitted to Back In The Dance, is gone)
     full = [1] * 54 + [0, 0] + [1] * 24
-    g = struct(full, [1] * 54 + [0, 0] + [1] * 24, heard=full)
-    assert g["lines"] == [56]
-
-
-def test_light_kick_two_bar_fill_is_ornament():
-    full = [1] * 54 + [0, 0] + [1] * 24
-    g = struct(full, [1] * 54 + [0, 0] + [1] * 24, heard=[1] * 80)
-    assert g["lines"] == []
+    g = struct(full, [1] * 54 + [0, 0] + [1] * 24)
+    assert g["lines"] == [] and g["fills"] == [(54, 56)]
 
 
 # --- line spacing ---------------------------------------------------------------------
@@ -562,6 +557,14 @@ def test_bass_residue_lines_after_the_outro_are_dropped():
     out = gs.drop_changes_after_outro(cands, [150, 194], 176)
     assert out == {32: 5, 176: 5, 150: gs.RANK["bass_change"]}
     assert gs.drop_changes_after_outro(cands, [150, 194], None) == cands
+
+
+def test_a_kick_stop_on_the_same_bar_as_a_dropped_bass_change_keeps_its_line():
+    # Bad Behaviours 143: the kick stops AND the residue bass flips there
+    cands = {136: 5, 143: gs.RANK["bass_change"]}
+    kinds = {136: {"outro"}, 143: {"tail", "bass_change"}}
+    out = gs.drop_changes_after_outro(cands, [143], 136, kinds)
+    assert out == {136: 5, 143: gs.RANK["tail"]}
 
 
 def test_residue_exit_needs_the_tail_to_stay_a_residue():
