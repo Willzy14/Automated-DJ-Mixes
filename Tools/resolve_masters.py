@@ -38,7 +38,7 @@ def keys(s):
     s=stem(s); return {norm(s),norm(strip_num(s))}-{''}
 def variants(n): return {w for w in OTHER if f' {w} ' in f' {n} '}
 # VERS are the version tokens, VMIX the mix tokens (VMIX also decides "has a mix word"), DECO the words of a decoration group.
-VERS=re.compile(r'\b(?:sw v\d+|amended v\d+|amended|master|24 bit|final)\b')
+VERS=re.compile(r'\b(?:sw v\d+|amended v\d+|amended|master|(?:16|24|32) bit|final)\b')
 VMIX=re.compile(r'\b(?:extended|original|main|mix|radio|edit)\b')
 DECO=re.compile(r'\b(?:extended|original|main|mix|radio|edit|club|vocal)\b')
 # A file name without its decorations: the track number, (..) and [..] groups of only mix or version words (Extended Mix, Radio Edit, Club Mix;

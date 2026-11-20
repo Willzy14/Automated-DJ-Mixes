@@ -5,8 +5,7 @@ No network, no database, no credentials file: an autouse fixture makes the real 
 file), so the main path is tested through capsys, with the rows file (the offline `--rows` input) written to tmp_path.
 
 Not tested on purpose: the exact numbers of the cool and cult presets (Sam's taste, still being tuned), only that they
-return a finite score for every row. The builder does not call Tools/resolve_masters.py (it only prints a hint line), so
-there is no resolver-integration path to test.
+return a finite score for every row. Resolver integration uses an isolated copy of the resolver and a synthetic index.
 """
 import argparse
 import datetime
@@ -343,6 +342,140 @@ def test_report_empty_playlist(pb, capsys):
 def _run_main(pb, monkeypatch, *argv):
     monkeypatch.setattr(sys, "argv", ["playlist_builder.py", *argv])
     pb.main()
+
+
+@pytest.fixture
+def resolver_tools(pb, monkeypatch, tmp_path):
+    tools = tmp_path / "Tools"
+    tools.mkdir()
+    (tools / "resolve_masters.py").write_bytes((REAL_SOURCE.parent / "resolve_masters.py").read_bytes())
+    monkeypatch.setattr(pb, "__file__", str(tools / "playlist_builder.py"))
+    return tools
+
+
+def _index_folder(tools, name, files):
+    renders = tools / name / "MASTER RENDERS"
+    renders.mkdir(parents=True)
+    for filename in files:
+        (renders / filename).touch()  # The resolver only needs names and file metadata.
+    (tools / "folder_index.json").write_text(json.dumps([[name, str(renders.parent)]]), encoding="utf-8")
+    return renders
+
+
+def _run_resolved(pb, monkeypatch, tools, *rows):
+    rows_file = tools / "rows.json"
+    rows_file.write_text(json.dumps(rows), encoding="utf-8")
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", str(len(rows)),
+              "--max-per-artist", str(len(rows)), "--resolve")
+
+
+def test_resolve_remix_uses_the_latest_matching_delivery(pb, monkeypatch, capsys, resolver_tools):
+    renders = _index_folder(resolver_tools, "Artist - Better When [Label] Project",
+                           ["Better When (Bob Remix) SW V3.wav", "Better When (Bob Remix) SW V2.wav",
+                            "Better When (Original Mix) SW V5.wav"])
+    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When", remixer="Bob"))
+    assert f"   MASTER: {renders / 'Better When (Bob Remix) SW V3.wav'}" in capsys.readouterr().out.splitlines()
+
+
+@pytest.mark.parametrize("mix", ["Bob Remix", "Dub", "Acapella", "Instrumental", "Radio Edit", "Bob Mix"])
+def test_resolve_original_rejects_alternate_only_folder(pb, monkeypatch, capsys, resolver_tools, mix):
+    _index_folder(resolver_tools, "Artist - Better When [Label] Project", [f"Better When ({mix}) SW V3.wav"])
+    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
+    out = capsys.readouterr().out
+    assert "NONE: " in out and "MASTER: " not in out
+
+
+@pytest.mark.parametrize("remixer,mix_name,version", [
+    (None, "Extended Mix", "Extended Mix"), ("Bob", "Extended Remix", "Bob Extended Remix"),
+    ("Bob", "Bob Extended Remix", "Bob Extended Remix"),
+])
+def test_resolve_requires_mix_in_the_filename(pb, monkeypatch, capsys, resolver_tools, remixer, mix_name, version):
+    renders = _index_folder(resolver_tools, f"Artist - Better When ({version}) [Label] Project",
+                           ["Better When (Original Mix) SW V3.wav", f"Better When ({version}) SW V1.wav"])
+    credit = row("Better When", remixer=remixer, mix_name=mix_name)
+    _run_resolved(pb, monkeypatch, resolver_tools, credit)
+    path = renders / f"Better When ({version}) SW V1.wav"
+    assert f"   MASTER: {path}" in capsys.readouterr().out.splitlines()
+    path.unlink()
+    _run_resolved(pb, monkeypatch, resolver_tools, credit)
+    out = capsys.readouterr().out
+    assert "NONE: " in out and "MASTER: " not in out
+
+
+def test_resolve_ep_picks_the_named_track(pb, monkeypatch, capsys, resolver_tools):
+    name = "02 Better When.wav"
+    renders = _index_folder(resolver_tools, "Artist - Better When [Label] Project",
+                           ["01 Change The Situation (Extended Mix) SW V9.wav", name,
+                            "03 Better When Again (Extended Mix) SW V9.wav"])
+    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
+    assert f"   MASTER: {renders / name}" in capsys.readouterr().out.splitlines()
+    (renders / name).unlink()
+    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
+    out = capsys.readouterr().out
+    assert "NONE: " in out and "MASTER: " not in out
+
+
+@pytest.mark.parametrize("label", ["16 Bit MASTER", "24 Bit MASTER", "32 Bit MASTER"])
+def test_resolve_accepts_every_bit_depth_delivery_label(pb, monkeypatch, capsys, resolver_tools, label):
+    # Found live 2026-11-20: three real 16 Bit masters came back NONE because only "24 bit" was a delivery label.
+    name = f"Artist - Better When {label}.wav"
+    renders = _index_folder(resolver_tools, "Artist - Better When & Change The Situation [Label] Project",
+                           [name, f"Artist - Change The Situation {label}.wav"])
+    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
+    assert f"   MASTER: {renders / name}" in capsys.readouterr().out.splitlines()
+
+
+def test_resolve_title_only_file_needs_the_credited_artist(pb, monkeypatch, capsys, resolver_tools):
+    _index_folder(resolver_tools, "Someone Else - Better When [Artist Records] Project", ["Better When.wav"])
+    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
+    out = capsys.readouterr().out
+    assert "NONE: " in out and "MASTER: " not in out
+
+
+@pytest.mark.parametrize("title_suffix,expected", [("", "MASTER: "), (" (Radio Edit)", "NONE: ")])
+def test_resolve_untitled_delivery_needs_a_safe_named_anchor(pb, monkeypatch, capsys, resolver_tools, title_suffix, expected):
+    renders = _index_folder(resolver_tools, "Artist - Better When [Label] Project",
+                           [f"Better When{title_suffix} MASTER.wav", "MASTER AMENDED V2.wav"])
+    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"))
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.startswith(f"   {expected}") for line in lines)
+    if not title_suffix: assert f"   MASTER: {renders / 'MASTER AMENDED V2.wav'}" in lines
+
+
+def test_resolve_prints_every_note_and_counts_picks(pb, monkeypatch, capsys, resolver_tools):
+    renders = _index_folder(resolver_tools, "Artist - Better When [Label] Project",
+                           ["02 Better When SW V1.wav", "01 Change The Situation.wav", "SW V4.wav", "SW V5.wav"])
+    _run_resolved(pb, monkeypatch, resolver_tools, row("Better When"), row("Better When", remixer="Bob"), row("Missing"))
+    lines = capsys.readouterr().out.splitlines()
+    assert lines.count('   NONE: no file matched the hint "bob remix"') == 1
+    assert lines.count("   NONE: no candidate matches the credit's title and version") == 1
+    for name in ("SW V4.wav", "SW V5.wav"):
+        assert lines.count(f"   NOTE: the folder may hold other tracks: {renders / name}") == 2
+    assert lines[-1] == "Resolved 1 of 3; 2 with notes; 2 not found"
+
+
+@pytest.mark.parametrize("index", [None, "{", "{}"])
+def test_resolve_bad_index_exits_before_playlist(pb, monkeypatch, capsys, resolver_tools, index):
+    if index is not None: (resolver_tools / "folder_index.json").write_text(index, encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        _run_main(pb, monkeypatch, "build", "--resolve")
+    assert e.value.code == "Cannot read Tools/folder_index.json. Run python Tools/build_folder_index.py."
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""  # Python prints the single SystemExit message on stderr at the CLI.
+
+
+def test_main_without_resolve_keeps_the_existing_report(pb, monkeypatch, capsys, resolver_tools):
+    rows_file = resolver_tools / "rows.json"
+    rows_file.write_text(json.dumps([row()]), encoding="utf-8")
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "1")
+    assert capsys.readouterr().out == (
+        "# Playlist draft: arc=rise preset=any n=1  (source: Neon credits ledger)\n\n"
+        "Each row is one VERSION with its own streams (a remix and an original are different tracks). "
+        "Genre is a DB DRAFT tag.\n\n"
+        " 1. [3] Artist - Song  (original/unspecified) | Lab 2018 | House | 1,000 streams | bpm - | key - | tier A\n"
+        "\nHeat curve: 3\n"
+        "Next: Tools/resolve_masters.py to find audio + confirm Sam's version; BPM/key are measured by the pipeline.\n"
+    )
 
 
 def test_main_build_from_a_rows_file(pb, monkeypatch, capsys, tmp_path):
