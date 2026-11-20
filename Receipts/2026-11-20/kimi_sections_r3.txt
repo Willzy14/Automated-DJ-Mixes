@@ -1,0 +1,39 @@
+﻿• I'll verify the diff checksum and examine the repo state before reviewing.
+
+• The diff checksum matches SHA.txt. Now let me check what round 2 changed in the picture tool versus the original, and find pair config JSONs to test the byte-identical claim.
+
+• Now I'll verify the pair-restore claim empirically by rendering in memory (no files written) with the original and r3 versions of the tool.
+
+• The render test is decisive: all six pair pictures differ from the original tool's output. Now let me confirm the legacy-path gating in `stem_detector.py` and look at `track_matches` for the scorer question.
+
+• VERDICT: CORRECTION
+
+  Pin check: SHA.txt contains one entry, 0068387952023134 for change_vs_main.diff, and I recomputed it to match. The other pack files are unpinned by SHA.txt; I read brief_sections_r3.txt, BUILDER_REPORT.txt (bf84e8cffdcc1bf9), PRIOR_codex_r2.txt (189cb3a87b654346) and the diff itself. I verified the code against git objects on work/sections-key-r3 (72916d2), with the pre-groove original of the picture tool at 8d5d0e1 and round 2 at b8ef8fb.
+
+  **1. Legacy path.** Clean. Against current main the branch touches exactly one Source file, Source/groove_sections.py, which main imports lazily and only behind the flag (stem_detector.py:1132-1135 inside `section_mode == groove`, and 1409 inside `if groove is not None`). stem_detector.py, section_format.py, shared helpers, constants, defaults and JSON keys are untouched on this branch, and the default is still legacy (stem_detector.py:950). The rewritten default test now calls `detect()` with no mode argument and asserts legacy format, so round 2's `or True` hole is actually fixed, and the new subprocess test proves a legacy run never puts groove_sections in sys.modules. I did not rerun the 31-track identity replay myself (needs the cached corpus); but since no legacy-executed line changes in this diff, the r2 evidence carries.
+
+  **2. Picture tool.** The builder's claim does not match the files. The changes are NOT confined to --track mode, and the pair output is NOT byte-identical to the original. I rendered all six `Documentation/Golden Sections/Pairs/pairN.json` with the pre-groove tool (8d5d0e1) and the r3 tool in the same process, capturing the PNG bytes in memory (no files written); all six differ, e.g. pair1 sha 51f0211e2a9b98b1 vs 4566462b40a5b67f, pair6 7e0ac86ade95777f vs 6abb87e716829080. Two pair-mode deltas survive against the original: (i) the legend is rewritten a third time - r3 pair draws only COL+FILL (6 entries, 0.07 step, fontsize 11) while the original drew LEGEND plus BASS SWITCH (7 entries, 0.095 step, fontsize 10.5), so VOCAL (purple), TRACK LEVEL (grey), SECTION LINE (red) and BASS SWITCH are gone even though the pair lane still draws the purple vocal trace, now undocumented; (ii) big==1 fill labels in pair mode now read "F{j}" only, while the original printed "F{j}" newline "m:ss". What IS restored: END marker position and time back to n_bars, section-label y offset back to 0.012, and the end_bar/bass/mix_points paths are inert for the six golden pairs because their JSONs carry only key/match/name/bpm/n_bars/sections/fills. Against current main the pair output also changed again, so "pair mode unchanged" is false under either reading.
+
+  **3. Scorer.** The three fixes are real: the version tag is anchored, so "A - B 24 Bit MASTER (X Remix)" no longer matches "A - B" and SW-plus-MASTER combos are covered by tests; duplicate detector fills are now counted by position so a duplicated interval shows up in fills_extra; and score_all raises when the JSON's own track name disagrees with the key. Remaining flattery, one paragraph: line credit still comes from match_lines at LINE_TOL_BARS 1.0, so a line 0.9 bars off earns headline "found" (EXACT_TOL_BARS only feeds the found0 sub-count); a fill still earns a hit on any positive overlap, so a fill shifted by most of its length counts as found with fills_exact the only honest counter; track end is still outside the score; and the new track-name check only fires when the JSON actually contains a "track" field, so the guard is as strong as the writer, not the reader.
+
+  **4. New groove rules (flag on only).** (a) gate_cue_bars drops any cue within one bar of a fill end; the "unless the kick or bass state changes there" is implicit, because a state change at that bar produces its own groove line independent of the cue, and the unit test exercises the boundary at 0, 1 and 4 bars. It does what is stated. (b) minute_fill_line fires only when the first line is past 75 s (or there are no lines) and picks the fill end nearest 60 s within 15 s; code matches the statement. Misfires on a track with a legitimately long unchanging intro full of fills - a progressive build or DJ intro edit - cutting a spurious "intro ends at 1:00" at an arbitrary fill. (c) residue_leave_bar matches: strong means at least a third of the bass stem's own solid level, the exit is the end of the last 4-plus-bar strong run, the tail must stay a residue (at most a quarter of bars back above), and the low band median over the next 8 bars must fall below 0.85 of the prior 8. Misfires on a track whose final section intentionally keeps a quiet filtered or subby bass while the low band thins - a sparse quiet outro or a fade ending - getting the outro called early. (d) The full-stop fill rule is genuinely gone: FULL_STOP_FILL_BARS, the heard_kick block, the heard_kick parameter and RANK full_stop are all removed, and the old full-stop test now asserts no line. Claims match the code throughout.
+
+  **5. Main worse with the flag off.** The detector itself: nothing. The tools: the picture tool's pair output changes without opt-in (question 2 - this is the one real regression for flag-off main), and score_all gains a hard ValueError where it used to score silently, which will break any existing script that feeds it a mismatched JSON.
+
+  **BLOCKS THE FLAG-OFF MERGE**
+
+  - Tools/section_key_picture.py pair mode is still not the original drawing: the legend (entries and layout) and the big==1 fill time labels differ from the pre-groove tool, and all six golden pair renders differ byte-for-byte. Restore the original pair legend and fill labels, or land the pair restyle as its own reviewed change.
+
+  **BLOCKS TURNING THE FLAG ON**
+
+  - Rules (b) and (c) rest on one or two tracks each (the builder admits this); validate on the heldout set before activation.
+  - Carried over from round 2, untouched here: groove cache isolation, the remaining unguarded readers, end-to-end downstream verification, owner picture checks, upstream grid correction, and the kick-model cache-provenance gap in legacy reruns.
+
+  **FOUND UNASKED**
+
+  - Tests/test_section_key_picture.py asserts `out[1][0] == 169 or out[1][0] == 176 or out[1][0] == 152`; a three-way or-assertion passes on nearly anything. Pin the real value.
+  - The r3 pair legend drops VOCAL (purple) while the pair lane still draws the vocal trace, so the restored pair picture is also less informative than the original.
+  - SHA.txt pins only the diff; the branch tree itself is unpinned. I reviewed git objects at 72916d2, which match the diff, but the pack alone could not prove that.
+  - The six byte-identical checksums the builder cites are not in the pack; my in-memory renders contradict the claim, so the checksum evidence should be produced or treated as stale.
+
+===SEAT-DONE kimi sections_r3===

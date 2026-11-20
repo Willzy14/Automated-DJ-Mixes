@@ -1,0 +1,34 @@
+VERDICT: CORRECTION
+
+The default detector is unchanged. The pair-picture command changes output against current main (`2e58f82`). Round 3 restores the pre-round-2 drawing, and all six saved PNG pairs match that older renderer byte for byte. Those checksums confirm the restoration. Current main already contains the round-2 drawing.
+
+**Legacy detector.** `stem_detector.py` has the same Git blob on main and `72916d2`. There are no changes to its shared helpers, constants, defaults, imports, or JSON fields. Both production imports of `groove_sections` are conditional. The new tests omit `section_mode` and check import isolation in a fresh process. My read-only probe also got identical JSON from the default and pre-groove detectors without importing `groove_sections`. The replay logs record 11/11 and 20/20 matches with width cues enabled. I checked the logs and did not rerun the 31 tracks.
+
+**Picture tool.** Changes extend beyond `--track`. Pair mode removes the time from whole-view fill labels, changes how the end timestamp is calculated, moves section captions, and reverts the legend. The setup refactor also runs for both modes. The new one-minute markers are specific to `--track`, which can also read legacy results. When the result omits duration, the end marker uses the bar-grid estimate. `change_vs_main.diff:616-655,659-683,712-758`
+
+**Scorer.** The remix suffix is rejected, unmatched duplicate detector fills count as extras, and a conflicting internal `track` name raises when present. A missing name still passes. The tighter suffix rule also rejects previously accepted names such as `SW V2 AMENDED`. A line 0.9 bars off and a fill overlapping by 0.01 bars both earned headline credit in my probe. Rescoring the saved replays reproduced 46/47 lines with 3 extras and 53/53 fills with 47 within one beat at both ends and 11 extras. The holdout reproduced 28/28 lines with zero extras. Its fill key covers one fill.
+
+**Groove only**
+
+- **(a) Fill-end cues.** Yes for width and energy cues on the rounded bar grid. The gate rejects cues within one bar of a rounded fill end. Independent kick or bass evidence can still supply the line. The minute rule can also add a line there.
+- **(b) Long intro.** Yes, with limits. If the first line is past 75 seconds, or there are no lines, it picks the earlier fill end nearest 60 seconds within the 45-75 second window. A genuine 90-second intro with a decorative fill around one minute can get an early section cut.
+- **(c) Bass residue.** Qualified yes. With a bass stem and low-band data, it uses a per-track estimate of the loud bass level and requires the low-band median after the exit to be below 0.85 of the median before. It allows up to 25% of tail bars at or above one third. A real but much quieter bassline in a stripped-back outro can be erased.
+- **(d) Full-stop fill.** Removed. The constant, rank, and branch are gone. The replacement test expects a two-bar stop to remain a fill without adding a line.
+
+_SHA-256 prefixes read:_ `change_vs_main.diff` `0068387952023134` is the sole `SHA.txt` entry and matches a fresh Git diff. I also hashed `BUILDER_REPORT.txt` (`bf84e8cffdcc1bf9`) and `PRIOR_codex_r2.txt` (`189cb3a87b654346`). The saved suite and mutation logs support 1,924 passed, 47 skipped, one pre-existing failure, and 48 mutants killed. I did not rerun the suite.
+
+**BLOCKS THE FLAG-OFF MERGE**
+
+- Pair PNG output changes against current main. Preserve that output or explicitly approve the restoration as a pair-mode change.
+
+**BLOCKS TURNING THE FLAG ON**
+
+- Fix the upstream bar-one grid and verify cache isolation and downstream consumers end to end.
+- Validate the minute and bass-residue rules on genuinely long intros and quiet bass outros.
+
+**FOUND UNASKED**
+
+- The minute line bypasses the minimum-spacing pass. A fill end at 74 seconds can add a line one bar before an existing line at 76 seconds at 120 BPM.
+- The builder's "one OUTRO" claim is too broad. A surviving kick-stop line can split the tail into two sections both labelled `outro`.
+===CODEX-ASK-DONE exit=0 nonce=5ed5899e8fe2485ea01d4a2063e94086===
+===SEAT-DONE codex sections_r3===

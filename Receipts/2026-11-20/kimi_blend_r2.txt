@@ -1,0 +1,85 @@
+﻿• I'll read the referenced files in the review directory.
+
+• The files are clear. Now I'll verify claims by running the code itself: reproduce the score, sensitivity claims, robustness edge cases, and synthetic counterexamples.
+
+• Key numbers confirmed. Now the robustness probes and synthetic counterexamples.
+
+• Now the synthetic counterexamples for points 1 and 2, and the implied-grid failure demos.
+
+• One construction bug in my 2b demo (fill end was at 196, not 195). Rerunning it corrected, plus checking for test files in the snapshot.
+
+• There's a test file from an earlier round. Let me read it to answer the tests question.
+
+• All verification is done. Here is the full review.
+
+  VERDICT: CORRECTION
+
+  SHAs read: 1740c67bb288245e (phrase_blend.py), 0620777c22264ac6 (score_blends.py). SHA.txt lists only these two; answer_key.json, content.json, OWNER_RULES.txt, SCORE_OUTPUT.txt and BUILDER_REPORT.txt carry no SHAs. Everything below was re-run live against 1740c67bb288245e, not taken from SCORE_OUTPUT.txt: baseline BOTTOM END reproduces exactly (6 of 7, blend 1 the miss, planner 192/200/209 cost 13.15 vs owner 184/200/215 cost 16.75, owner rank 2 among 11 sane pairings).
+
+  1. The implied grid
+
+  The code does exactly what the builder claims. implied_points (phrase_blend.py:264) builds disjoint intervals from each snapped section start (plus bar 0) to the next section start or n_bars, steps 8 bars, marks multiples of 16 as the stronger kind, and skips any bar already in phrase_points, so marked points are not double counted (verified: with sections at 32 and 176 that are also fill ends, the implied set contains 24, 40, 48 and not 32 or 176). The pairing enumeration adds out_impl and in_impl to the marked zone lists, which are disjoint by construction, so no swap is generated twice. point_type checks fill ends, then section starts, then implied, so a bar that is both marked and on the grid reports marked.
+
+  An implied point never beats a marked point: on the incoming, marked fill end 1.0 < marked section start 1.5 < implied 16 at 1.75 < implied 8 at 1.9; on the outgoing, marked 0 < implied 16 at 0.5 < implied 8 at 1.0. That ordering is right for the owner: every swap he accepted or placed sits on a marked point on at least one side, and he called a swap on no point "unacceptable". The grid exists for unmarked regions, and it should stay strictly below marked.
+
+  Where the idea is musically wrong, demonstrated live:
+  - A 2-bar pickup (first DROP at bar 2): the grid restarts at 2 and emits 10, 18, 26..., and the true global phrase bars 8, 16, 24 get NO implied point at all. If those bars are also unmarked, the planner is blind to the real phrases.
+  - A 12-bar first section: grid emits 8, 20, 28...; bar 16, a genuine 16-bar boundary, is absent.
+  - A lead-in first section at 0.5: implied keys are 8.5, 16.5, 24.5...; no integer grid bar exists, so point_type can never return an implied type for an integer bar (fractional keys still leak into the zone lists and generate fractional entries).
+  - A fill that restarts the phrase: the grid is anchored only to section starts, so a fill that resets the count (phrases running fill-end to fill-end, as in the owner's own "the fills are the markers" case) is followed only if the section happens to agree. The code comment admits this assumption; OWNER_RULES never states it.
+  The key itself dodges these because its sections mostly sit on the global 8-grid (the exceptions, 74 and 135.75 on Passion, still land on fill ends), so the failure shapes are invisible in the seven.
+
+  2. The pairing rule and the sanity tier
+
+  All three failure modes are reachable; I constructed each and ran it:
+
+  - Too short: sane has NO floor. Outgoing 200 bars, OUTRO at 176, one fill ending at 184; incoming with a fill ending at bar 4 and a target at bar 20. The top pick is entry 180, swap 184, end 200: a 20-bar blend (37.5 s at 128 bpm) with the incoming audible for exactly 4 bars before its bass takes over. It is paired, on the 30 s mark, under the cap, flat-free, so sane=True and it outranks everything, including any one-sided plan with a real one-minute blend. MIN_SIDE_BARS=4 is the only lower bound and it bounds the swap-to-end side, not the blend.
+
+  - Weak beats strong at the window edge: outgoing with marked fill ends at 173 and 192; incoming with measured bass-in at 16 and a natural end reachable at 43 bars. The pairing fill-end-173 <-> bass-in-16, natural end, no loop, cost 8.25, is 20.6 s off the 30 s mark: 0.6 s outside PAIR_WINDOW_SECONDS=20, so sane=False, rank 8. It loses to sane pairings costing up to 36.50, including an implied-8 incoming point on kick-only bars with a 5-bar outgoing loop (cost 21.40, rank 4). The owner accepted swaps 16.5 s and 17 s off the mark, said the clocks are "not a hard rule, an awareness", and called exactly this kind of kick-only early swap "lackluster, lacking energy". A 0.6 s cliff on a constant built from two examples outranks a 28-point cost difference.
+
+  - Incoming looped intro: the sane predicate (phrase_blend.py:678) never looks at in_intro_looped_bars. Verified: a plan with a 4-bar incoming intro loop (entry 176, swap 184, end 200, cost 13.00) is sane=True and ranks above every non-sane plan; the loop region repeats incoming bars 4-12 across out bars 184-192, i.e. repeated material right around the swap. The asymmetry that gives this away: matches() in score_blends.py refuses to count any in-loop plan as equal to an owner answer, so the planner can top-rank a plan shape the scorer itself treats as a different species.
+
+  3. Constants set from one example
+
+  - END_SLACK_BARS (1.0, from blend 2's partial bar): replace with a fractional-bar slack tied to its own rationale ("n_bars counts a partial final bar"), i.e. 0.5 bar, or better, stop charging W_CUT per fraction: score a sub-bar residual as a trim at W_TRIM per bar. As verified live, this constant seesaws between blends: at 1.0 blend 1 misses; at 0.75 and at 0.5 blend 2 flips to 168/176/199 and misses instead. There is no value that gets both right at this commit, and the comment already confesses "0.5 flips blend 2". One number, set from the very blend it now protects, silently decides two blends in opposite directions.
+  - PAIR_WINDOW_SECONDS (20, two named swaps): replace the tier cliff with the existing continuous switch_time cost, or widen to a tolerance grounded in the owner's spread (he accepted 16.5-17 s off and described ~45 s of switch time as fine for an alternative). As a tier boundary it converts 20.0 s vs 20.6 s into a total ordering inversion (demonstrated above).
+  - SANE_BLEND_SECONDS (80): add the missing floor (the owner "starts mixing about the last minute"; nothing sane should be 20 bars) and turn the cap into a cost, not a tier loss, since he said "it's not necessarily time. It's more about what's been left in the track." Verified: at 60 the score collapses to 1 of 7, so an 80->60 nudge silently carries six blends.
+  - ENTRY_MAX_SECONDS (120): this is only a candidate-generation cutoff for derived entries; its exact value does not move the seven (blend 7's derived entry is 77 s). Keep it, but document it as an enumeration bound, not a rule.
+  - The late-swap weight (W_LATE_SWAP 2.0): the owner stated this as a rule ("do NOT swap late on its bass-in with only 15 seconds left"), and the sane tier still admits swaps as late as 10 s before the end, whereupon a 2.0 cost does not prevent it from outranking every non-sane plan. Replace with a hard constraint (exclude, or force the slide-earlier behavior he described), matching how R5's cut is handled. Verified: zeroing it moves the score 6 to 5, so today a weight carries a rule he stated in words.
+
+  4. The blend 1 miss
+
+  Both plans are sane pairings at the same outgoing point (bar 200, marked fill end); they differ on the incoming point (implied 8 at bar 8 vs the kick-in at bar 16), the length (17 vs 25 bars to the original end) and the 6-bar outgoing loop. Two of the owner's statements favor his own plan inside the model: "swapping where the new track's bass comes in is probably the most energetic" (in_point 1.90 vs 0.50) and the about-a-minute aim (length 7.50 vs 3.50). The only term favoring the planner's pick is out_loop = 9.00, i.e. W_LOOP = 1.5 per bar over 6 bars. The statement that decides between them is his loop statement: "a loop exists only to make the blend longer and more natural, and must not be counted when measuring where the switch sits or how long a track is", together with his original blend logic, "the outgoing outro beats are looped up to the START of the next fill in the incoming track". Blend 1 is precisely that prescribed loop, and his answer key confirms it ("confirmed by Sam", out_looped_to_bar 215). Charging 9.0 for the device he prescribed, at a rate that outweighs both his energetic-swap preference and his length preference, is not defensible. But honesty requires adding what a simple W_LOOP=0 does: verified, the score stays 6 of 7 but blend 1 still misses, differently (176/192/224), because with free loops the planner loops to the farthest incoming section start (bar 48) and nothing bounds the loop by "the next fill" as his words do. So the defensible replacement is: loops cost ~0 when they lengthen toward the one-minute aim, AND loop extent is capped at the next incoming phrase point. The 9.0 charge is the decider and it contradicts him; "loops are free" alone is not his rule either.
+
+  5. Contradictions and ignored statements
+
+  Reading OWNER_RULES.txt to the end against 1740c67bb288245e:
+
+  - IGNORED (newest): "the outgoing track's drums should NOT play over [the long fill]; do the bass swap at the earlier fill, automate the outgoing's volume down to the START of the long fill". There is no fade or automation concept anywhere in the module and no fill-length logic; R6 only checks bottom end, and a fill that drops the kick for up to 8 bars is free (FREE_FLAT_BARS). Nothing can express this rule.
+  - IGNORED (newest): "in a long unchanging intro, the fill at about one minute is the crucial one: by then the mix is usually complete". The planner has no preference for completing by the one-minute fill; bass_in and kick_in are its only long-intro machinery. (The "fill end nearest one minute is a section line" half is detector-side, but its mixing consequence is planner-side and absent.)
+  - CONSISTENT: "a fill end is a mixing phrase point but not a section by itself": the planner never promotes fill ends to sections.
+  - IGNORED: the one-minute marks are "a strong preference when choosing the entry point", but for paired or anchored plans the minute-mark cost is waived entirely (phrase_blend.py:560 "if anchored or paired: pass"). All seven owner blends are pairings, so the preference is inert exactly where he applies it; it only binds on the one-sided fallback tier. The incoming's "about a minute after its start" mark is computed for the why-text and never costed anywhere.
+  - CONTRADICTED IN KIND: "do NOT swap late on the bass-in with only 15 seconds left" is implemented as +2.0, and the sane tier certifies late bass-in swaps (anything >= 10 s before the end) as top tier. A stated prohibition is a cost that the tier then overrides.
+  - CONTRADICTED IN KIND (as in point 4): W_LOOP taxes the prescribed lengthening device.
+  - TENSION: the owner said "it's not necessarily time. It's more about what's been left in the track", yet the top tier enforces a hard 80 s blend cap and a hard 20 s window, i.e. exactly time.
+
+  6. Robustness
+
+  Ran all of the brief's cases: no fills and no sections, sections only at bar 0, 16-bar tracks, bpm zero / missing / non-numeric, content missing or malformed on one track, fractional section starts, and a 128 vs 90 bpm pair. None crash. Invalid bpm returns None via _valid. Content problems fall back to labels and say so in why. Two non-crash caveats: (a) a 200-bar track with no sections and no fills against a 64-bar incoming yields NO PLAN, because the only end target is the incoming's end and MAX_TAIL_LOOP=24 makes it unreachable; sparse metadata yields silence rather than a degraded plan, which is a wiring decision to make consciously before this feeds a pipeline. (b) The tempo-gap pair plans happily with all clocks in outgoing bars; under the stated warp assumption that is fine, fed unwarped tracks it is confident garbage with no warning. Fractional section starts work but silently phase the implied grid onto half bars (see point 1).
+
+  7. Tests
+
+  The only test file in this snapshot is the stale round-1 suite at review-blend/cold/Tests/test_phrase_blend.py; the r2 suite the builder cites (173 pass, 25 mutants killed, three new tests) is not in the snapshot and cannot be verified. What the stale suite shows is cautionary: it pins SIX blends under the old OVERRIDES rule, pins blend 1 as RIGHT there, and its two score-pinning tests assert six-element result lists that would fail against the seven-blend key. So: the miss is recorded honestly in SCORE_OUTPUT.txt and recomputed live by score_blends.py, but I cannot confirm a test pins "6 of 7, blend 1 miss" at this commit, and the r1 pin actively masks it. Rules with no test in the visible material that would fail if removed: the entire sane tier in _rank_key (removing it still scores 6 of 7 but flips blend 1 to a swap at bar 192, two bars from the owner's rejected 193, so only a key-level pin catches it), the pairing tier itself, implied_points and its per-section restart, the outgoing implied costs, bass_in/kick_in, and W_LATE_SWAP (zeroing it moves the score 6 to 5, so a score pin catches it only if one exists at r2). One r1 test works against the owner: test_r4_no_loop_beats_a_looped_plan_that_has_a_better_clock locks in the W_LOOP behaviour that point 4 shows deciding blend 1 against him.
+
+  FOUND UNASKED
+
+  - The END_SLACK_BARS seesaw (point 3) is the single sharpest "one number carries the result" finding: no value in {0.5, 0.75, 1.0} gets blends 1 and 2 simultaneously right at this commit.
+  - Malformed input beyond the brief's list: a fill entry of length 1 ([183]) crashes _fill_ends with IndexError, and a section whose start is not numeric crashes _sections through float() on the same unguarded path. A detector hiccup would take the planner down.
+  - Zeroing W_LEN or W_SWITCH_TIME drops the score from 6 to 4: the two "softest" clock terms carry two of the seven blends, so the headline's "the score comes from geometry" should read "geometry plus these two soft clocks plus the tier".
+  - The brief's summary of the sane tier says "a pairing that keeps bottom end"; the code's flat test admits up to FREE_FLAT_BARS (8) of drums-over-drums at zero cost and still calls it "keeps bottom end". That matches his "a few bars is fine", but it is not what the tier's description says.
+  - score_blends.py as shipped reads Documentation/Golden Sections/... paths that do not exist in this snapshot; I monkeypatched KEY and CONTENT to reproduce the score. The reproduction is exact, and the SCORE_OUTPUT.txt artifact matches 1740c67bb288245e.
+  - matches() refuses in-loop plans when scoring against the owner while the sane tier admits them: planner and scorer disagree about what counts as an answer (plan demonstrated in point 2).
+
+  Why CORRECTION and not SOUND or DROP: the model is implemented substantially as stated, the miss is reported with its mechanism, the constants are at least confessed in comments, and nothing plausible crashes it. But the stop rule's first clause fails: two of the owner's newest statements (fade the outgoing before a long incoming fill; the one-minute fill in a long unchanging intro) are simply not in the model, the late-swap prohibition and the loop purpose are encoded as weights that the tier can override, and END_SLACK_BARS demonstrably decides two blends in opposite directions while being set from one of them. None of that is unfixable; all of it is listed above with the replacement rule or tolerance for each. DROP would be warranted if the pairing/sane framework itself were wrong, and it is not: it fixed blend 1 once, and the owner rejected the no-outgoing-point swap it exists to prevent.
+
+===SEAT-DONE kimi blend_r2===

@@ -128,6 +128,9 @@ def test_track_identity_is_exact():
     assert ss.track_matches("Sam Leagas - Double Dutch (Extended Mix) SW V1", "Sam Leagas - Double Dutch (Extended Mix)")
     assert not ss.track_matches("PAX - Revelry (Someone Remix) 24 Bit MASTER", "PAX - Revelry")
     assert not ss.track_matches("PAX - Revelry Dub 24 Bit MASTER", "PAX - Revelry")
+    assert not ss.track_matches("A - B 24 Bit MASTER (X Remix)", "A - B")
+    assert ss.track_matches("A - B 24 Bit MASTER AMENDED V2", "A - B")
+    assert ss.track_matches("A - B SW V2 24 Bit MASTER", "A - B")
 
 
 def test_remix_file_is_never_scored_as_the_original(tmp_path):
@@ -174,3 +177,18 @@ def test_real_key_loads_and_has_seven_tracks():
     assert len(key["tracks"]) == 7
     for kt in key["tracks"].values():
         assert kt["sections"][0][0] == 0
+
+
+
+def test_duplicate_detector_fills_cannot_hide_as_found():
+    key = _key([0], fills=[(15, 16)])
+    t = ss.score_track(key, _res([0], fills_bar=[(15, 16), (15, 16)]))
+    assert t["fills_found"] == 1 and t["fills_extra"] == 1
+
+
+def test_json_track_name_must_match_the_file(tmp_path):
+    r = _res([0, 16])
+    r["track"] = "Someone Else - Other"
+    (tmp_path / "SECTIONS_STEM_A - B.json").write_text(json.dumps(r), encoding="utf-8")
+    with pytest.raises(ValueError):
+        ss.score_all({"tracks": {"A - B": _key([0, 16])}}, tmp_path)

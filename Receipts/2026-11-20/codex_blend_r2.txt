@@ -1,0 +1,67 @@
+VERDICT: CORRECTION
+
+Hold the unwired merge. The planner can cut 28 bars of a usable outro, keep the outgoing drums playing through a long incoming fill, and rank a weaker swap first because it crosses a timing cutoff. I reproduced all three through `plan_blend`.
+
+I read `SHA.txt` and verified both listed SHA-256 prefixes against the files: `phrase_blend.py` `1740c67bb288245e` and `score_blends.py` `0620777c22264ac6`. I also read `answer_key.json`, `content.json`, `OWNER_RULES.txt`, `SCORE_OUTPUT.txt`, and `BUILDER_REPORT.txt`. The pack has no Git metadata to verify the branch or commit independently. I changed no files.
+
+### 1. Implied grid
+
+`implied_points()` steps by 8 from each snapped section start, stops strictly before the next section or track end, and gives every second step the stronger 16-bar grade. A coincident section start or fill end appears once as a marked point. The code also inserts an anchor at bar 0 regardless of the first supplied section.
+
+- A two-bar pickup can shift every subsequent implied point by two bars if its section line is treated as a downbeat. A fill end that genuinely restarts the phrase has the opposite problem: the code marks the fill end but continues the old grid.
+- A 12-bar section gets an implied point at +8, four bars before the next section. A 6-bar section gets none. Both results follow the arithmetic. Their musical validity depends on whether the short section resets the phrase or sits inside the existing count.
+- A first section at bar 12 generates a phantom implied point at bar 8 in the lead-in. An anchor needs to mean a confirmed phrase reset, including when the file starts before the first musical downbeat.
+
+An implied point can win even two bars from a marked one. In a synthetic pair, implied incoming bar 8 ended naturally and won at `104/112/128`, cost 7.15. The marked bass-in at bar 10 needed a six-bar loop and scored 11.25. That preference can make sense when the natural exit matters. A small clock or loop-cost saving alone should carry less weight than a confirmed musical change. The exclusion of two implied points is a builder choice. Measured bass-in has the inverse problem: a marked outgoing point lined up with a measured bass-in one bar before a section can be classified as one-sided.
+
+### 2. The sanity tier
+
+I used two 128-bar tracks at 120 BPM, with kick throughout. The outgoing sections were at 0, 102, and 123. The incoming sections were at 0, 13, 16, and 42, with bass entering at 16. Triplets below are entry, swap, exit.
+
+- **Too short.** The winner was `115/123/128`, a 26-second blend with a swap on implied incoming bar 8 and only 10 seconds left on the outgoing. It qualifies as sane. Four bars either side of the swap is the only minimum.
+- **Window cliff.** With incoming bass-in at 14 and the break at 40, `88/102/128` was a clean, marked-to-bass-in pairing with an 80-second blend and cost 7.75. The tier picked `93/123/133`, cost 14.25, with a weaker implied point. The stronger swap had 52 seconds left. Widening the window from 20 to 22 seconds flipped the winner with everything else fixed.
+- **Incoming loop.** At 124 BPM, with an outgoing outro at 102 and incoming fills at 6-9 and 16-17, the winner was `102/120/128` with a nine-bar incoming repeat. The swap landed on no outgoing point. Turning off incoming loops yielded `117/126/133`, a two-sided pairing outside the time window. The loop wins through the fallback. An incoming repeat also moves the entry earlier and counts in the length score and sanity cap, while the outgoing repeat is excluded. The code needs distinct clocks for original phrasing and actual overlap.
+
+### 3. Constants
+
+| Constant | Replacement |
+|---|---|
+| `END_SLACK_BARS = 1` | Use the actual audio endpoint when available. Report the offset between the incoming target and the natural exit. In blend 2 the target is 192 and the planner plays to 193. At 0.75 the aggregate stays 6/7 because blend 2 becomes a miss and blend 1 becomes a hit. |
+| `PAIR_WINDOW_SECONDS = 20` | Use roughly 30 seconds as a graded preference among valid pairings. Preserve room for the owner's accepted earlier swap at about 46 seconds. Penalize a late handoff according to what it leaves for the mix. The report cites two named swaps for this constant. |
+| `SANE_BLEND_SECONDS = 80` | Make about a minute a soft target. Assess whether the blend has enough overlap for the entry, handoff, and exit, then flag unusually long overlaps. I reproduced 6/7 at 80 and 1/7 at 60. The owner's actual overlaps in the key span about 58-63 seconds at outgoing tempo. The 77-second figure measures blend 7's entry to the original EOF despite its eight-bar trim. |
+| `ENTRY_MAX_SECONDS = 120` | Derive the entry from a credible incoming handoff point and the outgoing swap. Prefer the normal last-minute zone and allow an earlier entry when the incoming phrase calls for it. Apply that exception to the reason for the early entry. The current code extends it to every enumerated pairing, including looped entries. |
+| `W_LATE_SWAP = 2` | Apply the owner's instruction in its stated case: with a long intro, prefer bringing the same bass-in forward toward 30 seconds over using it with only about 15 seconds left. Use a graded lateness cost or an explicit preference between those two placements. I reproduced blend 7 flipping when the weight was zero. |
+
+### 4. Blend 1
+
+Both plans line up on outgoing bar 200, so the owner's rejection of an unphrased outgoing swap does not decide this miss. His first-picture guidance favors entry at an outgoing fill end, a swap on the incoming kick-in, and a loop to the next incoming fill start. The confirmed `184/200/215` does all three. The key gives it **31 bars** of actual overlap, about 58 seconds, versus 17 bars for `192/200/209`.
+
+The six-bar loop costs 9.0, overriding the combined 5.4 advantage in entry-to-end length and swap quality. A loop cost is defensible for audible repetition or a poor loop source. This rate makes the lengthening device defeat the longer blend it was meant to enable. Zeroing the cost also selects a different wrong plan, so the repair needs to value what the loop achieves.
+
+### 5. Owner rules still missed
+
+- **Long fills.** A fill start is an exit candidate, with no requirement to finish the outgoing fade there. At 124 BPM I gave the incoming a 56-bar intro and fills at 15-16 and 27-33. The planner swapped at incoming 16 and looped the outgoing through the entire long fill, finishing at incoming 56. Encode the earlier handoff and fade by the fill start, and recognize the near-minute fill as a completion landmark. Keep the owner's high-energy switch at the fill end as an explicit variant. Ordinary fill ends already stay out of the section list unless supplied as section starts.
+- **Usable outros.** When every candidate cuts, the planner returns a cut. With a 128-bar outgoing track whose outro starts at 96, and an incoming track whose sole later section is at 12, it returned `88/96/100`. It should report no admissible plan for that case.
+- **Bottom end.** Eight consecutive bars without kick or bass can still be sane. I reproduced that by removing outgoing lows before the short swap above. The final wording requires continuity. Any intentional fill exception needs its own rule.
+- **One-minute entry and late swap.** Every paired candidate bypasses the one-minute entry preference, including entries on marked fills. Blend 7 still offers the specifically discouraged bass-in with about 15.5 seconds left as its first alternative, described as having more energy.
+
+### 6. Robustness
+
+No fills works when there are usable section targets. With only bar 0 and no fills on the incoming, the planner returns `None` even if an implied exit could work. A 24-bar outgoing and 20-bar incoming produced a plan. Missing or zero BPM returns `None`.
+
+Missing content falls back to labels in the planner without reporting that the content was absent. The measured scorer raises `KeyError` for a missing track. `null` sections or fills crash with `TypeError`, and infinite BPM passes validation then raises `ZeroDivisionError`.
+
+Fractional starts are accepted, but a marked 8.25 snaps to 8, and the content walk can miss a half-bar gap because it does not split at the swap or content boundaries. Very different tempos require a shared warp. Even with that warp, a 24-bar kick-in at native 60 BPM is outside the incoming window although it arrives after 48 seconds at a 120 BPM blend tempo.
+
+### 7. Tests
+
+The recorded miss is pinned in `SCORE_OUTPUT.txt`. With the fixture paths pointed at the pack in memory, the full scorer output matched the supplied output line for line. BOTTOM END gives 6/7 primary, 6/7 including acceptable answers, and 7/7 primary in the top three. Blend 1 is rank two. The scorer's default paths fail in this pack.
+
+The pack contains no tests to verify the builder's 173-pass or mutation claims. The scorer prints results without asserting them. Removing the flat-run cost or one-minute entry weight leaves the seven picks unchanged. The fixtures also give no regression check for fading before a long fill or rejecting a plan when all candidates cut a usable outro.
+
+### FOUND UNASKED
+
+- Alternative selection stops at the first candidate over its cost margin, even though candidates are sorted by tier first. In the window example this hides the 7.75-cost pairing behind a 25.40-cost candidate. The listener never gets the stronger option.
+- The report infers that measured content is inert by zeroing only the flat-run cost. Bass-in detection, kick-only scoring, and loop-source selection still read measured content in that run. The ablation establishes that the flat-run cost leaves these picks unchanged.
+===CODEX-ASK-DONE exit=0 nonce=bb8f8247db974d66b8238f2752cdd7a2===
+===SEAT-DONE codex blend_r2===

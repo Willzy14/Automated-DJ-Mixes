@@ -22,9 +22,8 @@ def beats(bars):
     return np.repeat(np.asarray(bars, bool), 4)
 
 
-def struct(full_bars, bass_bars, heard=None):
-    return gs.groove_structure(beats(full_bars), np.asarray(bass_bars, bool), len(full_bars),
-                               heard_kick=None if heard is None else beats(heard))
+def struct(full_bars, bass_bars):
+    return gs.groove_structure(beats(full_bars), np.asarray(bass_bars, bool), len(full_bars))
 
 
 def run_detect(monkeypatch, tmp_path, kick, bass, mode="groove", provider=None, **kw):
@@ -44,13 +43,33 @@ def starts(res):
 # --- the flag ----------------------------------------------------------------------
 
 def test_default_mode_is_legacy_and_writes_no_new_fields(monkeypatch, tmp_path):
-    kick = [1] * 80
-    bass = [0] * 16 + [1] * 64
-    res = run_detect(monkeypatch, tmp_path, kick, bass, mode="legacy")
+    # no section_mode argument at all: the default must be legacy
+    envs, hop, _ = _make_envs(kick_on_per_bar=np.asarray([1] * 80),
+                              bass_on_per_bar=np.asarray([0] * 16 + [1] * 64))
+    monkeypatch.setattr(sd, "_separate_envelopes", lambda *_a, **_k: (envs, hop))
+    wav = tmp_path / "fake.wav"
+    wav.write_bytes(b"x")
+    res = sd.detect(wav, tmp_path, bpm=120.0, downbeat=0.0, make_viz=False, write_json=False,
+                    width_cues=False)
     assert res["analysis"] == {"kick_model": False}
     assert "fill_sections" not in res["signals"]
     assert section_format.section_detector_of(res) == "legacy"
-    assert "groove_sections" not in sys.modules or True   # importable, but never needed by legacy
+
+
+def test_legacy_detect_never_imports_the_groove_module():
+    import subprocess
+    src = Path(__file__).resolve().parent.parent / "Source"
+    tests = Path(__file__).resolve().parent
+    code = (
+        "import sys, numpy as np; sys.path.insert(0, r'%s'); sys.path.insert(0, r'%s');"
+        "import stem_detector as sd; from test_section_soft_rules import _make_envs;"
+        "import tempfile, pathlib; d = pathlib.Path(tempfile.mkdtemp()); w = d / 'f.wav'; w.write_bytes(b'x');"
+        "e, h, _ = _make_envs(kick_on_per_bar=np.ones(40, int), bass_on_per_bar=np.ones(40, int));"
+        "sd._separate_envelopes = lambda *a, **k: (e, h);"
+        "sd.detect(w, d, bpm=120.0, downbeat=0.0, make_viz=False, write_json=False, width_cues=False);"
+        "print('groove_sections' in sys.modules)" % (src, tests))
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.stdout.strip().splitlines()[-1] == "False", out.stdout + out.stderr
 
 
 def test_groove_mode_marks_its_format(monkeypatch, tmp_path):
@@ -219,16 +238,12 @@ def test_a_bass_change_needs_four_bars_of_the_old_state():
     assert struct([1] * 48, [1] + [0] * 47)["lines"] == []
 
 
-def test_two_bar_full_stop_fill_resets_the_phrase():
+def test_two_bar_fill_with_kick_and_bass_gone_is_not_a_section():
+    # Sam 2026-11-20: a fill end is not a section unless the kick or bass state
+    # changes there (the old full-stop rule, fitted to Back In The Dance, is gone)
     full = [1] * 54 + [0, 0] + [1] * 24
-    g = struct(full, [1] * 54 + [0, 0] + [1] * 24, heard=full)
-    assert g["lines"] == [56]
-
-
-def test_light_kick_two_bar_fill_is_ornament():
-    full = [1] * 54 + [0, 0] + [1] * 24
-    g = struct(full, [1] * 54 + [0, 0] + [1] * 24, heard=[1] * 80)
-    assert g["lines"] == []
+    g = struct(full, [1] * 54 + [0, 0] + [1] * 24)
+    assert g["lines"] == [] and g["fills"] == [(54, 56)]
 
 
 # --- line spacing ---------------------------------------------------------------------
@@ -492,3 +507,106 @@ def test_groove_bass_regions_follow_the_groove_bass_state(monkeypatch, tmp_path)
     assert [r[2:] for r in legacy["signals"]["bass_regions"]] == [[8, 40]]
     assert groove["signals"]["bass_state_bar"][39:41] == [1, 1]
     assert groove["signals"]["bass_out"] == 144.0 and legacy["signals"]["bass_out"] == 80.0
+
+
+
+# --- round 3: owner's judgements of the 14.08.26 pictures ------------------------------
+
+def test_residue_after_the_drop_is_not_bass_when_the_low_end_thins():
+    # Christoph - Reachin: full bass to 175, a residue (0.13-0.31) from 176, low band down
+    bass = np.array([0.0] * 32 + [1.0] * 144 + [0.2] * 9 + [0.02] * 9 + [0.25] * 6)
+    low = np.array([0.5] * 32 + [1.0] * 144 + [0.67] * 24)
+    assert gs.residue_leave_bar(bass, low) == 176
+
+
+def test_thin_bass_over_a_held_low_end_is_still_bass():
+    # Ninetoes 144-160: thinned bass, but the low band holds -> not a residue exit
+    bass = np.array([1.0] * 144 + [0.2] * 16 + [0.01] * 32)
+    low = np.array([0.9] * 160 + [0.88] * 32)
+    assert gs.residue_leave_bar(bass, low) is None
+
+
+def test_residue_that_comes_back_strongly_is_not_an_exit():
+    bass = np.array([1.0] * 100 + [0.2] * 8 + [1.0] * 30)
+    low = np.array([1.0] * 100 + [0.6] * 8 + [1.0] * 30)
+    assert gs.residue_leave_bar(bass, low) is None
+
+
+def test_outro_uses_the_earlier_residue_exit():
+    bass_on = np.array([1] * 186 + [0] * 8 + [1] * 6, bool)   # residue still reads 'on' to 185
+    assert gs.outro_start(bass_on, [], 200, [], residue_bar=176) == 176
+
+
+def test_long_unchanging_intro_ends_at_the_fill_nearest_one_minute():
+    spb = 1.875                                  # 128 BPM: bar 32 = 60 s
+    assert gs.minute_fill_line([56, 64], [16, 32, 44, 48], 0.0, spb) == 32
+    assert gs.minute_fill_line([24, 64], [16, 32], 0.0, spb) is None        # intro under a minute
+    assert gs.minute_fill_line([56], [8, 44], 0.0, spb) is None             # no fill near 1:00
+    assert gs.minute_fill_line([], [32], 0.0, spb) == 32
+
+
+def test_a_cue_on_a_fill_end_cuts_nothing():
+    g = struct([1] * 64, [1] * 64)
+    assert gs.gate_cue_bars([40], g, 64, [], fill_end_bars=[40]) == []
+    assert gs.gate_cue_bars([41], g, 64, [], fill_end_bars=[40]) == []
+    assert gs.gate_cue_bars([44], g, 64, [], fill_end_bars=[40]) == [44]
+
+
+def test_bass_residue_lines_after_the_outro_are_dropped():
+    cands = {32: 5, 176: 5, 194: gs.RANK["bass_change"], 150: gs.RANK["bass_change"]}
+    out = gs.drop_changes_after_outro(cands, [150, 194], 176)
+    assert out == {32: 5, 176: 5, 150: gs.RANK["bass_change"]}
+    assert gs.drop_changes_after_outro(cands, [150, 194], None) == cands
+
+
+def test_a_kick_stop_on_the_same_bar_as_a_dropped_bass_change_keeps_its_line():
+    # Bad Behaviours 143: the kick stops AND the residue bass flips there
+    cands = {136: 5, 143: gs.RANK["bass_change"]}
+    kinds = {136: {"outro"}, 143: {"tail", "bass_change"}}
+    out = gs.drop_changes_after_outro(cands, [143], 136, kinds)
+    assert out == {136: 5, 143: gs.RANK["tail"]}
+
+
+def test_residue_exit_needs_the_tail_to_stay_a_residue():
+    # after the last 4+ bar run the bass keeps coming back on every other bar
+    bass = np.array([1.0] * 100 + [1.0, 0.1] * 12)
+    low = np.array([1.0] * 100 + [0.6] * 24)
+    assert gs.residue_leave_bar(bass, low) is None
+
+
+def test_minute_rule_needs_an_opening_longer_than_75_seconds():
+    assert gs.minute_fill_line([36], [30], 0.0, 2.0) is None     # first line at 72 s
+    assert gs.minute_fill_line([40], [30], 0.0, 2.0) == 30       # first line at 80 s
+
+
+def _detect_with_low_band(monkeypatch, tmp_path, kick, bass_vals, low_vals):
+    n_bars, hop, spb = len(kick), 0.1, 2.0
+    n = int(n_bars * spb / hop) + 10
+    rep = lambda per_bar: np.concatenate([np.full(int(spb / hop), float(v)) for v in per_bar] + [np.zeros(10)])
+    envs = {"drums": rep(kick), "bass": rep(bass_vals), "vocals": np.zeros(n), "other": np.zeros(n),
+            "mix": rep([1.0] * n_bars)}
+    monkeypatch.setattr(sd, "_separate_envelopes", lambda *_a, **_k: (envs, hop))
+    cache = tmp_path / "_Stem Analysis"
+    cache.mkdir(exist_ok=True)
+    np.savez(cache / "fake__stemenv.npz", hop_t=np.array(hop), **envs, tiera_band_low=rep(low_vals))
+    wav = tmp_path / "fake.wav"
+    wav.write_bytes(b"x")
+    return sd.detect(wav, tmp_path, bpm=120.0, downbeat=0.0, make_viz=False, write_json=False,
+                     width_cues=False, section_mode="groove")
+
+
+def test_detect_wires_the_residue_exit(monkeypatch, tmp_path):
+    # the bass drops to a 20% residue at 60 and the low band thins: outro at 60,
+    # and the bass strip agrees (no bass after 60)
+    res = _detect_with_low_band(monkeypatch, tmp_path, [1] * 80,
+                                [0.0] * 8 + [1.0] * 52 + [0.2] * 20, [1.0] * 60 + [0.6] * 20)
+    assert (60, "outro") in [(s["start_bar"], s["label"]) for s in res["sections"]]
+    assert res["signals"]["bass_state_bar"][60:] == [0] * 20
+
+
+def test_detect_wires_the_one_minute_fill_in_a_long_unchanging_opening(monkeypatch, tmp_path):
+    kick = [1] * 120
+    kick[29] = 0                                   # a one bar fill ending at bar 30 = 60 s
+    kick[14] = 0
+    res = _detect_with_low_band(monkeypatch, tmp_path, kick, [1.0] * 120, [1.0] * 120)
+    assert 30 in [s["start_bar"] for s in res["sections"]], [s["start_bar"] for s in res["sections"]]
