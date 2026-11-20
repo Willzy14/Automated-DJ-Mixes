@@ -137,6 +137,10 @@ MAX_OUTRO_BARS = 48       # a 'last fill' leaving a longer tail than this isn't 
 OUTRO_CAP_BARS = 32       # Sam's rule (24.06.26): an outro is never more than 32 bars (one phrase) — cap it there
 MIN_LOOP_BARS = 4
 MIN_VOCAL_BARS = 2
+SILENT_BEAT_FRAC = 0.15   # leading beats quieter than this fraction of the median beat peak are
+                          # silence, not bar one. Measured: Call 911's two silent beats sit at
+                          # <= 0.09; the quietest real intros in the 2026-11-20 key (Passion,
+                          # Eli Brown, PAX hats) sit at >= 0.25, so 0.15 has margin both ways.
 
 # --- Soft intro/outro rules (R2, R3, R4 in the section-detector spec) ----------
 # Sam's mental model for intro/outro/head-cascade classification. Default OFF.
@@ -178,6 +182,30 @@ KICKLESS_FRAC = 0.47           # bar fraction with kick ON below this = "kick-le
                                # from both achievable neighbours: no corpus track sits
                                # on the boundary, and every replayed track keeps its
                                # current branch (0.5 heads stay kick-IN -> R4).
+
+
+def _skip_leading_silence(mix_env, hop_t, bpm, downbeat):
+    """Move the downbeat forward by whole beats past leading silence.
+
+    A beat is silent when its mix peak is below SILENT_BEAT_FRAC of the
+    track's median beat peak. Stops at the first beat that sounds, and never
+    moves more than half the track. Returns the (possibly unchanged) downbeat.
+    """
+    env = np.asarray(mix_env, dtype=float)
+    beat_sec = 60.0 / float(bpm)
+    n_beats = int((len(env) * hop_t - downbeat) / beat_sec)
+    if n_beats < 8:
+        return downbeat
+    peaks = np.zeros(n_beats)
+    for k in range(n_beats):
+        i0 = int((downbeat + k * beat_sec) / hop_t)
+        i1 = min(int((downbeat + (k + 1) * beat_sec) / hop_t), len(env))
+        peaks[k] = env[i0:i1].max() if i1 > i0 else 0.0
+    ref = float(np.median(peaks)) + 1e-12
+    k = 0
+    while k < n_beats // 2 and peaks[k] < SILENT_BEAT_FRAC * ref:
+        k += 1
+    return downbeat + k * beat_sec if k < n_beats // 2 else downbeat
 
 
 def _per_bar(env, hop_t, downbeat, sec_per_bar, n_bars):
@@ -1023,6 +1051,11 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     else:
         envs, hop_t = _separate_envelopes(wav, project / "_Stem Analysis")
     dur_real = len(envs["mix"]) * hop_t
+    # Bar one is the first beat that sounds, not the file start (answer key
+    # 2026-11-20: Call 911 opens with two silent beats, which put every line
+    # half a bar late). Whole beats only, so the grid's phase is kept.
+    downbeat_given = float(downbeat)
+    downbeat = _skip_leading_silence(envs["mix"], hop_t, bpm, downbeat)
     n_bars = max(1, int((dur_real - downbeat) / sec_per_bar))
 
     pb = {s: _per_bar(envs[s], hop_t, downbeat, sec_per_bar, n_bars) for s in STEMS}
@@ -1395,7 +1428,9 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
 
     result = {"track": wav.stem, "bpm": round(bpm, 2), "n_bars": n_bars,
               "sections": sections, "signals": signals,
-              "analysis": {"kick_model": kick_model_used}}
+              "analysis": {"kick_model": kick_model_used,
+                           "downbeat_sec": round(float(downbeat), 4),
+                           "leading_silence_beats": int(round((downbeat - downbeat_given) * bpm / 60.0))}}
     if write_json:
         (project / "_Stem Analysis").mkdir(parents=True, exist_ok=True)
         json_path = project / "_Stem Analysis" / f"SECTIONS_STEM_{wav.stem}.json"

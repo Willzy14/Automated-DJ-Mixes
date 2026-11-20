@@ -68,6 +68,8 @@ class CachedDrumsProvider(kma.KickPresenceProvider):
     def _activation(self, drums_mono, sr, chunk_fr=3000, overlap=200):
         memo = self.memo_dir / f"{self._current}.npy" if self._current else None
         if memo is not None and memo.exists():
+            if self._model_mod is None:   # presence_from_activation lives in the model module
+                self._model_mod = kma._load_model_module(self.root)
             return np.load(memo)
         act = super()._activation(drums_mono, sr, chunk_fr, overlap)
         if memo is not None:
