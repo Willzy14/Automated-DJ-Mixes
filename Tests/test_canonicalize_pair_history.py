@@ -319,7 +319,7 @@ def test_within_tolerance_duplicates_pick_a_deterministic_representative():
 
 @pytest.mark.skipif(not REAL_PAIR_HISTORY.exists(),
                     reason="real pair_history.jsonl unavailable")
-def test_real_corpus_reduces_to_41_unique_observations_with_4_conflicts():
+def test_real_corpus_reduces_to_52_unique_observations_with_4_conflicts():
     """Pinned against the actual project data. If this ever changes, it
     means the real pair_history.jsonl corpus itself changed (new sessions
     append to it) - re-verify by hand before updating this pin, the same
@@ -338,17 +338,21 @@ def test_real_corpus_reduces_to_41_unique_observations_with_4_conflicts():
     NEW pairs (checked by hand: 52 = 45 + 7): 6 valid (50 records, 41 unique,
     the same 4 conflicts) and 1 malformed - its T2 (Youngr -> HARTY) has no
     `sam_bass_swap_beat` because Sam's swap there sits on a tail-loop clip
-    (source delta not comparable), the same class as the August T4 record."""
+    (source delta not comparable), the same class as the August T4 record.
+    2026-10-06: the 05.10.26 Defected Selection learner run appended 11 records
+    for NEW pairs, all valid (checked 2026-11-20: 63 lines = 52 + 11; 61 valid,
+    52 unique, the same 4 conflicts, the same 2 malformed). The pin was not
+    updated at the time, so this test was red from 2026-10-06 to 2026-11-20."""
     records, malformed = load_records(REAL_PAIR_HISTORY)
     assert [(m["record"]["project"], m["record"]["pair_index"], m["error"])
             for m in malformed] == [
         ("15.09.26 August Releases Mix", 4, "missing field(s): ['sam_bass_swap_beat']"),
         ("05.10.26 September Mix", 2, "missing field(s): ['sam_bass_swap_beat']"),
     ]
-    assert len(records) == 50
+    assert len(records) == 61
 
     result = canonicalize(records)
-    assert len(result.canonical) + len(result.conflicts) == 41
+    assert len(result.canonical) + len(result.conflicts) == 52
 
     conflict_keys = {(c.project, c.pair_index) for c in result.conflicts}
     assert conflict_keys == {
