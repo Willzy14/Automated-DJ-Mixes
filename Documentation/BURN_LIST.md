@@ -2530,7 +2530,13 @@ was written).
   Touched: 2026-10-05.
   Peer review: plan - MiniMax CORRECTIONS (not yet applied).
 
-- [ ] **Intro-cut float edge case produces a zero-length clip** (D19) - found 2026-10-05 building 05.10.26 Tech House Selection: `align_engine.plan_fill_or_cut` branch (2) guards `0 < cut_to < intro_end`, but a track whose intro ends at bar 8.0018 (Dombresky - Dirty Secret) lets `cut_to=8.0` pass, trimming the WHOLE 8-bar intro. The ALS validator caught it ("zero/negative arrangement length") so nothing shipped; worked around with a written decision for that pair. Fix: compare with a tolerance (`cut_to < intro_end - 0.25`) plus a regression test. Related: stem-JSON sections and ALS chops disagreed on intro length for Volkoder - Act Up (32 vs 8 bars), which is how a hand decision of mine hit the same wall.
+- [x] **Intro-cut float edge case produces a zero-length clip** (D19) - found 2026-10-05 building 05.10.26 Tech House Selection: `align_engine.plan_fill_or_cut` branch (2) guards `0 < cut_to < intro_end`, but a track whose intro ends at bar 8.0018 (Dombresky - Dirty Secret) lets `cut_to=8.0` pass, trimming the WHOLE 8-bar intro. The ALS validator caught it ("zero/negative arrangement length") so nothing shipped; worked around with a written decision for that pair. Fix: compare with a tolerance (`cut_to < intro_end - 0.25`) plus a regression test. Related: stem-JSON sections and ALS chops disagreed on intro length for Volkoder - Act Up (32 vs 8 bars), which is how a hand decision of mine hit the same wall.
+  DONE 2026-11-20 [Claude] (attempt d19-20261120-r3c). The decision path and the clip writer are now guarded (`3f64592`, `35b3741`, 2026-11-04), and four review rounds today closed the holes Codex found in those guards: either quote style is read, a tag that is not exactly one plain value is refused before any edit, a start with no readable end fails closed, tail-loop limits match validate_loop_spec. Replayed on a real 10-track project: output XML identical to the previous main.
+  Author: Claude. Evidence: `Source/apply_loops.py` sha256:0fc6c2c9ad3bf8fe (the 16-hex prefix both reviewers named; the full hash is in the receipt) `Receipts/2026-11-20/receipt-D19-d19-20261120-r3c.json`. Owner: Claude.
+  Peer review: SOUND - Codex `Receipts/2026-11-20/codex-review-d19d22-r3c-SOUND.txt`: rounds 1 to 3 were CORRECTION (receipts beside it), confirmed SOUND at 60f6506; MiniMax also SOUND `Receipts/2026-11-20/minimax-review-d19d22-r3c-SOUND.txt`.
+  Worker: Claude Sonnet 5.5 / default. Why this worker: standard implementation from a spec that named each hole; not the dearer tier because the design decisions were made in the brief.
+  Worker result: UNDER-SPEC - the round 1 and 2 briefs chose patches (rollback, a per-line regex) where a structural change (staging, exactly-one-plain-value) was needed; it took Codex three rounds to get there.
+  Still latent and accepted (not built): the planner guard compares with the intro END, not its length; no locking between two concurrent runs on one destination; `shift_named_clip` reads double-quoted values only.
   Evidence: `Test Project/05.10.26 Tech House Selection/Output/phase2.log`; `Source/align_engine.py` ~line 2394.
   UPDATE 2026-10-05 later [Claude]: FIXED in the planner path (`ae3cc35`: an intro cut must leave >= 0.25 bar; `Tests/test_d19_d22_guards.py`, proven to fail without it). Two independent reviews (Opus + Sonnet) - applied: margin 0.25 not 1 bar, second ALS writer covered. REMAINING (latent/unguarded, validator still catches them so nothing invalid ships): (a) the guard compares `cut_to` with the intro's END position, not its length - differs only if an intro starts after bar 0 (not seen); (b) the `--decisions` path (`alignment_from_decision` / `fills_from_decision`, align_engine ~2758-2849) has NO check of `intro_trim_bars` against the intro length - a trim of the whole intro is accepted and only the ALS validator refuses it; (c) `apply_loops.trim_named_clip_front` with trim == clip length yields CurrentStart == CurrentEnd.
   Owner: Claude. Status: PARTIAL - planner path fixed, decision path still open.
@@ -2539,22 +2545,57 @@ was written).
 
 - [ ] **`track_hints.json` auto-derivation picks early drum-only moments, tripping the hints hard gate on 7 of 27 tracks** (D20) - found 2026-10-05: `stem_detector.hints_from_stem_result` set first_drop/first_break on a drum-only or pre-drop move (Call 911 hint bar 24/32 vs real drop 48 / break 104; Elevate, Act Up, Dirty Secret, You're My Life, Deeper; I Want You's outro was the one case where the SECTION was the weaker side - detector labels the last 11 bars 'break' + a 2-bar 'outro'). All were checked against DETECT pictures where noted and hand-corrected in `track_hints.json` (notes field records each). Fix candidates: derive hints from the section list (first drop section, first break after it, outro section) with the same rule the gate uses, flag disagreement instead of picking one silently; separately, relabel a long closing 'break' as outro when drums+bass fade.
   Evidence: `Test Project/05.10.26 Tech House Selection/Output/hints_gate.log`, same for Defected.
-  Owner: Claude. Status: OPEN - worked around per track.
-  Touched: 2026-10-05.
-  Peer review: NONE.
+  Owner: Claude.
+  UPDATE 2026-11-20 [Claude]: ROOT CAUSE FOUND AND FIXED, merged (`5072e1e`). It was not the derivation rule. The documented `stem_detector.py <project> --write-hints` re-ran detection WITHOUT the kick detector and (a) derived hints from sections that differ from the ones the Ableton set was built from, (b) OVERWROTE `_Stem Analysis/SECTIONS_STEM_*.json`, so the arrangement phase ran on the weaker analysis. Every mix built since the step was documented (2026-09-15) is affected: see D26. Now `--write-hints` only reads the Phase 1a analysis, refuses all-or-nothing unless it is known to come from the kick detector, and a kick-off run cannot replace a kick-on file. Replay on a real project (06.10.26 DFTD Tech House, scratch copy): Call 911 and Passion come out right with no hand fix; Ashibah (first drop bar 16, should be 24) and PAX (intro 4 bars, kick enters bar 16) are still wrong. Those are section-detector faults, split out as D23.
+  Status: OPEN - fix merged, acceptance incomplete: MiniMax SOUND at f9bcbfb, Codex confirmed the four named corrections but its verdict stays CORRECTION on one case (a track of 1 to 3 bars gives empty sections in detect() and is refused; split out as D25). Not marked DONE on a CORRECTION.
+  Touched: 2026-11-20.
+  Peer review: CORRECTION - Codex `Receipts/2026-11-20/codex-review-d20-r3c-corrections-confirmed.txt`: only the 1 to 3 bar case remains; MiniMax SOUND `Receipts/2026-11-20/minimax-review-d20-r3b-SOUND.txt`.
 
 - [ ] **Stem-grid result for the SAME file changed between runs when the other tracks in the folder changed** (D21) - found 2026-10-05: Defected Selection run 1 gridded MEDUZA I Got Nothing at 4.79 ms and Spiller Groovejet at 2.93 ms on their own kicks; after two other tracks were swapped out of the folder both read ~105-109 ms off and failed the beatgrid gate (stable across two re-runs). Unproven cause - project-BPM mode or a half-beat anchor choice are the suspects; the grid is meant to depend only on the track. Until understood, a track's grid pass/fail cannot be trusted across different folders. Also logged: 4 of 13 Defected and 2 of 14 Tech House picks failed the gate (Arielle Free 90 ms, Robosonic 111 ms, Kyle Watson 18 ms, Mahalo 38 ms); `refit_grid_from_stem.py` overrides are IGNORED under the mandatory `--stem-grid` (only the non-stem-grid path reads them) - Pat Premier could not be rescued that way.
   Evidence: `Test Project/05.10.26 Defected Selection/Output/phase1a*.log` (runs 1 vs 2/3), `05.10.26 September Mix/Output/phase1a*.log`.
-  Owner: Claude. Status: OPEN - observed, not diagnosed.
-  Touched: 2026-10-05.
-  Peer review: NONE.
+  Owner: Claude.
+  UPDATE 2026-11-20 [Claude]: DIAGNOSED by running it (Opus subagent; scratch in `D:\Claude Workspace\Automated DJ Mixes\d21\`). The other tracks in the folder play no part and project BPM never reaches the detector. Demucs `apply_model` defaults to `shifts=1`, an unseeded random time offset per separation, so two separations of one file differ slightly; on tracks whose kick intervals split into two near-equal clusters the period estimate flips (MEDUZA 125.0 or 126.4 BPM) and the grid lands about 105 ms off; the cache then freezes whichever separation was written last (run 1 gridded a fresh separation, runs 2 and 3 read a different cached one). Both results reproduced on demand by seed. PART 1 merged (`ce8ef64`): `shifts=0` at all three call sites, `DRUMS_CACHE_VERSION` 2 (every cached drums stem re-separates once), a tripwire test. PART 2 in rework in the Audio Analysis Toolkit (`work/d21-robust-period`): the period search as a RESCUE only for grids that fail the gate; first version measured on 120 cached stems: 112 pass before, 117 after, none worse.
+  Status: RUNNING (Claude Opus subagent, since 2026-11-20) - part 2. Deliverable: `D:\Worktrees\aat-d21\src\audio_analysis\stem_grid.py`.
+  Touched: 2026-11-20.
+  Peer review: CORRECTION - Codex `Receipts/2026-11-20/codex-review-d21fix1-r2.txt`: part 1 source edits confirmed by Codex and MiniMax, both corrections were on the guard test; part 2 not yet re-reviewed.
 
-- [ ] **A failed phase 2 leaves an invalid `Sections V<N+1>.als` on disk, which a resumed run then picks up as the latest** (D22) - found 2026-10-05: `propose_arrangement` writes the output before the ALS validator rejects it; my resume script took the stale invalid V3 as V and failed at the wrong gate. Worked around by deleting my own invalid file. Fix: write to a temp name and rename only after validation passes (also stops a half-built file being opened in Ableton).
+- [x] **A failed phase 2 leaves an invalid `Sections V<N+1>.als` on disk, which a resumed run then picks up as the latest** (D22) - found 2026-10-05: `propose_arrangement` writes the output before the ALS validator rejects it; my resume script took the stale invalid V3 as V and failed at the wrong gate. Worked around by deleting my own invalid file. Fix: write to a temp name and rename only after validation passes (also stops a half-built file being opened in Ableton).
+  DONE 2026-11-20 [Claude] (attempt d22-20261120-r3c). Every ALS writer stages to its own exclusively created `.partial`, validates, then renames (`als_generator` included, 2026-11-04). New today: Phase 3 with a MixPlan stages the ALS and a copy of the report, runs the reconcile hard gate on the staged pair and publishes only on a pass, so a run that fails the gate leaves no new `Sections V<N>.als` for a resumed run to pick up. The published gzip bytes no longer depend on the staging name.
+  Author: Claude. Evidence: `Source/apply_loops.py` sha256:0fc6c2c9ad3bf8fe (the 16-hex prefix both reviewers named; the full hash is in the receipt) `Receipts/2026-11-20/receipt-D22-d22-20261120-r3c.json`. Owner: Claude.
+  Peer review: SOUND - Codex `Receipts/2026-11-20/codex-review-d19d22-r3c-SOUND.txt`; MiniMax also SOUND `Receipts/2026-11-20/minimax-review-d19d22-r3c-SOUND.txt`.
+  Worker: Claude Sonnet 5.5 / default. Why this worker: same build as D19, one worktree.
+  Worker result: UNDER-SPEC - see D19.
+  Accepted and stated in the code: the ALS and report renames are not atomic; if the report publish fails after the ALS publish the run raises naming both files (the report is then stale and Phase 3 must be re-run).
   Evidence: `Source/apply_loops.py` compress_als (line ~63); `Test Project/05.10.26 Tech House Selection/Output/runmix.log`.
   UPDATE 2026-10-05 later [Claude]: FIXED for the two Phase 2/3 writers (`ae3cc35`: write `<name>.partial`, validate, rename only if valid, always clean the partial; `apply_automation.compress_als` now delegates). Both reviews: sound. NOT covered: `automated_dj_mixes/als_generator.py:65` (older single-command path) still writes first; `Path.replace` can raise PermissionError (read-only/locked output) instead of the ValueError callers expect after a validation failure (output left intact, partial removed).
   Owner: Claude. Status: PARTIAL - main writers fixed.
   Touched: 2026-10-05.
   Peer review: NONE.
+
+- [ ] **Section detector mislabels two real cases the hints fix does not cure** (D23) - found 2026-11-20 replaying 06.10.26 DFTD Tech House with the correct (kick-model) analysis: Ashibah - Devotion gets a `drop` at bar 16 where kick and vocals land at bar 24 and bass at bar 40; PAX - Revelry gets a 4-bar `intro` where the kick enters at bar 16. Also carried from D20: Nic Fanciulli & Butch - I Want You labels its last 11 bars `break` plus a 2-bar `outro`. Each is visible on the track DETECT picture.
+  Evidence: `Test Project/06.10.26 DFTD Tech House/Hints/track_hints.json` (notes fields record the hand fixes).
+  Owner: Claude. Status: OPEN. Touched: 2026-11-20.
+  Peer review: NONE - not yet reviewed.
+
+- [ ] **The direct grid probe feeds native-rate audio to Demucs while the kick-model path resamples to 44.1 kHz** (D24) - found 2026-11-20 by Codex, confirmed in code: `Source/probe_stem_kick_grid.py` `stem_audio` passes the file at its own rate; `Source/kick_model_adapter.py` (lines 737-740) and `Source/stem_section_probe.py` (lines 90-92) resample first. For a 48 kHz file the two paths separate different signals, so the grid and the kick readout can disagree, independent of the randomness fix.
+  Evidence: `Receipts/2026-11-20/codex-review-d21fix1-r1.txt`.
+  Owner: Claude. Status: OPEN. Touched: 2026-11-20.
+  Peer review: NONE - not yet reviewed.
+
+- [ ] **A track of 1 to 3 bars gives empty sections and is refused by the hints step** (D25) - found 2026-11-20 by Codex: `_snap_merge()` drops the end boundary as too close to bar 0, `detect()` writes `sections: []`, and `--write-hints` then refuses the whole project. No real DJ track is this short; recorded so a jingle or test file in a project folder is not a surprise.
+  Evidence: `Receipts/2026-11-20/codex-review-d20-r3c-corrections-confirmed.txt`.
+  Owner: Claude. Status: OPEN - low priority. Touched: 2026-11-20.
+  Peer review: NONE - not yet reviewed.
+
+- [ ] **Every mix built since 2026-09-15 was arranged from the weaker analysis; replay them before building rules from the corrections Sam made** (D26) - found 2026-11-20 (see D20). The 22.09.26 Core Sample, 05.10.26 September Mix, Tech House Selection, Defected Selection and 06.10.26 DFTD Tech House all ran `--write-hints` before Phase 2, so their arrangements, and the pipeline side of every `pair_history.jsonl` record learned from them, came from the energy-threshold sections. Some of what reads as a habit of his may be a correction of that. Before D17 / D18 / C1 build anything from those records: re-run Phase 1a and Phase 2 for each project on a scratch copy with the fixed code, diff against the tweaked set with the learner in dry-run, and count which corrections disappear. First data point: with the correct analysis the DFTD pair Eli Brown - Better When into Adam Ten & Rafael - Call 911 has NO alignment inside the 16 to 48 bar window (it only arranged because of the wrong sections), so that mix needs a different order.
+  Evidence: `Receipts/2026-11-20/minimax-review-d20-r1.txt` (the overwrite finding); scratch log `D:\Claude Workspace\Automated DJ Mixes\d19d22-replay\main.p2.log`.
+  Owner: Claude. Status: OPEN, after D21. Touched: 2026-11-20.
+  Peer review: NONE - not yet reviewed.
+
+- [ ] **Bar one to be checked by ear on the tracks the grid rescue brings back** (D27) - found 2026-11-20: the D21 part 2 rescue is measured on how well the grid sits on the kicks; whether bar one is musically right on Robosonic - In My Arms and the two Pat Premier - Temptation versions has no reference (MEDUZA and Spiller match the result the old code gives from a good separation).
+  Evidence: scratch `D:\Claude Workspace\Automated DJ Mixes\d21\regress_v1.csv`.
+  Owner: Sam. Status: SAM-GATED (do the bar lines on those three tracks sound right in a mix?). Touched: 2026-11-20.
+  Peer review: NONE - not yet reviewed.
 
 ## E - Hygiene / technical debt (does not affect output quality today)
 
@@ -2564,6 +2605,7 @@ was written).
   the render at all. No click has ever been reported on a flat render either (the only case where
   the check actually runs), so this is untested territory on the exact check most likely to
   catch an audible defect.
+  UPDATE 2026-11-20 [Claude]: the VISIBILITY half was built 2026-11-04 and merged (`a523145`, `a1f7e00`): `render_check` now records boundary_click coverage (boundaries, inspected, skipped by reason, failed) in its .json and .md, so a clean pass and a check that never ran no longer look the same. Still open, unchanged: on a tempo arc `boundary_click` still skips every boundary, and grid drift still cannot fail the render.
   Evidence: `Source/render_check.py:2235,2440` (Astra); Master Board line 27 (Fable, prior
   carding).
 
@@ -3388,7 +3430,9 @@ evidence trail rather than silently skipping the failed gate or hacking it to pa
 opened (10 -> 11 open, 27 done, 1 dropped unchanged).
 rev (this write) -> (this write).
 
-## THE COUNT: 17 open, 27 done, 1 dropped (last update 2026-10-05 [Claude]: D16 half-fixed, D17-D22 opened (D17 R2/R4/R5, D18 short-loop vocabulary, D19 intro-cut float bug, D20 hints derivation, D21 grid non-determinism, D22 invalid output on failed phase 2); before that 2026-09-22 19:15 [Claude]: D16 opened -
+Last item update: 2026-11-20 11:49 [Claude] - refill: D19, D22 DONE; D20, D21, E1 updated; D23, D24, D25, D26, D27 opened; rev 599b21f -> (this commit). Validator against the pre-fold copy: the same 4 legacy FAILs as before (2e, 6, 11, 13), none introduced. Work with no item, built 2026-11-04/05 and already in main: the alignment-baseline refresh guard (`Tests/baseline_refresh.py`), the master finder rounds (`Tools/resolve_masters.py`, now also 16 and 32 bit labels and `playlist_builder.py --resolve`), the Tier A cache hardening.
+
+## THE COUNT: 20 open, 29 done, 1 dropped (last update 2026-11-20 [Claude]: D19 and D22 DONE after four review rounds; D20 root cause fixed and merged, held open on a Codex CORRECTION; D21 diagnosed, part 1 merged, part 2 running; D23 to D27 opened; E1 visibility half noted)
 a real, separate MixPlan-reconciliation gap found while rebuilding the mix to show Sam D15's new
 transitions, confirmed harmless to actual audio, not blocking the rebuild; D15's own rebuild
 delivered successfully - 2 loops -> 7, T1/T3 visually confirmed fixed, all 10 transition pictures
