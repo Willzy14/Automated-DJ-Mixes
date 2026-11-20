@@ -1603,6 +1603,8 @@ def hints_from_stem_result(res: dict) -> dict:
         outro_start = max(first_drop + sec_per_bar, end_sec - 32 * sec_per_bar)
     if not first_break or first_break <= 0:
         first_break = first_drop + 16 * sec_per_bar
+        if end_sec > 0:
+            first_break = min(first_break, end_sec)
     if not last_bass_drop or last_bass_drop <= 0:
         last_bass_drop = max(first_drop, outro_start - 16 * sec_per_bar)
 

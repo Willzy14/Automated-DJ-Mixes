@@ -403,3 +403,17 @@ def test_reader_and_guard_share_one_trust_function(tmp_path):
     for name, (d, want) in cases.items():
         assert stem_detector._kick_provenance(d) == want, name
     assert stem_detector._kick_provenance([1]) == stem_detector.PROV_MALFORMED
+
+
+def test_short_track_fallback_break_is_clamped_to_the_track_end():
+    # MiniMax review 2026-11-20: first_break's fallback (first_drop + 16 bars) was the one hint not held inside the
+    # track, so the "no hint beyond the track end" check refused a correct analysis of any track under 32 bars.
+    spb = 4 * 60.0 / 128.0
+    res = {"track": "T", "bpm": 128.0, "n_bars": 20,
+           "sections": [{"label": "intro", "name": "intro_1", "start_sec": 0.0, "end_sec": 8 * spb},
+                        {"label": "drop", "name": "drop_1", "start_sec": 8 * spb, "end_sec": 20 * spb}],
+           "signals": {}}
+    h = stem_detector.hints_from_stem_result(res)
+    end = 20 * spb
+    assert all(0 < v <= end + 0.01 for v in h.values()), h
+    assert h["first_break_sec"] == round(end, 2)
