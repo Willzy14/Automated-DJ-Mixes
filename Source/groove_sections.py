@@ -24,8 +24,7 @@ import numpy as np
 
 import stem_detector as sd
 
-SECTION_DETECTOR = "groove-1"
-SECTIONS_SCHEMA = 2
+from section_format import GROOVE_DETECTOR as SECTION_DETECTOR, GROOVE_SCHEMA as SECTIONS_SCHEMA
 
 # --- constants: each number with its reason -------------------------------------
 KICK_FULL_FRAC = 0.75     # a heard kick is FULL at >= this fraction of the solid kick level.

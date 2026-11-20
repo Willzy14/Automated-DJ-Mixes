@@ -27,6 +27,8 @@ Library: `check_grid`, `enforce_beatgrid_quality`, `load_grid_overrides`, `apply
 
 
 ### `Source/automated_dj_mixes/orchestrator.py`
+
+[Codex, 2026-11-20]: Pass `--section-mode groove` here and to `Source/stem_detector.py --write-hints` for groove sections. In `Tools/run_mix_pipeline.sh`, set `SECTION_MODE=groove` to pass it to both. Legacy is the default.
 Main pipeline controller. The canonical `/mix` path uses `--stem-grid --stem-sections --kick-model`: owned per-beat grids, Demucs structure and Kick Detector V3 evidence. The orchestrator runs MIK only for optional key/energy metadata. **Rekordbox was removed entirely (2026-08-20, Sam 2026-08-18: "done away with")**: no desktop driving, no library reads, no phrase enrichment; `enforce_owned_grid_coverage` is the coverage gate for every mode (owned stem grids or `.asd` tick-fit shells; no fallback). `--allow-partial-rekordbox` is accepted-but-ignored with a deprecation warning so documented invocations don't break. CLI: `python -m automated_dj_mixes.orchestrator --input "Tracks/" --output "Output/"`.
 
 Key functions: `run_pipeline()`, `enforce_owned_grid_coverage()`, `_find_template()`, `_next_version()`, `main()` (CLI).

@@ -226,7 +226,14 @@ def run_pipeline(
     kick_model_path: Path | None = None,
     kick_model_device: str = "auto",
     track_order: list[str] | None = None,
+    section_mode: str = "legacy",
 ) -> Path | None:
+    from section_format import GROOVE, SECTION_MODES, SectionFormatError
+
+    if section_mode not in SECTION_MODES:
+        raise ValueError(f"section_mode must be one of {SECTION_MODES}, got {section_mode!r}")
+    if section_mode == GROOVE and (not sections_layout or not stem_sections or previews_only):
+        raise ValueError("--section-mode groove requires --sections-layout --stem-sections outside preview mode")
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
 
@@ -527,6 +534,7 @@ def run_pipeline(
                     kick_model=kick_model,
                     kick_model_path=kick_model_path,
                     kick_model_device=kick_model_device,
+                    section_mode=section_mode,
                     make_viz=True,   # DETECT_<track>.png = the per-track sanity check
                                      # (full track + 4 stem panels + section/beat annotations).
                                      # Replaces the old 80-PNG blind pass (Sam 2026-06-10).
@@ -540,7 +548,11 @@ def run_pipeline(
                     for w in validate_bar_math(segments, a.path.stem[:40]):
                         print(f"  BAR-MATH: {w}")
                     stem_results[str(a.path)] = segments
+                elif section_mode == GROOVE:
+                    raise SectionFormatError(f"No groove sections produced for {a.path.name}")
             except Exception as e:
+                if section_mode == GROOVE or isinstance(e, SectionFormatError):
+                    raise
                 print(f"  WARNING: stem section detection failed for {a.path.name}: {e}")
         elif sections_layout and not previews_only:
             print(f"  WARNING: no stem-sections for {a.path.name} - single uncoloured clip")
@@ -902,6 +914,9 @@ def main():
                              "(Source/stem_detector.py) as the section source (the only surviving one). "
                              "Analysis-only; envelope cache makes re-runs "
                              "on known tracks instant.")
+    from section_format import LEGACY, SECTION_MODES
+    parser.add_argument("--section-mode", choices=SECTION_MODES, default=LEGACY,
+                        help="Section detector for the stem layout (default: legacy).")
     parser.add_argument("--stem-grid", action="store_true",
                         help="Use our own stem-kick beat detector "
                              "(automated_dj_mixes.stem_grid) as the sole beat-grid authority. "
@@ -936,6 +951,7 @@ def main():
         kick_model=args.kick_model,
         kick_model_path=args.kick_model_path,
         kick_model_device=args.kick_model_device,
+        section_mode=args.section_mode,
         track_order=[k.strip() for k in args.order.split(",")] if args.order else None,
     )
     if als_path is not None:

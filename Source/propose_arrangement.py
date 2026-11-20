@@ -1541,6 +1541,11 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             tracks, stem_dir, order=[t.name for t in tracks],
             policy=get_policy(transition_policy), decisions=decisions)
     else:
+        from section_format import GROOVE, SectionFormatError, track_section_mode
+
+        if any(track_section_mode(stem_dir_for_bpm, t.name, "propose_arrangement") == GROOVE
+               for t in tracks):
+            raise SectionFormatError("Groove sections require align_engine for arrangement.")
         print("\n--- Natural-fill alignment (legacy) ---")
         positions = compute_natural_positions(tracks)
     shifts: list[tuple[str, float]] = []

@@ -8,14 +8,24 @@ Overwrites SECTIONS_STEM_*.json + DETECT_*.png in _Stem Analysis.
     python -m reverify_sections "Test Project/24.06.26"
 """
 import sys
+import json
 from pathlib import Path
 
 from automated_dj_mixes.stem_grid import detect_beat_grid
 from automated_dj_mixes.warping import grid_bpm_and_downbeat
 from stem_detector import detect as stem_detect
+from section_format import require_legacy
 
 project = Path(sys.argv[1])
 audio = project / "Audio"
+for wav in sorted(audio.glob("*.wav")):
+    path = project / "_Stem Analysis" / f"SECTIONS_STEM_{wav.stem}.json"
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        require_legacy(data, "reverify_sections", path.name)
 
 print(f"{'track':<38} {'downbeat':>8} {'bpm':>7} {'flag':>4} {'secs':>4}  intro")
 print("-" * 90)

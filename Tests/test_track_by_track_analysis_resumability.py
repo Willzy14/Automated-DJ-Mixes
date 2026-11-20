@@ -65,8 +65,9 @@ def _fake_grid(bpm: float = 120.0, n_beats: int = 64) -> SimpleNamespace:
     )
 
 
+@pytest.mark.parametrize("section_mode", ["legacy", "groove"])
 def test_track_one_is_fully_cached_before_track_two_analysis_even_starts(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, section_mode,
 ):
     project = tmp_path
     audio = project / "Audio"
@@ -84,7 +85,7 @@ def test_track_one_is_fully_cached_before_track_two_analysis_even_starts(
     monkeypatch.setattr(orchestrator, "analyse_folder", lambda _d: analyses)
 
     order_observations: list[tuple[str, bool]] = []
-    stem_detect_calls: list[str] = []
+    stem_detect_calls: list[tuple[str, str]] = []
 
     def fake_detect_beat_grid(path, asd_ticks=None):
         if "Track2" in path.name:
@@ -99,13 +100,14 @@ def test_track_one_is_fully_cached_before_track_two_analysis_even_starts(
         return _fake_grid(bpm=120.0)
 
     def fake_stem_detect(wav_path, project_dir, *, bpm, downbeat, kick_model,
-                          kick_model_path, kick_model_device, make_viz):
+                          kick_model_path, kick_model_device, make_viz,
+                          section_mode: str):
         # Mirrors the real stem_detector.detect: persists a per-track
         # artifact to `_Stem Analysis` before returning.
         d = project_dir / "_Stem Analysis"
         d.mkdir(parents=True, exist_ok=True)
         (d / f"CACHE_{wav_path.stem}.marker").write_text("done", encoding="utf-8")
-        stem_detect_calls.append(wav_path.name)
+        stem_detect_calls.append((wav_path.name, section_mode))
         return {"sections": [], "bpm": bpm}
 
     monkeypatch.setattr(stem_grid, "detect_beat_grid", fake_detect_beat_grid)
@@ -121,6 +123,7 @@ def test_track_one_is_fully_cached_before_track_two_analysis_even_starts(
             skip_desktop_analyze=True,
             stem_grid=True,
             stem_sections=True,
+            section_mode=section_mode,
         )
 
     # The coverage gate correctly still refuses to ship a mix missing a
@@ -134,7 +137,9 @@ def test_track_one_is_fully_cached_before_track_two_analysis_even_starts(
     )
     assert (stem_dir / "CACHE_Track1 SW V1.marker").exists()
     assert (stem_dir / "CACHE_Track2 SW V1.marker").exists()
-    assert stem_detect_calls == ["Track1 SW V1.wav", "Track2 SW V1.wav"], (
+    assert stem_detect_calls == [
+        ("Track1 SW V1.wav", section_mode), ("Track2 SW V1.wav", section_mode)
+    ], (
         "stage 3 must run track-by-track in order, not deferred as a "
         "second full-corpus sweep after the grid sweep"
     )
@@ -167,7 +172,9 @@ def test_a_track_that_fails_leaves_no_marker_but_does_not_lose_earlier_ones(
         return _fake_grid(bpm=120.0)
 
     def fake_stem_detect(wav_path, project_dir, *, bpm, downbeat, kick_model,
-                          kick_model_path, kick_model_device, make_viz):
+                          kick_model_path, kick_model_device, make_viz,
+                          section_mode: str):
+        assert section_mode == "legacy"
         d = project_dir / "_Stem Analysis"
         d.mkdir(parents=True, exist_ok=True)
         (d / f"CACHE_{wav_path.stem}.marker").write_text("done", encoding="utf-8")

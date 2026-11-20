@@ -37,6 +37,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 from stem_section_probe import _seccol  # shared section colour map
+from section_format import GROOVE, LEGACY, groove_fills, require_uniform_modes, section_mode_of
 from automated_dj_mixes.transition_policy import INTERIM_V1, beats_to_bars
 
 PHRASE_GRID = 16          # 16-bar phrase grid (viz gridlines)
@@ -306,6 +307,7 @@ def load_loop_quality_context(cache_path: str | Path) -> LoopQualityContext:
         raise FileNotFoundError(f"stem section metadata not found: {metadata_path}")
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    section_mode_of(metadata, "load_loop_quality_context", metadata_path.name)
     bpm = float(metadata["bpm"])
     sections = metadata.get("sections") or []
     if not sections:
@@ -668,6 +670,7 @@ class Track:
     loop_quality_context: LoopQualityContext | None = field(
         default=None, repr=False, compare=False
     )
+    section_mode: str = LEGACY
 
     def boundaries(self) -> list[tuple[float, str]]:
         """(bar, label) for every section start — the markers."""
@@ -682,8 +685,7 @@ def _sec_to_bar(sec: float | None, downbeat: float, spb: float) -> float | None:
 
 def load_track(stem_json: Path) -> Track:
     d = json.loads(stem_json.read_text(encoding="utf-8"))
-    from section_format import require_legacy   # a groove-format file must not mix in silently
-    require_legacy(d, "align_engine.load_track", stem_json.name)
+    mode = section_mode_of(d, "align_engine.load_track", stem_json.name)
     bpm = d["bpm"]
     spb = 4 * 60.0 / bpm
     secs = d["sections"]
@@ -696,11 +698,15 @@ def load_track(stem_json: Path) -> Track:
     # use the bar fields directly (no sec re-conversion, avoids downbeat rounding).
     loop_windows = [(w[2], w[3]) for w in sig.get("loop_windows", []) if len(w) >= 4]
     vocal_regions = [(w[2], w[3]) for w in sig.get("vocal_regions", []) if len(w) >= 4]
-    fills = []
-    for f in sig.get("fills", []):
-        a, b = _sec_to_bar(f[0], downbeat, spb), _sec_to_bar(f[1], downbeat, spb)
-        if a is not None and b is not None:
-            fills.append((a, b))
+    if mode == GROOVE:
+        fills = [(f.start_bar, f.end_bar)
+                 for f in groove_fills(d, "align_engine.load_track", stem_json.name)]
+    else:
+        fills = []
+        for f in sig.get("fills", []):
+            a, b = _sec_to_bar(f[0], downbeat, spb), _sec_to_bar(f[1], downbeat, spb)
+            if a is not None and b is not None:
+                fills.append((a, b))
     n_bars = d["n_bars"]
     last_min = max(8, round(60.0 / spb))
     envelope_cache = stem_json.with_name(f"{d['track']}__stemenv.npz")
@@ -714,6 +720,7 @@ def load_track(stem_json: Path) -> Track:
         musical_landmarks=list(sig.get("musical_landmarks", [])),
         envelope_cache_path=envelope_cache,
         loop_quality_overrides=overrides,
+        section_mode=mode,
     )
 
 
@@ -1032,7 +1039,13 @@ def _mix_cues(track: Track) -> dict[int, dict]:
         kind = landmark["type"]
         add(start, f"landmark:{kind}:start", 4)
         add(end, f"landmark:{kind}:end", 5)
-    if CUE_CONFIG.emit_fills:
+    if getattr(track, "section_mode", LEGACY) == GROOVE:
+        # Placement stays on the bar grid. Partial-bar fills still exclude
+        # loops, but only an actual bar-line ending can be a swap anchor.
+        for _, end_bar in track.fills:
+            if float(end_bar).is_integer():
+                add(end_bar, "fill:end", FILL_CUE_WEIGHT)
+    elif CUE_CONFIG.emit_fills:
         # stem_detector records these as "kick dropouts mark changes and are good
         # points to mix" — and until 2026-08-17 they reached ONLY the loop-exclusion
         # mask below, i.e. the engine used Sam's own mix-point rule exclusively to
@@ -1657,7 +1670,9 @@ def align_pair(o: Track, i: Track, policy=None) -> Alignment:
     pick the marker that maximises section-boundary lineup (energy-matched). The
     bass switch happens there — faked early on the outgoing if it's before the
     outgoing's natural bass-out. Marker-coincidence BEATS literal bass-to-bass."""
-    if o.musical_landmarks or i.musical_landmarks:
+    outgoing_mode = getattr(o, "section_mode", LEGACY)
+    require_uniform_modes((outgoing_mode, getattr(i, "section_mode", LEGACY)), "align_pair")
+    if outgoing_mode == GROOVE or o.musical_landmarks or i.musical_landmarks:
         return _align_pair_landmark_aware(o, i, policy)
 
     bass_in = i.bass_in_bar if i.bass_in_bar is not None else 0.0
@@ -2135,6 +2150,17 @@ def _incoming_pre_drop_break(i):
     return None
 
 
+def _leading_intro_end(track: Track) -> float:
+    end = 0.0
+    for section in track.sections:
+        if section["label"] != "intro":
+            break
+        end = section["end_bar"]
+        if getattr(track, "section_mode", LEGACY) == LEGACY:
+            break
+    return end
+
+
 def _resolve_break_to_break(o, i, al):
     """Mix-CHOICE policy (soft, swappable — Sam 2026-06-09): if the incoming's
     pre-drop break would coincide with an outgoing break before its outro, drop the
@@ -2297,8 +2323,7 @@ def plan_fill_or_cut(o, i, al, policy=None):
         max(0.0, overlap_ceiling - max(0.0, al.overlap_bars)),
     )
     first_drop_in = next((s["start_bar"] for s in i.sections if s["label"] == "drop"), None)
-    intro_end = (i.sections[0]["end_bar"]
-                 if i.sections and i.sections[0]["label"] == "intro" else 0.0)
+    intro_end = _leading_intro_end(i)
     intro_loop = False
 
     # (1) INCOMING-INTRO LOOP — enter at the outgoing's last drop; loop clean drums back.
@@ -2745,8 +2770,7 @@ def _check_decision_intro_trim(i: "Track", trim: float, pair) -> None:
     the planner leaves its own cut."""
     if trim <= 0:
         return
-    intro_end = (i.sections[0]["end_bar"]
-                 if i.sections and i.sections[0]["label"] == "intro" else 0.0)
+    intro_end = _leading_intro_end(i)
     if intro_end <= 0:
         return
     if intro_end - trim < _DECISION_INTRO_MIN_REMAINDER_BARS:
@@ -2944,6 +2968,8 @@ def compute_aligned_positions(tracks, stem_dir, order=None, policy=None,
                 f"align_engine.compute_aligned_positions: no stem JSON for track '{nm}' "
                 f"in {stem_dir}. Run the stem detector (--stem-sections) first.")
         resolved.append(key)
+    require_uniform_modes((stems[key].section_mode for key in resolved),
+                          "compute_aligned_positions")
 
     # Bridge TrackInfo hint fields (sec, set by propose_arrangement from
     # track_hints.json) → Track hint fields (bar, via _sec_to_bar). Populated

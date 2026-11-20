@@ -648,7 +648,8 @@ def _load_arrangement_report(als_path: Path,
     return out
 
 
-def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) -> list[TransitionPlan]:
+def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None,
+                     *, require_report_swaps: bool = False) -> list[TransitionPlan]:
     report_swaps = report_swaps or {}
     plans: list[TransitionPlan] = []
     for i in range(len(tracks) - 1):
@@ -742,6 +743,8 @@ def plan_transitions(tracks: list[TrackInfo], report_swaps: dict | None = None) 
                 swap_transforms.append("clamped")
             reason = f"align_engine {rep.get('handoff_kind', 'swap')}"
         else:
+            if require_report_swaps:
+                raise ValueError(f"Groove sections require a report swap for {out_t.name!r} -> {in_t.name!r}")
             swap, reason = find_bass_swap(out_t, in_t, ov_start, ov_end)
 
         # Land the swap exactly on a section boundary of either track (Sam's
@@ -1594,7 +1597,14 @@ def main() -> None:
     # ── plan transitions ──────────────────────────────────────────────
     report_path = _resolve_report_path(als_path, arrangement_report_path)
     report_swaps = _load_arrangement_report(als_path, arrangement_report_path)
-    plans = plan_transitions(tracks, report_swaps)
+    from section_format import GROOVE, track_section_mode
+
+    stem_dir = als_path.parent.parent / "_Stem Analysis"
+    if not stem_dir.exists():
+        stem_dir = als_path.parent / "_Stem Analysis"
+    groove = any(track_section_mode(stem_dir, t.name, "apply_automation") == GROOVE
+                 for t in tracks)
+    plans = plan_transitions(tracks, report_swaps, require_report_swaps=groove)
     print(f"\n{len(plans)} transitions planned:")
     for i, p in enumerate(plans):
         bars = (p.overlap_end - p.overlap_start) / 4

@@ -47,11 +47,16 @@ def _grid(ax, downbeat, sec_per_bar, n_bars, bold=False):
 
 
 def render(project: Path, wav: Path, data: dict, out_dir: Path):
+    from section_format import GROOVE, groove_fills, section_mode_of
+
+    mode = section_mode_of(data, "section_placement_viz", wav.stem)
     sections = data["sections"]
     bpm = data["bpm"]
     signals = data.get("signals", {})
     downbeat = float(sections[0]["start_sec"]) if sections else 0.0
     sec_per_bar = 4 * 60.0 / bpm
+    fills = ([(f.start_sec, f.end_sec) for f in groove_fills(data, "section_placement_viz", wav.stem)]
+             if mode == GROOVE else signals.get("fills", []))
 
     cache_dir = project / "_Stem Analysis"
     envs, hop_t = _separate_envelopes(wav, cache_dir)
@@ -84,7 +89,7 @@ def render(project: Path, wav: Path, data: dict, out_dir: Path):
                  ha="center", va="top", fontsize=9, zorder=6,
                  bbox=dict(boxstyle="round,pad=0.28", fc="white", ec=col, alpha=0.9))
     ax0.axvline(sections[-1]["end_sec"], color="k", lw=1.2, alpha=0.65, zorder=4)
-    for a, b in signals.get("fills", []):
+    for a, b in fills:
         ax0.axvspan(a, b, color="#ff8c00", alpha=0.75, lw=0, zorder=5)
     for bar in range(0, n_bars + 1, 16):
         ax0.text(downbeat + bar * sec_per_bar, 0.02, str(bar), fontsize=8.5, color="#000",
@@ -134,6 +139,9 @@ def render(project: Path, wav: Path, data: dict, out_dir: Path):
 
 
 def main():
+    from section_format import SectionFormatError
+
+    failed = False
     project = Path(sys.argv[1])
     stem_dir = project / "_Stem Analysis"
     audio_dir = project / "Audio"
@@ -151,8 +159,10 @@ def main():
             out = render(project, wav, data, out_dir)
             print(f"  wrote {out.name}")
         except Exception as e:
+            failed |= isinstance(e, SectionFormatError)
             print(f"  [FAIL] {track}: {type(e).__name__}: {e}")
+    return int(failed)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
