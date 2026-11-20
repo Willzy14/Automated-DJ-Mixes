@@ -61,6 +61,15 @@ FILL_LEAD_BARS = 2        # a kick drop at most this many bars before a phrase p
 TRAIL_DROP_FRAC = 0.5     # inside a soft break, a beat at under half the break's own median drum
                           # peak has dropped out: the fill before the kick returns
 TRAIL_MAX_BEATS = 8       # that trailing fill is at most two bars (Sam: one or two bar fills)
+RESIDUE_FRAC = 1.0 / 3.0  # a bass at under a third of its own solid (drop) level is a residue, not
+                          # bass (Christoph - Reachin 176-184: 0.13-0.31 after a 0.9-1.0 drop)
+LOW_THIN_FRAC = 0.85      # ...but only when the low band thins with it (Reachin 0.96 -> 0.67): a thin
+                          # bass over a held low end is still bass (Ninetoes 144-160, low band 0.98x)
+LONG_INTRO_SEC = 75.0     # an opening that runs "well past a minute" with no kick or bass change: the
+                          # owner says intros are not longer than a minute (Harry Romero - Renegades)
+MINUTE_TOL_SEC = 15.0     # the fill end chosen as the one-minute marker must be within this of 60 s
+FILL_END_CUE_BARS = 1     # an energy or width cue within this many bars of a fill end is that fill's
+                          # own change (a lead ending on a phrase point), not a section: Double Dutch 128
 MIN_LINE_GAP_BARS = 2     # two lines closer than this are one musical event; the one with the
                           # stronger evidence stays (see RANK)
 SILENT_BEAT_FRAC = 0.15   # bar-one REPORT only: a leading beat quieter than this fraction of the
@@ -74,7 +83,7 @@ BAR_ONE_PHASE_SHARE = 0.75  # this share of them on the same off-bar beat, befor
 # then a break start, a bass change, a tail stop, a full-stop fill, and last the
 # older energy/width cues.
 RANK = {"kick_return": 5, "outro": 5, "break_start": 4, "bass_change": 4, "tail": 3,
-        "full_stop": 2, "cue": 1}
+        "full_stop": 2, "minute_fill": 2, "cue": 1}
 
 
 # --- small helpers ---------------------------------------------------------------
@@ -209,6 +218,33 @@ def clip_fills_to_lines(spans, lines):
     return clean
 
 
+def drop_changes_after_outro(cands, bass_changes, o_start):
+    """After the bass has left, a bass residue coming and going cuts nothing:
+    bass-change candidates after the outro start are dropped (Reachin 194)."""
+    out = dict(cands)
+    if o_start is None:
+        return out
+    for b in bass_changes:
+        if b > o_start and out.get(b) == RANK["bass_change"]:
+            del out[b]
+    return out
+
+
+def minute_fill_line(lines, fill_end_bars, downbeat, sec_per_bar):
+    """In an opening that runs past LONG_INTRO_SEC with no line, the end of the
+    fill nearest one minute ends the intro (the fills are the markers when
+    nothing else changes). Returns that bar, or None."""
+    first = min(lines) if lines else None
+    if first is not None and downbeat + first * sec_per_bar <= LONG_INTRO_SEC:
+        return None
+    limit = first if first is not None else float("inf")
+    ends = [e for e in fill_end_bars if 0 < e < limit]
+    if not ends:
+        return None
+    best = min(ends, key=lambda e: abs(downbeat + e * sec_per_bar - 60.0))
+    return best if abs(downbeat + best * sec_per_bar - 60.0) <= MINUTE_TOL_SEC else None
+
+
 def keep_strongest(cands, n_bars):
     """cands: {bar: rank}. Drop lines outside (0, n_bars); of two lines closer
     than MIN_LINE_GAP_BARS keep the higher rank (the earlier one on a tie)."""
@@ -247,7 +283,7 @@ def groove_structure(full_beat, bass_on, n_bars, heard_kick=None):
     """
     bass_on = np.asarray(bass_on, bool)[:n_bars]
     full_bar = full_bars(full_beat, n_bars)
-    cands, fills, breaks, lead_fills = {}, [], [], set()
+    cands, fills, breaks, lead_fills, bass_changes = {}, [], [], set(), []
     head_end = tail_start = None
 
     def add(bar, kind):
@@ -309,6 +345,7 @@ def groove_structure(full_beat, bass_on, n_bars, heard_kick=None):
         old, new = bool(before[-1]), bool(after[0])
         if old != new and (before == old).all() and (after == new).all():
             add(line, "bass_change")
+            bass_changes.append(line)
 
     if heard_kick is not None:
         hk = np.zeros(n_bars * 4, bool)
@@ -322,7 +359,7 @@ def groove_structure(full_beat, bass_on, n_bars, heard_kick=None):
     fills = sorted(set((int(s), int(e)) for s, e in fills))
     return {"cands": cands, "lines": keep_strongest(cands, n_bars), "fills": fills,
             "breaks": breaks, "lead_fills": lead_fills, "head_end": head_end,
-            "tail_start": tail_start, "full_bar": full_bar}
+            "tail_start": tail_start, "full_bar": full_bar, "bass_changes": bass_changes}
 
 
 def bass_leave_bar(bass_on):
@@ -351,12 +388,40 @@ def bass_leave_bar(bass_on):
     return b if b < n else None
 
 
-def outro_start(bass_on, fills, n_bars, low_out_in_fill):
+def residue_leave_bar(bass_bar, low_bar):
+    """The end of the last run of MIN_SECTION_BARS or more bars at RESIDUE_FRAC or
+    more of the bass stem's solid level, when from there on the bass stays a
+    residue (at most a quarter of the bars back above it) AND the low band has
+    thinned (its median over the next 8 bars under LOW_THIN_FRAC of its median
+    over the 8 bars before). Else None. A faint residue is not bass."""
+    if low_bar is None:
+        return None
+    bass_bar = np.asarray(bass_bar, float)
+    low_bar = np.asarray(low_bar, float)
+    n = len(bass_bar)
+    solid = sd._solid_kick_level(bass_bar) + 1e-12
+    strong = bass_bar >= RESIDUE_FRAC * solid
+    runs = sd._regions(strong, sd.MIN_SECTION_BARS)       # the bass really playing
+    if not runs:
+        return None
+    c = int(runs[-1][1])
+    if n - c < sd.MIN_SECTION_BARS or c < 8:
+        return None
+    if strong[c:].mean() > 0.25:          # the tail must stay a residue, odd bars aside
+        return None
+    before = float(np.median(low_bar[c - 8:c]))
+    after = float(np.median(low_bar[c:c + 8]))
+    return c if after < LOW_THIN_FRAC * before else None
+
+
+def outro_start(bass_on, fills, n_bars, low_out_in_fill, residue_bar=None):
     """Outro start: where the bass leaves (bass_leave_bar), moved to the end of
     a fill that contains that point or ends on it. Without a bass exit, the end
     of the last fill in the final OUTRO_CAP_BARS during which the low end also
     drops out. Else None."""
     b = bass_leave_bar(bass_on)
+    if residue_bar is not None and (b is None or residue_bar < b):
+        b = residue_bar                     # the bass left earlier: what followed was residue
     if b is not None and n_bars - b >= sd.MIN_SECTION_BARS:   # a 1-3 bar tail is the file ending
         for s, e in fills:
             if s <= b <= e and e < n_bars:
@@ -367,7 +432,7 @@ def outro_start(bass_on, fills, n_bars, low_out_in_fill):
     return max(cands) if cands else None
 
 
-def gate_cue_bars(cue_bars, groove, n_bars, lines):
+def gate_cue_bars(cue_bars, groove, n_bars, lines, fill_end_bars=()):
     """The older boundary signals (energy dips, width collapses) cut a line only
     where the kick is full: not inside a break, the kick-down head or tail, and
     at least MIN_SECTION_BARS from every groove line."""
@@ -382,6 +447,8 @@ def gate_cue_bars(cue_bars, groove, n_bars, lines):
         inside_fill[s0 + 1:s1] = True
     out = []
     for b in cue_bars:
+        if any(abs(b - e) <= FILL_END_CUE_BARS for e in fill_end_bars):
+            continue
         if (0 < b < n_bars and not kick_down[b] and not kick_down[b - 1] and not inside_fill[b]
                 and all(abs(b - x) >= sd.MIN_SECTION_BARS for x in list(lines) + out)):
             out.append(b)
@@ -526,18 +593,43 @@ def groove_detect(*, wav, project, envs, hop_t, bpm, downbeat, sec_per_bar, n_ba
     else:
         low_ref, low_vals, low_frac = sd._solid_kick_level(pb["bass"]), pb["bass"], BASS_ON_FRAC
     low_out = [float(np.mean(low_vals[s0:s1])) < low_frac * low_ref for s0, s1 in groove["fills"]]
-    o_start = outro_start(bass_on, groove["fills"], n_bars, low_out)
+    residue = residue_leave_bar(pb["bass"], low_bar) if bass_source == "bass_stem" else None
+    o_start = outro_start(bass_on, groove["fills"], n_bars, low_out, residue_bar=residue)
+    if residue is not None and o_start is not None and o_start >= residue:
+        bass_on = np.asarray(bass_on, bool).copy()
+        bass_on[residue:] = False          # a residue is not bass: the strip, bass_out and regions agree
     if o_start is None:
         o_start = legacy_outro_start
     elif n_bars - sd.OUTRO_CAP_BARS > 0 and o_start < n_bars - sd.OUTRO_CAP_BARS:
         o_start = n_bars - sd.OUTRO_CAP_BARS      # Sam 24.06.26: an outro is never more than 32 bars
 
-    cands = dict(groove["cands"])
-    if o_start is not None and 0 < o_start < n_bars:
-        cands[o_start] = max(cands.get(o_start, 0), RANK["outro"])
+    # Fill edges, beat-precise (lines are fixed below; fills are cut at them).
+    spans = []
+    for s0, s1 in groove["fills"]:
+        kb, ke = refine_fill_beats(full_beat, s0, s1)
+        if (s0, s1) in groove["lead_fills"]:
+            ke = 4 * s1
+        spans.append([kb, ke])
+    for b in one_beat_fills(kick_on, full_beat, n_bars):
+        spans.append([4 * b + 3, 4 * b + 4])
+    strength = np.asarray(kick_peaks, float)[:n_beats] / (float(kick_ref) + 1e-9)
+    runs = list(groove["breaks"]) + ([(0, groove["head_end"])] if groove["head_end"] else [])
+    for s0, s1 in runs:
+        t = trailing_drop_fill(strength, kick_on, 4 * s0, 4 * s1)
+        if t is not None:
+            spans.append(list(t))
+    fill_end_bars = sorted(set(int(round(ke / 4.0)) for _, ke in spans))
+
+    cands = drop_changes_after_outro(groove["cands"], groove["bass_changes"], o_start)
+    if o_start is not None:
+        if 0 < o_start < n_bars:
+            cands[o_start] = max(cands.get(o_start, 0), RANK["outro"])
     lines = keep_strongest(cands, n_bars)
     cue_bars = [int(round(c["bar"])) for c in list(energy_cues) + list(wcues)]
-    lines = sorted(set(lines + gate_cue_bars(cue_bars, groove, n_bars, lines)))
+    lines = sorted(set(lines + gate_cue_bars(cue_bars, groove, n_bars, lines, fill_end_bars)))
+    m = minute_fill_line(lines, fill_end_bars, downbeat, sec_per_bar)
+    if m is not None:
+        lines = sorted(set(lines + [m]))
     if o_start is not None and o_start not in lines:
         o_start = min(lines, key=lambda x: abs(x - o_start)) if lines else None
 
@@ -553,22 +645,6 @@ def groove_detect(*, wav, project, envs, hop_t, bpm, downbeat, sec_per_bar, n_ba
     label_sections(sections, groove, bass_on, o_start, soft_intro_outro=soft_intro_outro,
                    mix_norm=mix_norm)
 
-    # Fill edges, beat-precise. A line never sits inside a fill: a fill that
-    # runs past a line is cut at the line (fills lead INTO lines).
-    spans = []
-    for s0, s1 in groove["fills"]:
-        kb, ke = refine_fill_beats(full_beat, s0, s1)
-        if (s0, s1) in groove["lead_fills"]:
-            ke = 4 * s1
-        spans.append([kb, ke])
-    for b in one_beat_fills(kick_on, full_beat, n_bars):
-        spans.append([4 * b + 3, 4 * b + 4])
-    strength = np.asarray(kick_peaks, float)[:n_beats] / (float(kick_ref) + 1e-9)
-    runs = list(groove["breaks"]) + ([(0, groove["head_end"])] if groove["head_end"] else [])
-    for s0, s1 in runs:
-        t = trailing_drop_fill(strength, kick_on, 4 * s0, 4 * s1)
-        if t is not None:
-            spans.append(list(t))
     clean = clip_fills_to_lines(spans, lines)
     fill_sections = [{
         "start_bar": round(kb / 4.0, 2), "end_bar": round(ke / 4.0, 2),

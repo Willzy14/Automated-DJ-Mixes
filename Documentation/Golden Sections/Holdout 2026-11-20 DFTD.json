@@ -2,9 +2,87 @@
  "what": "Holdout check of the work/sections-key detector (commit 5705c43) on four DFTD tracks it was never tuned on. Sam judged each from a picture on 2026-11-20. Bars are 1-based as shown on the pictures.",
  "pictures": "D:/Claude Workspace/Automated DJ Mixes/sections-key-work/holdout/",
  "tracks": {
-  "Offaiah - Something In Your Eyes (Extended Mix)": {"verdict": "looks good", "lines": 6, "wrong": []},
-  "Hannah Wants - Ghetto": {"verdict": "looks good, one correction", "lines": 10, "wrong": [{"line": "A9 outro", "detector_bar": 170, "true_bar": 169, "why": "bass plays its last note on beat 1 of bar 169; line belongs straight after fill F7"}]},
-  "MASON Collective - A Little Affection": {"verdict": "lines usable, one fill missed", "lines": 5, "wrong": [{"missed_fill": "kick out for one beat at bar 152 beat 4, 4:49, one minute from the end (track ends 5:50)", "why": "one-beat fills are not detected"}], "notes": "A1 bar 25 is bass in (4 bars), 4 bar gap, full drop at bar 33; both are phrase points"},
-  "Kyle Watson - The Afterhours (Extended Mix)": {"verdict": "looking good", "lines": 7, "wrong": [], "notes": "fills print a quarter bar off the grid (grid of this track is suspect; it fails the grid gate). Sam: the end of fill F6 (about a minute from the end) is where a mix would start"}
+  "Offaiah - Something In Your Eyes (Extended Mix)": {
+   "verdict": "looks good",
+   "lines": 6,
+   "wrong": []
+  },
+  "Hannah Wants - Ghetto": {
+   "verdict": "looks good, one correction",
+   "lines": 10,
+   "wrong": [
+    {
+     "line": "A9 outro",
+     "detector_bar": 170,
+     "true_bar": 169,
+     "why": "bass plays its last note on beat 1 of bar 169; line belongs straight after fill F7"
+    }
+   ]
+  },
+  "MASON Collective - A Little Affection": {
+   "verdict": "lines usable, one fill missed",
+   "lines": 5,
+   "wrong": [
+    {
+     "missed_fill": "kick out for one beat at bar 152 beat 4, 4:49, one minute from the end (track ends 5:50)",
+     "why": "one-beat fills are not detected"
+    }
+   ],
+   "notes": "A1 bar 25 is bass in (4 bars), 4 bar gap, full drop at bar 33; both are phrase points"
+  },
+  "Kyle Watson - The Afterhours (Extended Mix)": {
+   "verdict": "looking good",
+   "lines": 7,
+   "wrong": [],
+   "notes": "fills print a quarter bar off the grid (grid of this track is suspect; it fails the grid gate). Sam: the end of fill F6 (about a minute from the end) is where a mix would start"
+  }
+ },
+ "wider_14_08_26": {
+  "Harry Romero - Renegades": {
+   "verdict": "detector (groove, merged commit) misses one line",
+   "wrong": [
+    {
+     "missed_line": "bar 33 (1:00), the end of fill F2",
+     "why": "56 bar intro with no kick or bass change; Sam: intros are not longer than a minute, the fill at one minute ends the intro"
+    }
+   ],
+   "mix_notes": "As an incoming track: bass swap at fill F1 (about 0:29) or at the one minute point; outgoing faded out by the START of the long fill F2 so its drums never play over that fill."
+  },
+  "Sam Leagas - Double Dutch (Extended Mix)": {
+   "verdict": "all lines correct except one extra",
+   "lines": 8,
+   "wrong": [
+    {
+     "extra_line": "A7 at bar 129 (3:56)",
+     "why": "Sam: it sits at the end of a fill like F10, F11, F12, which are not marked as sections; nothing makes it a section. Inconsistent."
+    }
+   ],
+   "notes": "A8 outro at bar 144 correct; the end of fill F14 (bar 137) could also be argued as the outro start (energy drops there).",
+   "mix_notes": "Mixing OUT: start the incoming at the one minute to end point (end of F12, bar 121, 3:41); bass switch at the end of F14 (bar 137, about 30 seconds from the end). Mixing IN: bass swap at A2 (bar 17), outgoing ends at A3 (bar 33, the one minute point)."
+  },
+  "Christoph - Reachin": {
+   "verdict": "ending wrong",
+   "wrong": [
+    {
+     "line": "A9",
+     "detector_bar": 186,
+     "true_bar": 177,
+     "why": "Sam read the outro start off the picture as the third 8-bar line after fill F3; measured: the bass drops from full to almost nothing at bar 177 (5:40). The detector kept counting a faint bass residue as bass until bar 186."
+    },
+    {
+     "extra_line": "A10 at bar 195",
+     "why": "not a section"
+    },
+    {
+     "label": "BUILD then DROP at the end",
+     "why": "it is a long sparse OUTRO from bar 177"
+    },
+    {
+     "picture_bug": "the 1 MIN TO END marker was drawn at bar 186 (5:58), which is 29 seconds from the end (6:27), not a minute"
+    }
+   ],
+   "not_judged": "A3 (bar 40), A4/A5 (61, 66), A6/A7 (99, 102): Sam did not comment; Claude doubts them",
+   "mix_notes": "Mixing OUT: start the incoming when fill F3 finishes (bar 153, 4:54); bass swap at the outro start (bar 177, 5:40)."
+  }
  }
 }
