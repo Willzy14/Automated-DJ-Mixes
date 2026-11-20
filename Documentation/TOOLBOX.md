@@ -4,6 +4,12 @@ Module reference for all pipeline components.
 
 ## Modules
 
+### Phrase blend planner (2026-11-20, Codex)
+
+- `Source/phrase_blend.py` ranks cue-based blends and accepts a fractional audio endpoint in `end_bar`. Pass `why=reasons` to `plan_blend` to collect input warnings and the reason for a `None` result.
+- `Tools/score_blends.py` replays the seven owner placements and measures the effects of removing the bottom-end cost and the measured content.
+- `Tools/blend_candidates.py` shows the ranked plans and reports why the planner found no admissible placement.
+
 ### `Tools/playlist_builder.py` (2026-10-06, Claude)
 Builds a mix playlist from the Neon credits ledger via the read-only role `mix_planner_ro` (URL: `MIX_PLANNER_RO_DATABASE_URL` in the GitHub-folder `Credentials/Credentials.txt`; or `--rows file.json` offline). `sql` prints the SELECT; `build` filters by label/artist/year/streams/heat, orders by a genre-heat arc (`rise|wave|flat`), presets `hits|cool|cult|any`, one row per VERSION, drops acapella/dub/instrumental/radio edits. Genre tags are drafts. Not yet hooked to `resolve_masters.py`; no tests.
 

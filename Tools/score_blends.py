@@ -1,4 +1,4 @@
-"""Score phrase_blend.plan_blend against the six blends in the DFTD answer key.
+"""Score phrase_blend.plan_blend against the seven blends in the DFTD answer key.
 
 Usage:  python Tools/score_blends.py [--detail] [--top N]
 
@@ -61,10 +61,11 @@ MODES = {
 def apply_overrides(track, name, overrides):
     t = json.loads(json.dumps(track))
     ov = overrides.get(name, {})
-    for s in t["sections"]:
-        if float(s[0]) in ov:
+    for s in t.get("sections") or []:
+        start = pb._num(s[0]) if isinstance(s, list) and len(s) >= 2 else None
+        if start in ov:
             del s[2:]
-            s.append(ov[float(s[0])])
+            s.append(ov[start])
     return t
 
 
@@ -77,7 +78,7 @@ def prepare(track, name, mode, content):
     if source == "measured":
         c = (content.get("tracks") or {}).get(name)   # a missing track falls back to labels
         if c:
-            t["content"] = {"has_bass": c["has_bass"], "has_music": c["has_music"], "has_kick": c["has_kick"]}
+            t["content"] = {k: c[k] for k in ("has_bass", "has_music", "has_kick") if k in c}
     return t
 
 
@@ -86,30 +87,36 @@ def sam_numbers(blend, out_t):
     if e is None:
         e = blend.get("out_cut_at_bar")
     if e is None:
-        e = out_t["n_bars"]
+        e = pb.natural_end_bar(out_t)
     return (blend["in_starts_at_out_bar"], blend["bass_switch_out_bar"], e)
 
 
 def matches(plan, blend, sam):
     """None, "primary", or "acceptable #i": does the plan equal the owner's answer, or one of his
-    `also_acceptable` placements (entry and switch; the end too when the entry gives one)?
-    Round 8, fix 9: the scorer and the planner agree about incoming loops.  The planner only ever
-    builds intro loops that serve the blend (whole phrases inside the intro, completed before the
-    swap, free since round 8), so a plan whose entry, swap and end equal the owner's answer is his
-    answer even when it carries such a transparent intro loop - the heard swap and exit are the
-    same bars."""
+    `also_acceptable` placements? Compare the timeline bars, the incoming loop length and the
+    incoming track's source bar at the swap. An alternative may leave its exit unspecified."""
     if plan is None:
         return None
     if plan.in_intro_looped_bars != 0 and plan.in_loop_phrase_end <= 0:
         return None                            # an unbounded incoming repeat is a different plan
-    if all(abs(x - y) < 1e-6 for x, y in zip(plan.key(), sam)):
+    if _matches_placement(plan, blend, *sam):
         return "primary"
     for i, alt in enumerate(blend.get("also_acceptable", []), 1):
-        if (abs(plan.in_starts_at_out_bar - alt["in_starts_at_out_bar"]) < 1e-6
-                and abs(plan.bass_switch_out_bar - alt["bass_switch_out_bar"]) < 1e-6
-                and ("out_end_bar" not in alt or abs(plan.out_end_bar - alt["out_end_bar"]) < 1e-6)):
+        if _matches_placement(plan, alt, alt["in_starts_at_out_bar"],
+                              alt["bass_switch_out_bar"], alt.get("out_end_bar")):
             return "acceptable #%d" % i
     return None
+
+
+def _matches_placement(plan, placement, entry, swap, end):
+    loop = placement.get("in_intro_looped_bars", 0.0)
+    cut = placement.get("in_intro_cut_bars", 0.0)
+    source_swap = placement.get("swap_incoming_bar", swap - entry - loop + cut)
+    return (abs(plan.in_starts_at_out_bar - entry) < 1e-6
+            and abs(plan.bass_switch_out_bar - swap) < 1e-6
+            and (end is None or abs(plan.out_end_bar - end) < 1e-6)
+            and abs(plan.in_intro_looped_bars - loop) < 1e-6
+            and abs(plan.swap_incoming_bar - source_swap) < 1e-6)
 
 
 def _runs(flag, lo, hi):
@@ -130,6 +137,8 @@ def _fmt_runs(runs):
 
 def _sam_plan(o, n, sam, r6):
     """Sam's placement scored exactly as the planner scores any candidate."""
+    if not (pb._valid(o) and pb._valid(n)):
+        return None
     return pb._score(o, n, sam[0], sam[1], sam[2], 0.0, 0.0, pb.phrase_points(o), pb.phrase_points(n), r6)
 
 
@@ -139,20 +148,26 @@ def _breakdown(label, plan):
     return "      %-14s total %7.2f :: %s" % (label, plan.cost, parts or "all terms zero")
 
 
+def _read_content():
+    try:
+        return json.loads(CONTENT.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+
+
 def score(mode, top=0, detail=False, out=print):
     key = json.loads(KEY.read_text(encoding="utf-8"))
-    content = json.loads(CONTENT.read_text(encoding="utf-8"))
+    content = _read_content()
     r6 = MODES[mode][1]
     exact, rows = 0, []
     out("--- %s (content: %s, R6 %s) ---" % (mode, MODES[mode][0], r6))
     for i, b in enumerate(key["blends"], 1):
         o = prepare(key["tracks"][b["out"]], b["out"], mode, content)
         n = prepare(key["tracks"][b["in"]], b["in"], mode, content)
-        plan = pb.plan_blend(o, n, r6=r6)
+        why = []
+        plan = pb.plan_blend(o, n, r6=r6, why=why)
         sam = sam_numbers(b, o)
         mine = plan.key() if plan else (None, None, None)
-        # RIGHT = the top plan is the owner's answer or one of his also_acceptable placements; also
-        # no incoming loop (his blends have none: the same key can play other bars)
         which = matches(plan, b, sam)
         ok = which is not None
         exact += ok
@@ -167,7 +182,7 @@ def score(mode, top=0, detail=False, out=print):
                      "sam": sam, "plan": plan, "sam_plan": sp})
         out("%d. %s -> %s" % (i, b["out"][:30], b["in"][:30]))
         if plan is None:
-            out("   planner: NO PLAN")
+            out("   planner: NO PLAN" + (" - " + ". ".join(why) if why else ""))
             continue
         out("   planner: in %g  switch %g  end %g  cost %.2f  flat runs: %s" % (
             mine + (plan.cost, _fmt_runs(plan.flat_runs))))
@@ -187,8 +202,8 @@ def score(mode, top=0, detail=False, out=print):
                 "%s=%+.2f" % (k_, diff[k_]) for k_ in sorted(diff) if abs(diff[k_]) > 1e-9))
         pool = [plan] + [a.plan for a in plan.alternatives]
         for j, ac in enumerate(b.get("also_acceptable", []), 1):
-            hit = [q for q in pool if abs(q.in_starts_at_out_bar - ac["in_starts_at_out_bar"]) < 1e-6
-                   and abs(q.bass_switch_out_bar - ac["bass_switch_out_bar"]) < 1e-6]
+            hit = any(_matches_placement(q, ac, ac["in_starts_at_out_bar"],
+                                         ac["bass_switch_out_bar"], ac.get("out_end_bar")) for q in pool)
             out("      owner's also_acceptable #%d (entry %g, swap %g): %s" % (
                 j, ac["in_starts_at_out_bar"], ac["bass_switch_out_bar"],
                 "offered (top plan or an alternative)" if hit else "NOT offered"))
@@ -204,14 +219,15 @@ def score(mode, top=0, detail=False, out=print):
             out("      Sam minus planner, by term: " + " ".join(
                 "%s=%+.2f" % (k, diff[k]) for k in sorted(diff) if abs(diff[k]) > 1e-9))
         if r6 == pb.R6_BE and (detail or not ok):
-            co, ci = content["tracks"][b["out"]], content["tracks"][b["in"]]
             a_, s_, e_ = sam
             rr = lambda tr, key, lo, hi: _runs(lambda x: x < len(tr[key]) and tr[key][x], lo, hi)
             out("      measured on Sam's placement (out bars %g-%g, switch %g; incoming bars 0-%g):" % (a_, e_, s_, e_ - a_))
-            out("        outgoing kick %s | bass %s | music %s" % (
-                rr(co, "has_kick", a_, e_), rr(co, "has_bass", a_, e_), rr(co, "has_music", a_, e_)))
-            out("        incoming kick %s | bass %s | music %s" % (
-                rr(ci, "has_kick", 0, e_ - a_), rr(ci, "has_bass", 0, e_ - a_), rr(ci, "has_music", 0, e_ - a_)))
+            for side, track, lo, hi in (("outgoing", o, a_, e_), ("incoming", n, 0, e_ - a_)):
+                if pb._measured(track, 0, pb.R6_BE) is None:
+                    out("        %s measurements unavailable. Using labels." % side)
+                    continue
+                runs = [rr(track["content"], key, lo, hi) for key in ("has_kick", "has_bass", "has_music")]
+                out("        %s kick %s | bass %s | music %s" % (side, *runs))
         if detail and sp.flat_bars:
             a = sam[0]
             out("      what each side has in Sam's flat stretches (out bar numbers, incoming bar = out - %g):" % a)
@@ -231,15 +247,15 @@ def score(mode, top=0, detail=False, out=print):
 
 
 def headline(out=print):
-    """The two facts that limit what the six blends prove, computed live, not asserted."""
+    """Compute both ablations on the answer key."""
     key = json.loads(KEY.read_text(encoding="utf-8"))
-    content = json.loads(CONTENT.read_text(encoding="utf-8"))
+    content = _read_content()
     gaps = [b["bass_switch_out_bar"] - b["in_starts_at_out_bar"] for b in key["blends"]]
-    base = _count(key, content, "BOTTOM END")
+    base = _picks(key, content)
     saved = pb.W_FLAT_RUN
     pb.W_FLAT_RUN = 0.0
     try:
-        off = _count(key, content, "BOTTOM END")
+        flat_off = _picks(key, content)
     finally:
         pb.W_FLAT_RUN = saved
     out("HEADLINE (computed now):")
@@ -248,22 +264,24 @@ def headline(out=print):
     out("  switch minus entry per owner blend: %s -> the first six %s; blends 7+ %s" % (
         gaps, "ALL EXACTLY %g bars (they say almost nothing about the switch rule)" % first[0]
         if len(set(first)) == 1 else "are not all equal", "differ" if len(set(gaps)) > 1 else "agree"))
-    out("  BOTTOM END score %d of %d; with W_FLAT_RUN = 0 (R6 cost removed) %d of %d -> R6 and the "
-        "measured content are %s on these blends; the score comes from geometry" % (
-            base, nb, off, nb, "INERT" if base == off else "NOT inert"))
+    no_content = _picks(key, {})
+    hits = lambda picks: sum(match is not None for _, match in picks)
+    misses = ", ".join(str(i) for i, (_, match) in enumerate(no_content, 1) if match is None)
+    out("  BOTTOM END score %d of %d. With W_FLAT_RUN = 0: %d of %d. The bottom-end cost %s the top picks." % (
+        hits(base), nb, hits(flat_off), nb, "is INERT for" if base == flat_off else "changes"))
+    out("  BOTTOM END with measured content off: %d of %d (misses: %s)." %
+        (hits(no_content), nb, misses or "none"))
     out("")
 
 
-def _count(key, content, mode):
-    r6 = MODES[mode][1]
-    n_ok = 0
+def _picks(key, content):
+    picks = []
     for b in key["blends"]:
-        o = prepare(key["tracks"][b["out"]], b["out"], mode, content)
-        n = prepare(key["tracks"][b["in"]], b["in"], mode, content)
-        p = pb.plan_blend(o, n, r6=r6)
-        sam = sam_numbers(b, o)
-        n_ok += matches(p, b, sam) is not None
-    return n_ok
+        o = prepare(key["tracks"][b["out"]], b["out"], "BOTTOM END", content)
+        n = prepare(key["tracks"][b["in"]], b["in"], "BOTTOM END", content)
+        plan = pb.plan_blend(o, n, r6=pb.R6_BE)
+        picks.append((plan.full_key() if plan else None, matches(plan, b, sam_numbers(b, o))))
+    return picks
 
 
 def table(out=print):
@@ -289,7 +307,8 @@ def table(out=print):
         for m in names:
             r = res[m][i]
             out("  blend %d  %-12s Sam: %-28s planner: %s" % (
-                i + 1, m, _fmt_runs(r["sam_plan"].flat_runs), _fmt_runs(r["plan"].flat_runs) if r["plan"] else "no plan"))
+                i + 1, m, _fmt_runs(r["sam_plan"].flat_runs) if r["sam_plan"] else "unusable track",
+                _fmt_runs(r["plan"].flat_runs) if r["plan"] else "no plan"))
 
 
 if __name__ == "__main__":

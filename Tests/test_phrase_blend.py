@@ -82,9 +82,8 @@ def test_score_columns_are_pinned_as_measured_in_round_6():
     # Round 8 (the two CORRECTION reviews): under BOTTOM END - the owner's own rule, with measured
     # content - all seven now match, blend 1 included: its 6 bar loop to the next incoming fill
     # start is free, exactly as the owner describes the device.  In the LABELS/OVERRIDES columns
-    # (no measured content) blend 2 now misses on purpose: without content the planner cannot see
-    # that PAX's last counted bar is a silent partial bar, so a stop at bar 192 is priced as a cut
-    # of the outro.  The partial-bar fact is a measured-content fact (round 8, fix 5).
+    # (no measured content) blend 2 misses. The fixture supplies no audio endpoint, so the
+    # last-kick allowance applies only under measured content. At bar 192, labels see a cut.
     assert _exact_vector("MEASURED") == [True, False, True, False, True, True, True]
     assert _exact_vector("LABELS") == [True, False, False, False, True, False, False]
     assert _exact_vector("OVERRIDES") == [True, False, True, True, True, True, False]
@@ -92,7 +91,7 @@ def test_score_columns_are_pinned_as_measured_in_round_6():
 
 
 def test_headline_claims_are_true_and_stated():
-    # the module docstring says R6 is inert on the six and the switch is entry + 16 in all six,
+    # The module docstring says W_FLAT_RUN is inert and that the first six swap at entry + 16,
     # and tells the two-clock story (round 8)
     assert "INERT" in pb.__doc__ and "entry + 16" in pb.__doc__
     assert "original phrasing" in pb.__doc__ and "actual overlap" in pb.__doc__
@@ -435,10 +434,10 @@ def test_r5_cuts_are_excluded_whenever_any_non_cutting_plan_exists():
     assert not any(c.out_end_bar == 94 for c in cs)
 
 
-def test_r5_when_every_plan_cuts_the_cuts_are_kept_otherwise_dropped():
+def test_r5_forbidden_cuts_are_dropped_even_when_every_plan_cuts():
     cut = lambda c: pb.BlendPlan(1, 2, 3, 0, 0, out_cut_bars=4.0, cost=c)
     ok = pb.BlendPlan(1, 2, 3, 0, 0, cost=50.0)
-    assert [p.cost for p in pb._drop_forbidden_cuts([cut(1.0), cut(2.0)])] == [1.0, 2.0]     # all cut: kept
+    assert pb._drop_forbidden_cuts([cut(1.0), cut(2.0)]) == []
     assert pb._drop_forbidden_cuts([cut(1.0), ok]) == [ok]                                    # a non-cut exists
 
 

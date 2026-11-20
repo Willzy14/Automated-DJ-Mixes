@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "Source"))
 sys.path.insert(0, str(ROOT / "Tools"))
@@ -54,7 +56,7 @@ def test_fix1_the_exit_may_not_run_past_the_next_long_fill_after_the_swap():
     for c in cs:
         if c.swap_incoming_bar <= 20.0 + 1e-9:      # a swap at or before the long fill start
             t_exit = c.out_end_bar - c.in_starts_at_out_bar - c.in_intro_looped_bars + c.in_intro_cut_bars
-            assert t_exit <= 24.0 + 1e-9, c.key()
+            assert t_exit <= 20.0 + 1e-9, c.key()
     exits = {c.out_end_bar - c.in_starts_at_out_bar - c.in_intro_looped_bars + c.in_intro_cut_bars
              for c in cs if c.swap_incoming_bar <= 20.0 + 1e-9}
     assert 20.0 in exits                          # exiting at the fill start (the fade point) is offered
@@ -87,21 +89,21 @@ def test_fix2_loop_beyond_the_called_for_exit_still_costs():
 
 # ---- fix 3: the intro side too ------------------------------------------------------------------
 def test_fix3_the_entry_is_extended_or_cut_to_meet_an_outgoing_cue_point():
-    # the pairing (swap 184 with incoming bar 13) derives entry 171, which is no outgoing cue
-    # point (the outgoing grid runs 16+8m with 168 and 184 marked; 171 is on none of them).  The
+    # The pairing (swap 184 with incoming bar 12) derives entry 172, which is no outgoing cue
+    # point (the outgoing grid runs 16+8m with 168 and 184 marked). The
     # intro may be looped back so the entry meets 168, or cut so it meets 176; both are free.
     out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)])
-    ins = trk(120, [(0, "INTRO"), (13, "DROP"), (48, "BREAK")], fills=[(12, 13)])
+    ins = trk(120, [(0, "INTRO"), (12, "DROP"), (48, "BREAK")], fills=[(11, 12)])
     cs = pb.candidates(out, ins)
     ext = [c for c in cs if c.in_starts_at_out_bar == 168.0 and c.bass_switch_out_bar == 184.0
-           and c.in_intro_looped_bars == 3.0]
+           and c.in_intro_looped_bars == 4.0]
     cut = [c for c in cs if c.in_starts_at_out_bar == 176.0 and c.bass_switch_out_bar == 184.0
-           and c.in_intro_cut_bars == 5.0]
+           and c.in_intro_cut_bars == 4.0]
     assert ext and "entry" not in ext[0].terms
     assert cut and "entry" not in cut[0].terms
     assert any("cue point" in w for w in ext[0].why)
-    # the unadjusted pairing (entry 171, off every cue) pays for its entry
-    raw = [c for c in cs if c.in_starts_at_out_bar == 171.0 and c.bass_switch_out_bar == 184.0
+    # The unadjusted pairing (entry 172, off every cue) pays for its entry.
+    raw = [c for c in cs if c.in_starts_at_out_bar == 172.0 and c.bass_switch_out_bar == 184.0
            and c.in_intro_looped_bars == 0.0 and c.in_intro_cut_bars == 0.0]
     assert raw and raw[0].terms.get("entry", 0.0) > 1.0
 
@@ -137,10 +139,10 @@ def test_fix4_the_owners_46_second_swap_stays_a_sane_pairing():
 
 
 # ---- fix 5: END_SLACK_BARS is gone ---------------------------------------------------------------
-def test_fix5_no_end_slack_constant_a_partial_final_bar_ends_naturally():
+def test_fix5_missing_audio_endpoint_retains_the_legacy_last_kick_allowance():
     assert not hasattr(pb, "END_SLACK_BARS")
-    # PAX-like: the last counted bar has no kick (the bar count includes a partial bar), so a stop
-    # at bar 192 is the natural end, not a cut.  (PAX has 193 bars against a target of 192.)
+    # PAX-like metadata without an audio endpoint. The last kick flag permits the cue at 192
+    # and playback still ends at the counted 193.
     pax = with_content(trk(193, [(0, "INTRO"), (16, "DROP"), (176, "OUTRO")], fills=[(175, 176)]),
                        [0] * 193, [0] * 193, [1] * 192 + [0])
     ins = trk(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)])
@@ -232,13 +234,11 @@ def test_fix9_the_scorer_runs_from_any_working_directory():
     assert "TOTAL BOTTOM END" in r.stdout
 
 
-def test_fix9_the_scorer_and_planner_agree_about_incoming_loops():
-    # a plan equal to the owner's answer plus a transparent intro loop (inside the intro, done
-    # with before the swap) is the same answer, not a different species
+def test_fix9_same_timeline_with_an_unrequested_intro_loop_is_a_different_placement():
     b, o, n = _prepared(0)
     sam = sb.sam_numbers(b, o)
     looped = pb.BlendPlan(184.0, 200.0, 215.0, 6.0, 8.0, in_loop_phrase_end=16.0)
-    assert sb.matches(looped, b, sam) == "primary"
+    assert sb.matches(looped, b, sam) is None
 
 
 # ---- the success criterion ------------------------------------------------------------------------
@@ -246,3 +246,176 @@ def test_the_seven_owner_blends_all_match_under_bottom_end():
     exact, rows = sb.score("BOTTOM END", out=lambda *_: None)
     assert exact == 7
     assert all(r["which"] == "primary" for r in rows)
+
+
+def _kicked(n, sections, fills=(), bass_in=0):
+    return with_content(trk(n, sections, fills, bpm=120),
+                        [0] * bass_in + [1] * (n - bass_in), [0] * n, [1] * n)
+
+
+def _incoming_exit(plan):
+    return (plan.out_end_bar - plan.in_starts_at_out_bar
+            - plan.in_intro_looped_bars + plan.in_intro_cut_bars)
+
+
+def test_sparse_long_intro_winner_leaves_the_six_bar_fill_alone():
+    out = _kicked(128, [(0, "DROP"), (96, "DROP"), (112, "OUTRO")])
+    ins = _kicked(120, [(0, "INTRO"), (32, "INTRO"), (56, "DROP")],
+                  [(15, 16), (26, 32)])
+    winner = pb.plan_blend(out, ins)
+    assert winner.key() == (104, 120, 130)
+    assert winner.swap_incoming_bar == 16 and _incoming_exit(winner) == 26
+    assert all(_incoming_exit(c) <= 26 or c.swap_incoming_bar >= 32
+               for c in pb.candidates(out, ins))
+
+
+def test_long_fill_containing_swap_blocks_exit_but_swap_at_fill_end_can_play_on():
+    out = _kicked(128, [(0, "DROP"), (96, "DROP"), (112, "OUTRO")])
+    ins = _kicked(120, [(0, "INTRO"), (16, "DROP"), (32, "DROP"), (48, "BREAK")],
+                  [(14, 17)], bass_in=16)
+    cs = pb.candidates(out, ins)
+    assert not any(14 <= c.swap_incoming_bar < 17 for c in cs)
+    assert any(c.swap_incoming_bar == 17 and _incoming_exit(c) >= 32 for c in cs)
+
+
+def test_all_candidates_cut_a_usable_outro_so_there_is_no_plan():
+    out = trk(128, [(0, "INTRO"), (96, "OUTRO")], bpm=120)
+    ins = trk(120, [(0, "INTRO"), (8, "DROP"), (12, "BREAK")], bpm=120)
+    assert pb.plan_blend(out, ins) is None
+    why = []
+    assert pb.plan_blend(out, ins, why=why) is None
+    assert pb.candidates(out, ins) == []
+    assert any("usable outro" in reason for reason in why)
+
+
+def test_scorer_prints_the_reason_for_a_rejected_outro(tmp_path, monkeypatch):
+    key = {
+        "tracks": {
+            "A": trk(128, [(0, "INTRO"), (96, "OUTRO")], bpm=120),
+            "B": trk(120, [(0, "INTRO"), (8, "DROP"), (12, "BREAK")], bpm=120),
+        },
+        "blends": [{"out": "A", "in": "B", "in_starts_at_out_bar": 92,
+                    "bass_switch_out_bar": 100, "out_cut_at_bar": 104}],
+    }
+    path = tmp_path / "key.json"
+    path.write_text(json.dumps(key), encoding="ascii")
+    monkeypatch.setattr(sb, "KEY", path)
+    monkeypatch.setattr(sb, "CONTENT", tmp_path / "missing.json")
+    lines = []
+    count, rows = sb.score("BOTTOM END", detail=True, out=lines.append)
+    assert count == 0 and rows[0]["plan"] is None
+    assert any("NO PLAN" in line and "usable outro" in line for line in lines)
+
+
+@pytest.mark.parametrize(("field", "bad"), [
+    ("fills", [None]), ("sections", [None]),
+    ("fills", [(float("nan"), 112)]), ("fills", [(111, float("inf"))]),
+    ("fills", [(float("-inf"), 112)]),
+])
+def test_bad_cue_is_skipped_with_a_reason(field, bad):
+    out, ins = _loop_needed_pair()
+    dirty = dict(out, **{field: out[field] + bad})
+    plan = pb.plan_blend(dirty, ins)
+    assert plan.full_key() == pb.plan_blend(out, ins).full_key()
+    assert any(field in reason and "skipped" in reason for reason in plan.why)
+
+
+@pytest.mark.parametrize("bad_bpm", [0, float("inf"), float("-inf"), float("nan")])
+def test_bad_bpm_declines_plan_with_a_reason(bad_bpm):
+    out, ins = _loop_needed_pair()
+    why = []
+    assert pb.plan_blend(out, dict(ins, bpm=bad_bpm), why=why) is None
+    assert any("incoming" in reason and "bpm" in reason for reason in why)
+
+
+def test_explicit_audio_end_is_fractional_and_independent_of_last_kick():
+    out = _kicked(129, [(0, "DROP"), (96, "DROP"), (112, "OUTRO")])
+    ins = _kicked(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], bass_in=16)
+    out["end_bar"] = 127.75
+    for last_kick in (0, 1):
+        out["content"]["has_kick"][-1] = last_kick
+        assert pb.natural_end_bar(out) == 127.75
+        assert any(c.key() == (96, 112, 127.75) and c.out_looped_bars == 0
+                   and any("offset -0.25 bar" in reason for reason in c.why)
+                   for c in pb.candidates(out, ins))
+    del out["end_bar"]
+    assert any("end_bar absent" in reason for reason in pb.plan_blend(out, ins).why)
+
+
+@pytest.mark.parametrize("content", [{}, {"tracks": {"PAX - Revelry": {"has_bass": [1]}}}])
+def test_scorer_handles_missing_measurements_in_detail(tmp_path, monkeypatch, content):
+    path = tmp_path / "content.json"
+    path.write_text(json.dumps(content), encoding="ascii")
+    monkeypatch.setattr(sb, "CONTENT", path)
+    lines = []
+    sb.score("BOTTOM END", detail=True, out=lines.append)
+    assert any("measurements unavailable" in line for line in lines)
+
+
+def test_headline_separates_flat_cost_from_measured_content():
+    lines = []
+    sb.headline(out=lines.append)
+    assert any("W_FLAT_RUN = 0" in line and "INERT" in line for line in lines)
+    assert any("4 of 7" in line and "2, 4, 7" in line for line in lines)
+
+
+def test_matching_checks_source_swap_bar_even_with_matching_loop_count():
+    plan = pb.BlendPlan(105, 113, 132, 0, 4, in_loop_phrase_end=4)
+    sam = (105, 113, 132)
+    assert sb.matches(plan, {}, sam) is None
+    assert sb.matches(plan, {"in_intro_looped_bars": 4}, sam) == "primary"
+    assert sb.matches(plan, {"in_intro_looped_bars": 4, "in_intro_cut_bars": 1}, sam) is None
+
+
+def _loop_needed_pair():
+    out = _kicked(126, [(0, "DROP"), (94, "DROP"), (110, "OUTRO")])
+    ins = _kicked(120, [(0, "INTRO"), (16, "DROP"), (36, "BREAK")], bass_in=16)
+    return out, ins
+
+
+def test_two_reachable_looped_exits_survive_deduplication():
+    out, ins = _loop_needed_pair()
+    ins["sections"].append([42, "DROP"])
+    exits = {c.out_end_bar for c in pb.candidates(out, ins)
+             if c.full_key()[:2] == (94, 110)
+             and c.in_intro_looped_bars == c.in_intro_cut_bars == 0}
+    assert {130, 136} <= exits
+
+
+def test_intro_cut_cannot_skip_past_the_intro():
+    out = _kicked(128, [(0, "DROP"), (96, "DROP"), (112, "OUTRO")])
+    ins = _kicked(120, [(0, "INTRO"), (2, "DROP"), (13, "DROP"), (40, "BREAK")], bass_in=13)
+    cs = pb.candidates(out, ins)
+    assert cs and all(c.in_intro_cut_bars <= 2 for c in cs)
+
+
+def test_intro_extension_repeats_at_least_the_minimum():
+    out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)])
+    ins = trk(120, [(0, "INTRO"), (13, "DROP"), (48, "BREAK")], fills=[(12, 13)])
+    cs = pb.candidates(out, ins)
+    assert cs and all(c.in_intro_looped_bars == 0 or c.in_intro_looped_bars >= pb.MIN_IN_LOOP for c in cs)
+
+
+def test_cut_intro_does_not_make_extra_outgoing_loop_bars_free():
+    out, ins = _loop_needed_pair()
+    plan = pb._score(out, ins, 97, 110, 133, 0, 0,
+                     pb.phrase_points(out), pb.phrase_points(ins), in_cut=3)
+    assert plan.swap_incoming_bar == 16 and plan.out_looped_bars == 7
+    assert plan.terms["out_loop"] == 3 * pb.W_LOOP
+
+
+def test_loop_needed_pair_repeats_the_kicked_outro_to_the_break():
+    out, ins = _loop_needed_pair()
+    plan = pb.plan_blend(out, ins)
+    assert plan.key() == (94, 110, 130)
+    assert plan.out_looped_bars == 4 and plan.out_loop_source_bars == (110, 126)
+    assert "out_loop" not in plan.terms and _incoming_exit(plan) == 36
+
+
+def test_intro_extension_pair_repeats_the_four_bar_pickup():
+    out = _kicked(132, [(0, "DROP"), (105, "DROP"), (113, "OUTRO")])
+    ins = _kicked(120, [(0, "INTRO"), (4, "DROP"), (23, "BREAK")], bass_in=4)
+    plan = pb.plan_blend(out, ins)
+    assert plan.key() == (105, 113, 132)
+    assert plan.in_intro_looped_bars == plan.in_loop_phrase_end == plan.swap_incoming_bar == 4
+    assert _incoming_exit(plan) == 23 and not plan.out_looped_bars
