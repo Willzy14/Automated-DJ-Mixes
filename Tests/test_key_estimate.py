@@ -148,3 +148,70 @@ def test_rejects_invalid_camelot_codes(junk):
 )
 def test_key_relations(reference, estimate, relation):
     assert classify_relation(reference, estimate) == relation
+
+
+def test_kk_profiles_are_the_published_values():
+    from automated_dj_mixes.key_estimate import _KK
+
+    assert _KK[0] == (6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
+    assert _KK[1] == (6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
+
+
+def test_confidence_calibration_constants_are_valid():
+    from automated_dj_mixes import key_estimate as ke
+
+    assert list(ke._CAL_EDGES) == sorted(ke._CAL_EDGES)
+    assert len(ke._CAL_VALUES) == len(ke._CAL_EDGES) + 1
+    assert all(0 <= v <= 1 for v in ke._CAL_VALUES)
+    assert list(ke._CAL_VALUES) == sorted(ke._CAL_VALUES)
+    probes = [-1.0, 0.0, *ke._CAL_EDGES, 0.4, 1.0]
+    values = [ke._calibrated(p) for p in probes]
+    assert values == sorted(values)
+    assert ke._calibrated(-1.0) == ke._CAL_VALUES[0]
+    assert ke._calibrated(1.0) == ke._CAL_VALUES[-1]
+    assert 0 < ke._GATE_ZERO < ke._GATE_FULL
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [("8A", {"8A", "9A", "7A", "8B"}), ("12B", {"12B", "1B", "11B", "12A"}),
+     ("1A", {"1A", "2A", "12A", "1B"})],
+)
+def test_compatible_set(code, expected):
+    from automated_dj_mixes.key_estimate import _compatible
+
+    assert _compatible(code) == expected
+
+
+def test_loud_bass_pedal_below_c3_does_not_decide_the_key(tmp_path):
+    time = np.arange(SR * 6) / SR
+    triad = _triad(60, False, seconds=6.0, bass=False)  # C major, all above C3
+    pedal = 0.9 * np.sin(2 * np.pi * 440 * 2 ** ((30 - 69) / 12) * time)  # F#1
+    result = estimate_key(_wav(tmp_path, triad + pedal))
+    assert result.key == "C major"
+
+
+def test_bass_bonus_is_optional_and_off_by_default(tmp_path):
+    path = _wav(tmp_path, _triad(62, True))
+    off = estimate_key(path)
+    on = estimate_key(path, bass_weight=0.1)
+    assert off.method != on.method and "bass" in on.method and "bass" not in off.method
+    assert on.key == off.key == "D minor"
+
+
+def test_native_44100_and_multiple_blocks(tmp_path):
+    seconds = 75  # more than two 30 s blocks after the default 15/85 crop
+    samples = _triad(69, True, seconds=seconds)
+    path = tmp_path / "long.wav"
+    sf.write(path, np.interp(np.arange(0, len(samples) - 1, 0.5), np.arange(len(samples)), samples), 44100,
+             subtype="FLOAT")
+    result = estimate_key(path)
+    assert result.key == "A minor"
+    assert estimate_key(path) == result  # deterministic
+
+
+def test_rejects_non_finite_audio(tmp_path):
+    samples = _triad(60, False)
+    samples[len(samples) // 2] = np.nan
+    with pytest.raises(ValueError):
+        estimate_key(_wav(tmp_path, samples))
