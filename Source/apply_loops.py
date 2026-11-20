@@ -844,6 +844,17 @@ def _insert_source_beat(lines: list[str], track_start: int, track_end: int,
     raise ValueError("could not map loop insertion to a source beat")
 
 
+class LoopQualityRejection(ValueError):
+    def __init__(self, spec: LoopSpec, details: str, failed_checks: tuple[str, ...]):
+        self.spec = spec
+        self.failed_checks = failed_checks or ("cache/context",)
+        loop_name = spec.clip_name or f"{spec.source_beat_start:g}-{spec.source_beat_end:g}"
+        super().__init__(
+            f"Loop quality gate failed for '{spec.track_name}' loop '{loop_name}': "
+            f"{details}; failed={','.join(self.failed_checks)}"
+        )
+
+
 def _revalidate_loop_quality(lines: list[str], spec: LoopSpec,
                              matched: tuple[int, int, str]) -> None:
     """Hard-fail one LoopSpec against the shared cached-envelope gate."""
@@ -897,14 +908,7 @@ def _revalidate_loop_quality(lines: list[str], spec: LoopSpec,
         print(f"  [loop quality] UNMEASURED (no cache) for '{spec.track_name}': "
               f"{details}; loop applied without a quality verdict")
     elif not result.passed:
-        failed = ",".join(result.failed_checks) or "cache/context"
-        loop_name = spec.clip_name or (
-            f"{spec.source_beat_start:g}-{spec.source_beat_end:g}"
-        )
-        raise ValueError(
-            f"Loop quality gate failed for '{spec.track_name}' loop '{loop_name}': "
-            f"{details}; failed={failed}"
-        )
+        raise LoopQualityRejection(spec, details, result.failed_checks)
     log_loop_quality_override(
         spec.track_name, spec.source_beat_start, spec.source_beat_end, result
     )
@@ -1081,14 +1085,14 @@ def remove_named_clips(lines: list[str], track_name: str, names) -> int:
 # ── Shift helpers (used by propose_arrangement.py) ───────────────────────────
 
 def shift_track_clips(lines: list[str], track_start: int, track_end: int,
-                      delta_beats: float) -> None:
+                      delta_beats: float, *, min_shift: float = 0.001) -> None:
     """Shift all AudioClip positions in a track by delta_beats (in-place).
 
     Modifies Time, CurrentStart, CurrentEnd on every AudioClip within the
     given track line range.  LoopStart/LoopEnd are NOT changed (source
     positions stay the same).
     """
-    if abs(delta_beats) < 0.001:
+    if abs(delta_beats) < min_shift:
         return
 
     for i in range(track_start, track_end + 1):

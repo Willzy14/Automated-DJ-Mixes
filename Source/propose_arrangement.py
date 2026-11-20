@@ -26,7 +26,9 @@ Can also be imported:
 
 from __future__ import annotations
 
+import bisect
 import hashlib
+import html
 import json
 import math
 import re
@@ -34,6 +36,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
+from xml.etree import ElementTree as ET
 
 try:
     from automated_dj_mixes.sequencer import compatibility_score as _compat_score
@@ -43,12 +46,15 @@ except ImportError:
 # Reuse proven line-based ALS patching from apply_loops
 from apply_loops import (
     LoopSpec,
+    LoopQualityRejection,
+    _clip_geometry,
     _match_track,        # canonical track matcher — DO NOT redefine locally
     _normalise,
     apply_loops,
     compress_als,
     decompress_als,
     find_track_line_ranges,
+    find_clip_events,
     remove_named_clips,
     shift_track_clips,
     validate_loop_spec,
@@ -76,6 +82,8 @@ USE_ALIGN_ENGINE = True
 
 # Loop granularity - all loops must be multiples of this
 LOOP_GRANULARITY = 4     # 1 bar at 4/4
+DECISION_CLOCK_TOLERANCE = 1.0  # beats, for detector-to-layout agreement
+DECISION_EDIT_TOLERANCE = 1e-6  # float rounding only, for actual edits
 
 # Target overlap when extending with loops
 TARGET_OVERLAP_BEATS = 128  # 32 bars - comfortable default
@@ -85,6 +93,27 @@ BPM_MATCH_TOLERANCE = 2.0  # +/- BPM for "similar" pairs
 
 
 # -- Data structures ----------------------------------------------------------
+
+@dataclass
+class DecisionClock:
+    source_origin: float
+    start: float
+    native_end: float
+    source_windows: list[tuple[float, float]]
+    intro_extension: float = 0.0
+
+    def beat(self, bar: float, *, after_intro: bool = False) -> float:
+        return self.start + 4 * bar + (self.intro_extension if after_intro else 0)
+
+    def check_source(self, low: float, high: float, context: str) -> None:
+        cursor = low
+        for start, end in self.source_windows:
+            if start <= cursor + DECISION_EDIT_TOLERANCE and end > cursor:
+                cursor = end
+            if cursor >= high - DECISION_EDIT_TOLERANCE:
+                return
+        raise ValueError(f"{context}: loop source {low:g}-{high:g} beats crosses missing audio")
+
 
 @dataclass
 class TrackInfo:
@@ -106,6 +135,7 @@ class TrackInfo:
     first_break_sec: float | None = None
     outro_start_sec: float | None = None
     last_bass_drop_sec: float | None = None
+    decision_clock: DecisionClock | None = None
 
     @property
     def track_length(self) -> float:
@@ -135,6 +165,9 @@ class OverlapAnalysis:
     break_skip_shift: tuple | None = None  # (track_name, threshold_beat, delta) — pull drop onto swap
     outro_split: tuple | None = None       # (track_name, clip_name, skip_beats, keep_end_beats)
     front_cut: tuple | None = None         # (track_name, clip_name, cut_beats) — decisions: cut a clip's front, pull the rest in
+    blend_edits: list = field(default_factory=list)
+    decision_exit: tuple[float, float] | None = None  # native bar, arrangement beat
+    decision_loop_drops: list[dict] = field(default_factory=list)
     shift_delta: float = 0.0
     similar_pairs: list[dict] = field(default_factory=list)
     # Burn list C7 Step 1, report-only (never gates/rejects, same discipline
@@ -323,6 +356,92 @@ def ordered_tracks(sections: dict) -> list[TrackInfo]:
         ))
     tracks.sort(key=lambda t: t.arr_start)
     return tracks
+
+
+def reject_empty_layout_tracks(sections: dict, path: Path) -> None:
+    if not sections:
+        raise ValueError(f"{path}: empty layout")
+    for name, clips in sections.items():
+        if not clips:
+            raise ValueError(f"{path}: empty layout track {name!r}")
+
+
+def _load_decision_clocks(lines, tracks, stem_dir, decisions):
+    """Calibrate planner bars against the original ALS clips and warp grid."""
+    from align_engine import _decision_bar, _resolve_stem_key, load_track
+
+    stems = {p.stem.removeprefix("SECTIONS_STEM_"): p
+             for p in stem_dir.glob("SECTIONS_STEM_*.json")}
+    root = ET.fromstring("".join(lines))
+    als_tracks = {
+        t.find("Name/EffectiveName").get("Value"): t
+        for t in root.findall("./LiveSet/Tracks/AudioTrack")
+    }
+    ranges = find_track_line_ranges(lines)
+    for pair, decision in decisions.items():
+        if "out_end_bar" not in decision:
+            continue
+        requested = _decision_bar(decision["out_end_bar"], "out_end_bar", pair)
+        for track in tracks[pair - 1:pair + 1]:
+            if track.decision_clock is not None:
+                continue
+            context = f"Transition {pair}: {track.name!r}, requested exit bar {requested:g}"
+            stem = _resolve_stem_key(track.name, stems)
+            if stem is None:
+                raise ValueError(f"{context}: missing detector clock")
+            detector = load_track(stems[stem])
+            if not detector.sections:
+                raise ValueError(f"{context}: empty detector sections")
+            matched = _match_track(track.name, ranges)
+            if not matched:
+                raise ValueError(f"{context}: missing ALS track")
+            start, end, name = matched
+            als_track = als_tracks[html.unescape(name)]
+            events_start, events_end = find_clip_events(lines, start, end)
+            clips = (sorted(_clip_geometry(lines, events_start, events_end),
+                            key=lambda c: c["current_start"]) if events_start >= 0 else [])
+            if not clips:
+                raise ValueError(f"{context}: empty ALS layout track")
+            warp_clip = min(als_track.findall(
+                "DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events/AudioClip"),
+                key=lambda c: float(c.get("Time")))
+            markers = sorted((float(m.get("SecTime")), float(m.get("BeatTime")))
+                             for m in warp_clip.findall("WarpMarkers/WarpMarker"))
+            if len(markers) < 2:
+                raise ValueError(f"{context}: missing ALS warp grid for detector bar zero")
+            index = min(max(bisect.bisect_right(markers, (detector.downbeat, math.inf)), 1),
+                        len(markers) - 1)
+            (sec0, beat0), (sec1, beat1) = markers[index - 1:index + 1]
+            if not sec0 < sec1 or not beat0 < beat1:
+                raise ValueError(f"{context}: invalid ALS warp grid at detector bar zero")
+            zero = beat0 + (detector.downbeat - sec0) * (beat1 - beat0) / (sec1 - sec0)
+            first, last = clips[0], clips[-1]
+            origin = first["source_start"]
+            zero_error = origin - zero
+            length_error = last["source_end"] - origin - detector.n_bars * 4
+            if max(abs(zero_error), abs(length_error)) > DECISION_CLOCK_TOLERANCE:
+                raise ValueError(
+                    f"{context}: ALS bar-zero mismatch {zero_error:+.3f} beats "
+                    f"(clip {origin:g}, detector {zero:.3f}); length mismatch "
+                    f"{length_error:+.3f} beats; tolerance {DECISION_CLOCK_TOLERANCE:g} beat"
+                )
+            for clip in clips:
+                if "time" not in clip or not _at_beat(clip["time"], clip["current_start"]):
+                    raise ValueError(f"{context}: ALS clip Time differs from CurrentStart")
+                offsets = (clip["current_start"] - clip["source_start"],
+                           clip["current_end"] - clip["source_end"])
+                for offset in offsets:
+                    error = offset - (first["current_start"] - origin)
+                    if abs(error) > DECISION_EDIT_TOLERANCE:
+                        raise ValueError(f"{context}: ALS clip has source-to-timeline "
+                                         f"mismatch {error:+.6g} beats")
+            track.arr_start, track.arr_end = first["current_start"], last["current_end"]
+            # Once verified to within one beat, keep the ALS downbeat boundary
+            # (the clips are quantized while the detector seconds can be rounded).
+            track.decision_clock = DecisionClock(
+                origin, track.arr_start, detector.n_bars,
+                [(c["source_start"], c["source_end"]) for c in clips],
+            )
 
 
 def fill_missing_bpm_from_stem_grid(tracks: list[TrackInfo],
@@ -900,6 +1019,19 @@ def _plan_loop_extensions(out_track: TrackInfo, in_track: TrackInfo,
         analysis.notes += " -> {:.0f}b overlap".format(new_overlap)
 
 
+def _plan_decision_end(track, analysis, stop_bar, exit_bar):
+    stop = track.decision_clock.beat(stop_bar, after_intro=True)
+    context = f"Transition {analysis.pair_index}: {track.name!r}, requested exit bar {exit_bar:g}"
+    mismatch = track.arr_end - stop
+    if mismatch < -DECISION_EDIT_TOLERANCE:
+        raise ValueError(f"{context}: ALS ends {-mismatch:g} beats before the required "
+                         f"source stop at bar {stop_bar:g}")
+    if mismatch > DECISION_EDIT_TOLERANCE:
+        analysis.blend_edits.append((track.name, "trim_end", stop, 0))
+    track.arr_end = stop
+    return stop
+
+
 def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
                        analysis: OverlapAnalysis) -> None:
     """Apply align_engine's FillCutSpecs (Sam's marker-based loops/cuts).
@@ -916,7 +1048,51 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
     """
     from align_engine import DECISIONS_POLICY, LANDMARK_POLICIES
     for fc in getattr(al, "fills_cuts", None) or []:
-        if fc.kind == "outgoing_tail" and (fc.reps >= 1 or fc.partial_bars > 0):
+        if fc.kind in ("decision_intro_loop", "decision_tail_loop"):
+            is_intro = fc.kind == "decision_intro_loop"
+            track = in_track if is_intro else out_track
+            clock = track.decision_clock
+            low, high = fc.source_start_bar * 4.0, fc.source_end_bar * 4.0
+            source_start, source_end = clock.source_origin + low, clock.source_origin + high
+            clock.check_source(source_start, source_end,
+                               f"Transition {analysis.pair_index}: {track.name!r}")
+            insert_at = (clock.beat(fc.source_end_bar) if is_intro else
+                         _plan_decision_end(track, analysis, clock.native_end,
+                                            fc.target_marker_bar))
+            partial = fc.partial_bars * 4.0
+            extension = fc.reps * (high - low) + partial
+            spec = LoopSpec(
+                track_name=track.name,
+                source_beat_start=source_start,
+                source_beat_end=source_end,
+                count=fc.reps,
+                insert_at_beat=insert_at,
+                clip_name="decision_intro_loop" if is_intro else "decision_tail_loop",
+                tail_partial_beats=partial,
+            )
+            if is_intro:
+                analysis.in_intro_loop = spec
+                analysis.blend_edits.append((track.name, "insert", insert_at, extension))
+                clock.intro_extension += extension
+            else:
+                analysis.out_tail_loop = spec
+            track.arr_end += extension
+            if not is_intro:
+                analysis.decision_exit = (
+                    fc.target_marker_bar, clock.beat(fc.target_marker_bar, after_intro=True))
+            analysis.overlap_policy = "named_landmark_64"
+            analysis.loop_target_marker = "decision:blend"
+            analysis.notes += f"; {fc.kind} {extension / 4:g} bars from native {low / 4:g}-{high / 4:g}"
+        elif fc.kind == "decision_intro_trim":
+            in_track.arr_start = in_track.decision_clock.beat(fc.cut_to_bar)
+            analysis.blend_edits.append((in_track.name, "trim_front", in_track.arr_start, 0))
+            analysis.notes += f"; decision intro trim {fc.cut_to_bar:g} bars"
+        elif fc.kind == "decision_tail_trim":
+            stop = _plan_decision_end(out_track, analysis, fc.target_marker_bar,
+                                      fc.target_marker_bar)
+            analysis.decision_exit = (fc.target_marker_bar, stop)
+            analysis.notes += f"; decision exit at bar {fc.target_marker_bar:g}"
+        elif fc.kind == "outgoing_tail" and (fc.reps >= 1 or fc.partial_bars > 0):
             outro = next((s for s in out_track.sections if _label(s) == "outro"), None)
             if not outro and getattr(al, "alignment_policy", "") != DECISIONS_POLICY:
                 continue
@@ -1157,6 +1333,102 @@ def _plan_marker_loops(out_track: TrackInfo, in_track: TrackInfo, al,
             analysis.notes += f"; {note}"
 
 
+def _apply_blend_edits(lines, overlaps):
+    """Split at exact decision boundaries, then shift or remove the affected clips."""
+    from apply_loops import shift_clips_from_beat
+    from automated_dj_mixes.als_generator import (
+        _audio_clip_line_ranges, _clip_number, _xml_number, split_audio_clip_at_beat,
+    )
+
+    for overlap in overlaps:
+        for name, operation, beat, extension in overlap.blend_edits:
+            match = _match_track(name, find_track_line_ranges(lines))
+            if not match:
+                raise ValueError(f"Transition {overlap.pair_index}: missing decision track {name!r}")
+            start, end, _ = match
+            context = f"Transition {overlap.pair_index}: {name!r} {operation} at beat {beat:g}"
+            clips = _clip_geometry(lines, start, end)
+            starts = any(_at_beat(c["current_start"], beat) for c in clips)
+            ends = any(_at_beat(c["current_end"], beat) for c in clips)
+            existing_edge = {
+                "trim_front": starts, "trim_end": ends, "insert": starts and ends,
+            }[operation]
+            before = len(lines)
+            if not existing_edge and not split_audio_clip_at_beat(lines, start, end, beat):
+                raise ValueError(f"{context}: no usable clip edge or split (gap or missing audio)")
+            end += len(lines) - before
+            clips = _audio_clip_line_ranges(lines, start, end)
+            before_edit = len(lines)
+            if operation == "insert":
+                changed = shift_clips_from_beat(lines, start, end, beat, extension)
+            else:
+                if operation == "trim_front":
+                    remove = [(a, b) for a, b in clips
+                              if _clip_number(lines, a, b, "CurrentEnd")
+                              <= beat + DECISION_EDIT_TOLERANCE]
+                else:
+                    remove = [(a, b) for a, b in clips
+                              if _xml_number(lines[a], "AudioClip", "Time")
+                              >= beat - DECISION_EDIT_TOLERANCE]
+                for first, last in reversed(remove):
+                    del lines[first:last + 1]
+                changed = len(remove)
+            if not changed:
+                raise ValueError(f"{context}: did not edit any clips")
+            clips = _clip_geometry(lines, start, end + len(lines) - before_edit)
+            if operation == "trim_front":
+                verified = clips and _at_beat(min(c["current_start"] for c in clips), beat)
+            elif operation == "trim_end":
+                verified = clips and _at_beat(max(c["current_end"] for c in clips), beat)
+            else:
+                verified = (any(_at_beat(c["current_end"], beat) for c in clips)
+                            and any(_at_beat(c["current_start"], beat + extension) for c in clips)
+                            and not any(c["current_start"] < beat + extension - DECISION_EDIT_TOLERANCE
+                                        and c["current_end"] > beat + DECISION_EDIT_TOLERANCE
+                                        for c in clips))
+            if not verified:
+                raise ValueError(f"{context}: edited ALS clips missed the requested boundary")
+
+
+def _at_beat(actual, expected):
+    return abs(actual - expected) <= DECISION_EDIT_TOLERANCE
+
+
+def _verify_blend_edits(lines, overlaps):
+    ranges = find_track_line_ranges(lines)
+    for overlap in overlaps:
+        if overlap.decision_exit is None:
+            continue
+        bar, expected = overlap.decision_exit
+        start, end, _ = _match_track(overlap.out_track, ranges)
+        actual = max(c["current_end"] for c in _clip_geometry(lines, start, end))
+        if not _at_beat(actual, expected):
+            raise ValueError(
+                f"Transition {overlap.pair_index}: {overlap.out_track!r}, requested exit bar "
+                f"{bar:g} (beat {expected:g}), ALS ends at beat {actual:g}; "
+                f"mismatch {actual - expected:+g} beats"
+            )
+        for spec in (overlap.out_tail_loop, overlap.in_intro_loop):
+            if spec is None:
+                continue
+            start, end, _ = _match_track(spec.track_name, ranges)
+            clips = _clip_geometry(lines, start, end)
+            period = spec.source_beat_end - spec.source_beat_start
+            lengths = [period] * spec.count
+            if spec.tail_partial_beats:
+                lengths.append(spec.tail_partial_beats)
+            beat = spec.insert_at_beat
+            for length in lengths:
+                if not any(_at_beat(c["current_start"], beat)
+                           and _at_beat(c["current_end"], beat + length)
+                           and _at_beat(c["source_start"], spec.source_beat_start)
+                           and _at_beat(c["source_end"], spec.source_beat_start + length)
+                           for c in clips):
+                    raise ValueError(f"Transition {overlap.pair_index}: {spec.track_name!r} "
+                                     f"{spec.clip_name} missed ALS clip beats {beat:g}-{beat + length:g}")
+                beat += length
+
+
 # -- Pair history matching ----------------------------------------------------
 
 def load_pair_history(path: Path | None) -> list[dict]:
@@ -1373,6 +1645,48 @@ def _resolve_inherited_tempo_and_warp_modes(
     return bpm, modes
 
 
+class _RetryArrangement(Exception):
+    """A requested loop was dropped and the arrangement needs fresh positions."""
+
+
+def _drop_rejected_decision_loop(rejection, plan, decisions, drops):
+    for index, overlap in enumerate(plan.overlaps):
+        pair = overlap.pair_index
+        decision = decisions.get(pair)
+        if decision is None:
+            continue
+        spec = rejection.spec
+        if spec is overlap.out_tail_loop and decision.get("tail_loop"):
+            key = "tail_loop"
+        elif spec is overlap.in_intro_loop and decision.get("intro_loop"):
+            key = "intro_loop"
+        else:
+            continue
+        updated = dict(decision)
+        loop = updated.pop(key)
+        drop = {
+            "repeat": key,
+            "track": spec.track_name,
+            "proposal": loop,
+            "failed_checks": list(rejection.failed_checks),
+            "reason": str(rejection),
+        }
+        if key == "intro_loop":
+            # Keep the original outgoing swap and the incoming source bar at
+            # that swap. With no repeat the incoming must start later.
+            updated["entry_out_bar"] += loop["source_end_bar"] - loop["source_start_bar"]
+            drop["requested_entry_bar"] = decision["entry_out_bar"]
+            drop["applied_entry_bar"] = updated["entry_out_bar"]
+        elif "out_end_bar" in updated:
+            updated["out_end_bar"] = plan.tracks[index].decision_clock.native_end
+            drop["requested_exit_bar"] = decision["out_end_bar"]
+            drop["applied_exit_bar"] = updated["out_end_bar"]
+        decisions[pair] = updated
+        drops.setdefault(pair, []).append(drop)
+        print(f"  T{pair}: dropped {key}, {rejection}", flush=True)
+        raise _RetryArrangement from rejection
+
+
 def propose_arrangement(als_path: Path, sections_path: Path,
                         output_path: Path,
                         history_path: Path | None = None,
@@ -1383,7 +1697,47 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                         dry_run: bool = False,
                         transition_policy: str = "interim_v1",
                         tempo_arc: bool = False,
-                        decisions_path: Path | None = None) -> ArrangementPlan:
+                        decisions_path: Path | None = None,
+                        decisions_drop_rejected_loops: bool = False) -> ArrangementPlan:
+    """Build the arrangement, optionally removing only quality-rejected decision repeats."""
+    if decisions_drop_rejected_loops and decisions_path is None:
+        raise ValueError("--decisions-drop-rejected-loops requires --decisions")
+    if decisions_path is not None:
+        for target in (output_path, mix_plan_path):
+            if target is not None:
+                reject_aliased_output(target, (als_path, sections_path, decisions_path, hints_path,
+                                              history_path))
+    items = None
+    decisions = None
+    if decisions_path is not None:
+        raw = json.loads(decisions_path.read_text(encoding="utf-8"))
+        items = raw["transitions"] if isinstance(raw, dict) else raw
+        decisions = {int(d["pair_index"]): d for d in items}
+    drops = {}
+    while True:
+        try:
+            return _propose_arrangement(
+                als_path, sections_path, output_path, history_path, hints_path, mix_plan_path,
+                project_bpm, warp_mode, dry_run, transition_policy, tempo_arc, decisions_path,
+                items, decisions, drops, decisions_drop_rejected_loops,
+            )
+        except _RetryArrangement:
+            continue
+
+
+def reject_aliased_output(output, inputs):
+    for source in inputs:
+        if source is not None and (
+            output.resolve() == source.resolve()
+            or (output.exists() and source.exists() and output.samefile(source))
+        ):
+            raise ValueError(f"output {output} aliases {source}")
+
+
+def _propose_arrangement(als_path, sections_path, output_path, history_path,
+                         hints_path, mix_plan_path, project_bpm, warp_mode, dry_run,
+                         transition_policy, tempo_arc, decisions_path, items, decisions,
+                         drops, drop_rejected_loops) -> ArrangementPlan:
     """Propose and optionally apply a full arrangement.
 
     `decisions_path`: a JSON file of per-transition decisions (Claude-arranged
@@ -1408,6 +1762,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         for name, track_sections in sections.items()
     }
 
+    if decisions_path is not None:
+        reject_empty_layout_tracks(sections, sections_path)
     tracks = ordered_tracks(sections)
 
     # -- Enrich from hints --
@@ -1521,13 +1877,11 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             print(f"  WARNING: align_engine does not yet honour intro_skip_bars "
                   f"(set on {len(skipped)} track(s)) — positions ignore that trim. "
                   f"Use USE_ALIGN_ENGINE=False for hinted intro-skips until cuts land.")
-        decisions = None
         if decisions_path is not None:
-            raw = json.loads(Path(decisions_path).read_text(encoding="utf-8"))
-            items = raw["transitions"] if isinstance(raw, dict) else raw
             _validate_decision_pair_indices(
                 [int(d["pair_index"]) for d in items], len(tracks), Path(decisions_path).name)
-            decisions = {int(d["pair_index"]): d for d in items}
+            if any("out_end_bar" in d for d in decisions.values()):
+                _load_decision_clocks(decompress_als(als_path), tracks, stem_dir, decisions)
             print(f"\n--- Claude-arranged: {len(decisions)} decision(s) from "
                   f"{Path(decisions_path).name} ---")
             for k in sorted(decisions):
@@ -1536,7 +1890,9 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                       f"swap in-bar {d['swap_in_bar']}"
                       + (", tail loop" if d.get("tail_loop") else "")
                       + (", front cut" if d.get("outgoing_cut") else "")
-                      + (", outro skip" if d.get("outro_skip") else ""))
+                      + (", outro skip" if d.get("outro_skip") else "")
+                      + (f", end {d['out_end_bar']}" if "out_end_bar" in d else "")
+                      + (", intro loop" if d.get("intro_loop") else ""))
         positions, alignments = compute_aligned_positions(
             tracks, stem_dir, order=[t.name for t in tracks],
             policy=get_policy(transition_policy), decisions=decisions)
@@ -1549,11 +1905,12 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         print("\n--- Natural-fill alignment (legacy) ---")
         positions = compute_natural_positions(tracks)
     shifts: list[tuple[str, float]] = []
+    shift_tolerance = DECISION_EDIT_TOLERANCE if decisions_path is not None else 0.5
     for name, cur, new, delta in positions:
-        marker = " ** SHIFT **" if abs(delta) > 0.5 else ""
+        marker = " ** SHIFT **" if abs(delta) > shift_tolerance else ""
         print("  {} : {:.0f} -> {:.0f} ({:+.0f}){}".format(
             name[:45], cur, new, delta, marker))
-        if abs(delta) > 0.5:
+        if marker:
             shifts.append((name, delta))
 
     # Apply shifts to track positions (in-memory, for overlap analysis)
@@ -1562,6 +1919,8 @@ def propose_arrangement(als_path: Path, sections_path: Path,
             if track.name == name:
                 track.arr_start += delta
                 track.arr_end += delta
+                if track.decision_clock is not None:
+                    track.decision_clock.start += delta
                 # Update section arr_time/arr_end to match
                 for s in track.sections:
                     s["arr_time"] += delta
@@ -1612,6 +1971,7 @@ def propose_arrangement(als_path: Path, sections_path: Path,
         analysis = analyse_overlap(
             out_t, in_t, i + 1,
             alignments[i] if i < len(alignments) else None)
+        analysis.decision_loop_drops = drops.get(i + 1, [])
 
         # Check pair history for similar transitions
         bpm = out_t.bpm or in_t.bpm or 128.0
@@ -1864,11 +2224,12 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                    if decisions_path is not None else {}),
             },
         )
-        write_mix_plan(plan.mix_plan, mix_plan_path)
-        print(f"  MixPlan: {mix_plan_path} ({plan.mix_plan.plan_hash})")
+        if decisions_path is None:
+            write_mix_plan(plan.mix_plan, mix_plan_path)
+            print(f"  MixPlan: {mix_plan_path} ({plan.mix_plan.plan_hash})")
 
     # -- Apply to ALS (unless dry-run) --
-    if not dry_run:
+    if not dry_run or drop_rejected_loops:
         print("\n--- Applying to ALS ---")
         lines = decompress_als(als_path)
         print("  Read {} lines from {}".format(len(lines), als_path.name))
@@ -1920,7 +2281,11 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                 matched = _match_track(track_name, als_tracks)
                 if matched:
                     start, end, tname = matched
-                    shift_track_clips(lines, start, end, delta)
+                    if decisions_path is not None:
+                        shift_track_clips(lines, start, end, delta,
+                                          min_shift=DECISION_EDIT_TOLERANCE)
+                    else:
+                        shift_track_clips(lines, start, end, delta)
                     # Print BOTH request and matched names so mismatches
                     # surface in the log (the 22.05.26 'Your Love' bug
                     # was hidden behind 40-char truncation).
@@ -1993,10 +2358,18 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                 print("  Front cut: '{}' on '{}' by {:.0f} beats, later clips pulled in".format(
                     clip_name, tname[:40], cut_beats))
 
+        if decisions_path is not None:
+            _apply_blend_edits(lines, plan.overlaps)
+
         # Step 2: Apply loop extensions
         if all_loops:
             print("  Applying {} loop specs...".format(len(all_loops)))
-            lines = apply_loops(lines, all_loops)
+            try:
+                lines = apply_loops(lines, all_loops)
+            except LoopQualityRejection as exc:
+                if drop_rejected_loops:
+                    _drop_rejected_decision_loop(exc, plan, decisions, drops)
+                raise
 
         # Step 3: Outgoing-outro trim for break-skips — shorten the outro to the pulled
         # marker, keeping its ending. AFTER loops, because the outro's tail loops set its
@@ -2015,13 +2388,18 @@ def propose_arrangement(als_path: Path, sections_path: Path,
                 print("  Outro trim: {} '{}' on '{}' (-{:.0f}b, kept ending)".format(
                     "split" if ok else "SKIPPED", clip_name, tname[:40], skip_beats))
 
-        # Write output
-        compress_als(lines, output_path)
-        print("\n  Written to {} ({} bytes)".format(
-            output_path.name, output_path.stat().st_size))
+        if decisions_path is not None:
+            _verify_blend_edits(lines, plan.overlaps)
+        if not dry_run:
+            compress_als(lines, output_path)
+            print("\n  Written to {} ({} bytes)".format(
+                output_path.name, output_path.stat().st_size))
     else:
         print("\n--- DRY RUN: no ALS changes ---")
 
+    if decisions_path is not None and mix_plan_path is not None:
+        write_mix_plan(plan.mix_plan, mix_plan_path)
+        print(f"  MixPlan: {mix_plan_path} ({plan.mix_plan.plan_hash})")
     return plan
 
 
@@ -2315,6 +2693,13 @@ def generate_report(plan: ArrangementPlan, output_path: Path) -> Path:
                     ov.in_intro_loop.source_beat_end),
                 "count": ov.in_intro_loop.count,
             }
+        if ov.decision_exit is not None:
+            t["decision_exit"] = {
+                "applied_bar": ov.decision_exit[0],
+                "arrangement_beat": ov.decision_exit[1],
+            }
+        if ov.decision_loop_drops:
+            t["decision_loop_drops"] = ov.decision_loop_drops
         if ov.similar_pairs:
             t["similar_history"] = [
                 {
@@ -2414,6 +2799,9 @@ def main():
                              "(entry bar, intro trim, swap bar, tail loop / cut). Pairs it "
                              "names bypass the anchor search; see align_engine."
                              "alignment_from_decision for the shape.")
+    parser.add_argument("--decisions-drop-rejected-loops", action="store_true",
+                        help="With --decisions, remove repeats rejected by the production "
+                             "loop-quality gate and record the changes in the arrangement report.")
     parser.add_argument("--cue-signals", default="",
                         help="Comma-separated analysis signals to admit as alignment "
                              "anchors, e.g. 'fills,phrase,deep,bassout,introloop,matched,hints'. Default (empty) "
@@ -2429,6 +2817,14 @@ def main():
                              "Tests/test_alignment_baseline.py")
 
     args = parser.parse_args()
+    if args.decisions_drop_rejected_loops and args.decisions is None:
+        parser.error("--decisions-drop-rejected-loops requires --decisions")
+    report_path = args.report or args.output
+    if args.decisions is not None:
+        report_file = (report_path if report_path.suffix == ".json" else
+                       report_path.with_name(report_path.stem + "_ARRANGEMENT_REPORT.json"))
+        reject_aliased_output(report_file, (args.als, args.sections_json, args.decisions,
+                                            args.hints, args.history, args.output, args.mix_plan))
 
     from section_format import SectionFormatError, cached_section_mode
 
@@ -2460,10 +2856,10 @@ def main():
         transition_policy=args.transition_policy,
         tempo_arc=args.tempo_arc,
         decisions_path=args.decisions,
+        decisions_drop_rejected_loops=args.decisions_drop_rejected_loops,
     )
 
     # Generate report
-    report_path = args.report or args.output
     generate_report(plan, report_path)
 
     # Summary

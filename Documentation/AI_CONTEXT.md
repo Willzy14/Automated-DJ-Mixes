@@ -82,6 +82,14 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 ## Current State
 
 [Codex, 2026-11-20]: The Phase 1a CLI defaults to groove for a stem sections layout outside preview mode. Later phases use the cached format and reject mixed legacy and groove analyses. The cached 10-track DFTD replay built nine transitions and passed the hints, ALS, and 71 MixPlan checks. The 16-track August legacy replay passed the same gates as main, with identical deterministic output. Proof logs are under `_scratch/default/`.
+[Codex, 2026-11-20]: Exact planner decisions now check the ALS warp and clip geometry with a one-beat detector tolerance, then verify each applied exit at float precision. Fresh Mix V3 passes the ALS and MixPlan gates after six production loop rejections, with all seven applied exit boundaries verified. Both DFTD runs refuse the Call 911 bar-zero mismatch of 1.936 beats. Both default replays match the saved ALS XML, MixPlan and report byte for byte.
+
+[Codex, 2026-11-20]: The round 9 cached replay kept all 16 entry and swap placements. Both exact builds stopped at the production loop-quality gate. Both review sets pass the final ALS and MixPlan checks after removing eight rejected loops, with all 16 swaps verified from the ALS clip geometry. The five stale tests were pinned to the updated owner key. The owner-key Bottom End score is 7 of 7.
+
+[Codex, 2026-11-20]: The planner-decisions worktree converts groove sections and cached stem envelopes into explicit phrase-blend decisions. Exact DFTD and Fresh Mix replays stopped at the existing loop-quality gate. The review replays remove rejected repeats, retain all 16 chosen bass swaps, and pass both final ALS validators. Fresh Mix transition 3 enters eight bars later in the review replay to retain its swap after removing the intro repeat.
+
+[Codex, 2026-11-20]: Groove sections can be selected with `--section-mode groove` in Phase 1a and `stem_detector.py --write-hints`. The deployment default is legacy. In a cached 10-track DFTD replay, groove built nine transitions and passed the hints, final ALS, and MixPlan gates. The legacy run stopped at Eli Brown into Call 911.
+**[Codex, 2026-11-20]:** The standalone phrase-blend planner enforces long incoming fill starts and rejects plans that cut a usable outro. Its optional fractional audio endpoint carries a cue offset, and the legacy answer key still uses counted bars. Bottom End ranks all seven owner placements first. Removing measured content drops that score to four of seven.
 
 **[Claude, 2026-10-05]: D16 HALF-FIXED, SAM'S V5 + SEPTEMBER CORRECTIONS LEARNED, R1+R3 LOOP SIMPLIFICATION MERGED, FOUR MIXES BUILT (22.09.26 Core Sample re-checked, 05.10.26 September Mix, Tech House Selection, Defected Selection).** Sam listened to the D15 rebuild: outgoing loops were over-used where a section line already existed. Diffed his hand-tweaked V5 (`Documentation/Plans/v5-sam-tweaks-analysis.md`, rules R1-R6) -> R1 (skip the outgoing tail loop when it ends within 2 bars of an incoming section start) + R3 (12-bar reach cap on optional loops) built via Codex worktree (exited early, 503), finished and reviewed by MiniMax + an independent Opus agent (all corrections applied), merged `e1c0452`, suite 920/6/0, corpus loops 215 -> 94, 0 new raises; `INTERIM_V1` has both flags on. D16 validator half fixed (`_coalesce_automation_splits`). Built 05.10.26 September Mix (8 tracks, Sam's order, Pat Premier excluded: grid 19/97 ms off); Sam tweaked + bounced it -> render check WARN, learner appended 7 `pair_history` entries, note `Documentation/Mix Patterns Library/05.10.26 September Mix Sam Tweaks.md`. Then, for Mixcloud/SoundCloud: shortlists (`Documentation/Mix Shortlists 2026-10-05.md`, ideas `Documentation/Mix Ideas 2026-10-05.md`) and built Tech House (14) and Defected (13) selections end to end (`Test Project/05.10.26 Tech House Selection|Defected Selection/Output/Sections V4.als`, all gates pass, not yet listened to; hints hand-corrected on 9 tracks, 3 pairs got written `--decisions`). New burn-list items D17-D22 (R2/R4/R5, short-loop vocabulary plan - MiniMax CORRECTIONS, intro-cut float bug, hints auto-derivation, grid non-determinism, invalid file left by a failed phase 2); open count 17. New tools: `Tools/run_mix_pipeline.sh`, `resolve_masters.py`, `build_folder_index.py`, `scan_pair_alignment.py`, `fix_hints_from_gate.py`, `show_sections.py`. Lesson: stream counts belong to the song, not Sam's version (memory `streams-belong-to-song-not-sams-version`).
 
@@ -222,6 +230,12 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - Ableton extends first/last automation breakpoint values to entire timeline — must clamp with unity anchors
 
 ## Recent Session History
+
+### 2026-11-20 - Phrase-blend decisions replay
+
+**Brain:** Codex
+
+**Focus:** Build DFTD and Fresh Mix from the phrase planner's top choices using cached stems. The six DFTD answer-key placements and Fresh Mix transition 5 match in entry and swap. Exact choices, ranked alternatives, gate logs, pictures, and validated review sets are under `_scratch/planned/`.
 
 ### 2026-10-06 (Latest Session) - Neon-only playlist builder, Defected tweaks learned, DFTD Tech House built
 **Brain:** Claude
@@ -1441,6 +1455,12 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 ## What's Next
 
 - **Codex** - Rerun DFTD with the upstream Call 911 grid fix and listen to the blends. The cached replay still flags a two-beat offset on Call 911. The Passion into Ninetoes entry and the Ninetoes into Ashibah entry and swap are 16 bars earlier than Sam's key. The hints gate flags fallback outro hints for Call 911 and A Little Affection for review.
+- [ ] **Codex** - Replay the strict DFTD decision path with a reconciled Call 911 layout and detector clock (2026-11-20).
+
+- [ ] **Codex** - Review the mismatch between phrase-length loop sources and the production loop-quality gate before promoting exact phrase-blend replay (2026-11-20).
+
+- **Codex** - Before enabling groove by default, rerun DFTD with the upstream Call 911 grid fix and listen to the blends. The cached replay still flags a two-beat offset on Call 911. The Passion into Ninetoes entry and the Ninetoes into Ashibah entry and swap are 16 bars earlier than Sam's key.
+- [ ] **Codex** - Verify the separate decisions integration with real audio endpoints and the no-plan result (2026-11-20).
 
 > **TOP (2026-09-22 evening): D15 fully closed at the code level (plan + implementation each
 > independently dual-reviewed SOUND) and delivered on a real rebuild - see the Current State
