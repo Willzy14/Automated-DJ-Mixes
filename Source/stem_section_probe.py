@@ -100,7 +100,7 @@ def _separate_envelopes(wav_path: Path, cache_dir: Path, hop_sec: float = 0.1):
     dev = _device()
     print(f"  separating {wav_path.name} ({dev.upper()})...")
     with torch.no_grad():
-        out = apply_model(model, t[None], device=dev, progress=True)[0]   # [src, ch, n]
+        out = apply_model(model, t[None], shifts=0, device=dev, progress=True)[0]   # [src, ch, n]
     out = out * (ref.std() + 1e-8) + ref.mean()
 
     hop = max(1, int(sr * hop_sec))

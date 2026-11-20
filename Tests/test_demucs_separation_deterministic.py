@@ -57,6 +57,33 @@ def test_kick_model_adapter_separation_passes_shifts_zero():
     assert isinstance(val, ast.Constant) and val.value == 0
 
 
+def test_stem_section_probe_separation_passes_shifts_zero():
+    calls = _apply_model_calls("stem_section_probe.py")
+    assert len(calls) == 1
+    val = _shifts_value(calls[0])
+    assert isinstance(val, ast.Constant) and val.value == 0
+
+
+def test_every_apply_model_call_under_source_passes_shifts_zero():
+    offenders = []
+    scanned = 0
+    for path in sorted(SOURCE.rglob("*.py")):
+        scanned += 1
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")
+            if name != "apply_model":
+                continue
+            val = _shifts_value(node)
+            if not (isinstance(val, ast.Constant) and val.value == 0):
+                offenders.append(f"{path.relative_to(SOURCE)}:{node.lineno}")
+    assert scanned > 0
+    assert not offenders, "apply_model without explicit shifts=0: " + ", ".join(offenders)
+
+
 def test_drums_cache_version_is_two():
     assert kick_model_adapter.DRUMS_CACHE_VERSION == 2
 
