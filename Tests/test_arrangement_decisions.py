@@ -8,10 +8,14 @@ the ending) and the no-outro tail loop, each against the numbers in the
 """
 from __future__ import annotations
 
+import gzip
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from xml.etree import ElementTree as ET
 
+import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +23,9 @@ sys.path.insert(0, str(ROOT / "Source"))
 
 import align_engine as AE  # noqa: E402
 from apply_loops import cut_named_clip_front_and_pull, find_track_line_ranges  # noqa: E402
-from propose_arrangement import OverlapAnalysis, TrackInfo, _plan_marker_loops  # noqa: E402
+from propose_arrangement import (  # noqa: E402
+    OverlapAnalysis, TrackInfo, _plan_marker_loops, generate_report, propose_arrangement,
+)
 
 
 def _track(name, n_bars, sections):
@@ -267,6 +273,125 @@ def _fields(lines, name):
     get = lambda tag: float(re.search(rf'{tag} Value="([^"]+)"', block).group(1))
     time = float(re.search(r'Time="([^"]+)"', block).group(1))
     return time, get("CurrentStart"), get("CurrentEnd"), get("LoopStart"), get("LoopEnd"), get("HiddenLoopStart")
+
+
+@pytest.fixture
+def blend_layout(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    def build(a_windows=((0, 401),), zero=0, reject=False, a_exit=96):
+        stems = tmp_path / "_Stem Analysis"
+        stems.mkdir()
+        sections, lines = {}, ['<Ableton>\r\n', '<LiveSet>\r\n', '<Tracks>\r\n']
+        for i, name in enumerate("ABC"):
+            windows = a_windows if name == "A" else [(0, 400)]
+            base = i * 500
+            lines.extend([f'<AudioTrack Id="{i + 10}">\r\n', '<Name>\r\n',
+                          f'<EffectiveName Value="{name}" />\r\n', '</Name>\r\n',
+                          '<DeviceChain>\r\n', '<MainSequencer>\r\n', '<Sample>\r\n',
+                          '<ArrangerAutomation>\r\n', '<Events>\r\n'])
+            sections[name] = []
+            for j, (start, end) in enumerate(windows):
+                clip_name = f"drop_{j + 1}"
+                clip = _clip(100 + 10*i + j, clip_name, base + start, end - start, start)
+                clip[-1:-1] = [
+                    '<WarpMarkers>\r\n',
+                    f'<WarpMarker Id="{200 + 20*i + 2*j}" SecTime="0" BeatTime="0" />\r\n',
+                    f'<WarpMarker Id="{201 + 20*i + 2*j}" SecTime="400" BeatTime="400" />\r\n',
+                    '</WarpMarkers>\r\n',
+                ]
+                lines.extend(clip)
+                sections[name].append({"name": clip_name, "label": "drop",
+                                       "arr_time": base + start, "arr_end": base + end,
+                                       "source_start_beats": start, "source_end_beats": end})
+            lines.extend(['</Events>\r\n', '</ArrangerAutomation>\r\n', '</Sample>\r\n',
+                          '</MainSequencer>\r\n', '</DeviceChain>\r\n', '</AudioTrack>\r\n'])
+            detector = {"track": name, "bpm": 60, "n_bars": 100,
+                        "sections": [{"name": "drop_1", "label": "drop", "start_bar": 0,
+                                      "end_bar": 100, "start_sec": zero if name == "A" else 0,
+                                      "end_sec": 400}]}
+            (stems / f"SECTIONS_STEM_{name}.json").write_text(json.dumps(detector), encoding="ascii")
+            np.savez(stems / f"{name}__stemenv.npz", hop_t=0.25, mix=np.full(1616, 0.1))
+        lines.extend(['</Tracks>\r\n', '</LiveSet>\r\n', '</Ableton>\r\n'])
+        als = tmp_path / "Layout.als"
+        als.write_bytes(gzip.compress("".join(lines).encode("ascii")))
+        layout = tmp_path / "Sections.json"
+        layout.write_text(json.dumps(sections), encoding="ascii")
+        decisions = tmp_path / "Decisions.json"
+        decisions.write_text(json.dumps({"transitions": [
+            dict(pair_index=1, out_track="A", in_track="B", entry_out_bar=76,
+                 swap_in_bar=8, out_end_bar=a_exit,
+                 intro_loop={"source_start_bar": 3 if reject else 2, "source_end_bar": 6}),
+            dict(pair_index=2, out_track="B", in_track="C", entry_out_bar=80,
+                 swap_in_bar=8, out_end_bar=103 if reject else 104,
+                 tail_loop={"source_start_bar": 93 if reject else 92, "source_end_bar": 96,
+                            "reps": 1}),
+        ]}), encoding="ascii")
+        return als, layout, tmp_path / "Arranged.als", decisions
+
+    return build
+
+
+def _written_windows(path):
+    root = ET.fromstring(gzip.decompress(path.read_bytes()))
+    tags = ("CurrentStart", "CurrentEnd", "Loop/LoopStart", "Loop/LoopEnd")
+    return {
+        track.find("Name/EffectiveName").get("Value"): {
+            tuple(float(clip.find(tag).get("Value")) for tag in tags)
+            for clip in track.findall(".//AudioClip")
+        }
+        for track in root.findall("./LiveSet/Tracks/AudioTrack")
+    }
+
+
+def test_blend_decisions_edit_actual_als_and_shift_next_transition(blend_layout, capsys):
+    als, layout, output, decisions = blend_layout()
+    plan = propose_arrangement(als, layout, output, decisions_path=decisions)
+    assert _written_windows(output) == {
+        "A": {(0, 384, 0, 384)},
+        "B": {(304, 328, 0, 24), (328, 344, 8, 24),
+              (344, 720, 24, 400), (720, 736, 368, 384)},
+        "C": {(640, 1040, 0, 400)},
+    }
+    assert [ov.decision_exit for ov in plan.overlaps] == [(96, 384), (104, 736)]
+    assert [alignment.swap_beats for alignment in plan.alignments] == [352, 672]
+    assert "UNMEASURED" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(("windows", "zero", "exit_bar", "message"), [
+    (((0, 402),), 0, 96, r"A.*exit bar 96.*length mismatch \+2\.000 beats"),
+    (((0, 400),), 2, 100, r"A.*exit bar 100.*bar-zero mismatch -2\.000 beats"),
+    (((0, 380), (388, 401)), 0, 96, r"A.*trim_end at beat 384.*gap"),
+    (((0, 399),), 0, 100, r"A.*exit bar 100.*ends 1 beats before"),
+])
+def test_blend_decisions_refuse_clock_mismatches_and_gap_edits(
+        blend_layout, windows, zero, exit_bar, message):
+    als, layout, output, decisions = blend_layout(windows, zero, a_exit=exit_bar)
+    with pytest.raises(ValueError, match=message):
+        propose_arrangement(als, layout, output, decisions_path=decisions)
+    assert not output.exists()
+
+
+def test_production_drops_rejected_loops_and_preserves_proposal(blend_layout):
+    als, layout, output, decisions = blend_layout(reject=True)
+    proposal = decisions.read_bytes()
+    with pytest.raises(ValueError, match=r"Loop quality gate failed.*failed=period"):
+        propose_arrangement(als, layout, output, decisions_path=decisions)
+    assert not output.exists()
+    plan = propose_arrangement(als, layout, output, decisions_path=decisions,
+                               decisions_drop_rejected_loops=True)
+    assert decisions.read_bytes() == proposal
+    assert not plan.loops
+    assert _written_windows(output) == {
+        "A": {(0, 384, 0, 384)}, "B": {(316, 716, 0, 400)}, "C": {(636, 1036, 0, 400)},
+    }
+    assert [alignment.swap_beats for alignment in plan.alignments] == [348, 668]
+    rows = json.loads(generate_report(plan, output).read_text(encoding="utf-8"))["transitions"]
+    drops = [row["decision_loop_drops"][0] for row in rows]
+    assert [(drop["repeat"], drop["failed_checks"]) for drop in drops] == [
+        ("intro_loop", ["period"]), ("tail_loop", ["period"])]
+    assert (drops[0]["requested_entry_bar"], drops[0]["applied_entry_bar"]) == (76, 79)
+    assert (drops[1]["requested_exit_bar"], drops[1]["applied_exit_bar"]) == (103, 100)
 
 
 def test_als_front_cut_moves_source_not_position_and_pulls_the_rest_in():

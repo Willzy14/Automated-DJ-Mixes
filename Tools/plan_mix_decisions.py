@@ -9,9 +9,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Source"))
 
 from align_engine import _decision_bar
+from apply_loops import staged_file
 from measure_section_content import bar_content, read_envelope
 from phrase_blend import plan_blend
-from propose_arrangement import ordered_tracks
+from propose_arrangement import ordered_tracks, reject_aliased_output, reject_empty_layout_tracks
 from section_format import groove_fills
 
 
@@ -26,6 +27,8 @@ def convert_track(result, envelope_path):
     if not (math.isfinite(bpm) and bpm > 0 and math.isfinite(n_bars) and n_bars > 0):
         raise ValueError(f"{envelope_path}: invalid bpm or n_bars")
     sections = result["sections"]
+    if not sections:
+        raise ValueError(f"{envelope_path}: empty detector sections")
     first = sections[0]
     lead = result.get("lead_in_bars", result["analysis"].get("lead_in_bars"))
     if lead is None:
@@ -48,24 +51,36 @@ def convert_track(result, envelope_path):
     }
 
 
-def track_order(project, sections_path=None):
+def order_input(project, sections_path):
     if sections_path is None:
         layouts = [p for p in (project / "Sections Review").glob("Sections_V*.json")
                    if p.stem.removeprefix("Sections_V").isdecimal()]
         if layouts:
             sections_path = max(layouts, key=lambda p: int(p.stem.removeprefix("Sections_V")))
     if sections_path is not None:
-        return [track.name for track in ordered_tracks(read_json(sections_path))]
+        return sections_path, True
     report = project / "Output" / "ARRANGEMENT_REPORT.json"
     if not report.is_file():
         raise ValueError(f"{project}: no layout sections or arrangement report; pass --sections")
-    transitions = read_json(report)["transitions"]
+    return report, False
+
+
+def track_order(project, sections_path=None):
+    return read_track_order(*order_input(project, sections_path))
+
+
+def read_track_order(path, is_layout):
+    data = read_json(path)
+    if is_layout:
+        reject_empty_layout_tracks(data, path)
+        return [track.name for track in ordered_tracks(data)]
+    transitions = data["transitions"]
     if not transitions:
         return []
     names = [transitions[0]["out_track"]]
     for transition in transitions:
         if transition["out_track"] != names[-1]:
-            raise ValueError(f"{report}: transitions do not form an adjacent track order")
+            raise ValueError(f"{path}: transitions do not form an adjacent track order")
         names.append(transition["in_track"])
     return names
 
@@ -150,8 +165,14 @@ def write_decisions(path, names, tracks):
     if errors:
         raise ValueError("Decisions file was not written; no substitutions were made. "
                          + " | ".join(errors))
-    path.write_text(json.dumps({"transitions": decisions}, indent=2) + "\n", encoding="ascii")
+    write_json_atomically(path, {"transitions": decisions}, indent=2)
     return decisions
+
+
+def write_json_atomically(path, data, **options):
+    payload = (json.dumps(data, **options) + "\n").encode("ascii")
+    with staged_file(path, payload) as partial:
+        partial.replace(path)
 
 
 def main(argv=None):
@@ -162,14 +183,20 @@ def main(argv=None):
     parser.add_argument("--content", type=Path, help="Save planner tracks and measured bar content")
     args = parser.parse_args(argv)
     try:
-        names = [html.unescape(name) for name in track_order(args.project, args.sections)]
+        order_path, is_layout = order_input(args.project, args.sections)
+        names = [html.unescape(name) for name in read_track_order(order_path, is_layout)]
         stem_dir = args.project / "_Stem Analysis"
-        tracks = [convert_track(read_json(stem_dir / f"SECTIONS_STEM_{name}.json"),
-                                stem_dir / f"{name}__stemenv.npz") for name in names]
+        stem_inputs = [(stem_dir / f"SECTIONS_STEM_{name}.json",
+                        stem_dir / f"{name}__stemenv.npz") for name in names]
+        inputs = [order_path, *(path for pair in stem_inputs for path in pair)]
+        reject_aliased_output(args.out, inputs)
         if args.content is not None:
-            args.content.write_text(json.dumps({"tracks": dict(zip(names, tracks))}) + "\n",
-                                    encoding="ascii")
+            reject_aliased_output(args.content, [*inputs, args.out])
+        tracks = [convert_track(read_json(sections), envelope)
+                  for sections, envelope in stem_inputs]
         write_decisions(args.out, names, tracks)
+        if args.content is not None:
+            write_json_atomically(args.content, {"tracks": dict(zip(names, tracks))})
     except (OSError, ValueError, KeyError, IndexError) as exc:
         parser.exit(1, f"plan_mix_decisions: {exc}\n")
     return 0

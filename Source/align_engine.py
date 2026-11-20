@@ -2945,11 +2945,11 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
             reps=reps, source_start_bar=s0, source_end_bar=s1,
             partial_bars=partial, target_marker_bar=float(o.n_bars) + ext,
             target_marker_name=f"decision:{loop.get('target') or 'tail'}", note="decision"))
-    elif blend_geometry and end != o.n_bars:
-        if not 0 < end < o.n_bars:
+    elif blend_geometry:
+        if not 0 < end <= o.n_bars:
             raise ValueError(f"decision for pair {pair}: out_end_bar {end:g} requires a tail_loop "
                              "or a positive stop within the source")
-        specs.append(FillCutSpec(kind="decision_tail_trim", skip_bars=o.n_bars - end))
+        specs.append(FillCutSpec(kind="decision_tail_trim", target_marker_bar=end))
     intro_loop = decision.get("intro_loop")
     if intro_loop:
         low = _decision_bar(intro_loop["source_start_bar"], "intro_loop.source_start_bar", pair)

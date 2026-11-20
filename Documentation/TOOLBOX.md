@@ -6,6 +6,8 @@ Module reference for all pipeline components.
 
 ### `Tools/plan_mix_decisions.py` (2026-11-20, Codex)
 
+The planner publishes decisions with a same-directory atomic rename. Phase 2 verifies exact exit bars against the ALS clip and warp geometry with a one-beat detector tolerance. Use `--decisions-drop-rejected-loops` with `--decisions` to remove repeats rejected by the production loop-quality gate. Each drop and any resulting entry or exit change appears in the arrangement report. The original proposal stays on disk.
+
 Reads a project's groove section JSONs and cached stem envelopes, then writes one top-ranked phrase-blend decision per adjacent pair. Pass `--sections` to use the same layout JSON as Phase 2, `--out` for the decisions, and optionally `--content` for the measured per-bar kick, bass, and music flags. The decisions add `out_end_bar` and optional `intro_loop` to name an exact outgoing stop and an incoming phrase repeat for `propose_arrangement.py --decisions`. The normal loop and ALS validators check the resulting geometry.
 ### Phrase blend planner (2026-11-20, Codex)
 

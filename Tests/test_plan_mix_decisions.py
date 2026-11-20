@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -92,8 +93,8 @@ def test_writer_records_exact_outgoing_and_incoming_cut(tmp_path, monkeypatch):
     in_track = SimpleNamespace(name="B", n_bars=60)
     assert alignment_from_decision(out_track, in_track, decision).handoff_bar_out == 84
     tail, front = fills_from_decision(out_track, in_track, decision)
-    assert (tail.kind, tail.skip_bars, front.kind, front.cut_to_bar) == (
-        "decision_tail_trim", 4, "decision_intro_trim", 4,
+    assert (tail.kind, tail.target_marker_bar, front.kind, front.cut_to_bar) == (
+        "decision_tail_trim", 96, "decision_intro_trim", 4,
     )
 
 
@@ -107,3 +108,46 @@ def test_writer_reports_unusable_plan_without_writing_partial_file(tmp_path, mon
     with pytest.raises(ValueError, match=error):
         tool.write_decisions(decisions, ["A", "B"], [{"n_bars": 100}, {"n_bars": 60}])
     assert not decisions.exists()
+
+
+def test_writer_keeps_existing_file_if_atomic_publish_fails(tmp_path, monkeypatch):
+    decisions = tmp_path / "decisions.json"
+    decisions.write_bytes(b"old proposal")
+    monkeypatch.setattr(tool, "plan_blend", lambda *_: BlendPlan(72, 88, 100, 0, 0,
+                                                              swap_incoming_bar=16))
+
+    def fail_replace(stage, target):
+        assert stage.parent == target.parent and stage != target
+        assert tool.read_json(stage)["transitions"][0]["out_end_bar"] == 100
+        assert target.read_bytes() == b"old proposal"
+        raise OSError("rename failed")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="rename failed"):
+        tool.write_decisions(decisions, ["A", "B"], [{"n_bars": 100}, {"n_bars": 60}])
+    assert list(tmp_path.iterdir()) == [decisions]
+    assert decisions.read_bytes() == b"old proposal"
+
+
+def test_writer_refuses_empty_layout_tracks_and_aliased_outputs(tmp_path, capsys):
+    sections = tmp_path / "Sections.json"
+    sections.write_text('{"A": []}', encoding="ascii")
+    with pytest.raises(ValueError, match="empty layout track 'A'"):
+        tool.track_order(tmp_path, sections)
+    sections.write_text(json.dumps({
+        "A": [{"arr_time": 0, "arr_end": 400, "source_end_beats": 400}],
+    }), encoding="ascii")
+    hardlink = tmp_path / "alias.json"
+    os.link(sections, hardlink)
+    args = [str(tmp_path), "--sections", str(sections)]
+    output = tmp_path / "out.json"
+    for outputs in [
+        ["--out", str(hardlink)],
+        ["--out", str(output), "--content", str(sections)],
+        ["--out", str(output), "--content", str(output)],
+    ]:
+        with pytest.raises(SystemExit) as error:
+            tool.main(args + outputs)
+        assert error.value.code == 1
+        assert "aliases" in capsys.readouterr().err
+        assert not output.exists()
