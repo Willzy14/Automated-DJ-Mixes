@@ -2859,7 +2859,13 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
     if loop:
         s0 = _decision_bar(loop["source_start_bar"], "tail_loop.source_start_bar", pair)
         s1 = _decision_bar(loop["source_end_bar"], "tail_loop.source_end_bar", pair)
-        reps = int(loop["reps"])
+        raw_reps = loop["reps"]
+        if (isinstance(raw_reps, bool) or not isinstance(raw_reps, (int, float))
+                or not math.isfinite(raw_reps) or raw_reps != int(raw_reps)):
+            raise ValueError(
+                f"decision for pair {pair}: tail_loop reps {raw_reps!r} is not "
+                "a whole number")
+        reps = int(raw_reps)
         partial = _decision_bar(loop.get("partial_bars") or 0.0, "tail_loop.partial_bars", pair)
         if s1 <= s0 or reps < 0 or (reps == 0 and partial <= 0):
             raise ValueError(f"decision for pair {pair}: tail_loop geometry is empty")
@@ -2867,15 +2873,23 @@ def fills_from_decision(o: "Track", i: "Track", decision: dict) -> list[FillCutS
             raise ValueError(
                 f"decision for pair {pair}: tail_loop partial_bars {partial:g} "
                 "must not be negative")
+        if partial >= s1 - s0:
+            raise ValueError(
+                f"decision for pair {pair}: tail_loop partial_bars {partial:g} "
+                f"must be less than the {s1 - s0:g}-bar loop")
+        if reps > MAX_LOOP_REPEATS:
+            raise ValueError(
+                f"decision for pair {pair}: tail_loop reps {reps} exceeds the "
+                f"{MAX_LOOP_REPEATS}-repeat limit")
         if s1 > o.n_bars + 1e-6:
             raise ValueError(
                 f"decision for pair {pair}: tail_loop source_end_bar {s1:g} is past "
                 f"'{o.name}' end at bar {o.n_bars}")
         ext = reps * (s1 - s0) + partial
-        if ext <= 0:
+        if not math.isfinite(ext) or ext > MAX_LOOP_EXTENSION_BARS:
             raise ValueError(
-                f"decision for pair {pair}: tail_loop geometry is empty "
-                f"(total extension {ext:g} bars)")
+                f"decision for pair {pair}: tail_loop total extension {ext:g} bars "
+                f"exceeds the {MAX_LOOP_EXTENSION_BARS:g}-bar limit")
         specs.append(FillCutSpec(
             kind="outgoing_tail", reps=reps, source_start_bar=s0, source_end_bar=s1,
             partial_bars=partial, target_marker_bar=float(o.n_bars) + ext,

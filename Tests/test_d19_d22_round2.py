@@ -84,7 +84,7 @@ def test_a_start_with_no_readable_end_fails_closed_before_any_edit(hi_tag, how):
     else:
         lines = [ln for ln in lines if f"<{hi_tag} " not in ln]
     before = list(lines)
-    with pytest.raises(ValueError, match="no readable"):
+    with pytest.raises(ValueError, match="refusing to"):
         _trim(lines, 12.0)
     assert lines == before
 
@@ -301,3 +301,273 @@ def test_valid_tail_loops_are_unchanged(reps, partial, marker):
     o, i = _track("out", 110), _track("in", 80)
     (spec,) = ae.fills_from_decision(o, i, _tail(reps=reps, partial_bars=partial))
     assert spec.kind == "outgoing_tail" and spec.target_marker_bar == marker
+
+
+# =========================================================================== #
+# Round 3                                                                     #
+# =========================================================================== #
+
+# --- D: structural, fail-closed trim -------------------------------------- #
+
+def _plain_clip():
+    return _clip(cs='"100.0"', ce='"132.0"', ls='"4.0"', le='"36.0"', time='"100.0"')
+
+
+def _line_of(lines, tag):
+    return next(i for i, ln in enumerate(lines) if f"<{tag} " in ln)
+
+
+def _m_whitespace(lines, tag):
+    i = _line_of(lines, tag)
+    lines[i] = lines[i].replace("Value=", "Value = ")
+
+
+def _m_attribute_first(lines, tag):
+    i = _line_of(lines, tag)
+    lines[i] = lines[i].replace(f"<{tag} ", f'<{tag} Id="7" ')
+
+
+def _m_next_line(lines, tag):
+    i = _line_of(lines, tag)
+    lines[i:i + 1] = [lines[i].replace(f"<{tag} Value", f"<{tag}\n    Value", 1)]
+
+
+def _m_entity(lines, tag):
+    i = _line_of(lines, tag)
+    lines[i] = re.sub(r'Value="(\d)', lambda m: f'Value="&#{ord(m.group(1))};', lines[i])
+
+
+def _m_commented_duplicate(lines, tag):
+    i = _line_of(lines, tag)
+    lines.insert(i, f'  <!-- <{tag} Value="1.0" /> -->\n')
+
+
+def _m_real_duplicate(lines, tag):
+    i = _line_of(lines, tag)
+    lines.insert(i, lines[i])
+
+
+@pytest.mark.parametrize("mutate", [_m_whitespace, _m_attribute_first, _m_next_line,
+                                    _m_entity, _m_commented_duplicate,
+                                    _m_real_duplicate],
+                         ids=lambda f: f.__name__[3:])
+@pytest.mark.parametrize("tag", ["CurrentStart", "CurrentEnd", "LoopStart", "LoopEnd"])
+def test_a_tag_that_is_not_exactly_one_plain_value_is_refused_with_no_line_changed(
+        tag, mutate):
+    lines = _plain_clip()
+    mutate(lines, tag)
+    before = list(lines)
+    with pytest.raises(ValueError, match=tag):
+        _trim(lines, 12.0)
+    assert lines == before
+
+
+@pytest.mark.parametrize("time_attr", ['Time = "100.0"', 'Id="2" Time="100.0" Time="5"'])
+def test_a_time_attribute_that_is_not_one_plain_value_is_refused(time_attr):
+    lines = _plain_clip()
+    lines = [ln.replace('Time="100.0"', time_attr) for ln in lines]
+    before = list(lines)
+    with pytest.raises(ValueError, match="Time"):
+        _trim(lines, 12.0)
+    assert lines == before
+
+
+def test_time_is_never_moved_when_current_start_is_absent():
+    lines = [ln for ln in _plain_clip() if "<CurrentStart" not in ln]
+    before = list(lines)
+    with pytest.raises(ValueError, match="CurrentStart"):
+        _trim(lines, 12.0)
+    assert lines == before
+
+
+def test_a_plain_clip_is_still_trimmed():
+    lines = _plain_clip()
+    assert _trim(lines, 12.0) == 3
+    text = "".join(lines)
+    assert 'Time="112.0"' in text and '<CurrentStart Value="112.0" />' in text
+    assert '<LoopStart Value="16.0" />' in text
+
+
+# --- B: the gzip header ---------------------------------------------------- #
+
+def _freeze_time(monkeypatch):
+    import time
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+
+
+def test_published_bytes_do_not_depend_on_the_staging_name(tmp_path, monkeypatch):
+    _freeze_time(monkeypatch)
+    out_a, out_b = tmp_path / "a" / "Sections V9.als", tmp_path / "b" / "Sections V9.als"
+    for writer in (apply_loops.compress_als, als_generator.compress_als):
+        out_a.parent.mkdir(exist_ok=True)
+        out_b.parent.mkdir(exist_ok=True)
+        writer(VALID_LINES, out_a)
+        writer(VALID_LINES, out_b)
+        assert _sha(out_a) == _sha(out_b)
+    assert b"Sections V9.als\x00" in out_a.read_bytes()[:64]
+    assert b".partial" not in out_a.read_bytes()[:64]
+
+
+def test_apply_loops_bytes_equal_the_original_direct_write(tmp_path, monkeypatch):
+    _freeze_time(monkeypatch)
+    old = tmp_path / "old" / "Sections V9.als"
+    old.parent.mkdir()
+    with gzip.open(old, "wb") as f:      # the write before D22 touched it
+        f.write("".join(VALID_LINES).encode("utf-8"))
+    new = tmp_path / "new" / "Sections V9.als"
+    apply_loops.compress_als(VALID_LINES, new)
+    assert new.read_bytes() == old.read_bytes()
+
+
+# --- C: exclusive staging -------------------------------------------------- #
+
+@pytest.mark.parametrize("module", [apply_loops, als_generator],
+                         ids=["apply_loops", "als_generator"])
+def test_an_existing_staged_name_is_never_overwritten_and_a_new_token_is_tried(
+        tmp_path, monkeypatch, module):
+    import secrets
+    tokens = iter(["a" * 16, "b" * 16])
+    monkeypatch.setattr(secrets, "token_hex", lambda n: next(tokens))
+    out = tmp_path / "x.als"
+    squatter = tmp_path / ("x.als." + "a" * 16 + ".partial")
+    squatter.write_bytes(b"another writer stage")
+    module.compress_als(VALID_LINES, out)
+    assert squatter.read_bytes() == b"another writer stage"
+    assert _unpack(out) == "".join(VALID_LINES).encode("utf-8")
+
+
+@pytest.mark.parametrize("module", [apply_loops, als_generator],
+                         ids=["apply_loops", "als_generator"])
+def test_staging_gives_up_after_a_bounded_number_of_collisions(tmp_path, monkeypatch, module):
+    import secrets
+    monkeypatch.setattr(secrets, "token_hex", lambda n: "c" * 16)
+    out = tmp_path / "x.als"
+    squatter = tmp_path / ("x.als." + "c" * 16 + ".partial")
+    squatter.write_bytes(b"keep")
+    with pytest.raises(ValueError, match="unique staging file"):
+        module.compress_als(VALID_LINES, out)
+    assert squatter.read_bytes() == b"keep" and not out.exists()
+
+
+def test_the_staging_constructs_remove_their_file_on_any_exit(tmp_path):
+    out = tmp_path / "x.als"
+    for exc in (KeyboardInterrupt, RuntimeError):
+        with pytest.raises(exc):
+            with apply_loops.staged_als(VALID_LINES, out) as p:
+                assert p.is_file() and p.name.endswith(".partial")
+                raise exc()
+        assert _partials(tmp_path) == []
+        with pytest.raises(exc):
+            with apply_loops.staged_file(out, b"data") as p:
+                assert p.read_bytes() == b"data"
+                raise exc()
+        assert _partials(tmp_path) == []
+    with pytest.raises(ValueError):
+        with apply_loops.staged_als(BAD_LINES, out):
+            pytest.fail("an invalid ALS must not be yielded")
+    assert _partials(tmp_path) == [] and not out.exists()
+
+
+# --- A: staged reconcile --------------------------------------------------- #
+
+def _patch_reconcile_recording(monkeypatch, report, out, outcome):
+    import validate_mix_plan_als
+    seen = {}
+
+    def fake(plan_path, report_path, als_path):
+        seen["staged_report"] = Path(report_path) != report
+        seen["staged_als"] = Path(als_path) != out
+        seen["swap"] = json.loads(Path(report_path).read_text(encoding="utf-8"))[
+            "transitions"][0]["swap_beats"]
+        seen["real_report_sha"] = _sha(report)
+        seen["out_exists"] = out.exists()
+        if outcome == "interrupt":
+            raise KeyboardInterrupt()
+        if outcome == "fail":
+            raise ValueError("MixPlan plan_hash is stale; forced FAIL")
+        return {"status": "PASS", "checks": [], "errors": []}
+
+    monkeypatch.setattr(validate_mix_plan_als, "reconcile", fake)
+    return seen
+
+
+@pytest.mark.parametrize("outcome, exc", [("fail", ValueError),
+                                          ("interrupt", KeyboardInterrupt)])
+def test_reconcile_sees_staged_files_and_the_finals_stay_untouched_on_failure(
+        tmp_path, monkeypatch, outcome, exc):
+    report, out = _setup(tmp_path, monkeypatch)
+    seen = _patch_reconcile_recording(monkeypatch, report, out, outcome)
+    before = _sha(report)
+    with pytest.raises(exc):
+        apply_automation.main()
+    assert seen["staged_report"] and seen["staged_als"]
+    assert seen["swap"] == 792.0                # the gate saw the updated report
+    assert seen["real_report_sha"] == before    # while the real one was untouched
+    assert seen["out_exists"] is False          # and nothing was published yet
+    assert _sha(report) == before and not out.exists()
+    assert _strays(tmp_path) == []
+
+
+def test_a_pass_publishes_the_als_then_the_report(tmp_path, monkeypatch):
+    report, out = _setup(tmp_path, monkeypatch)
+    seen = _patch_reconcile_recording(monkeypatch, report, out, "pass")
+    before = _sha(report)
+    apply_automation.main()
+    assert seen["out_exists"] is False and seen["real_report_sha"] == before
+    assert out.is_file() and _sha(report) != before
+    assert json.loads(report.read_text(encoding="utf-8"))["transitions"][0][
+        "swap_beats"] == 792.0
+    assert _strays(tmp_path) == []
+
+
+def test_a_failure_between_the_two_publishes_leaves_new_als_and_old_report(
+        tmp_path, monkeypatch):
+    report, out = _setup(tmp_path, monkeypatch)
+    _patch_reconcile_recording(monkeypatch, report, out, "pass")
+    before = _sha(report)
+    real_replace = apply_automation.os.replace
+
+    def replace(src, dst):
+        if Path(dst) == report:
+            raise OSError("disk full")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(apply_automation.os, "replace", replace)
+    with pytest.raises(OSError, match="disk full"):
+        apply_automation.main()
+    assert out.is_file() and _sha(report) == before
+    assert _strays(tmp_path) == []
+
+
+# --- E: tail_loop limits --------------------------------------------------- #
+
+@pytest.mark.parametrize("reps", [2.5, float("nan"), float("inf"), True, "2"])
+def test_tail_loop_reps_must_be_a_whole_number(reps):
+    o, i = _track("out", 110), _track("in", 80)
+    with pytest.raises(ValueError, match="not a whole number"):
+        ae.fills_from_decision(o, i, _tail(reps=reps))
+
+
+def test_tail_loop_reps_above_the_repeat_limit_are_refused():
+    o, i = _track("out", 110), _track("in", 80)
+    with pytest.raises(ValueError, match="repeat limit"):
+        ae.fills_from_decision(o, i, _tail(reps=ae.MAX_LOOP_REPEATS + 1))
+
+
+def test_tail_loop_partial_must_be_less_than_the_loop():
+    o, i = _track("out", 110), _track("in", 80)
+    with pytest.raises(ValueError, match="less than the 4-bar loop"):
+        ae.fills_from_decision(o, i, _tail(partial_bars=4))
+
+
+def test_tail_loop_total_extension_above_the_limit_is_refused_and_the_limit_is_allowed():
+    o, i = _track("out", 110), _track("in", 80)
+    with pytest.raises(ValueError, match="extension"):
+        ae.fills_from_decision(o, i, _tail(source_end_bar=95, reps=8))   # 8 x 5 = 40
+    (spec,) = ae.fills_from_decision(o, i, _tail(reps=8))                 # 8 x 4 = 32
+    assert spec.target_marker_bar == 110 + ae.MAX_LOOP_EXTENSION_BARS
+
+
+def test_tail_loop_limits_are_the_validate_loop_spec_limits():
+    assert ae.MAX_LOOP_REPEATS == apply_loops.MAX_LOOP_REPEATS
+    assert ae.MAX_LOOP_EXTENSION_BARS * 4 == apply_loops.MAX_LOOP_EXTENSION_BEATS

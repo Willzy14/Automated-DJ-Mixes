@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -1432,53 +1433,87 @@ def _apply_track_levelling(lines: list[str], tracks, audio_dir: Path) -> None:
         print(f"  {_short(t.name):20s}  LUFS {lf:6.1f}  ->  {off:+5.1f} dB")
 
 
-class _PublishRollback:
-    """Undo one apply_automation publish when the MixPlan hard gate fails.
+def _publish_with_reconcile(lines: list[str], output_path: Path,
+                            report_path: Path | None, plans: list,
+                            arrangement_report_path: Path | None,
+                            mix_plan_path: Path) -> None:
+    """The MixPlan path: stage, reconcile, THEN publish.
 
-    Taken BEFORE the output is written: a private copy of any existing output
-    and the report's bytes. `restore()` puts the output back byte-identical
-    (or removes it if there was none) and rewrites the report only if it
-    changed. `close()` removes the private copy. Restore problems are printed,
-    never raised, so they can not mask the gate's own error."""
+    The ALS is built and validated into its own staged `.partial`; the updated
+    arrangement report is written to a staged copy beside the real report
+    (write_final_swaps_to_report is pointed at the copy, never the real
+    file); validate_mix_plan_als.reconcile (a HARD GATE, it raises ValueError
+    on a mismatch) runs against that staged pair. Only a pass publishes, ALS
+    first and the report second. Any failure, KeyboardInterrupt included,
+    removes both staged files and leaves the real output and the real report
+    untouched.
 
-    def __init__(self, output_path: Path, report_path: Path | None):
-        self.output_path = Path(output_path)
-        self.report_path = Path(report_path) if report_path is not None else None
-        self.published = False
-        self._report_bytes = None
-        self._backup = None
-        if self.report_path is not None and self.report_path.is_file():
-            self._report_bytes = self.report_path.read_bytes()
-        if self.output_path.is_file():
-            from apply_loops import _unique_partial
-            import shutil
-            self._backup = _unique_partial(self.output_path)
-            shutil.copy2(self.output_path, self._backup)
+    Why ALS first: the report must never describe an attempt that did not
+    ship. If the process dies between the two renames, the state is the new
+    ALS beside the OLD report. reconcile on that pair fails whenever a swap
+    beat moved (the automation implements the new beat, the old report names
+    the old one), so the next reconcile detects it; a resumed run re-reads the
+    old report as its input and rebuilds. The opposite order would leave a
+    report claiming swaps that never shipped, which nothing detects. When the
+    write-back changed nothing, no report is published at all."""
+    from apply_loops import publish_staged, staged_als, staged_file
+    from validate_mix_plan_als import reconcile
 
-    def restore(self) -> None:
-        try:
-            if self.published:
-                if self._backup is not None:
-                    os.replace(self._backup, self.output_path)
-                    self._backup = None
-                else:
-                    self.output_path.unlink(missing_ok=True)
-            if (self._report_bytes is not None
-                    and self.report_path.read_bytes() != self._report_bytes):
-                from apply_loops import _unique_partial
-                staged = _unique_partial(self.report_path)
-                staged.write_bytes(self._report_bytes)
-                os.replace(staged, self.report_path)
-        except OSError as exc:
-            print(f"  !! rollback after a failed gate was incomplete: {exc}",
-                  file=sys.stderr)
+    with ExitStack() as stack:
+        staged_als_path = stack.enter_context(staged_als(lines, output_path))
+        real_report = Path(report_path) if report_path is not None else None
+        staged_report = None
+        if real_report is not None and real_report.is_file():
+            staged_report = stack.enter_context(
+                staged_file(real_report, real_report.read_bytes()))
+            # write_final_swaps_to_report goes through `<name>.tmp`; that
+            # name belongs to the staged copy, so clean it up with it.
+            stack.callback(_unlink_quiet, Path(str(staged_report) + ".tmp"))
+        changed = (write_final_swaps_to_report(staged_report, plans)
+                   if staged_report is not None else 0)
 
-    def close(self) -> None:
-        if self._backup is not None:
-            try:
-                self._backup.unlink(missing_ok=True)
-            except OSError:
-                pass
+        report_for_reconcile = arrangement_report_path or (
+            output_path.parent / (output_path.stem + "_ARRANGEMENT_REPORT.json")
+        )
+        if not report_for_reconcile.is_file():
+            # Try the newest ARRANGEMENT_REPORT.json beside the output ALS
+            reps = sorted(
+                output_path.parent.glob("*ARRANGEMENT_REPORT.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            report_for_reconcile = reps[0] if reps else report_for_reconcile
+        # The gate reads the staged copy when it is the same report this run
+        # updates (the normal case); otherwise the report it always read.
+        gate_report = (staged_report
+                       if staged_report is not None
+                       and _same_file(report_for_reconcile, real_report)
+                       else report_for_reconcile)
+        print(f"\nReconciling MixPlan against {output_path.name} "
+              f"(plan={mix_plan_path.name}, "
+              f"report={report_for_reconcile.name}) ...")
+        reconcile(mix_plan_path, gate_report, staged_als_path)
+        print(f"  [OK] MixPlan-to-ALS reconciliation passed")
+
+        publish_staged(staged_als_path, output_path)
+        print(f"Done -> {output_path}")
+        if changed:
+            os.replace(staged_report, real_report)
+            print(f"  Wrote {changed} final swap beat(s) back to {real_report.name}")
+
+
+def _unlink_quiet(path: Path) -> None:
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return Path(a) == Path(b)
 
 
 def main() -> None:
@@ -1679,63 +1714,22 @@ def main() -> None:
     lines = _fix_sample_ref_paths(lines, output_path, audio_dir)
 
     # ── write output ──────────────────────────────────────────────────
-    # With a MixPlan the reconcile hard gate runs AFTER the publish and the
-    # report write-back, and it reads both from their real paths. If it
-    # fails, put the output and the report back exactly as they were, so a
-    # failed run leaves no published Sections V<N>.als for a resumed run.
-    rollback = (_PublishRollback(output_path, report_path)
-                if mix_plan_path is not None else None)
-    try:
-        print(f"\nWriting {output_path.name} ...")
+    print(f"\nWriting {output_path.name} ...")
+    if mix_plan_path is None:
+        # No MixPlan: byte-for-byte the behaviour this script always had.
         compress_als(lines, output_path)
-        if rollback is not None:
-            rollback.published = True
         print(f"Done -> {output_path}")
 
-        # ── final-swap write-back (transactional) ─────────────────────────
+        # ── final-swap write-back (transactional) ─────────────────────
         # Only now - the output ALS exists on disk and passed the corruption
         # gate inside compress_als - may the arrangement report be mutated.
         # The report must describe what the automation actually SHIPPED
         # (never a swap the automation stage silently moved, and never an
-        # attempt that failed before writing) - reconcile reads it next.
+        # attempt that failed before writing).
         write_final_swaps_to_report(report_path, plans)
-
-        # ── MixPlan-to-ALS reconciliation (HARD GATE, optional) ───────────
-        # Only fires when Phase 2c produced a MixPlan (mix_plan_path supplied).
-        # reconcile() raises ValueError on any mismatch - we let it propagate so
-        # a stale / wrong plan stops the script (matching the "HARD GATE"
-        # framing in mix.md Phase 3b). The arrangement_report_path arg, if
-        # provided, is the SAME artefact reconcile() needs (its report_path
-        # reads `report["transitions"]` - the same schema _load_arrangement_report
-        # reads). If arrangement_report_path was not provided, fall back to
-        # the report alongside the ALS (same fallback _load_arrangement_report
-        # uses). No-MixPlan runs skip this block entirely - existing callers
-        # without --mix-plan see byte-for-byte identical behaviour.
-        if mix_plan_path is not None:
-            from validate_mix_plan_als import reconcile
-            report_for_reconcile = arrangement_report_path or (
-                output_path.parent / (output_path.stem + "_ARRANGEMENT_REPORT.json")
-            )
-            if not report_for_reconcile.is_file():
-                # Try the newest ARRANGEMENT_REPORT.json beside the output ALS
-                reps = sorted(
-                    output_path.parent.glob("*ARRANGEMENT_REPORT.json"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                )
-                report_for_reconcile = reps[0] if reps else report_for_reconcile
-            print(f"\nReconciling MixPlan against {output_path.name} "
-                  f"(plan={mix_plan_path.name}, "
-                  f"report={report_for_reconcile.name}) ...")
-            reconcile(mix_plan_path, report_for_reconcile, output_path)
-            print(f"  [OK] MixPlan-to-ALS reconciliation passed")
-    except BaseException:
-        if rollback is not None:
-            rollback.restore()
-        raise
-    finally:
-        if rollback is not None:
-            rollback.close()
+    else:
+        _publish_with_reconcile(lines, output_path, report_path, plans,
+                                arrangement_report_path, mix_plan_path)
 
 
 if __name__ == "__main__":

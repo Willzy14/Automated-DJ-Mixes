@@ -63,12 +63,24 @@ def decompress_als(als_path: Path) -> list[str]:
     return content.splitlines(keepends=True)
 
 
-def _unique_partial(output_path: Path) -> Path:
-    """A staging name no other call can share: `<name>.<8 hex>.partial`. Two
-    writers aimed at the same output each get their own file, so one can never
-    validate its bytes and have the other's renamed onto the output. The
-    `.partial` suffix stays last, so cleanup and Dropbox ignore patterns match."""
-    return output_path.with_name(f"{output_path.name}.{secrets.token_hex(4)}.partial")
+_STAGE_TRIES = 8
+
+
+def _create_partial(final: Path):
+    """Create `<name>.<16 hex>.partial` beside `final` exclusively (mode "xb")
+    and return (path, open binary file). An existing name is never reused:
+    retry with a new token a bounded number of times, then raise. The
+    `.partial` suffix stays last so cleanup and Dropbox ignore patterns match."""
+    final = Path(final)
+    for _ in range(_STAGE_TRIES):
+        partial = final.with_name(f"{final.name}.{secrets.token_hex(8)}.partial")
+        try:
+            return partial, open(partial, "xb")
+        except FileExistsError:
+            continue
+    raise ValueError(
+        f"could not create a unique staging file beside {final.name} "
+        f"after {_STAGE_TRIES} tries")
 
 
 def _discard_partial(partial: Path) -> None:
@@ -102,12 +114,12 @@ def compress_als(lines: list[str], output_path: Path,
     output_path = Path(output_path)
     content = "".join(lines)
     raw_bytes = content.encode("utf-8")
-    partial = _unique_partial(output_path)
+    partial, raw = _create_partial(output_path)
     try:
         # The gzip header records the file name; give it the FINAL name, not
         # "<name>.partial", so a valid write is byte-identical to the old
         # direct write.
-        with open(partial, "wb") as raw:
+        with raw:
             with gzip.GzipFile(filename=output_path.name, mode="wb",
                                fileobj=raw) as f:
                 f.write(raw_bytes)

@@ -764,7 +764,12 @@ def test_apply_automation_calls_reconcile_when_mix_plan_provided(
     received = []
 
     def spy_reconcile(plan_path, report_path, als_path):
-        received.append((plan_path, report_path, als_path))
+        # What the gate sees, captured while it runs: the staged pair, with
+        # the final paths still untouched.
+        received.append((plan_path, report_path, als_path,
+                         Path(report_path).read_bytes(),
+                         Path(als_path).is_file(),
+                         als_out.exists()))
         return {"status": "PASS", "checks": [], "errors": []}
 
     monkeypatch.setattr(validate_mix_plan_als, "reconcile", spy_reconcile)
@@ -794,10 +799,20 @@ def test_apply_automation_calls_reconcile_when_mix_plan_provided(
     assert len(received) == 1, (
         f"reconcile() should be called exactly once, got {len(received)}"
     )
-    plan_arg, report_arg, als_arg = received[0]
+    plan_arg, report_arg, als_arg, report_bytes, staged_als_ok, out_existed = received[0]
     assert Path(plan_arg) == mix_plan
-    assert Path(report_arg) == arrangement_report
-    assert Path(als_arg) == als_out
+    # reconcile reads STAGED copies beside the real files, never the finals
+    assert Path(report_arg) != arrangement_report
+    assert Path(report_arg).parent == arrangement_report.parent
+    assert Path(report_arg).name.endswith(".partial")
+    assert report_bytes == arrangement_report.read_bytes()
+    assert Path(als_arg) != als_out and Path(als_arg).name.endswith(".partial")
+    assert Path(als_arg).parent == als_out.parent
+    assert staged_als_ok and not out_existed, (
+        "the final ALS must not exist until reconcile has passed")
+    # a pass publishes the ALS and leaves no staged file behind
+    assert als_out.is_file()
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith((".partial", ".tmp"))]
 
 
 def test_apply_automation_propagates_reconcile_failure_as_hard_gate(
