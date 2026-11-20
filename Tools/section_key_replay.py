@@ -8,8 +8,8 @@ Usage:
 Reads `<project>/_Stem Analysis/*__stemenv.npz` and `*__drumsstem.npz`; the kick
 model (Kick Detector V3) runs on the cached drums stem. The kick model's
 activation is memoised per track in `<out>/_kick_activation/` so re-runs at a
-different grid cost nothing. bpm comes from the cached SECTIONS_STEM json, the
-downbeat from --downbeat (default 0.0, the CLI convention). Nothing is written
+different grid cost nothing. bpm and the starting downbeat come from the cached
+SECTIONS_STEM json (the grid that analysis used), unless --downbeat forces one. Nothing is written
 into the project folder: detect() runs with write_json=False and the result
 is written to --out. A missing drums cache is an error, never a re-separation.
 """
@@ -91,7 +91,7 @@ def _default_kick_model():
     return HUB_KICK_MODEL
 
 
-def run(project: Path, audio_dirs, out: Path, matches=None, downbeat=0.0, kick_model_path=None):
+def run(project: Path, audio_dirs, out: Path, matches=None, downbeat=None, kick_model_path=None):
     cache_dir = project / "_Stem Analysis"
     provider = CachedDrumsProvider(cache_dir, out / "_kick_activation",
                                    model_path=kick_model_path or _default_kick_model())
@@ -107,8 +107,13 @@ def run(project: Path, audio_dirs, out: Path, matches=None, downbeat=0.0, kick_m
         if not (cache_dir / f"{wav.stem}__stemenv.npz").exists() or not cached.exists():
             continue
         seen.add(wav.stem)
-        bpm = json.loads(cached.read_text(encoding="utf-8"))["bpm"]
-        res = sd.detect(wav, project, bpm=bpm, downbeat=downbeat, make_viz=False,
+        prior = json.loads(cached.read_text(encoding="utf-8"))
+        bpm = prior["bpm"]
+        db = downbeat
+        if db is None:   # the downbeat the cached analysis used (its bar 0 in seconds)
+            first = prior["sections"][0]
+            db = float(first["start_sec"]) - float(first["start_bar"]) * 240.0 / float(bpm)
+        res = sd.detect(wav, project, bpm=bpm, downbeat=db, make_viz=False,
                         write_json=False, kick_provider=provider)
         if res is None:
             continue
@@ -123,7 +128,8 @@ def main(argv=None) -> int:
     ap.add_argument("--audio", type=Path, action="append", required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--match", action="append", default=None)
-    ap.add_argument("--downbeat", type=float, default=0.0)
+    ap.add_argument("--downbeat", type=float, default=None,
+                    help="force one downbeat for every track (default: each cached analysis's own)")
     ap.add_argument("--kick-model-path", type=Path, default=None)
     args = ap.parse_args(argv)
     done = run(args.project, args.audio, args.out, args.match, args.downbeat, args.kick_model_path)

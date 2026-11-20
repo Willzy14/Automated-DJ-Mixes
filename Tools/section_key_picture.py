@@ -1,5 +1,11 @@
 """Draw one section answer-key picture: two tracks at their mix position, proposed section
-lines numbered so Sam can tick or correct each one. Usage: python draw_pair.py pair1.json out.png"""
+lines numbered so Sam can tick or correct each one.
+
+Usage:
+    python Tools/section_key_picture.py pair1.json out.png
+    python Tools/section_key_picture.py --track SECTIONS_STEM_<track>.json --stem-dir <_Stem Analysis> out.png
+The --track form draws ONE track straight from a detector result (its sections and
+fill_sections): the whole track, plus zooms on the first and last 48 bars (the mix zones)."""
 import glob, json, os, sys
 import numpy as np
 import matplotlib
@@ -7,8 +13,36 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 COL = {"INTRO": "#9ec5f8", "DROP": "#f7b59a", "BREAK": "#cdb4ec", "BUILD": "#fff3b0", "OUTRO": "#a9dfbf"}
-cfg = json.load(open(sys.argv[1], encoding="utf-8"))
-out = sys.argv[2]
+LEGEND = list(COL.items()) + [("FILL", "#ff9800"), ("VOCAL (purple trace)", "#8e24aa"),
+                               ("TRACK LEVEL (grey)", "#444444"), ("SECTION LINE (red)", "#c62828")]
+
+
+def track_from_result(path, stem_dir, key="A"):
+    """A picture track dict built from a detector SECTIONS_STEM json."""
+    res = json.load(open(path, encoding="utf-8"))
+    bpm = float(res["bpm"])
+    spb = 240.0 / bpm
+    downbeat = float(res.get("analysis", {}).get("downbeat_sec", res["sections"][0]["start_sec"]))
+    fills = res["signals"].get("fill_sections")
+    if fills is None:
+        fills = [{"start_bar": (a - downbeat) / spb, "end_bar": (b - downbeat) / spb}
+                 for a, b in res["signals"].get("fills", [])]
+    return {"key": key, "match": res["track"], "name": f"{key}: {res['track']}", "bpm": bpm,
+            "n_bars": int(res["n_bars"]), "lead_in_bars": downbeat / spb,
+            "sections": [[s["start_bar"], s["label"].upper()] for s in res["sections"]],
+            "fills": [[f["start_bar"], f["end_bar"]] for f in fills]}
+
+
+SINGLE = len(sys.argv) > 1 and sys.argv[1] == "--track"
+if SINGLE:
+    _a = sys.argv[1:]
+    _res, _dir, out = _a[_a.index("--track") + 1], _a[_a.index("--stem-dir") + 1], _a[-1]
+    _t = track_from_result(_res, _dir)
+    cfg = {"stem_dir": _dir, "tracks": [_t], "b_starts_at_a_bar": 0,
+           "title": "HOLDOUT (not tuned on): " + _t["match"]}
+else:
+    cfg = json.load(open(sys.argv[1], encoding="utf-8"))
+    out = sys.argv[2]
 
 
 def load(t):
@@ -37,7 +71,7 @@ def lane(ax, t, off, y0, big):
         fx = (fs + fe) / 2 + off
         if ax.get_xlim()[0] <= fx <= ax.get_xlim()[1]:
             sec = (fs + t.get("lead_in_bars", 0)) * bar
-            ax.text(fx, y0 + 0.37 if big == 1 else y0 - 0.075, f"F{j}" if big == 1 else f"FILL {t['key']}-F{j}\nbar {fs + 1:g}, {int(sec // 60)}:{int(sec % 60):02d}", ha="center", va="bottom" if big == 1 else "top",
+            ax.text(fx, y0 + 0.37 if big == 1 else y0 - 0.075, f"F{j}" + chr(10) + f"{int(sec // 60)}:{int(sec % 60):02d}" if big == 1 else f"FILL {t['key']}-F{j}\nbar {fs + 1:g}, {int(sec // 60)}:{int(sec % 60):02d}", ha="center", va="bottom" if big == 1 else "top",
                     fontsize=8 if big == 1 else 10.5, weight="bold", color="#b34700", linespacing=0.95)
     end = t["n_bars"] + off
     if ax.get_xlim()[0] <= end <= ax.get_xlim()[1]:
@@ -84,17 +118,39 @@ def panel(ax, lo, hi, big, title):
     ax.text(lo, 1.30, title, fontsize=14, weight="bold", va="top")
 
 
+def single_panel(ax, lo, hi, big, title):
+    ax.set_xlim(lo, hi); ax.set_ylim(-0.17, 0.75); ax.axis("off")
+    step = 8
+    for g in range(int(lo // step) * step, int(hi) + 1, step):
+        if g >= lo:
+            ax.plot([g, g], [-0.04, 0.6], color="#999", lw=0.9 if g % 16 else 1.4, alpha=0.55, zorder=0)
+    lane(ax, cfg["tracks"][0], 0, 0.05, big)
+    ax.text(lo, 0.75, title, fontsize=14, weight="bold", va="top")
+
+
 fig = plt.figure(figsize=(24, 13), dpi=100)
-total = cfg["b_starts_at_a_bar"] + cfg["tracks"][1]["n_bars"]
-ax1 = fig.add_axes([0.03, 0.50, 0.96, 0.43])
-panel(ax1, -8, total + 2, 1, "WHOLE OF BOTH TRACKS, placed as in the mix.  A = " + cfg["tracks"][0]["name"][3:] + "   B = " + cfg["tracks"][1]["name"][3:] + "   (grey lines every 8 bars, purple = vocal)")
-ax2 = fig.add_axes([0.03, 0.04, 0.96, 0.43])
-panel(ax2, cfg["zoom"][0], cfg["zoom"][1], 3, "ZOOM ON THE BLEND")
+if SINGLE:
+    t0 = cfg["tracks"][0]
+    nb = t0["n_bars"]
+    ax1 = fig.add_axes([0.03, 0.50, 0.96, 0.43])
+    single_panel(ax1, -8, nb + 4, 1, "WHOLE TRACK   (grey lines every 8 bars)")
+    ax2 = fig.add_axes([0.03, 0.05, 0.47, 0.42])
+    single_panel(ax2, -2, min(nb, 48), 2, "ZOOM: FIRST 48 BARS (mix-in zone)")
+    ax3 = fig.add_axes([0.52, 0.05, 0.47, 0.42])
+    single_panel(ax3, max(0, nb - 48), nb + 3, 2, "ZOOM: LAST 48 BARS (mix-out zone)")
+else:
+    total = cfg["b_starts_at_a_bar"] + cfg["tracks"][1]["n_bars"]
+    ax1 = fig.add_axes([0.03, 0.50, 0.96, 0.43])
+    panel(ax1, -8, total + 2, 1, "WHOLE OF BOTH TRACKS, placed as in the mix.  A = " + cfg["tracks"][0]["name"][3:] + "   B = " + cfg["tracks"][1]["name"][3:] + "   (grey lines every 8 bars, purple = vocal)")
+    ax2 = fig.add_axes([0.03, 0.04, 0.96, 0.43])
+    panel(ax2, cfg["zoom"][0], cfg["zoom"][1], 3, "ZOOM ON THE BLEND")
 fig.text(0.012, 0.965, cfg["title"], fontsize=20, weight="bold")
-fig.text(0.988, 0.968, "Each red numbered line is where I say a section starts. Tick it, or tell me the right bar.   "
+fig.text(0.988, 0.938 if SINGLE else 0.968,
+         "Each red numbered line is where I say a section starts. Tick it, or tell me the right bar.   "
          "Bar numbers count from 1 at the track's first beat, as Ableton does.", fontsize=11.5, ha="right")
-for i, (k, c) in enumerate(list(COL.items()) + [("FILL", "#ff9800")]):
-    fig.patches.append(plt.Rectangle((0.012 + i * 0.07, 0.008), 0.014, 0.018, color=c, transform=fig.transFigure))
-    fig.text(0.030 + i * 0.07, 0.017, k, fontsize=11, va="center")
+legend = LEGEND + ([] if SINGLE else [("BASS SWITCH (blue dashed)", "#1565c0")])
+for i, (k, c) in enumerate(legend):
+    fig.patches.append(plt.Rectangle((0.012 + i * 0.095, 0.008), 0.012, 0.016, color=c, transform=fig.transFigure))
+    fig.text(0.027 + i * 0.095, 0.016, k, fontsize=10.5, va="center")
 fig.savefig(out, facecolor="white")
 print("wrote", out)

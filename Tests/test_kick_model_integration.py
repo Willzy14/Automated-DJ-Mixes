@@ -103,7 +103,11 @@ def test_flag_on_fake_provider_overrides_only_kick_presence(monkeypatch, tmp_pat
     assert res["signals"]["kick_presence_source"] == "kick-detector-v3"
     assert res["signals"]["musical_landmarks"][0]["start_beat"] == 16
     assert res["signals"]["musical_landmarks"][0]["end_beat"] == 24
-    assert res["signals"]["fills"] == []
+    # CHANGED 2026-11-20 (answer key): fills are first-class and follow the
+    # kick the sections use, so the 2-bar model kick-out (beats 16-24 = 8-12 s
+    # at 120 BPM) is a fill. Before, fills were energy-only and this was [].
+    assert res["signals"]["fills"] == [[8.0, 12.0]]
+    assert [(f["start_bar"], f["end_bar"]) for f in res["signals"]["fill_sections"]] == [(4.0, 6.0)]
     assert "kick_model_adapter" not in sys.modules
 
 

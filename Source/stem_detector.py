@@ -137,7 +137,30 @@ MAX_OUTRO_BARS = 48       # a 'last fill' leaving a longer tail than this isn't 
 OUTRO_CAP_BARS = 32       # Sam's rule (24.06.26): an outro is never more than 32 bars (one phrase) — cap it there
 MIN_LOOP_BARS = 4
 MIN_VOCAL_BARS = 2
-SILENT_BEAT_FRAC = 0.15   # leading beats quieter than this fraction of the median beat peak are
+# --- Groove structure (owner's answer key, 2026-11-20) --------------------------
+# Section lines follow the rhythm section: where the FULL kick leaves or returns
+# and where the bass comes or goes under a full kick. Fills are first-class.
+KICK_FULL_FRAC = 0.75     # a heard kick is FULL at >= this fraction of the solid kick level.
+                          # Measured on the key: full-groove beats 0.78-1.2; the light kicks of
+                          # fills (Eli Brown), soft intros (Passion, PAX) and breaks (Call 911,
+                          # Ashibah) 0.2-0.73. The kick model alone hears those light kicks as IN.
+KICK_FULL_BAR_BEATS = 3   # a bar is full-kick with 3 of its 4 beats full: one dropped beat is a
+                          # syncopation or a one-beat fill, not a change of state
+BASS_ON_FRAC = 0.10       # bass present vs gone, per bar against the bass stem's solid level. A truly
+                          # absent bass leaks 0-5% through Demucs; a thinned bass (Ninetoes 144-160,
+                          # 14-30%) is still bass and must not cut a line
+BASS_IN_KICK_FRAC = 0.10  # bass stem below this through the full-kick bars = the bass lives in the
+                          # kick/sub (PAX Revelry): read the low band instead
+LOW_ON_FRAC = 0.60        # low band present at >= this fraction of its solid level (kick+sub in a
+                          # bass-in-kick track; its fills and breaks fall to 0.1-0.4)
+SHORT_FILL_BARS = 2       # Sam: fills are one or two bar dropouts. Up to this, a kick-down run is a
+                          # fill even with the bass gone; longer with the bass gone is a break
+FULL_STOP_FILL_BARS = 2   # a fill this long with no kick heard and no bass is a full stop of the
+                          # rhythm section and resets the phrase (Back In The Dance 54-56, 102-104,
+                          # 174-176); Eli Brown's light-kick fills and fills over a held bass are not
+FILL_LEAD_BARS = 2        # a kick drop at most this many bars before a phrase point is the fill INTO
+                          # that phrase; the section starts at the phrase point (Eli Brown 30-32)
+SILENT_BEAT_FRAC = 0.15  # leading beats quieter than this fraction of the median beat peak are
                           # silence, not bar one. Measured: Call 911's two silent beats sit at
                           # <= 0.09; the quietest real intros in the 2026-11-20 key (Passion,
                           # Eli Brown, PAX hats) sit at >= 0.25, so 0.15 has margin both ways.
@@ -184,28 +207,43 @@ KICKLESS_FRAC = 0.47           # bar fraction with kick ON below this = "kick-le
                                # current branch (0.5 heads stay kick-IN -> R4).
 
 
-def _skip_leading_silence(mix_env, hop_t, bpm, downbeat):
+def _skip_leading_silence(mix_env, hop_t, bpm, downbeat, drums_env=None):
     """Move the downbeat forward by whole beats past leading silence.
 
     A beat is silent when its mix peak is below SILENT_BEAT_FRAC of the
-    track's median beat peak. Stops at the first beat that sounds, and never
-    moves more than half the track. Returns the (possibly unchanged) downbeat.
+    track's median beat peak. The first beat that sounds becomes bar one only
+    if it is a real downbeat: the drums hit there at least half their median
+    beat peak (Call 911 opens on its kick). Silence followed by something
+    else (a pad, a bass) leaves the grid alone. Never moves more than half the
+    track. Returns the (possibly unchanged) downbeat.
     """
     env = np.asarray(mix_env, dtype=float)
     beat_sec = 60.0 / float(bpm)
     n_beats = int((len(env) * hop_t - downbeat) / beat_sec)
     if n_beats < 8:
         return downbeat
-    peaks = np.zeros(n_beats)
-    for k in range(n_beats):
-        i0 = int((downbeat + k * beat_sec) / hop_t)
-        i1 = min(int((downbeat + (k + 1) * beat_sec) / hop_t), len(env))
-        peaks[k] = env[i0:i1].max() if i1 > i0 else 0.0
+
+    def beat_peaks(e):
+        e = np.asarray(e, dtype=float)
+        out = np.zeros(n_beats)
+        for k in range(n_beats):
+            i0 = int((downbeat + k * beat_sec) / hop_t)
+            i1 = min(int((downbeat + (k + 1) * beat_sec) / hop_t), len(e))
+            out[k] = e[i0:i1].max() if i1 > i0 else 0.0
+        return out
+
+    peaks = beat_peaks(env)
     ref = float(np.median(peaks)) + 1e-12
     k = 0
     while k < n_beats // 2 and peaks[k] < SILENT_BEAT_FRAC * ref:
         k += 1
-    return downbeat + k * beat_sec if k < n_beats // 2 else downbeat
+    if k == 0 or k >= n_beats // 2:
+        return downbeat
+    if drums_env is not None:
+        dp = beat_peaks(drums_env)
+        if dp[k] < 0.5 * (float(np.median(dp)) + 1e-12):
+            return downbeat
+    return downbeat + k * beat_sec
 
 
 def _per_bar(env, hop_t, downbeat, sec_per_bar, n_bars):
@@ -595,6 +633,266 @@ def _find_outro_start(pb, n_bars):
     if i >= n_bars or i <= n_bars * 0.5:    # nothing, or too long to be an outro
         return None
     return int(round(i / PHRASE_GRID) * PHRASE_GRID)
+
+
+def _cached_low_band(wav, cache_dir):
+    """The cached low-band envelope (tiera_band_low) if the stem cache has it, else None.
+    Read-only: never computes, never writes."""
+    cache = Path(cache_dir) / f"{Path(wav).stem}__stemenv.npz"
+    try:
+        with np.load(cache, allow_pickle=False) as d:
+            return np.asarray(d[_TIERA_BAND_LOW_KEY]) if _TIERA_BAND_LOW_KEY in d.files else None
+    except (OSError, ValueError):
+        return None
+
+
+def _full_kick_beats(kick_on, peaks, ref):
+    """Per-beat FULL kick: a kick is heard (model or energy path) AND its drum
+    peak reaches KICK_FULL_FRAC of the solid kick level. A light kick under a
+    fill, a soft intro kick or a break kick is not a full kick."""
+    strength = np.asarray(peaks, float) / (float(ref) + 1e-9)
+    return np.asarray(kick_on, bool) & (strength >= KICK_FULL_FRAC)
+
+
+def _bass_state_per_bar(bass_bar, low_bar, full_bar):
+    """Per-bar 'low end present' state.
+
+    Normally the Demucs bass stem: present when the bar is at least
+    BASS_ON_FRAC of the stem's solid level. When the bass stem is close to
+    silent through the full-kick bars, the bass lives in the kick or sub (PAX
+    Revelry), so the low band is read instead (LOW_ON_FRAC of its solid level).
+    Returns (bass_on[bar], source) with source 'bass_stem' or 'low_band'.
+    """
+    bass_bar = np.asarray(bass_bar, float)
+    solid = _solid_kick_level(bass_bar)
+    full = np.asarray(full_bar, bool)
+    in_kick = (low_bar is not None and full.any()
+               and float(np.median(bass_bar[full])) < BASS_IN_KICK_FRAC * solid)
+    if in_kick:
+        low_bar = np.asarray(low_bar, float)
+        on = low_bar >= LOW_ON_FRAC * _solid_kick_level(low_bar)
+        return _median_bool(on, SMOOTH_BARS), "low_band"
+    return _median_bool(bass_bar >= BASS_ON_FRAC * solid, SMOOTH_BARS), "bass_stem"
+
+
+def _refine_fill_beats(full_beat, s_bar, e_bar):
+    """Beat-precise edges for a bar-level kick-down run [s_bar, e_bar)."""
+    n = len(full_beat)
+    k = 4 * s_bar
+    while k - 1 >= max(0, 4 * s_bar - 3) and not full_beat[k - 1]:
+        k -= 1
+    while k < min(n, 4 * e_bar) and full_beat[k]:
+        k += 1
+    j = min(n, 4 * e_bar)
+    while j - 1 > k and full_beat[j - 1]:
+        j -= 1
+    while j < min(n, 4 * e_bar + 3) and not full_beat[j]:
+        j += 1
+    return k, j
+
+
+def _groove_structure(full_beat, bass_on, n_bars, heard_kick=None, bass_raw_on=None):
+    """Section lines and fills from the rhythm section (kick + bass).
+
+    Rules (answer key 2026-11-20, see the constants for each number):
+      * A kick-down run is a FILL when it is short: up to SHORT_FILL_BARS
+        always, up to FILL_MAX_BARS while the bass holds through it. A fill
+        never makes a section line by itself.
+      * A longer kick-down run is a BREAK (a 4 bar break with the bass gone is
+        a break, not a fill). Lines at its start and where the full kick
+        returns. The start line goes to the next phrase point (4 bar steps from
+        the previous line) when that is at most FILL_LEAD_BARS ahead: the bars
+        before it are the fill into the break.
+      * A kick-down head (from bar 0) is part of the intro; the line is where
+        the full kick arrives. A kick-down tail of at least MIN_SECTION_BARS
+        gets a line where the kick stops.
+      * Under a full kick, a lasting bass change is a line. If a fill sits on
+        it, the line goes at the END of the fill (the section starts after it).
+      * A fill of FULL_STOP_FILL_BARS or more where no kick is heard at all and
+        the bass is gone is a full stop: line at its end (a light-kick fill, or
+        a fill over a held bass, is ornament and cuts nothing).
+      * The full-kick return is the line, wherever it lands: no grid snapping
+        (pickups and bar extensions move it, Ashibah 74).
+    Returns dict(lines=[bar], fills=[(s_bar, e_bar)], breaks=[(s, e)],
+    head_end=bar|None, tail_start=bar|None).
+    """
+    full_beat = np.asarray(full_beat, bool)
+    n_beats = n_bars * 4
+    fb = np.zeros(n_beats, bool)
+    fb[:min(n_beats, len(full_beat))] = full_beat[:n_beats]
+    full_bar = np.array([fb[b * 4:(b + 1) * 4].sum() >= KICK_FULL_BAR_BEATS for b in range(n_bars)])
+    bass_on = np.asarray(bass_on, bool)[:n_bars]
+
+    lines, fills, breaks, lead_fills = set(), [], [], set()
+    head_end = tail_start = None
+    for s, e in _regions(~full_bar):
+        if s == 0:
+            head_end = e if e < n_bars else None
+            if head_end is not None:
+                lines.add(e)
+            continue
+        if e >= n_bars:
+            if e - s >= MIN_SECTION_BARS:
+                tail_start = s
+                lines.add(s)
+            else:
+                fills.append((s, e))
+            continue
+        length = e - s
+        holds = bool(bass_on[s:e].all())
+        if length > FILL_MAX_BARS or (length > SHORT_FILL_BARS and not holds):
+            breaks.append((s, e))
+        else:
+            fills.append((s, e))
+
+    # Break lines, in order, with the phrase point measured from the previous line.
+    last_line = 0
+    events = sorted([(s, "break", (s, e)) for s, e in breaks])
+    for _, _, (s, e) in events:
+        prior = [b for b in lines if b <= s]
+        if prior:
+            last_line = max(last_line, max(prior))
+        step = PHRASE_GRID
+        g = last_line + step * int(math.ceil((s - last_line) / step))
+        if 0 < g - s <= FILL_LEAD_BARS and g < e:
+            fills.append((s, g))
+            lead_fills.add((s, g))
+            lines.add(g)
+        else:
+            lines.add(s)
+        lines.add(e)
+        last_line = e
+
+    # Bass changes under a full kick: a LASTING change (the old state held for
+    # MIN_SECTION_BARS before, the new one holds for MIN_SECTION_BARS after).
+    # A fill sitting on the change is skipped over and the line goes at its end.
+    in_break = np.zeros(n_bars, bool)
+    for s, e in breaks:
+        in_break[s:e] = True
+    if head_end is not None:
+        in_break[:head_end] = True
+    W = MIN_SECTION_BARS
+    for b in range(1, n_bars):
+        if bass_on[b] == bass_on[b - 1] or in_break[b] or in_break[b - 1]:
+            continue
+        s_pre, line = b, b
+        for s, e in fills:
+            if s - 1 <= b <= e + 1:
+                s_pre, line = s, e
+        before = bass_on[max(0, s_pre - W):s_pre]
+        after = bass_on[line:line + W]
+        if len(before) < 1 or len(after) < W:
+            continue
+        old, new = bool(before[-1]), bool(after[0])
+        if old != new and (before == old).all() and (after == new).all():
+            lines.add(line)
+
+    # A fill where the whole rhythm section stops (no kick heard, no bass) for
+    # FULL_STOP_FILL_BARS or more resets the phrase: line at its end.
+    if heard_kick is not None and bass_raw_on is not None:
+        hk = np.zeros(n_beats, bool)
+        hk[:min(n_beats, len(heard_kick))] = np.asarray(heard_kick, bool)[:n_beats]
+        for s, e in fills:
+            if e - s < FULL_STOP_FILL_BARS or e >= n_bars or in_break[s]:
+                continue
+            if hk[4 * s:4 * e].mean() <= 0.25 and not np.asarray(bass_raw_on[s:e]).any():
+                lines.add(e)
+
+    # Keep the first of two lines closer than two bars.
+    kept = []
+    for b in sorted(lines):
+        if 0 < b < n_bars and (not kept or b - kept[-1] >= 2):
+            kept.append(b)
+    fills = sorted(set((int(s), int(e)) for s, e in fills))
+    return {"lines": kept, "fills": fills, "breaks": breaks, "lead_fills": lead_fills,
+            "head_end": head_end, "tail_start": tail_start, "full_bar": full_bar}
+
+
+def _groove_outro_start(bass_on, fills, n_bars, low_out_in_fill):
+    """Outro start: where the bass leaves for good (at the END of a fill that
+    sits on that point), else the end of the last fill in the final
+    OUTRO_CAP_BARS during which the low end also drops out. None if neither."""
+    bass_on = np.asarray(bass_on, bool)
+    on_idx = np.where(bass_on)[0]
+    if not len(on_idx):
+        return None
+    b = int(on_idx[-1]) + 1
+    if n_bars - b >= MIN_SECTION_BARS:      # a 1-3 bar tail is the file ending, not an outro
+        for s, e in fills:
+            if s - 1 <= b <= e + 1 and e < n_bars:
+                b = e
+        return b
+    cands = [e for (s, e), out in zip(fills, low_out_in_fill)
+             if out and n_bars - e >= MIN_SECTION_BARS and n_bars - e <= OUTRO_CAP_BARS]
+    return max(cands) if cands else None
+
+
+def _label_groove_sections(sections, groove, bass_on, outro_start, soft_intro_outro=True,
+                           mix_norm=None):
+    """Label sections cut by _groove_structure.
+
+    outro: from outro_start on, and a kick-down tail after the last drop.
+    intro: the kick-down head, and full-kick bars without bass before the
+    first drop. break: inside a break run. drop: full kick with bass. A
+    full-kick, bass-less stretch between drops is a build if a drop follows,
+    else part of the drop. Every track starts with an intro.
+    """
+    full_bar = groove["full_bar"]
+    head_end = groove["head_end"] or 0
+    in_break = np.zeros(len(full_bar), bool)
+    for s, e in groove["breaks"]:
+        in_break[s:e] = True
+    raw = []
+    for sec in sections:
+        s0, s1 = sec["start_bar"], sec["end_bar"]
+        if outro_start is not None and s0 >= outro_start:
+            raw.append("outro")
+        elif s1 <= head_end:
+            raw.append("intro")
+        elif in_break[s0:s1].mean() > 0.5:
+            raw.append("break")
+        elif groove["tail_start"] is not None and s0 >= groove["tail_start"]:
+            raw.append("tail")
+        elif np.asarray(bass_on[s0:s1], float).mean() >= 0.5:
+            raw.append("drop")
+        else:
+            raw.append("nobass")
+    first_drop = next((i for i, lab in enumerate(raw) if lab == "drop"), None)
+    last_drop = max((i for i, lab in enumerate(raw) if lab == "drop"), default=None)
+    for i, lab in enumerate(raw):
+        if lab == "nobass":
+            if first_drop is None or i < first_drop:
+                lab = "intro"
+            elif last_drop is not None and i > last_drop:
+                lab = "outro"
+            else:
+                lab = "build" if i + 1 < len(raw) and raw[i + 1] == "drop" else "drop"
+                # (you build INTO a drop; a bass-less stretch leading anywhere else is drop material)
+        elif lab == "tail":
+            lab = "outro" if last_drop is None or i > last_drop else "break"
+        sections[i]["label"] = lab
+    if sections:
+        sections[0]["label"] = "intro"
+    # R4 (Sam's soft rule, kept from _assign_labels): when the track opens with
+    # a kick, the FIRST break before the first drop is still intro ("the first
+    # fill/break point with everything before it being intro"). Only that one
+    # break, and only when everything before it is intro. The line before it
+    # stays: it is a real kick drop-out. (R2, a kick-less head extending the
+    # intro, is built in: a kick-down head is one intro section by construction.)
+    # As in _assign_labels, R4 needs a head quieter than the drops (DROP_REL):
+    # a head already at drop energy followed by a long kick-less stretch is a
+    # body break (25625f8, the James Poole anomaly).
+    def energy(sec):
+        return float(np.mean(mix_norm[sec["start_bar"]:sec["end_bar"]])) if sec["end_bar"] > sec["start_bar"] else 0.0
+    head_quiet = (mix_norm is not None and len(sections) > 2
+                  and energy(sections[0]) < DROP_REL * max(energy(x) for x in sections))
+    if soft_intro_outro and head_quiet and groove["head_end"] is None:
+        first_drop = next((i for i in range(1, len(sections)) if sections[i]["label"] == "drop"), None)
+        for i in range(1, first_drop or 0):
+            if sections[i]["label"] == "break":
+                if all(sections[j]["label"] == "intro" for j in range(i)):
+                    sections[i]["label"] = "intro"
+                break
 
 
 def _assign_labels(sections, kick_on_bar, bass_pres, mix_norm, outro_start,
@@ -1055,7 +1353,7 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     # 2026-11-20: Call 911 opens with two silent beats, which put every line
     # half a bar late). Whole beats only, so the grid's phase is kept.
     downbeat_given = float(downbeat)
-    downbeat = _skip_leading_silence(envs["mix"], hop_t, bpm, downbeat)
+    downbeat = _skip_leading_silence(envs["mix"], hop_t, bpm, downbeat, envs.get("drums"))
     n_bars = max(1, int((dur_real - downbeat) / sec_per_bar))
 
     pb = {s: _per_bar(envs[s], hop_t, downbeat, sec_per_bar, n_bars) for s in STEMS}
@@ -1101,10 +1399,6 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
                   "kick presence and NOT recording kick_model true")
     kick_on_bar = np.array([kick_on[b * 4:(b + 1) * 4].mean() >= 0.5 for b in range(n_bars)])
     kick_cues = _kick_cues(kick_on, bpm, downbeat)
-
-    # Fills = brief raw-kick dips inside the grooves (1-beat phrase-end fills included —
-    # see _phrase_fills). Sam: kick dropouts mark changes and are good points to mix.
-    fills = _phrase_fills(kick_peaks, kick_ref, bpm, downbeat, n_bars)
 
     # Outro start: the lead (vocals+other) drop near the end. But Sam's rule of
     # thumb — the END OF THE LAST FILL is the outro start — wins when that fill is a
@@ -1170,20 +1464,57 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     # snapped to 152 lands the section boundary and the merge guard at the
     # same bar). Other cue types ("bar"/"beat"/raw int) keep int(round(...))
     # for back-compat - _width_step_cues is the only emitter of a float bar.
-    raw_bounds = [int(round(c["bar"])) for c in kick_cues + energy_cues] + [
-        int(c["bar"]) for c in wcues
-    ]
-    for b in range(1, n_bars):
-        if presence["bass"][b] != presence["bass"][b - 1]:
-            raw_bounds.append(b)
-    bounds = _snap_merge(sorted({b for b in raw_bounds if 0 < b < n_bars}), n_bars)
-    if outro_start is not None and 0 < outro_start < n_bars:
-        # Protected, UNSNAPPED final boundary AT the bass-finish point — Sam wants the
-        # outro exactly where the bass ends, and the file rarely ends on a phrase line,
-        # so don't let _snap_merge round it onto the body or MIN_SECTION_BARS-merge the
-        # (often short) tail away — which then let the hard rule relabel the final DROP
-        # as outro (Delacour/Discosteps).
-        bounds = [b for b in bounds if b < outro_start] + [outro_start, n_bars]
+    # Groove structure (answer key 2026-11-20): lines where the FULL kick leaves
+    # or returns and where the bass changes under a full kick; fills are their
+    # own output and never cut a section; no 4-bar snapping (pickups move lines).
+    full_beat = _full_kick_beats(kick_on, kick_peaks, kick_ref)
+    full_bar = np.array([full_beat[b * 4:(b + 1) * 4].sum() >= KICK_FULL_BAR_BEATS
+                         for b in range(n_bars)])
+    low_bar = None
+    low_env = _cached_low_band(wav, project / "_Stem Analysis")
+    if low_env is None and (width_cues or tier_a):     # those flags already compute-and-cache it
+        low_env = ensure_tier_a_arrays(wav, project / "_Stem Analysis")[_TIERA_BAND_LOW_KEY]
+    if low_env is not None:
+        low_bar = _per_bar(low_env, hop_t, downbeat, sec_per_bar, n_bars)
+    bass_state, bass_source = _bass_state_per_bar(pb["bass"], low_bar, full_bar)
+    bass_solid = _solid_kick_level(pb["bass"])
+    bass_raw_on = (pb["bass"] >= BASS_ON_FRAC * bass_solid) if bass_source == "bass_stem" else (
+        low_bar >= LOW_ON_FRAC * _solid_kick_level(low_bar))
+    groove = _groove_structure(full_beat, bass_state, n_bars, heard_kick=kick_on,
+                               bass_raw_on=bass_raw_on)
+    if low_bar is not None and bass_source == "low_band":
+        low_ref, low_vals, low_frac = _solid_kick_level(low_bar), low_bar, LOW_ON_FRAC
+    else:
+        low_ref, low_vals, low_frac = _solid_kick_level(pb["bass"]), pb["bass"], BASS_ON_FRAC
+    low_out = [float(np.mean(low_vals[s0:s1])) < low_frac * low_ref for s0, s1 in groove["fills"]]
+    g_outro = _groove_outro_start(bass_state, groove["fills"], n_bars, low_out)
+    if g_outro is not None:
+        outro_start = g_outro
+        cap = n_bars - OUTRO_CAP_BARS
+        if cap > 0 and outro_start < cap:
+            outro_start = cap
+
+    # The older boundary signals keep their jobs where the rhythm section is
+    # full: a sustained mix-energy dip with the kick still reading in
+    # (_energy_cues, Double Dutch) and a stereo-width collapse at flat energy
+    # (_width_step_cues, Revoloution). Inside a kick-down run they only
+    # repeat what the kick already says, so they are ignored there.
+    groove_lines = list(groove["lines"])
+    kick_down = np.zeros(n_bars, bool)          # breaks, the kick-down head and tail
+    for s0, s1 in groove["breaks"]:
+        kick_down[s0:s1] = True
+    kick_down[:groove["head_end"] or 0] = True
+    if groove["tail_start"] is not None:
+        kick_down[groove["tail_start"]:] = True
+    for c in energy_cues + wcues:
+        b = int(round(c["bar"]))
+        if (0 < b < n_bars and not kick_down[b] and not kick_down[b - 1]
+                and all(abs(b - x) >= MIN_SECTION_BARS for x in groove_lines)):
+            groove_lines.append(b)
+    bounds = sorted(set([0, n_bars] + [b for b in groove_lines if 0 < b < n_bars]))
+    if outro_start is not None and 0 < outro_start < n_bars and outro_start not in bounds:
+        bounds = sorted(set(bounds + [outro_start]))
+    bounds = [b for i, b in enumerate(bounds) if i == 0 or b - bounds[i - 1] >= 1]
 
     sections = []
     for i in range(len(bounds) - 1):
@@ -1194,23 +1525,29 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
             "end_sec": round(downbeat + s1 * sec_per_bar, 2),
             "stems_on": [s for s in STEMS if presence[s][s0:s1].mean() > 0.5],
         })
-    _assign_labels(sections, kick_on_bar, presence["bass"], mix_norm, outro_start,
-                   soft_intro_outro=soft_intro_outro)
-    # Strip internal R2/R4 marker before downstream sees the section dicts.
-    for s in sections:
-        s.pop("_r2_r4_touched", None)
-    # Protected boundaries: the grid-snapped width-cue bars (the helper emits
-    # "bar" as the SNAPPED bar, so int(c["bar"]) lines up with the bar
-    # _snap_merge wrote into bounds - the section boundary and the merge
-    # guard land at the same bar). Flag OFF -> empty set, default branch ->
-    # byte-identical merge behaviour. Flag ON -> a width cut inside an
-    # otherwise-mergeable same-label run survives (Revoloution bars 128-164:
-    # drop on both sides of bar ~148, would otherwise fold into one drop and
-    # erase the cue inside).
-    width_protected = frozenset(
-        int(c["bar"]) for c in wcues
-    ) if width_cues else frozenset()
-    sections = _merge_same_label(sections, protected_bars=width_protected)
+    _label_groove_sections(sections, groove, bass_state, outro_start,
+                           soft_intro_outro=soft_intro_outro, mix_norm=mix_norm)
+    # Every bound is a deliberate line, so nothing merges; only the names are
+    # assigned (a short break stays a break: it is a section, not a fill).
+    counts = {}
+    for sec in sections:
+        counts[sec["label"]] = counts.get(sec["label"], 0) + 1
+        sec["name"] = f"{sec['label']}_{counts[sec['label']]}"
+
+    fill_sections = []
+    beat_sec = 60.0 / bpm
+    for s0, s1 in groove["fills"]:
+        kb, ke = _refine_fill_beats(full_beat, s0, s1)
+        if (s0, s1) in groove["lead_fills"]:
+            ke = 4 * s1          # the fill into a break ends on the phrase point
+        if ke <= kb:
+            continue
+        fill_sections.append({
+            "start_bar": round(kb / 4.0, 2), "end_bar": round(ke / 4.0, 2),
+            "start_sec": round(downbeat + kb * beat_sec, 2),
+            "end_sec": round(downbeat + ke * beat_sec, 2),
+        })
+    fills = [[f["start_sec"], f["end_sec"]] for f in fill_sections]
 
     # A tiny drop fragment (<= one phrase) right before the outro is the last
     # fill's block, not a real drop — fold it into the preceding drop so it reads
@@ -1381,6 +1718,8 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
             [intro_refinement] if intro_refinement is not None else []
         ),
         "fills": fills,
+        "fill_sections": fill_sections,
+        "bass_state_source": bass_source,
         "major_cues": major_cues,
     }
     # Only attach the soft-rule hints when the flag is on. Omitting the key
