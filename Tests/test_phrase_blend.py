@@ -61,9 +61,8 @@ def test_six_blends_with_carries_overrides(idx, a, s, e):
     b = KEY["blends"][idx]
     o = sb.apply_overrides(KEY["tracks"][b["out"]], b["out"], sb.OVERRIDES)
     n = sb.apply_overrides(KEY["tracks"][b["in"]], b["in"], sb.OVERRIDES)
-    plan = pb.plan_blend(o, n, r6=pb.R6_V1)   # the OVERRIDES column is the round 2 rule
-    assert plan.key() == (a, s, e)
-    assert plan.flat_bars == 0
+    # the owner's placement is not flat under the (round 2) rule once the hand overrides are applied
+    assert pb.content_check(o, n, a, s, e, r6=pb.R6_V1)[1] == 0
 
 
 def _exact_vector(mode):
@@ -77,14 +76,16 @@ def _exact_vector(mode):
     return vec
 
 
-def test_score_columns_are_pinned_as_measured_in_round_5():
+def test_score_columns_are_pinned_as_measured_in_round_6():
     # Characterisation, not validation.  Seven owner blends: the first six share switch = entry + 16,
-    # the seventh (swap on the incoming's bass-in) is entry + 24.  Round 5 regressed blend 1 (the
-    # derived 90 s plan 161/193/209 and the new kick-only swap cost beat the owner's) and fixed 7.
-    assert _exact_vector("MEASURED") == [False, True, True, True, True, True, True]
-    assert _exact_vector("LABELS") == [True, True, False, True, True, True, False]
-    assert _exact_vector("OVERRIDES") == [True, True, True, True, True, True, False]
-    assert _exact_vector("BOTTOM END") == [False, True, True, True, True, True, True]
+    # the seventh (swap on the incoming's bass-in) is entry + 24.
+    # Round 6 (sane both-sided pairings outrank one-sided swaps): blend 1 is right again; blends 3, 6
+    # and 7 are now missed in BOTTOM END because a sane pairing exists and the owner's own answer is
+    # one-sided (his stated rule against his own accepted placements: see the report).
+    assert _exact_vector("MEASURED") == [True, False, True, False, True, False, True]
+    assert _exact_vector("LABELS") == [True, True, False, False, True, False, False]
+    assert _exact_vector("OVERRIDES") == [True, True, True, True, True, False, False]
+    assert _exact_vector("BOTTOM END") == [True, True, False, True, True, False, False]
 
 
 def test_headline_claims_are_true_and_stated():
@@ -138,9 +139,10 @@ def test_r1_fill_end_costs_less_than_a_section_start_at_identical_geometry():
     base = [(0, "INTRO"), (16, "DROP")]
     o_fill = trk(200, base, fills=[(167, 168), (183, 184)])
     o_sec = trk(200, base + [(168, "DROP")], fills=[(183, 184)])
-    ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
+    ins = trk(120, [(0, "INTRO", True), (13, "DROP"), (32, "BREAK")])      # no phrase point at 16: one-sided
     c_fill, c_sec = _cost(o_fill, ins, 168, 184, 200), _cost(o_sec, ins, 168, 184, 200)
-    assert c_sec.cost - c_fill.cost > 0.5            # literal: survives zeroing W_ENTRY_SECTION? no
+    assert not c_fill.paired and not c_sec.paired
+    assert c_sec.cost - c_fill.cost > 0.5
     assert "entry" in c_sec.terms and "entry" not in c_fill.terms
 
 
@@ -149,7 +151,7 @@ def test_r1_entry_cost_order_fill_end_then_section_start_then_unphrased():
     o_fill = trk(200, base, fills=[(168, 169), (183, 184)])
     o_sec = trk(200, base + [(167, "DROP")], fills=[(183, 184)])
     o_off = trk(200, base, fills=[(183, 184)])
-    ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
+    ins = trk(120, [(0, "INTRO", True), (13, "DROP"), (32, "BREAK")])      # one-sided swaps keep the entry cost
     c_fill = _cost(o_fill, ins, 169, 184, 200).cost
     c_sec = _cost(o_sec, ins, 167, 184, 200).cost
     c_off = _cost(o_off, ins, 167, 184, 200).cost
@@ -185,14 +187,16 @@ def test_awareness_the_incoming_minute_is_noted_in_why_without_a_cost():
 
 
 # ---- R2: switch on a phrase point of at least one track; no premium for both ----------------
-def test_r2_one_track_hit_costs_the_same_as_both():
-    out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)])
-    in_both = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
-    in_none = trk(120, [(0, "INTRO", True), (13, "DROP"), (32, "BREAK")])
-    both = _cost(out, in_both, 168, 184, 200)         # outgoing 184 and incoming 16 are phrase points
-    one = _cost(out, in_none, 168, 184, 200)          # outgoing 184 only
-    assert abs(both.cost - one.cost) < 1e-9           # the owner never said "both"
-    assert "switch_phrase" not in both.terms and "switch_phrase" not in one.terms
+def test_r2_a_sane_pairing_outranks_a_cheaper_one_sided_swap():
+    # round 6 (owner on blend 1): lining the swap up on BOTH tracks beats a cheaper swap that sits
+    # on only one, because it is a tier, not a weight
+    b = KEY["blends"][0]
+    o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
+    n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
+    cs = pb.candidates(o, n)
+    assert cs[0].sane and cs[0].paired
+    assert any((not c.sane) and c.cost < cs[0].cost for c in cs)         # a cheaper one-sided plan exists
+    assert cs[0].key() == (184.0, 200.0, 215.0)                          # the owner's own answer
 
 
 def test_r2_no_phrase_point_at_all_is_the_worst_case():
@@ -203,17 +207,33 @@ def test_r2_no_phrase_point_at_all_is_the_worst_case():
     assert none.cost - one.cost > 5 and "switch_phrase" in none.terms
 
 
-def test_r2_the_owners_one_sided_switches_are_chosen():
-    for idx in (2, 3, 5):                              # blends 3, 4, 6 hit one track only
+def test_r2_reconciling_the_owners_one_sided_answers_with_the_pairing_rule():
+    got = {}
+    for idx in (2, 3, 5, 6):
         b = KEY["blends"][idx]
         o = sb.prepare(KEY["tracks"][b["out"]], b["out"], "BOTTOM END", CONTENT)
         n = sb.prepare(KEY["tracks"][b["in"]], b["in"], "BOTTOM END", CONTENT)
-        assert pb.plan_blend(o, n).bass_switch_out_bar == b["bass_switch_out_bar"]
+        got[idx] = pb.plan_blend(o, n)
+    # blend 4: the outgoing offers no phrase point within 20 s of the 30 s mark, so the owner's
+    # one-sided swap (176) is the fallback and is chosen, and `why` says so
+    assert got[3].key() == (160.0, 176.0, 192.0) and not got[3].paired
+    assert any("ONE-SIDED" in w and "fallback" in w for w in got[3].why)
+    # blends 3, 6 and 7: a sane pairing exists, so it outranks the owner's one-sided placement
+    for idx in (2, 5, 6):
+        assert got[idx].paired and got[idx].sane
 
 
 def test_r2_switch_never_off_every_phrase_point_when_a_phrase_exists():
     for c in pb.candidates(OUT, IN, limit=5):
         assert "switch_phrase" not in c.terms
+
+
+def test_a_one_sided_swap_says_so_and_names_the_outgoing_points_it_ignored():
+    out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)])
+    ins = trk(120, [(0, "INTRO", True), (13, "DROP"), (32, "BREAK")])
+    p = _cost(out, ins, 168, 184, 200)                     # outgoing fill end 184, incoming bar 16: no point
+    assert not p.paired
+    assert any("ONE-SIDED" in w and "pairing could use" in w for w in p.why)
 
 
 # ---- R3: end on the incoming's next section; loop the tail up to a phrase point -------------
@@ -282,7 +302,10 @@ def test_r4_no_loop_beats_a_looped_plan_with_a_better_clock():
     out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(175, 176), (183, 184)])
     ins = trk(120, [(0, "INTRO"), (8, "DROP"), (24, "BREAK"), (32, "DROP")])
     cs = pb.candidates(out, ins)
-    assert cs[0].key() == (176.0, 184.0, 200.0) and cs[0].out_looped_bars == 0
+    best_loop_free = [c for c in cs if c.out_looped_bars == 0 and c.in_intro_looped_bars == 0][0]
+    assert cs[0].out_looped_bars == 0 and cs[0].in_intro_looped_bars == 0
+    looped = [c for c in cs if c.out_looped_bars > 0 and c.sane == cs[0].sane]
+    assert looped and min(c.cost for c in looped) > best_loop_free.cost
 
 
 def test_r4_a_tail_loop_adds_only_its_own_cost_the_clocks_ignore_it():
@@ -517,8 +540,8 @@ def test_r9_zone_is_seconds_converted_with_the_outgoing_bpm():
     ins = trk(160, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)], bpm=120.0)
     cs = pb.candidates(out, ins)
     assert cs
-    assert min(c.in_starts_at_out_bar for c in cs) >= 162.5
-    assert min(c.bass_switch_out_bar for c in cs) >= 162.5
+    assert min(c.bass_switch_out_bar for c in cs) >= 162.5               # the swap stays in the 75 s zone
+    assert min(c.in_starts_at_out_bar for c in cs) >= 200 - 60 - 1e-9    # a pairing's entry: 120 s / 2 s = 60 bars
     assert any(c.in_starts_at_out_bar == 164 for c in cs)
 
 
@@ -526,7 +549,7 @@ def test_r9_zone_follows_the_bpm_not_a_bar_count():
     slow = trk(200, [(0, "INTRO"), (50, "DROP")], fills=[(139, 140), (181, 182), (191, 192)], bpm=60.0)  # 18.75 bars
     fast = trk(200, [(0, "INTRO"), (50, "DROP")], fills=[(139, 140), (183, 184)], bpm=240.0)         # 75 bars
     ins = trk(300, [(0, "INTRO", True), (16, "DROP"), (48, "BREAK"), (60, "DROP")], bpm=60.0)
-    assert min(c.in_starts_at_out_bar for c in pb.candidates(slow, ins)) >= 200 - 18.75
+    assert min(c.bass_switch_out_bar for c in pb.candidates(slow, ins)) >= 200 - 18.75
     ins2 = dict(ins, bpm=240.0)
     assert any(c.in_starts_at_out_bar == 140 for c in pb.candidates(fast, ins2))
 
@@ -548,8 +571,8 @@ def test_r9_far_phrase_points_are_not_entries():
     out = trk(400, [(0, "INTRO"), (50, "DROP"), (336, "OUTRO")], fills=[(49, 50), (335, 336)])
     ins = trk(160, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)])
     for c in pb.candidates(out, ins):
-        assert c.in_starts_at_out_bar >= 400 - 40 - 1e-9   # 75 s at 128 bpm = 40 bars (literal)
-        assert c.bass_switch_out_bar >= 400 - 40 - 1e-9
+        assert c.in_starts_at_out_bar >= 400 - 64 - 1e-9   # a derived entry: 120 s at 128 bpm = 64 bars (literal)
+        assert c.bass_switch_out_bar >= 400 - 40 - 1e-9    # the swap: 75 s = 40 bars (literal)
 
 
 def test_r9_incoming_phrase_points_beyond_the_zone_are_not_used_for_the_switch():
@@ -716,9 +739,9 @@ def test_be_end_to_end_flat_run_cost_follows_the_convex_curve():
                          [0] * 30 + [1] * 90, [0] * 120, [0] * 30 + [1] * 90)
     loud = with_content(trk(120, [(0, "INTRO"), (32, "DROP"), (48, "BREAK")], fills=[(31, 32)]),
                         [1] * 120, [0] * 120, [1] * 120)
-    p = pb.plan_blend(out, quiet)
+    p = _cost(out, quiet, 168, 184, 200)
     assert p.flat_runs == [(184.0, 14.0)] and abs(p.terms["flat"] - 9.0) < 1e-9
-    assert pb.plan_blend(out, loud).terms["flat"] == 0.0
+    assert _cost(out, loud, 168, 184, 200).terms["flat"] == 0.0
 
 
 def test_flat_cost_is_free_up_to_one_phrase_then_convex():
@@ -812,33 +835,43 @@ def test_bass_in_of_the_real_incoming_tracks():
     assert got["Back In "] == 24.0 and got["Better W"] == 16.0 and got["Come Bac"] is None
 
 
-def test_blend_7_the_owners_tricky_pair_is_planned_as_he_placed_it():
+def test_blend_7_planner_prefers_the_sane_pairing_and_says_so():
+    # round 6: A-F4 end (bar 131) lined up with B's bass-in (bar 24) is a sane both-sided pairing, so
+    # it outranks the owner's primary, whose swap (139) is on no outgoing phrase point
     b, o, n = _blend7()
     p = pb.plan_blend(o, n)
-    assert p.key() == (115.0, 139.0, 147.0)
-    assert p.swap_anchored and p.swap_at_bass_in and p.out_trim_bars == 8.0 and p.out_cut_bars == 0
-    assert sb.matches(p, b, sb.sam_numbers(b, o)) == "primary"
+    assert p.key() == (107.0, 131.0, 147.0) and p.paired and p.sane and p.in_point_kind == "bass-in"
+    assert sb.matches(p, b, sb.sam_numbers(b, o)) is None            # entry 107, not his 115
+    assert p.bass_switch_out_bar == b["also_acceptable"][0]["bass_switch_out_bar"]   # same swap bar as his second answer
+    assert p.out_trim_bars == 8.0 and p.out_cut_bars == 0
 
 
-def test_blend_7_the_owners_second_answer_is_offered_as_an_alternative():
+def test_blend_7_the_owners_primary_is_a_one_sided_anchored_fallback_in_the_top_3():
     b, o, n = _blend7()
-    p = pb.plan_blend(o, n)
+    cs = pb.candidates(o, n)
+    assert (115.0, 139.0, 147.0) in [c.key() for c in cs[:3]]
+    own = _cost(o, n, 115, 139, 147)
+    assert own.swap_anchored and not own.paired and not own.sane
+    assert any("ONE-SIDED" in w for w in own.why)
+
+
+def test_blend_7_the_owners_second_answer_is_a_candidate():
+    b, o, n = _blend7()
     ac = b["also_acceptable"][0]
-    assert any(a.plan.in_starts_at_out_bar == ac["in_starts_at_out_bar"]
-               and a.plan.bass_switch_out_bar == ac["bass_switch_out_bar"] for a in p.alternatives)
+    assert any(c.in_starts_at_out_bar == ac["in_starts_at_out_bar"] and c.bass_switch_out_bar == ac["bass_switch_out_bar"]
+               for c in pb.candidates(o, n))
 
 
-def test_blend_7_the_old_pick_is_still_a_defensible_alternative_not_the_answer():
+def test_blend_7_the_round_4_pick_is_still_a_candidate():
     b, o, n = _blend7()
-    p = pb.plan_blend(o, n)
-    assert (123.0, 147.0, 155.0) in [a.plan.key() for a in p.alternatives]
+    assert (123.0, 147.0, 155.0) in [c.key() for c in pb.candidates(o, n)]
 
 
-def test_blend_7_depends_on_the_late_swap_rule_stated_plainly(monkeypatch):
-    # without the "do not swap late on the bass-in" term the owner's plan loses by 0.25
+def test_blend_7_pick_no_longer_depends_on_the_late_swap_term(monkeypatch):
     b, o, n = _blend7()
+    before = pb.plan_blend(o, n).key()
     monkeypatch.setattr(pb, "W_LATE_SWAP", 0.0)
-    assert pb.plan_blend(o, n).key() == (123.0, 147.0, 155.0)
+    assert pb.plan_blend(o, n).key() == before
 
 
 def test_swap_anchored_plan_waives_the_minute_mark_term_only():
@@ -947,14 +980,15 @@ def test_matches_reads_primary_acceptable_and_none():
     assert sb.matches(looped, b, sam) is None                            # an incoming loop plays other bars
 
 
-def test_the_scorer_reports_primary_top3_and_the_acceptable_offer():
+def test_the_scorer_reports_three_numbers_and_the_acceptable_offer():
     lines = []
     exact, rows = sb.score("BOTTOM END", out=lines.append)
     text = "\n".join(lines)
-    assert "owner's primary answer in the top 3" in text
-    assert "also_acceptable #1 (entry 115, swap 131): offered" in text
-    assert rows[6]["which"] == "primary" and rows[6]["primary_top3"]
-    assert rows[0]["which"] is None            # the round 5 regression on blend 1, stated not hidden
+    assert "top pick = primary" in text and "primary or also_acceptable" in text and "primary in top 3" in text
+    assert "(info) swap bar equals one of his" in text
+    assert sum(r["primary"] for r in rows) == 4 and exact == 4
+    assert sum(r["primary_top3"] for r in rows) == 6
+    assert rows[6]["which"] is None and rows[6]["primary_top3"] and rows[6]["swap_only"]
 
 
 # ---- round 5, mutation follow-ups ------------------------------------------------------------
@@ -1004,3 +1038,132 @@ def test_alternatives_exclude_forbidden_cuts_costly_flat_and_respect_the_limits(
     many = [best] + [mk(10 * i, 1.0 + 0.1 * i) for i in range(1, 11)]
     assert len(pb.alternatives_for(many, trk(100, [(0, "INTRO")]))) <= 4     # literal limit
     assert all(a.plan.cost <= best.cost + 5.0 for a in alts)  # literal: about a ten bar clock error
+
+
+# ---- round 6: pairings (lining the swap up on a phrase point of BOTH tracks) ------------------
+def _blend1(mode="BOTTOM END"):
+    b = KEY["blends"][0]
+    return (b, sb.prepare(KEY["tracks"][b["out"]], b["out"], mode, CONTENT),
+            sb.prepare(KEY["tracks"][b["in"]], b["in"], mode, CONTENT))
+
+
+def test_pairing_is_a_swap_on_a_phrase_point_of_both_tracks_and_the_entry_follows():
+    b, o, n = _blend1()
+    owner = _cost(o, n, 184, 200, 215)                    # A11 (outro start) with B1 (kick-in), outro looped
+    assert owner.paired and owner.sane and owner.in_point_kind == "kick-in"
+    assert "entry" not in owner.terms and "minute_mark" not in owner.terms     # entry is derived, not chosen
+    assert any("pairing" in w for w in owner.why)
+
+
+def test_blend_1_the_owners_named_pairings_are_candidates_and_his_own_answer_ranks_first():
+    b, o, n = _blend1()
+    cs = pb.candidates(o, n)
+    keys = [c.key() for c in cs]
+    assert keys[0] == (184.0, 200.0, 215.0)               # A11 with B1, outro looped a little
+    assert keys.index((168.0, 184.0, 216.0)) < 6          # A-F7 end with B1 (kick-in)
+    assert (168.0, 200.0, 216.0) in keys                  # A11 with B-F1 end (bass-in)
+    # A-F7 end with B-F1 end would stop the outgoing at its outro start, dropping all 9 outro bars
+    assert (152.0, 184.0, 200.0) not in keys
+    assert _cost(o, n, 152, 184, 200).out_cut_bars == 9
+    assert not any(c.key() == (161.0, 193.0, 209.0) and c.sane for c in cs)   # the round 5 pick is one-sided
+
+
+def test_a_sane_pairing_outranks_every_one_sided_plan_even_a_far_cheaper_one():
+    plans = [pb.BlendPlan(1, 2, 3, 0, 0, cost=0.1, sane=False), pb.BlendPlan(1, 2, 3, 0, 0, cost=90.0, sane=True)]
+    plans.sort(key=pb._rank_key)
+    assert plans[0].sane
+
+
+def test_sane_needs_bottom_end_no_forbidden_cut_a_swap_near_the_mark_and_a_sane_length():
+    out = with_content(trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)]),
+                       [1] * 200, [0] * 200, [1] * 200)
+    ins = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)]),
+                       [1] * 120, [0] * 120, [1] * 120)
+    good = _cost(out, ins, 168, 184, 200)                 # swap 16 bars (30 s) from the end, 32 bar blend
+    assert good.paired and good.sane
+    out_far = with_content(trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(159, 160), (167, 168), (183, 184)]),
+                           [1] * 200, [0] * 200, [1] * 200)
+    far = _cost(out_far, ins, 144, 160, 200)              # swap 40 bars (75 s) before the end, blend 105 s
+    assert far.paired and not far.sane
+    kickless = with_content(out, [1] * 168 + [0] * 32, [0] * 200, [1] * 168 + [0] * 32)
+    quiet = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)]),
+                         [0] * 120, [0] * 120, [0] * 120)
+    flat = _cost(kickless, quiet, 168, 184, 200)
+    assert flat.paired and flat.terms["flat"] > 0 and not flat.sane
+    cutter = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184), (195, 196)])
+    cut = _cost(cutter, ins, 168, 184, 190)
+    assert cut.out_cut_bars > 0 and not cut.sane
+
+
+def test_sane_window_and_blend_length_are_in_seconds():
+    out = with_content(trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(167, 168), (183, 184)]),
+                       [1] * 200, [0] * 200, [1] * 200)
+    ins = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)]),
+                       [1] * 120, [0] * 120, [1] * 120)
+    # 128 bpm: 1.875 s a bar.  Swap 168 is 32 bars (60 s) from the end: 30 s off the mark: not sane
+    assert not _cost(out, ins, 152, 168, 184).sane
+    assert _cost(out, ins, 168, 184, 200).sane
+    assert pb.PAIR_WINDOW_SECONDS == 20.0 and pb.SANE_BLEND_SECONDS == 80.0
+
+
+def test_incoming_point_quality_runs_bass_in_kick_in_fill_end_section_start_none():
+    n = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (24, "BREAK"), (40, "DROP")], fills=[(7, 8)]),
+                     [0] * 24 + [1] * 96, [0] * 120, [1] * 120)
+    kinds = [pb.in_point_kind(n, k) for k in (24, 16, 8, 40, 11)]
+    assert [k[0] for k in kinds] == ["bass-in", "kick-in", "fill end", "section start", ""]
+    costs = [k[1] for k in kinds]
+    assert costs == sorted(costs) and len(set(costs)) == 5 and costs[0] == 0.0
+
+
+def test_kick_in_is_the_first_drop_or_build_after_the_start():
+    assert pb.kick_in(trk(100, [(0, "INTRO"), (24, "BUILD"), (40, "DROP")])) == 24.0
+    assert pb.kick_in(trk(100, [(0, "DROP"), (30, "BREAK")])) is None
+    assert pb.kick_in(trk(100, [(0, "INTRO"), (16, "DROP")])) == 16.0
+
+
+def test_the_in_point_term_prefers_a_bass_in_pairing_to_a_section_start_pairing():
+    n = with_content(trk(120, [(0, "INTRO"), (16, "DROP"), (24, "BREAK"), (40, "BREAK")]),
+                     [0] * 24 + [1] * 96, [0] * 120, [1] * 120)
+    out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(183, 184)])
+    a = _cost(out, n, 160, 184, 200)                      # k = 24: bass-in
+    b = _cost(out, n, 144, 184, 200)                      # k = 40: a plain section start
+    assert a.in_point_kind == "bass-in" and b.in_point_kind == "section start"
+    assert a.terms.get("in_point", 0.0) < b.terms["in_point"]
+
+
+def test_a_pairing_waives_the_entry_type_and_minute_mark_terms_a_one_sided_swap_keeps_them():
+    out = trk(200, [(0, "INTRO"), (16, "DROP")], fills=[(183, 184)])
+    paired_in = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
+    one_in = trk(120, [(0, "INTRO", True), (13, "DROP"), (32, "BREAK")])
+    p = _cost(out, paired_in, 168, 184, 200)              # entry 168 is no outgoing phrase point
+    q = _cost(out, one_in, 168, 184, 200)
+    assert p.paired and "entry" not in p.terms
+    assert not q.paired and q.terms["entry"] > 5
+
+
+def test_every_swap_in_the_candidates_is_inside_the_mix_zone():
+    b, o, n = _blend1()
+    assert all(c.bass_switch_out_bar >= o["n_bars"] - 40 - 1e-9 for c in pb.candidates(o, n))   # 75 s = 40 bars
+
+
+def test_the_scorer_prints_three_numbers_per_column_and_the_info_line():
+    lines = []
+    sb.table(out=lines.append)
+    text = "\n".join(lines)
+    for head in ("primary           |", "primary or accept.|", "primary in top 3  |", "(info) swap bar equals his"):
+        assert head in text
+
+
+def test_a_pairing_on_an_outgoing_section_start_entry_pays_no_entry_cost_either():
+    out = trk(200, [(0, "INTRO"), (16, "DROP"), (168, "DROP")], fills=[(183, 184)])
+    ins = trk(120, [(0, "INTRO", True), (16, "DROP"), (32, "BREAK")])
+    p = _cost(out, ins, 168, 184, 200)                    # entry on the outgoing section start 168, swap paired
+    assert p.paired and "entry" not in p.terms
+    assert _cost(out, trk(120, [(0, "INTRO", True), (13, "DROP"), (32, "BREAK")]), 168, 184, 200).terms["entry"] > 0.5
+
+
+def test_the_scorer_separates_primary_from_acceptable_and_swap_only(monkeypatch):
+    monkeypatch.setattr(pb, "plan_blend", lambda *a, **k: pb.BlendPlan(115.0, 131.0, 147.0, 0.0, 0.0))
+    exact, rows = sb.score("BOTTOM END", out=lambda *_: None)
+    assert rows[6]["which"] == "acceptable #1" and rows[6]["ok"] and not rows[6]["primary"]
+    assert rows[6]["swap_only"] and rows[0]["swap_only"] is False

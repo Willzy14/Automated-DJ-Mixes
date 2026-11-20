@@ -38,7 +38,7 @@ def test_flags_a_pair_where_the_switch_rules_disagree():
 
 
 def test_says_when_the_rules_agree():
-    info, text = run("Ninetoes", "Ashibah")       # only 176 meets any rule
+    info, text = run("Eli Brown", "Ashibah")      # every switch rule points at the same bar
     assert not info["disagree"] and "cannot discriminate" in text
 
 
@@ -67,3 +67,28 @@ def test_sensitivity_flips_are_reported_for_the_geometry_constants():
     assert {"MIX_ZONE_SECONDS", "END_SLACK_BARS"} <= names
     # every constant is restored afterwards
     assert pb.MIX_ZONE_SECONDS == 75.0 and pb.END_SLACK_BARS == 1.0
+
+
+def test_the_owners_names_for_points_and_pairings():
+    key = json.loads(bc.KEY.read_text(encoding="utf-8"))["tracks"]
+    a = key["Darius Syrossian & George Smeddles - Back In The Dance"]
+    b = key["PAX - Revelry"]
+    assert bc.point_name("A", a, 184) == "A-F7 end (bar 184)"
+    assert bc.point_name("A", a, 200) == "A-F8 end = A11 (bar 200)"      # the outro start is also a fill end
+    assert bc.point_name("B", b, 16) == "B1 (bar 16)"
+    assert bc.point_name("B", b, 32) == "B-F1 end (bar 32)"
+    assert bc.point_name("A", a, 209) == "A end (bar 209)" and bc.point_name("A", a, 0) == "A start (bar 0)"
+    assert "no phrase point" in bc.point_name("A", a, 193)
+
+
+def test_report_prints_pairings_by_name():
+    info, text = run("Back In", "PAX")
+    assert "swap: A-F8 end = A11 (bar 200) with B1 (bar 16) [B kick-in]  <sane PAIRING>" in text
+
+
+def test_scan_ranks_unplaced_pairs_and_skips_the_owners_own():
+    keydata = json.loads(bc.KEY.read_text(encoding="utf-8"))
+    rows = bc.scan(keydata, json.loads(bc.CONTENT.read_text(encoding="utf-8"))["tracks"], 3, out=lambda *_: None)
+    assert [r[0] for r in rows] == sorted((r[0] for r in rows), reverse=True)
+    placed = {(b["out"], b["in"]) for b in keydata["blends"]}
+    assert not any((r[1], r[2]) in placed for r in rows)

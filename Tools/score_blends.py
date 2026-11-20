@@ -137,7 +137,11 @@ def score(mode, top=0, detail=False, out=print):
         top3 = pb.candidates(o, n, limit=3, r6=r6)
         primary_top3 = any(matches(c, b, sam) == "primary" for c in top3)
         sp = _sam_plan(o, n, sam, r6)
+        swap_only = bool(plan) and any(
+            abs(plan.bass_switch_out_bar - v) < 1e-6
+            for v in [sam[1]] + [a["bass_switch_out_bar"] for a in b.get("also_acceptable", [])])
         rows.append({"i": i, "ok": ok, "which": which, "primary_top3": primary_top3, "mine": mine,
+                     "primary": which == "primary", "swap_only": swap_only,
                      "sam": sam, "plan": plan, "sam_plan": sp})
         out("%d. %s -> %s" % (i, b["out"][:30], b["in"][:30]))
         if plan is None:
@@ -185,8 +189,11 @@ def score(mode, top=0, detail=False, out=print):
         if top:
             for c in pb.candidates(o, n, limit=top, r6=r6):
                 out("      cand %-26s cost %6.2f flat %g" % (c.key(), c.cost, c.flat_bars))
-    out("TOTAL %s: %d of %d right; owner's primary answer in the top 3 for %d of %d" % (
-        mode, exact, len(rows), sum(r["primary_top3"] for r in rows if r["plan"]), len(rows)))
+    out("TOTAL %s: top pick = primary %d of %d | primary or also_acceptable %d of %d | primary in top 3 %d of %d"
+        " | (info) swap bar equals one of his %d of %d" % (
+            mode, sum(r["primary"] for r in rows), len(rows), exact, len(rows),
+            sum(r["primary_top3"] for r in rows if r["plan"]), len(rows),
+            sum(r["swap_only"] for r in rows), len(rows)))
     return exact, rows
 
 
@@ -239,8 +246,10 @@ def table(out=print):
             cells.append("%-24s" % ((r["which"].upper() if r["which"] != "primary" else "RIGHT") if r["ok"] else
                                     ("NO PLAN" if r["plan"] is None else "MISS %g/%g/%g" % r["mine"])))
         out("%5d | %s" % (i + 1, " | ".join(cells)))
-    out("total | " + " | ".join("%-24s" % ("%d of %d" % (sum(r["ok"] for r in res[m]), nb)) for m in names))
-    out("primary in top 3 | " + " | ".join("%-24s" % ("%d of %d" % (sum(r["primary_top3"] for r in res[m] if r["plan"]), nb)) for m in names))
+    out("primary           | " + " | ".join("%-24s" % ("%d of %d" % (sum(r["primary"] for r in res[m]), nb)) for m in names))
+    out("primary or accept.| " + " | ".join("%-24s" % ("%d of %d" % (sum(r["ok"] for r in res[m]), nb)) for m in names))
+    out("primary in top 3  | " + " | ".join("%-24s" % ("%d of %d" % (sum(r["primary_top3"] for r in res[m] if r["plan"]), nb)) for m in names))
+    out("(info) swap bar equals his | " + " | ".join("%-24s" % ("%d of %d" % (sum(r["swap_only"] for r in res[m]), nb)) for m in names))
     out("")
     out("flat runs (start+length) on SAM'S placement / on the PLANNER'S pick, per column:")
     for i in range(nb):

@@ -14,8 +14,13 @@ Tools/score_blends.py, which prints each of these live):
   - Round 5 implements three things he said about that seventh blend: the SWAP is the anchor (the
     incoming's bass-in about 30 s before the original end; entry and exit derived), a short TAIL TRIM
     of a non-outro tail is allowed, and there can be MORE THAN ONE right answer (alternatives are
-    returned).  It fixes blend 7 and regresses blend 1 (see Tools/score_blends.py).  Blend 7 passes
-    only because of the late-bass-in-swap term (W_LATE_SWAP); without it the owner's plan loses by 0.25.
+    returned).  Round 5 fixed blend 7 and broke blend 1.
+  - Round 6 (owner on blend 1: a swap "just randomly slapped anywhere on the A track" is "unacceptable")
+    enumerates PAIRINGS: the swap lines a phrase point of the incoming up with a phrase point of the
+    outgoing, and a SANE both-sided pairing always outranks a one-sided swap (a tier, not a weight).
+    That fixes blend 1 again and, in BOTTOM END, misses the owner's own one-sided answers for blends 3,
+    6 and 7 because a sane pairing exists for each; his stated rule and his accepted placements
+    disagree there (Tools/score_blends.py prints the numbers and the term-by-term costs).
   - The weights are hand-set judgements.  A constant set from a single case says which
     (END_SLACK_BARS from blend 2).  Nothing here is "validated": the cases were run many times while
     the rules were written, and the score is reported as measured.
@@ -113,6 +118,23 @@ W_TRIM = 0.25            # 8 bars cost 2.0: about the price of one 8-bar clock e
 LATE_SWAP_SECONDS = 20.0
 W_LATE_SWAP = 2.0
 ALT_MARGIN = 5.0
+# Round 6 (owner on blend 1, rejecting a swap "just randomly slapped anywhere on the A track"):
+# the swap is made by LINING UP a phrase point of the incoming (bass-in, kick-in, fill end, section
+# start) with a phrase point of the OUTGOING (a fill end or a section start such as the outro start).
+# These PAIRINGS are enumerated; entry = outgoing point - incoming point, then the exit rule.  A
+# both-sided pairing that keeps the blend sane ALWAYS outranks any other swap (a TIER, not a weight).
+# Sane = bottom end kept, no forbidden cut, the swap within PAIR_WINDOW_SECONDS of the 30 s mark, and
+# a blend no longer than SANE_BLEND_SECONDS.  A swap on a phrase point of only one track is the
+# fallback, used when no sane pairing exists (and `why` says it is one-sided).
+PAIR_WINDOW_SECONDS = 20.0  # both swaps he named as fine, A-F7 end (17 s off the 30 s mark) and A-F4 end
+#                             in blend 7 (16.5 s off), lie inside it; a swap 30+ s from the mark is not "about 30 s"
+SANE_BLEND_SECONDS = 80.0   # a minute plus one phrase: the mix zone; his own blends run 62 to 77 s
+# Incoming point quality, in his order: bass-in is "probably the most energetic", then the kick-in,
+# then a fill end, then a plain section start; a point that is no phrase point at all is worst.
+W_Q_KICKIN = 0.5
+W_Q_FILL = 1.0
+W_Q_SECTION = 1.5
+W_Q_NONE = 2.0
 ANCHOR_TOL_BARS = 1.0    # "about 30 seconds": the swap is within one bar of the 30 s mark of the original end
 MAX_ALTERNATIVES = 4
 
@@ -141,6 +163,10 @@ class BlendPlan:
     swap_at_bass_in: bool = False                   # the swap lands on the incoming's bass-in bar
     swap_incoming_bar: float = 0.0
     swap_anchored: bool = False                     # round 5: entry and exit derived from the swap
+    paired: bool = False                            # round 6: swap is a phrase point of BOTH tracks
+    sane: bool = False                              # round 6: a paired swap that keeps the blend sane
+    in_point_kind: str = ""                         # what the swap lines up on, on the incoming
+    out_point_kind: str = ""                        # ... and on the outgoing ("" when none)
     alternatives: list = field(default_factory=list)  # [Alternative]: other defensible swaps
 
     def key(self):
@@ -255,6 +281,29 @@ def bass_in(track):
         if hb[b] and sum(1 for v in hb[b:b + w] if v) >= BASS_IN_FRACTION * w:
             return float(b) if b > 0 else None
     return None
+
+
+def kick_in(track):
+    """The incoming's kick-in: the start of its first DROP or BUILD section after bar 0 (the owner's
+    "B1").  Label-based on purpose: measured has_kick cannot tell a soft intro kick from the drop's
+    full kick.  None when it has no such section."""
+    starts = [x[0] for x in _sections(track) if x[1] in ("DROP", "BUILD") and x[0] > 0]
+    return min(starts) if starts else None
+
+
+def in_point_kind(track, k):
+    """(name, quality cost) of the incoming point k a swap lines up on, in the owner's order."""
+    bi = bass_in(track)
+    if bi is not None and abs(k - bi) < 1e-9:
+        return "bass-in", 0.0
+    ki = kick_in(track)
+    if ki is not None and abs(k - ki) < 1e-9:
+        return "kick-in", W_Q_KICKIN
+    if any(abs(k - float(f[1])) < 1e-9 for f in track.get("fills", [])):
+        return "fill end", W_Q_FILL
+    if any(abs(k - x[0]) < 1e-9 for x in _sections(track)):
+        return "section start", W_Q_SECTION
+    return "", W_Q_NONE
 
 
 def loop_source(track, r6=R6_BE):
@@ -412,26 +461,34 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
     anchored = (bi is not None and abs(k - bi) < 1e-9
                 and abs((e_swap - s) - bars_min / 2.0) <= ANCHOR_TOL_BARS + 1e-9)
 
-    # R1: entry on an outgoing phrase point, normally a fill end
+    out_hit = any(abs(s - p) < 1e-9 for p in out_pts)
+    in_hit = any(abs(k - p) < 1e-9 for p in in_pts)
+    paired = out_hit and in_hit
+    # R1: entry on an outgoing phrase point, normally a fill end.  For a PAIRING the entry is derived
+    # (outgoing point minus incoming point), not chosen, so the entry-type cost does not apply to it.
+    if paired:
+        why.append("round 6: pairing: the entry (out bar %g) follows from lining the swap up on both tracks" % a)
     if anchored:
         why.append("round 5: swap-anchored: the swap is the incoming's bass-in (incoming bar %g) about 30 s "
                    "before the original end, so the entry (out bar %g) is derived from it" % (k, a))
     if a in fill_ends:
         why.append("R1: entry at out bar %g is the end of an outgoing fill" % a)
     elif a in sec_starts:
-        cost += W_ENTRY_SECTION
-        terms["entry"] = W_ENTRY_SECTION
+        if not paired:
+            cost += W_ENTRY_SECTION
+            terms["entry"] = W_ENTRY_SECTION
         why.append("R1: entry at out bar %g is an outgoing section start (not a fill end)" % a)
     else:
-        cost += W_ENTRY_OFF
-        terms["entry"] = W_ENTRY_OFF
+        if not paired:
+            cost += W_ENTRY_OFF
+            terms["entry"] = W_ENTRY_OFF
         why.append("R1: entry at out bar %g is NOT an outgoing phrase point (placed back from the switch)" % a)
 
     # owner awareness (soft): a phrase point about a minute before the outgoing END
     mark = n_out - bars_min
     is_phrase = any(abs(a - p) < 1e-9 for p in out_pts)
     minute = is_phrase and abs(a - mark) <= MINUTE_TOL_BARS
-    if anchored:
+    if anchored or paired:
         pass
     elif minute:
         why.append("awareness: entry at out bar %g is a one-minute mark (a phrase point about a minute "
@@ -441,11 +498,23 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
         terms["minute_mark"] = W_MINUTE_OFF
 
     # R2: switch on a phrase point of at least one track
-    out_hit = any(abs(s - p) < 1e-9 for p in out_pts)
-    in_hit = any(abs(k - p) < 1e-9 for p in in_pts)
+    kind, qcost = in_point_kind(in_t, k)
+    if qcost:
+        cost += qcost
+        terms["in_point"] = qcost
     if out_hit or in_hit:
-        who = "both tracks" if out_hit and in_hit else ("the outgoing only" if out_hit else "the incoming only")
-        why.append("R2: switch is a phrase point of %s (out bar %g, incoming bar %g)" % (who, s, k))
+        who = "both tracks" if paired else ("the outgoing only" if out_hit else "the incoming only")
+        why.append("R2: switch is a phrase point of %s (out bar %g, incoming bar %g%s)" % (
+            who, s, k, ", the incoming's %s" % kind if kind else ""))
+        if not paired:
+            mark_s = n_out - 30.0 / _bar_seconds(out_t)
+            near = [p for p in out_pts if p < n_out - 1e-9
+                    and abs(p - mark_s) * _bar_seconds(out_t) <= PAIR_WINDOW_SECONDS]
+            why.append("ONE-SIDED swap: it lines up with a phrase point of only one track; "
+                       + ("the outgoing offers phrase points near the 30 s mark (out bars %s) that a pairing could use"
+                          % ", ".join("%g" % p for p in near) if near
+                          else "the outgoing offers no phrase point within %g s of the 30 s mark, so this is the fallback"
+                          % PAIR_WINDOW_SECONDS))
     else:
         cost += W_SWITCH_NONE
         terms["switch_phrase"] = W_SWITCH_NONE
@@ -529,19 +598,30 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
                 why.append("R6: %s content unusable under bottom end (no has_kick, empty or mismatched "
                            "lists); fell back to labels for it" % nm)
 
+    mark_s = n_out - 30.0 / _bar_seconds(out_t)
+    bs_ = _bar_seconds(out_t)
+    sane = (paired and terms.get("flat", 0.0) == 0.0 and cut == 0.0
+            and abs(s - mark_s) * bs_ <= PAIR_WINDOW_SECONDS + 1e-9
+            and (e0 - a) * bs_ <= SANE_BLEND_SECONDS + 1e-9)
+    if paired:
+        why.append("pairing: %s" % ("sane, so it outranks every one-sided swap" if sane else
+                                    "both-sided but not sane (flat run, forbidden cut, swap far from the 30 s mark, "
+                                    "or a blend longer than %g s)" % SANE_BLEND_SECONDS))
     return BlendPlan(in_starts_at_out_bar=a, bass_switch_out_bar=s, out_end_bar=out_end,
                      out_looped_bars=looped, in_intro_looped_bars=loop_l, out_cut_bars=cut,
                      stretches=stretches, flat_bars=flat, cost=cost, why=why,
                      flat_runs=runs, terms=terms, out_loop_source_bars=src,
                      in_loop_phrase_end=loop_p if loop_l > 0 else 0.0, minute_mark=minute,
                      out_trim_bars=trim, swap_at_bass_in=at_bass_in, swap_incoming_bar=k,
-                     swap_anchored=anchored)
+                     swap_anchored=anchored, paired=paired, sane=sane, in_point_kind=kind,
+                     out_point_kind=("fill end" if any(abs(s - float(f[1])) < 1e-9 for f in out_t.get("fills", []))
+                                     else "section start" if s in sec_starts else ""))
 
 
 def _rank_key(b):
-    """Cheapest first; on an exact tie prefer no incoming loop, then less outgoing loop, then the
-    earlier entry, switch and end."""
-    return (round(b.cost, 9), b.in_intro_looped_bars, b.out_looped_bars,
+    """Sane both-sided pairings first (a tier, round 6), then cheapest first; on an exact tie prefer
+    no incoming loop, then less outgoing loop, then the earlier entry, switch and end."""
+    return (0 if b.sane else 1, round(b.cost, 9), b.in_intro_looped_bars, b.out_looped_bars,
             b.in_starts_at_out_bar, b.bass_switch_out_bar, b.out_end_bar)
 
 
@@ -581,8 +661,11 @@ def candidates(out_t, in_t, limit=None, r6=R6_BE):
                         derived.add((a, s2, 0.0, 0.0))
     for p, l in loops:
         for s in out_zone:                      # switch on an outgoing phrase point
-            for k in in_zone:                   # ... and an incoming one: entry derived
-                trips.add((s - k - l, s, p, l))
+            for k in in_zone:                   # ... and an incoming one: a PAIRING, entry derived
+                a_pair = s - k - l
+                trips.add((a_pair, s, p, l))
+                if a_pair >= n_out - ENTRY_MAX_SECONDS / _bar_seconds(out_t):
+                    derived.add((a_pair, s, p, l))
             for a in out_zone:                  # ... entry on an outgoing phrase point
                 if a < s:
                     trips.add((a, s, p, l))

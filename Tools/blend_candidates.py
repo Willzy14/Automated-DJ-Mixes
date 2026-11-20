@@ -38,6 +38,41 @@ def find(tracks, part):
     return hits[0]
 
 
+def point_name(letter, track, bar):
+    """The owner's name for a phrase point: fills F1.. in order (A-F7 end), section lines numbered from 1
+    after the track start (A11, B1), the track start and end."""
+    names = []
+    fills = sorted(track.get("fills", []), key=lambda f: f[0])
+    for i, f in enumerate(fills, 1):
+        if abs(bar - float(f[1])) < 1e-9:
+            names.append("%s-F%d end" % (letter, i))
+        elif abs(bar - float(f[0])) < 1e-9:
+            names.append("%s-F%d start" % (letter, i))
+    lines = [x for x in pb._sections(track) if x[0] > 0]
+    for j, x in enumerate(lines, 1):
+        if abs(bar - x[0]) < 1e-9:
+            names.append("%s%d" % (letter, j))
+    if abs(bar) < 1e-9:
+        names.append("%s start" % letter)
+    if abs(bar - float(track["n_bars"])) < 1e-9:
+        names.append("%s end" % letter)
+    if not names:
+        return "%s bar %g (no phrase point)" % (letter, bar)
+    return "%s (bar %g)" % (" = ".join(names), bar)
+
+
+def pairing_name(plan, out_t, in_t):
+    """e.g. 'A-F7 end (bar 184) with B1 (bar 16) [B kick-in]' for a candidate's swap."""
+    k = plan.bass_switch_out_bar - plan.in_starts_at_out_bar - plan.in_intro_looped_bars
+    a = point_name("A", out_t, plan.bass_switch_out_bar)
+    b = point_name("B", in_t, k)
+    role = " [B %s]" % plan.in_point_kind if plan.in_point_kind else ""
+    kind = "PAIRING" if plan.paired else "one-sided"
+    if plan.sane:
+        kind = "sane PAIRING"
+    return "%s with %s%s  <%s>" % (a, b, role, kind)
+
+
 def rules_for(plan, out_t, in_t):
     """Which of the three switch rules a candidate satisfies."""
     out_pts, in_pts = pb.phrase_points(out_t), pb.phrase_points(in_t)
@@ -96,6 +131,7 @@ def report(out_t, in_t, out_name, in_name, top=5, r6=pb.R6_BE, out=print):
         out("  #%d in %g  switch %g  end %g  (loop %g, in-loop %g, cut %g)  cost %.2f%s" % (
             i, c.in_starts_at_out_bar, c.bass_switch_out_bar, c.out_end_bar, c.out_looped_bars,
             c.in_intro_looped_bars, c.out_cut_bars, c.cost, "  [minute mark]" if c.minute_mark else ""))
+        out("      swap: %s" % pairing_name(c, out_t, in_t))
         out("      terms: %s" % terms)
         out("      switch rules met: %s" % (", ".join(k for k, v in r.items() if v) or "none"))
         if c.flat_runs:
