@@ -47,7 +47,7 @@ def test_six_blends_with_carries_overrides(idx, a, s, e):
     b = KEY["blends"][idx]
     o = sb.apply_overrides(KEY["tracks"][b["out"]], b["out"], sb.OVERRIDES)
     n = sb.apply_overrides(KEY["tracks"][b["in"]], b["in"], sb.OVERRIDES)
-    plan = pb.plan_blend(o, n)
+    plan = pb.plan_blend(o, n, r6=pb.R6_V1)   # the OVERRIDES column is the round 2 rule
     assert plan.key() == (a, s, e)
     assert plan.flat_bars == 0
 
@@ -55,8 +55,9 @@ def test_six_blends_with_carries_overrides(idx, a, s, e):
 @pytest.mark.parametrize("idx,a,s,e", [SIX[0], SIX[1], SIX[4]])
 def test_blends_1_2_5_need_no_override(idx, a, s, e):
     b = KEY["blends"][idx]
-    plan = pb.plan_blend(KEY["tracks"][b["out"]], KEY["tracks"][b["in"]])
-    assert plan.key() == (a, s, e)
+    for r6 in (pb.R6_V1, pb.R6_BE):
+        plan = pb.plan_blend(KEY["tracks"][b["out"]], KEY["tracks"][b["in"]], r6=r6)
+        assert plan.key() == (a, s, e)
 
 
 def test_blends_3_4_6_are_flat_by_label_without_overrides():
@@ -374,22 +375,23 @@ def with_content(track, bass, music):
 
 def test_measured_pre_switch_outgoing_needs_bass_or_music():
     out = with_content(trk(8, [(0, "INTRO")]), [0, 0, 1, 1, 0, 0, 0, 0], [0, 0, 0, 0, 1, 0, 0, 0])
-    assert [pb._out_state(out, x, 6) for x in range(6)] == [False, False, True, True, True, False]
+    assert [pb._out_state(out, x, 6, pb.R6_V1) for x in range(6)] == [False, False, True, True, True, False]
 
 
 def test_measured_post_switch_outgoing_needs_music_not_bass():
     out = with_content(trk(8, [(0, "INTRO")]), [1] * 8, [0, 0, 0, 0, 0, 0, 1, 0])
-    assert pb._out_state(out, 3, 4) is True      # before the switch: bass counts
-    assert pb._out_state(out, 5, 4) is False     # after: its bass has left, no music
-    assert pb._out_state(out, 6, 4) is True      # after: music still plays
+    assert pb._out_state(out, 3, 4, pb.R6_V1) is True      # before the switch: bass counts
+    assert pb._out_state(out, 5, 4, pb.R6_V1) is False     # after: its bass has left, no music
+    assert pb._out_state(out, 6, 4, pb.R6_V1) is True      # after: music still plays
 
 
 def test_measured_incoming_counts_bass_or_music_after_the_switch_only():
     ins = with_content(trk(8, [(0, "INTRO")]), [1, 0, 0, 0, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0, 0])
-    assert pb._in_state(ins, 0, 0, 4) is False   # pre-switch: percussion only (R7)
-    assert pb._in_state(ins, 0, 4, 4) is True    # bass
-    assert pb._in_state(ins, 1, 4, 4) is False
-    assert pb._in_state(ins, 2, 4, 4) is True    # music
+    v1 = pb.R6_V1
+    assert pb._in_state(ins, 0, 0, 4, v1) is False   # pre-switch: percussion only (R7)
+    assert pb._in_state(ins, 0, 4, 4, v1) is True    # bass
+    assert pb._in_state(ins, 1, 4, 4, v1) is False
+    assert pb._in_state(ins, 2, 4, 4, v1) is True    # music
 
 
 def test_measured_content_beats_the_label():
@@ -408,16 +410,17 @@ def test_flag_beats_measured_content():
 
 def test_measured_content_beyond_the_track_reads_as_the_last_bar():
     out = with_content(trk(4, [(0, "DROP")]), [1, 1, 1, 0], [0, 0, 0, 1])
-    assert pb._measured(out, 9) == (False, True) and pb._measured(out, -1) == (True, False)
+    assert pb._measured(out, 9) == (False, True, False) and pb._measured(out, -1) == (True, False, False)
 
 
 def test_measured_flat_counts_each_side():
+    v1 = pb.R6_V1
     out = with_content(trk(40, [(0, "DROP")]), [1] * 20 + [0] * 20, [0] * 40)
     ins = with_content(trk(40, [(0, "DROP")]), [0] * 40, [0] * 40)
-    _, flat = pb.content_check(out, ins, 24, 32, 40)   # outgoing has nothing from bar 20
+    _, flat = pb.content_check(out, ins, 24, 32, 40, r6=v1)   # outgoing has nothing from bar 20
     assert flat == 16
     ins2 = with_content(trk(40, [(0, "DROP")]), [0] * 8 + [1] * 32, [0] * 40)
-    _, flat2 = pb.content_check(out, ins2, 24, 32, 40)  # incoming bass from its bar 8 = out bar 32
+    _, flat2 = pb.content_check(out, ins2, 24, 32, 40, r6=v1)  # incoming bass from its bar 8 = out bar 32
     assert flat2 == 8     # only the 8 pre-switch bars, where the outgoing has nothing
 
 
@@ -427,31 +430,137 @@ def test_measured_planner_avoids_a_stretch_the_labels_would_pass():
     out_m = with_content(out, [0] * 10 + [1] * 66 + [0] * 24, [0] * 100)
     ins = trk(100, [(0, "INTRO"), (16, "DROP"), (32, "BREAK")], fills=[(31, 32)])
     ins_m = with_content(ins, [0] * 16 + [1] * 84, [0] * 100)
-    by_label = pb.plan_blend(out, ins)
-    by_stems = pb.plan_blend(out_m, ins_m)
+    by_label = pb.plan_blend(out, ins, r6=pb.R6_V1)
+    by_stems = pb.plan_blend(out_m, ins_m, r6=pb.R6_V1)
     assert by_label.flat_bars == 0
-    seen_by_stems = pb.content_check(out_m, ins_m, *by_label.key())[1]
+    seen_by_stems = pb.content_check(out_m, ins_m, *by_label.key(), r6=pb.R6_V1)[1]
     assert seen_by_stems > 0                       # the label plan IS flat on the stems
     assert by_stems.flat_bars == seen_by_stems == 8   # no phrase plan escapes: reported, not hidden
 
 
-def _measured_rows():
+def _measured_rows(mode):
     key = json.loads(sb.KEY.read_text(encoding="utf-8"))
     content = json.loads(sb.CONTENT.read_text(encoding="utf-8"))
+    r6 = sb.MODES[mode][1]
     rows = []
     for b in key["blends"]:
-        o = sb.prepare(key["tracks"][b["out"]], b["out"], "MEASURED", content)
-        n = sb.prepare(key["tracks"][b["in"]], b["in"], "MEASURED", content)
+        o = sb.prepare(key["tracks"][b["out"]], b["out"], mode, content)
+        n = sb.prepare(key["tracks"][b["in"]], b["in"], mode, content)
         sam = sb.sam_numbers(b, o)
-        rows.append((pb.plan_blend(o, n).key() == tuple(float(x) for x in sam),
-                     pb.content_check(o, n, *sam)[1]))
+        plan = pb.plan_blend(o, n, r6=r6)
+        sam_plan = pb.content_check(o, n, *sam, r6=r6)
+        rows.append((plan.key() == tuple(float(x) for x in sam), sam_plan[1],
+                     pb.flat_runs(sam_plan[0])))
     return rows
 
 
-def test_measured_score_is_pinned_unaided():
-    # Characterisation of the real stems with NO overrides and no tuning: blends 1, 3, 5, 6
-    # exact; blends 2 and 4 are not.  Flat bars the planner sees on Sam's own placement:
-    # blend 2 = 11, blend 4 = 14 (questions for Sam, not bugs to force).
-    rows = _measured_rows()
+def test_measured_v1_score_is_pinned_unaided():
+    # Round 2 rule, real stems, NO overrides, no tuning: blends 1, 3, 5, 6 exact; blends 2 and 4
+    # not.  Flat bars the planner sees on Sam's own placement: blend 2 = 11, blend 4 = 14.
+    rows = _measured_rows("MEASURED")
     assert [r[0] for r in rows] == [True, False, True, False, True, True]
     assert [r[1] for r in rows] == [0, 11, 0, 14, 0, 0]
+
+
+def test_bottom_end_score_is_pinned_unaided():
+    # Sam's statement of R6 (bottom end), real stems, no overrides, no tuning.  Blends 1-5 exact.
+    # Blend 6 misses, and not because of R6: Sam's placement and the planner's pick both have
+    # no flat bar; the planner prefers a switch at out bar 168 that is a phrase point of both
+    # tracks over Sam's at 160 (outgoing phrase point only), a 2.0 vs 1.81 trade of R2 terms.
+    # Sam's placement has no flat run before its switch in blend 4 and none after it in blend 2
+    # (only the last, partial bar 192 of PAX, where nothing is left).
+    rows = _measured_rows("BOTTOM END")
+    assert [r[0] for r in rows] == [True, True, True, True, True, False]
+    assert [r[2] for r in rows] == [[], [(192.0, 1.0)], [], [], [], []]
+
+
+# ---- R6 bottom end (Sam, 2026-11-20) -------------------------------------------------------
+def bottom(track_kick, track_bass, music=None, n=None):
+    n = n or len(track_kick)
+    t = with_content(trk(n, [(0, "INTRO")]), track_bass, music or [0] * n)
+    t["content"]["has_kick"] = list(track_kick)
+    return t
+
+
+def test_be_outgoing_before_switch_needs_kick_or_bass_after_switch_only_kick():
+    out = bottom([0, 1, 0, 0, 0, 1, 0, 0], [0, 0, 1, 0, 0, 0, 1, 0], music=[1] * 8)
+    be = pb.R6_BE
+    assert [pb._out_state(out, x, 4, be) for x in range(4)] == [False, True, True, False]
+    assert [pb._out_state(out, x, 4, be) for x in range(4, 8)] == [False, True, False, False]
+    # bass after the switch is cut; music never counts
+
+
+def test_be_incoming_gives_nothing_before_the_switch_then_kick_or_bass():
+    ins = bottom([1, 0, 1, 0, 0, 0], [1, 1, 0, 0, 0, 0], music=[1] * 6)
+    be = pb.R6_BE
+    assert pb._in_state(ins, 0, 0, 3, be) is False and pb._in_state(ins, 1, 2, 3, be) is False
+    assert pb._in_state(ins, 0, 3, 3, be) is True      # kick
+    assert pb._in_state(ins, 1, 4, 3, be) is True      # bass
+    assert pb._in_state(ins, 3, 6, 3, be) is False     # music alone does not give bottom end
+
+
+def test_be_music_does_not_rescue_a_bar_but_is_reported():
+    out = bottom([0] * 12, [0] * 12, music=[1] * 12)
+    ins = bottom([0] * 12, [0] * 12, music=[1] * 12)
+    st, flat = pb.content_check(out, ins, 0, 6, 12, r6=pb.R6_BE)
+    assert flat == 12 and len(st) == 1 and st[0]["flat"] and st[0]["music_bars"] == 12
+
+
+def test_be_a_one_bar_kick_drop_is_a_free_flat_run():
+    # outgoing kick drops for one bar (a fill) before the switch
+    out = bottom([1] * 5 + [0] + [1] * 6, [0] * 12)
+    ins = bottom([1] * 12, [0] * 12)
+    st, flat = pb.content_check(out, ins, 0, 8, 12, r6=pb.R6_BE)
+    runs = pb.flat_runs(st)
+    assert runs == [(5.0, 1.0)] and pb.flat_cost(runs) == 0
+
+
+def test_be_long_flat_run_is_costly():
+    out = bottom([1] * 4 + [0] * 28, [0] * 32)
+    ins = bottom([0] * 20 + [1] * 12, [0] * 32)
+    st, flat = pb.content_check(out, ins, 4, 16, 32, r6=pb.R6_BE)
+    runs = pb.flat_runs(st)
+    assert runs and runs[0][1] >= 16 and pb.flat_cost(runs) >= pb.W_FLAT_RUN * (runs[0][1] - pb.FREE_FLAT_BARS) ** 2 > 16
+
+
+def test_be_planner_prefers_a_plan_with_kicks_over_a_kickless_one():
+    out = bottom([1] * 100, [0] * 100)
+    out["sections"] = [[0, "INTRO"], [10, "DROP"]]
+    out["fills"] = [[67, 68], [83, 84]]
+    out["bpm"] = 128.0
+    # incoming has no kick before its bar 16 and then a full kick; any plan is fine for the
+    # outgoing (kick everywhere).  The planner must still produce a plan with no flat run.
+    ins = bottom([0] * 16 + [1] * 84, [0] * 100)
+    ins["sections"] = [[0, "INTRO"], [16, "DROP"], [32, "BREAK"]]
+    ins["fills"] = [[31, 32]]
+    ins["bpm"] = 128.0
+    p = pb.plan_blend(out, ins)
+    assert p.flat_runs == [] and p.flat_bars == 0
+
+
+def test_flat_cost_is_free_up_to_one_phrase_then_convex():
+    f = pb.FREE_FLAT_BARS
+    assert pb.flat_cost([(0, f)]) == 0 and pb.flat_cost([(0, 1)]) == 0
+    c1, c2, c3 = (pb.flat_cost([(0, f + d)]) for d in (4, 8, 16))
+    assert 0 < c1 < c2 < c3
+    assert c2 > 2 * c1 and c3 > 2 * c2
+
+
+def test_flat_cost_charges_each_continuous_run_not_the_total():
+    f = pb.FREE_FLAT_BARS
+    assert pb.flat_cost([(0, f), (20, f)]) == 0     # 16 flat bars in total, never 9 in a row
+    assert pb.flat_cost([(0, 2 * f)]) > 0
+
+
+def test_v1_flat_cost_is_the_per_bar_ban():
+    assert pb.flat_cost([(0, 3), (9, 2)], pb.R6_V1) == pb.W_FLAT * 5
+
+
+def test_flat_weight_makes_a_minute_of_drums_over_drums_as_dear_as_a_12_bar_cut():
+    assert pb.flat_cost([(0, 32)]) == pytest.approx(pb.W_CUT * 12)
+
+
+def test_plan_cost_is_the_sum_of_its_terms_and_reports_flat_runs():
+    for c in pb.candidates(OUT, IN, limit=8):
+        assert c.cost == pytest.approx(sum(c.terms.values()))
+        assert c.flat_bars == sum(n for _, n in c.flat_runs)

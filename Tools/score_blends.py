@@ -2,13 +2,18 @@
 
 Usage:  python Tools/score_blends.py [--detail] [--top N]
 
-Three columns, same planner and weights each time, only the R6 content source changes:
-  MEASURED  per-bar bass/music measured from the stems (Content 2026-11-20 DFTD.json), no overrides
-  LABELS    old R6: INTRO/OUTRO never carry, DROP/BUILD/BREAK do, no overrides
-  OVERRIDES old R6 labels plus the hand-set `carries` overrides below
-For each blend it prints the planner's answer, Sam's answer, and how many flat bars the planner
-sees on SAM'S placement (the direct test of whether R6 agrees with him).  The answer key and
-the content file are read only, never edited.
+Four columns.  Same planner and weights each time; only the R6 content source and rule change:
+  MEASURED    round 2: per-bar bass/music from the stems, per-bar flat ban (R6 v1), no overrides
+  LABELS      old R6: INTRO/OUTRO never carry, DROP/BUILD/BREAK do, per-bar ban (v1), no overrides
+  OVERRIDES   old R6 labels plus the hand-set `carries` overrides below (v1)
+  BOTTOM END  round 3, Sam's own statement of R6: a bar is flat when NEITHER side gives bottom
+              end (kick or bass; after the switch the outgoing's bass is cut so only its kick;
+              before the switch the incoming's lows are cut so it gives none).  Music is only
+              reported.  Flatness costs by the length of each continuous flat run.
+For each blend it prints the planner's answer, Sam's answer, and the flat runs (start+length, in
+the outgoing's bar numbers) on SAM'S placement and on the PLANNER'S pick.  A blend that misses
+under BOTTOM END gets a term-by-term cost breakdown of Sam's placement against the planner's
+pick.  The answer key and the content file are read only, never edited.
 """
 import json
 import sys
@@ -24,13 +29,19 @@ CONTENT = ROOT / "Documentation" / "Golden Sections" / "Content 2026-11-20 DFTD.
 # Per-section `carries` overrides, applied to a COPY of the key data (the key is not edited).
 # Kept only for the OVERRIDES column: with labels alone R6 calls blends 3, 4 and 6 flat.  They
 # were INFERRED from Sam accepting those blends, not measured, so that column is partly
-# circular.  The MEASURED column replaces them.
+# circular.  The MEASURED columns replace them.
 OVERRIDES = {
     "Ninetoes - Come Back": {0.0: True, 160.0: True},
     "Adam Ten & Rafael - Call 911": {0.0: True},
 }
 
-MODES = ("MEASURED", "LABELS", "OVERRIDES")
+# column name -> (content source, R6 rule)
+MODES = {
+    "MEASURED": ("measured", pb.R6_V1),
+    "LABELS": ("labels", pb.R6_V1),
+    "OVERRIDES": ("overrides", pb.R6_V1),
+    "BOTTOM END": ("measured", pb.R6_BE),
+}
 
 
 def apply_overrides(track, name, overrides):
@@ -44,12 +55,14 @@ def apply_overrides(track, name, overrides):
 
 
 def prepare(track, name, mode, content):
-    if mode == "OVERRIDES":
+    """mode: a column name, or one of 'measured' / 'labels' / 'overrides'."""
+    source = MODES[mode][0] if mode in MODES else mode.lower()
+    if source == "overrides":
         return apply_overrides(track, name, OVERRIDES)
     t = json.loads(json.dumps(track))
-    if mode == "MEASURED":
-        t["content"] = {"has_bass": content["tracks"][name]["has_bass"],
-                        "has_music": content["tracks"][name]["has_music"]}
+    if source == "measured":
+        c = content["tracks"][name]
+        t["content"] = {"has_bass": c["has_bass"], "has_music": c["has_music"], "has_kick": c["has_kick"]}
     return t
 
 
@@ -62,10 +75,10 @@ def sam_numbers(blend, out_t):
     return (blend["in_starts_at_out_bar"], blend["bass_switch_out_bar"], e)
 
 
-def _runs(flags, lo, hi):
+def _runs(flag, lo, hi):
     out, start = [], None
     for x in range(int(lo), int(hi) + 1):
-        f = x < hi and flags(x)
+        f = x < hi and flag(x)
         if f and start is None:
             start = x
         if not f and start is not None:
@@ -74,75 +87,91 @@ def _runs(flags, lo, hi):
     return " ".join(out) or "none"
 
 
+def _fmt_runs(runs):
+    return " ".join("%g+%g" % r for r in runs) or "none"
+
+
+def _sam_plan(o, n, sam, r6):
+    """Sam's placement scored exactly as the planner scores any candidate."""
+    return pb._score(o, n, sam[0], sam[1], sam[2], 0.0, 0.0, pb.phrase_points(o), pb.phrase_points(n), r6)
+
+
+def _breakdown(label, plan):
+    t = plan.terms
+    parts = " ".join("%s=%.2f" % (k, t[k]) for k in sorted(t))
+    return "      %-14s total %7.2f :: %s" % (label, plan.cost, parts or "all terms zero")
+
+
 def score(mode, top=0, detail=False, out=print):
     key = json.loads(KEY.read_text(encoding="utf-8"))
     content = json.loads(CONTENT.read_text(encoding="utf-8"))
+    r6 = MODES[mode][1]
     exact, rows = 0, []
-    out("--- R6 content source: %s ---" % mode)
+    out("--- %s (content: %s, R6 %s) ---" % (mode, MODES[mode][0], r6))
     for i, b in enumerate(key["blends"], 1):
         o = prepare(key["tracks"][b["out"]], b["out"], mode, content)
         n = prepare(key["tracks"][b["in"]], b["in"], mode, content)
-        plan = pb.plan_blend(o, n)
+        plan = pb.plan_blend(o, n, r6=r6)
         sam = sam_numbers(b, o)
         mine = plan.key() if plan else (None, None, None)
         ok = plan is not None and all(abs(x - y) < 1e-6 for x, y in zip(mine, sam))
         exact += ok
-        _, sam_flat = pb.content_check(o, n, *sam)
-        rows.append({"i": i, "ok": ok, "mine": mine, "sam": sam, "sam_flat": sam_flat, "plan": plan})
+        sp = _sam_plan(o, n, sam, r6)
+        rows.append({"i": i, "ok": ok, "mine": mine, "sam": sam, "plan": plan, "sam_plan": sp})
         out("%d. %s -> %s" % (i, b["out"][:30], b["in"][:30]))
-        if plan:
-            out("   planner: in %g  switch %g  end %g   (loop %g, in-loop %g, flat %g, cost %.2f)" % (
-                mine[0], mine[1], mine[2], plan.out_looped_bars, plan.in_intro_looped_bars,
-                plan.flat_bars, plan.cost))
-        else:
-            out("   planner: NO PLAN")
-        out("   Sam    : in %g  switch %g  end %g   -> %s   flat bars on Sam's placement: %g" % (
-            sam + ("EXACT" if ok else "MISS", sam_flat)))
-        if detail and sam_flat:
-            a, s_, e = sam
-            nb = n["n_bars"]
-            out("      flat on Sam's placement (out bar numbers); what each side has there:")
-            for st in pb.content_check(o, n, *sam)[0]:
+        out("   planner: in %g  switch %g  end %g  cost %.2f  flat runs: %s" % (
+            mine + (plan.cost, _fmt_runs(plan.flat_runs))))
+        out("   Sam    : in %g  switch %g  end %g  cost %.2f  flat runs: %s   -> %s" % (
+            sam + (sp.cost, _fmt_runs(sp.flat_runs), "EXACT" if ok else "MISS")))
+        if not ok and r6 == pb.R6_BE:
+            out("      cost breakdown, term by term (no weight was changed to flip this):")
+            out(_breakdown("planner's pick", plan))
+            out(_breakdown("Sam's placement", sp))
+            diff = {k: sp.terms.get(k, 0.0) - plan.terms.get(k, 0.0) for k in set(sp.terms) | set(plan.terms)}
+            out("      Sam minus planner, by term: " + " ".join(
+                "%s=%+.2f" % (k, diff[k]) for k in sorted(diff) if abs(diff[k]) > 1e-9))
+        if r6 == pb.R6_BE and (detail or not ok):
+            co, ci = content["tracks"][b["out"]], content["tracks"][b["in"]]
+            a_, s_, e_ = sam
+            rr = lambda tr, key, lo, hi: _runs(lambda x: x < len(tr[key]) and tr[key][x], lo, hi)
+            out("      measured on Sam's placement (out bars %g-%g, switch %g; incoming bars 0-%g):" % (a_, e_, s_, e_ - a_))
+            out("        outgoing kick %s | bass %s | music %s" % (
+                rr(co, "has_kick", a_, e_), rr(co, "has_bass", a_, e_), rr(co, "has_music", a_, e_)))
+            out("        incoming kick %s | bass %s | music %s" % (
+                rr(ci, "has_kick", 0, e_ - a_), rr(ci, "has_bass", 0, e_ - a_), rr(ci, "has_music", 0, e_ - a_)))
+        if detail and sp.flat_bars:
+            a = sam[0]
+            out("      what each side has in Sam's flat stretches (out bar numbers, incoming bar = out - %g):" % a)
+            for st in sp.stretches:
                 if st["flat"]:
-                    out("        out bars %g-%g: outgoing carries=%s, incoming carries=%s (incoming bars %g-%g)" % (
-                        st["start"], st["end"], st["out"], st["in"], st["start"] - a, st["end"] - a))
-            if mode == "MEASURED":
-                co, ci = content["tracks"][b["out"]], content["tracks"][b["in"]]
-                out("        outgoing %s in %g-%g: bass %s | music %s" % (
-                    b["out"][:20], a, e,
-                    _runs(lambda x: x < len(co["has_bass"]) and co["has_bass"][x], a, e),
-                    _runs(lambda x: x < len(co["has_music"]) and co["has_music"][x], a, e)))
-                out("        incoming %s in %g-%g: bass %s | music %s" % (
-                    b["in"][:20], 0, e - a,
-                    _runs(lambda j: j < len(ci["has_bass"]) and ci["has_bass"][j], 0, e - a),
-                    _runs(lambda j: j < len(ci["has_music"]) and ci["has_music"][j], 0, e - a)))
-        if top or not ok:
-            allc = pb.candidates(o, n)
-            for c in allc[:max(top, 3)]:
-                out("      cand %-26s cost %6.2f flat %g loop %g/%g" % (
-                    c.key(), c.cost, c.flat_bars, c.out_looped_bars, c.in_intro_looped_bars))
-            sc = [c for c in allc if all(abs(x - y) < 1e-6 for x, y in zip(c.key(), sam))]
-            if sc:
-                out("      Sam's plan is candidate rank %d, cost %.2f, flat %g" % (
-                    allc.index(sc[0]) + 1, sc[0].cost, sc[0].flat_bars))
-            else:
-                out("      Sam's plan is NOT in the candidate set")
+                    out("        out bars %g-%g (incoming %g-%g): outgoing carries=%s, incoming carries=%s" % (
+                        st["start"], st["end"], st["start"] - a, st["end"] - a, st["out"], st["in"]))
+        if top:
+            for c in pb.candidates(o, n, limit=top, r6=r6):
+                out("      cand %-26s cost %6.2f flat %g" % (c.key(), c.cost, c.flat_bars))
     out("TOTAL %s: %d of %d exact" % (mode, exact, len(rows)))
     return exact, rows
 
 
 def table(out=print):
     res = {m: score(m, out=lambda *_: None)[1] for m in MODES}
+    names = list(MODES)
     out("")
-    out("blend | " + " | ".join("%-27s" % m for m in MODES))
-    out("      | " + " | ".join("%-27s" % "result (flat bars on Sam)" for _ in MODES))
+    out("blend | " + " | ".join("%-24s" % m for m in names))
     for i in range(6):
         cells = []
-        for m in MODES:
+        for m in names:
             r = res[m][i]
-            cells.append("%-27s" % ("%s (%g)" % ("EXACT" if r["ok"] else "MISS %g/%g/%g" % r["mine"], r["sam_flat"])))
+            cells.append("%-24s" % ("EXACT" if r["ok"] else "MISS %g/%g/%g" % r["mine"]))
         out("%5d | %s" % (i + 1, " | ".join(cells)))
-    out("total | " + " | ".join("%-27s" % ("%d of 6" % sum(r["ok"] for r in res[m])) for m in MODES))
+    out("total | " + " | ".join("%-24s" % ("%d of 6" % sum(r["ok"] for r in res[m])) for m in names))
+    out("")
+    out("flat runs (start+length) on SAM'S placement / on the PLANNER'S pick, per column:")
+    for i in range(6):
+        for m in names:
+            r = res[m][i]
+            out("  blend %d  %-12s Sam: %-28s planner: %s" % (
+                i + 1, m, _fmt_runs(r["sam_plan"].flat_runs), _fmt_runs(r["plan"].flat_runs)))
 
 
 if __name__ == "__main__":

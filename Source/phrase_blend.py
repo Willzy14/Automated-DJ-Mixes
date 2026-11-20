@@ -23,7 +23,7 @@ BEFORE the six answer-key blends were run and were not tuned to pass them.
 from dataclasses import dataclass, field
 
 # ---- hand-set weights (cost; lower is better) -------------------------------------------
-W_FLAT = 10.0          # R6: flat is "penalised hard"; one flat bar costs more than any loop
+W_FLAT = 10.0          # R6 v1 (round 2 rule, kept for comparison): flat is a per-bar ban
 W_CUT = 12.0           # R5: never cut a usable outro short; dearest thing a plan can do
 W_LOOP = 1.5           # R4: prefer no loop; a loop is the cheap way to lengthen a blend
 W_ENTRY_SECTION = 1.0  # R1: entry "normally" on a fill END; a plain section start is second best
@@ -32,6 +32,23 @@ W_SWITCH_ONE = 2.0     # R2: "where possible" on both tracks; one side only is a
 W_SWITCH_NONE = 12.0   # R2: a switch on no phrase point of either track is the worst case
 W_LEN = 0.5            # R1: aim for about a minute; the clock is soft, the phrase decides
 W_SWITCH_TIME = 0.25   # R2: switch roughly 30 s from the end; softest term of all
+# R6 "bottom end" (BE), from Sam's words (2026-11-20): "what you don't want to be doing is
+# putting an outro that doesn't have a kick in it, that's just percussion, mixing with an intro
+# that doesn't have a kick in it ... There's no bottom end energy in that mix then ... You want
+# to try and keep the energy up all the time."  A blend bar is FLAT when neither side gives
+# bottom end (kick or bass; after the switch the outgoing's bass is cut, so only its kick).
+# Music (vocal, pads) does not rescue a bar; it is only reported.  And, his earlier words,
+# drums over drums "sometimes works, you just don't want it to happen for ages", so flatness
+# costs by the length of each CONTINUOUS flat run, not per bar:
+#   cost = W_FLAT_RUN * max(0, run_bars - FREE_FLAT_BARS) ** 2, summed over runs.
+FREE_FLAT_BARS = 8.0   # one phrase (8 bars, about 15 s): "sometimes works" costs nothing up to
+#                        here, which also keeps a one or two bar fill (kick drops for a bar) free
+W_FLAT_RUN = 0.25      # "ages" = a full minute (32 bars): 0.25 * 24**2 = 144, the same as cutting
+#                        12 bars of outro (W_CUT), the worst thing R5 forbids.  Sam gave no numbers;
+#                        this is the one place a number is a judgement, not a measurement.
+R6_V1 = "v1"           # round 2: bass or music counts; per-bar flat ban (kept for comparison)
+R6_BE = "be"           # round 3: bottom end (kick or bass); convex per-run flat cost
+R6_V2 = R6_BE          # alias so older callers keep working
 
 MIX_ZONE_BARS = 64      # R9: first 64 bars of the incoming, last 64 of the outgoing
 END_SLACK_BARS = 1.0    # n_bars counts a partial final bar (PAX 193): a target within 1 bar
@@ -55,6 +72,8 @@ class BlendPlan:
     flat_bars: float = 0.0
     cost: float = 0.0
     why: list = field(default_factory=list)
+    flat_runs: list = field(default_factory=list)   # [(start out bar, length)]
+    terms: dict = field(default_factory=dict)       # cost broken down term by term
 
     def key(self):
         return (self.in_starts_at_out_bar, self.bass_switch_out_bar, self.out_end_bar)
@@ -109,34 +128,40 @@ def _intro_loop_options(track):
 
 
 def _measured(track, bar):
-    """Measured (has_bass, has_music) at a bar, or None when the track carries no content.
-    track["content"] = {"has_bass": [0/1 per bar], "has_music": [0/1 per bar]} as written by
-    Tools/measure_section_content.py.  Bars past the end read as the last bar."""
+    """Measured (has_bass, has_music, has_kick) at a bar, or None when the track carries no
+    content.  track["content"] = {"has_bass": [0/1 per bar], "has_music": [...], "has_kick":
+    [...]} as written by Tools/measure_section_content.py (has_kick optional: absent reads as
+    no kick).  Bars past the end read as the last bar."""
     c = track.get("content")
     if not c:
         return None
     i = min(max(int(bar + 1e-9), 0), len(c["has_bass"]) - 1)
-    return bool(c["has_bass"][i]), bool(c["has_music"][i])
+    k = c.get("has_kick")
+    return bool(c["has_bass"][i]), bool(c["has_music"][i]), bool(k[i]) if k else False
 
 
-def _out_state(track, x, switch):
-    """R6: does the outgoing carry what the blend needs at out bar x?  Priority: an explicit
+def _out_state(track, x, switch, r6=R6_BE):
+    """R6: does the outgoing give what the blend needs at out bar x?  Priority: an explicit
     section `carries` flag, then MEASURED content, then labels.
-    Measured: before the switch the outgoing must have bass or music; after it its bass has
-    left, so only music counts.  Labels: DROP/BUILD/BREAK carry, and only before the switch."""
+    Bottom end (BE): before the switch the outgoing needs kick or bass; after it its bass has
+    been cut, so only its kick counts.  v1: bass or music before, music only after.
+    Labels: DROP/BUILD/BREAK carry, and only before the switch."""
     n = float(track["n_bars"])
     sec = _section_at(track, min(x, n - 1e-6))
     if sec[2] is not None:
         return sec[2]
     m = _measured(track, x)
     if m is not None:
-        return (m[0] or m[1]) if x < switch - 1e-9 else m[1]
+        if r6 == R6_V1:
+            return (m[0] or m[1]) if x < switch - 1e-9 else m[1]
+        return (m[0] or m[2]) if x < switch - 1e-9 else m[2]
     return x < switch - 1e-9 and sec[1] in CARRY_LABELS
 
 
-def _in_state(track, j, x, switch):
-    """R6/R7: the incoming's lows are cut before the switch, so only percussion counts there.
-    After the switch it carries if it has bass or music (measured), or by flag, or by label."""
+def _in_state(track, j, x, switch, r6=R6_BE):
+    """R6/R7: the incoming's lows are cut before the switch, so it gives no bottom end there
+    (only percussion).  After the switch: BE counts kick or bass; v1 counts bass or music.
+    A section `carries` flag, then labels, apply when there is no measured content."""
     if x < switch - 1e-9:
         return False
     n = float(track["n_bars"])
@@ -145,7 +170,7 @@ def _in_state(track, j, x, switch):
         return sec[2]
     m = _measured(track, max(j, 0.0))
     if m is not None:
-        return m[0] or m[1]
+        return (m[0] or m[1]) if r6 == R6_V1 else (m[0] or m[2])
     return sec[1] in CARRY_LABELS
 
 
@@ -158,31 +183,50 @@ def _in_bar(x, a, loop_p, loop_l):
     return x - a - loop_l
 
 
-def content_check(out_t, in_t, a, s, e, loop_p=0.0, loop_l=0.0):
-    """R6 per-stretch content check.  Walks the blend bar by bar, merges runs.  Returns
-    (stretches, flat_bars); a stretch is {start, end, out, in, flat}."""
+def content_check(out_t, in_t, a, s, e, loop_p=0.0, loop_l=0.0, r6=R6_BE):
+    """R6 per-stretch content check.  Walks the blend bar by bar and merges runs of the same
+    (outgoing gives, incoming gives) state, so adjacent flat bars form one flat run.  Returns
+    (stretches, flat_bars); a stretch is {start, end, out, in, flat, music_bars} where music_bars
+    counts bars in it where either side has measured music (reported, never rescues a flat bar)."""
     stretches, flat = [], 0.0
     x = a
     while x < e - 1e-9:
         nxt = min(x + 1.0, e)
         j = _in_bar(x, a, loop_p, loop_l)
-        o = _out_state(out_t, x, s)
-        i = _in_state(in_t, j, x, s)
+        o = _out_state(out_t, x, s, r6)
+        i = _in_state(in_t, j, x, s, r6)
         f = (not o) and (not i)
+        mo, mi = _measured(out_t, x), _measured(in_t, max(j, 0.0))
+        music = bool((mo and mo[1]) or (mi and mi[1] and x >= s - 1e-9))
         if f:
             flat += nxt - x
         if stretches and stretches[-1]["out"] == o and stretches[-1]["in"] == i:
             stretches[-1]["end"] = nxt
+            stretches[-1]["music_bars"] += (nxt - x) if music else 0.0
         else:
-            stretches.append({"start": x, "end": nxt, "out": o, "in": i, "flat": f})
+            stretches.append({"start": x, "end": nxt, "out": o, "in": i, "flat": f,
+                              "music_bars": (nxt - x) if music else 0.0})
         x = nxt
     return stretches, flat
 
 
+def flat_runs(stretches):
+    """Maximal continuous flat runs as (start out bar, length).  Flat means both sides are
+    False, a single state, so adjacent flat stretches are already merged."""
+    return [(st["start"], st["end"] - st["start"]) for st in stretches if st["flat"]]
+
+
+def flat_cost(runs, r6=R6_BE):
+    """v1: per-bar ban.  v2: convex per continuous run, free up to one phrase."""
+    if r6 == R6_V1:
+        return W_FLAT * sum(n for _, n in runs)
+    return W_FLAT_RUN * sum(max(0.0, n - FREE_FLAT_BARS) ** 2 for _, n in runs)
+
+
 # ---- candidate generation and scoring ---------------------------------------------------
-def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts):
+def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE):
     n_out = float(out_t["n_bars"])
-    why, cost = [], 0.0
+    why, cost, terms = [], 0.0, {}
     fill_ends = {float(f[1]) for f in out_t.get("fills", [])}
     sec_starts = {x[0] for x in _sections(out_t)}
 
@@ -191,9 +235,11 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts):
         why.append("R1: entry at out bar %g is the end of an outgoing fill" % a)
     elif a in sec_starts:
         cost += W_ENTRY_SECTION
+        terms["entry"] = W_ENTRY_SECTION
         why.append("R1: entry at out bar %g is an outgoing section start (not a fill end)" % a)
     else:
         cost += W_ENTRY_OFF
+        terms["entry"] = W_ENTRY_OFF
         why.append("R1: entry at out bar %g is NOT an outgoing phrase point (placed back from the switch)" % a)
 
     # R2: switch on a phrase point of both tracks where possible
@@ -204,16 +250,19 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts):
         why.append("R2: switch is a phrase point of both tracks (out bar %g, incoming bar %g)" % (s, k))
     elif out_hit or in_hit:
         cost += W_SWITCH_ONE
+        terms["switch_phrase"] = W_SWITCH_ONE
         why.append("R2: switch is a phrase point of the %s only (out bar %g, incoming bar %g)"
                    % ("outgoing" if out_hit else "incoming", s, k))
     else:
         cost += W_SWITCH_NONE
+        terms["switch_phrase"] = W_SWITCH_NONE
         why.append("R2: switch is on no phrase point of either track (out bar %g, incoming bar %g)" % (s, k))
 
     # R1/R2 clock terms, soft
     bars_min = float(out_t["bpm"]) / 4.0   # bars in 60 s
-    cost += W_LEN * abs((e - a) - bars_min)
-    cost += W_SWITCH_TIME * abs((e - s) - bars_min / 2.0)
+    terms["length"] = W_LEN * abs((e - a) - bars_min)
+    terms["switch_time"] = W_SWITCH_TIME * abs((e - s) - bars_min / 2.0)
+    cost += terms["length"] + terms["switch_time"]
     why.append("blend %g bars (%.0f s), switch %g bars (%.0f s) before the end"
                % (e - a, (e - a) * 240.0 / float(out_t["bpm"]), e - s, (e - s) * 240.0 / float(out_t["bpm"])))
 
@@ -223,10 +272,12 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts):
     out_end = e
     if looped > 0:
         cost += W_LOOP * looped
+        terms["out_loop"] = W_LOOP * looped
         why.append("R3/R4: outgoing tail looped %g bars to reach the incoming phrase point at incoming bar %g"
                    % (looped, e - a - loop_l))
     elif cut > 0:
         cost += W_CUT * cut
+        terms["cut"] = W_CUT * cut
         why.append("R5: outgoing outro CUT by %g bars" % cut)
     else:
         out_end = n_out
@@ -234,19 +285,25 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts):
                    % (e - a - loop_l))
     if loop_l > 0:
         cost += W_LOOP * loop_l
+        terms["in_loop"] = W_LOOP * loop_l
         why.append("R3/R4: incoming intro looped %g bars (phrase ending at incoming bar %g)" % (loop_l, loop_p))
 
     # R6: flat check
-    stretches, flat = content_check(out_t, in_t, a, s, out_end, loop_p, loop_l)
-    cost += W_FLAT * flat
-    why.append("R6: %g flat bars" % flat if flat else "R6: no flat stretch (one side carries throughout)")
+    stretches, flat = content_check(out_t, in_t, a, s, out_end, loop_p, loop_l, r6)
+    runs = flat_runs(stretches)
+    flat_c = flat_cost(runs, r6)
+    cost += flat_c
+    terms["flat"] = flat_c
+    why.append("R6: %g flat bars in runs %s" % (flat, ["%g+%g" % r for r in runs]) if flat
+               else "R6: no flat stretch (one side carries throughout)")
 
     return BlendPlan(in_starts_at_out_bar=a, bass_switch_out_bar=s, out_end_bar=out_end,
                      out_looped_bars=looped, in_intro_looped_bars=loop_l, out_cut_bars=cut,
-                     stretches=stretches, flat_bars=flat, cost=cost, why=why)
+                     stretches=stretches, flat_bars=flat, cost=cost, why=why,
+                     flat_runs=runs, terms=terms)
 
 
-def candidates(out_t, in_t, limit=None):
+def candidates(out_t, in_t, limit=None, r6=R6_BE):
     """Ranked list of BlendPlan, best first.  Switch points come from ORIGINAL phrase points
     only (R4); loops only lengthen the blend.  Entries and switches outside the mix zones
     are not considered (R9)."""
@@ -288,13 +345,13 @@ def candidates(out_t, in_t, limit=None):
             if sig in seen:
                 continue
             seen.add(sig)
-            plans.append(_score(out_t, in_t, a, s, e, p, l, out_pts, in_pts))
+            plans.append(_score(out_t, in_t, a, s, e, p, l, out_pts, in_pts, r6))
     plans.sort(key=lambda b: (round(b.cost, 9), b.in_intro_looped_bars, b.out_looped_bars,
                               b.in_starts_at_out_bar, b.bass_switch_out_bar, b.out_end_bar))
     return plans[:limit] if limit else plans
 
 
-def plan_blend(out_track, in_track):
+def plan_blend(out_track, in_track, r6=R6_BE):
     """The single best blend, or None if no plan fits the mix zones."""
-    c = candidates(out_track, in_track, limit=1)
+    c = candidates(out_track, in_track, limit=1, r6=r6)
     return c[0] if c else None
