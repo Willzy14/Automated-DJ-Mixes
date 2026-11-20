@@ -872,6 +872,8 @@ def _check_cached_sections_inner(path: Path, wav_stem: str, allow_unverified: bo
         return None, f"{path.name} has no section with a finite positive end_sec"
     track_end = max(ends)
     for key, val in hints.items():
+        if key == "fallback_hints":
+            continue
         if not (isinstance(val, (int, float)) and math.isfinite(val)
                 and 0 < val <= track_end + 0.01):
             return None, (f"{path.name} gives an invalid hint {key}={val!r} "
@@ -939,7 +941,6 @@ def _may_overwrite_sections_json(path: Path, kick_model_on: bool,
               f"{type(exc).__name__}: {_ascii(exc)}; overwriting")
         return True
     if state == KICK_ON:
-        require_section_mode(prior, section_mode, "stem_detector overwrite guard", path.name)
         if section_mode == SECTION_MODE_GROOVE:
             raise SectionFormatError(
                 f"{path.name} was written with the kick model. Re-run groove section "
@@ -1636,7 +1637,8 @@ def hints_from_stem_result(res: dict) -> dict:
         outro_start = max(first_drop + sec_per_bar, end_sec - 32 * sec_per_bar)
     if not first_break or first_break <= 0:
         first_break = first_drop + 16 * sec_per_bar
-    if not last_bass_drop or last_bass_drop <= 0:
+    synthetic_bass_drop = not last_bass_drop or last_bass_drop <= 0
+    if synthetic_bass_drop:
         last_bass_drop = (outro_start if mode == SECTION_MODE_GROOVE else
                           max(first_drop, outro_start - 16 * sec_per_bar))
 
@@ -1649,12 +1651,23 @@ def hints_from_stem_result(res: dict) -> dict:
         outro_start = min(outro_start, end_sec)
         last_bass_drop = min(last_bass_drop, end_sec)
 
-    return {
+    hints = {
         "first_drop_sec": round(first_drop, 2),
         "first_break_sec": round(first_break, 2),
         "outro_start_sec": round(outro_start, 2),
         "last_bass_drop_sec": round(last_bass_drop, 2),
     }
+    if mode == SECTION_MODE_GROOVE and outro is None:
+        fallbacks = {
+            "outro_start_sec": {"fallback": True, "reason": "No outro section was detected."},
+        }
+        if synthetic_bass_drop:
+            fallbacks["last_bass_drop_sec"] = {
+                "fallback": True,
+                "reason": "No eligible fill end or detected outro. Used the fallback outro start.",
+            }
+        hints["fallback_hints"] = fallbacks
+    return hints
 
 
 def main():

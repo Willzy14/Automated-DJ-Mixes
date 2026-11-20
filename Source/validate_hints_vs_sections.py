@@ -22,7 +22,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from section_format import GROOVE, section_mode_of
+from section_format import GROOVE, GROOVE_DETECTOR, section_detector_of, section_mode_of
 
 
 def _label(sec: dict) -> str:
@@ -78,9 +78,8 @@ def _bpm_lookup(project_dir: Path,
             continue
         out.setdefault(stem, bpm)
         out.setdefault(stem + ".wav", bpm)
-        if groove_clocks is not None and section_mode_of(
-            d, "validate_hints_vs_sections", j.name
-        ) == GROOVE:
+        if (groove_clocks is not None and section_detector_of(d) == GROOVE_DETECTOR
+                and section_mode_of(d, "validate_hints_vs_sections", j.name) == GROOVE):
             first = d["sections"][0]
             downbeat = d["analysis"].get(
                 "downbeat_sec", first["start_sec"] - first["start_bar"] * 240.0 / bpm)
@@ -150,6 +149,7 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
     has_error = False
     has_warn = False
     rows = 0
+    fallback_warnings = []
     matched_hint_keys: set[str] = set()
     for raw_track_name, secs in sections_data.items():
         if not raw_track_name or not secs:
@@ -168,6 +168,10 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
                 break
         if not hint_entry:
             continue
+        for hint_key, info in hint_entry.get("fallback_hints", {}).items():
+            if info.get("fallback") is True:
+                fallback_warnings.append(f"WARN: {track_name} / {hint_key}: {info['reason']}")
+                has_warn = True
         bpm = bpms.get(track_name)
         if bpm is None:
             # Try the .wav variant
@@ -254,6 +258,8 @@ def validate(project_dir: Path, version: int | None = None) -> tuple[int, list[s
         lines.append(f"| {name[:40]} | (no matching sections track) | - | - | - | - "
                      f"| ✗ error |")
 
+    if fallback_warnings:
+        lines.extend(["", *fallback_warnings])
     summary = (
         f"\n**Total checks:** {rows} | "
         f"errors: {'yes' if has_error else 'none'} | "

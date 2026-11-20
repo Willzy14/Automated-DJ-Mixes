@@ -412,8 +412,15 @@ def run_pipeline(
         n_stem = n_snap = 0
 
     if sections_layout and stem_sections and not previews_only:
-        from stem_detector import detect as stem_detect
+        from stem_detector import _may_overwrite_sections_json, detect as stem_detect
         from automated_dj_mixes.phrase_viz import segments_from_stem_sections, validate_bar_math
+        if section_mode == GROOVE:
+            # Check every cache before the first per-track write. A kick-off
+            # groove run cannot replace a cache written with the kick model.
+            stem_dir = input_dir.parent / "_Stem Analysis"
+            for analysis in analyses:
+                cache = stem_dir / f"SECTIONS_STEM_{analysis.path.stem}.json"
+                _may_overwrite_sections_json(cache, kick_model, section_mode)
 
     # The grid (stem-grid or tick-grid) is the BPM AUTHORITY for every track
     # that has one. Without this, a.bpm stays librosa's quantized lattice
@@ -551,7 +558,7 @@ def run_pipeline(
                 elif section_mode == GROOVE:
                     raise SectionFormatError(f"No groove sections produced for {a.path.name}")
             except Exception as e:
-                if section_mode == GROOVE or isinstance(e, SectionFormatError):
+                if section_mode == GROOVE:
                     raise
                 print(f"  WARNING: stem section detection failed for {a.path.name}: {e}")
         elif sections_layout and not previews_only:

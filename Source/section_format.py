@@ -99,12 +99,17 @@ def require_uniform_modes(modes, reader: str) -> None:
             "Re-run Phase 1a with one --section-mode for all tracks.")
 
 
-def track_section_mode(stem_dir: Path, track_name: str, reader: str) -> str:
+def track_section_mode(stem_dir: Path, track_name: str, reader: str, *,
+                       required: bool = False) -> str:
     """Check a layout track's sibling analysis for consumers of derived clips."""
     name = html.unescape(track_name)
     path = stem_dir / f"SECTIONS_STEM_{name.removesuffix('.wav')}.json"
     try:
         result = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if required:
+            raise SectionFormatError(f"{reader}: cannot read section analysis {path}: {exc}") from exc
         return LEGACY
+    if required and not isinstance(result, dict):
+        raise SectionFormatError(f"{reader}: invalid section analysis in {path}")
     return section_mode_of(result, reader, path.name)

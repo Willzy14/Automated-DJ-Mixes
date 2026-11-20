@@ -29,6 +29,7 @@ Two things are pinned here:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,7 @@ import automated_dj_mixes.stem_grid as stem_grid
 import probe_stem_kick_grid
 import stem_detector
 from automated_dj_mixes.analysis import TrackAnalysis
+from section_format import SectionFormatError, require_legacy
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +201,74 @@ def test_a_track_that_fails_leaves_no_marker_but_does_not_lose_earlier_ones(
     # The failed track still gets a stage-3 attempt (fallback bpm, no grid) —
     # its OWN cache is not corrupted or half-written, it simply has no grid.
     assert (stem_dir / "CACHE_Bad SW V1.marker").exists()
+
+
+def _write_analysis_inputs(project, monkeypatch, analyses):
+    audio = project / "Audio"
+    audio.mkdir()
+    stem_dir = project / "_Stem Analysis"
+    stem_dir.mkdir()
+    tracks = []
+    for name, header in analyses:
+        wav = audio / f"{name}.wav"
+        wav.touch()
+        (stem_dir / f"SECTIONS_STEM_{name}.json").write_text(
+            json.dumps({"analysis": header}), encoding="utf-8")
+        tracks.append(TrackAnalysis(path=wav, bpm=120.0, camelot="8A",
+                                    lufs=-8.0, first_downbeat_sec=0.0, duration_sec=180.0))
+    monkeypatch.setattr(orchestrator, "analyse_folder", lambda _: tracks)
+    return audio, stem_dir
+
+
+def test_legacy_stage_three_warns_on_foreign_and_continues_as_on_main(
+        tmp_path, monkeypatch, capsys):
+    audio, stem_dir = _write_analysis_inputs(
+        tmp_path, monkeypatch, [("First", {}), ("Foreign", {"section_detector": "other-1"}),
+                                ("Last", {})])
+    processed = []
+
+    def legacy_reader(path, *_args, **_kwargs):
+        cache = stem_dir / f"SECTIONS_STEM_{path.stem}.json"
+        require_legacy(json.loads(cache.read_text(encoding="utf-8")), "legacy reader", cache.name)
+        processed.append(path.stem)
+        return None
+
+    def no_grid(*_args, **_kwargs):
+        raise RuntimeError("simulated missing grid")
+
+    monkeypatch.setattr(stem_grid, "detect_beat_grid", no_grid)
+    monkeypatch.setattr(stem_detector, "detect", legacy_reader)
+    with pytest.raises(RuntimeError, match="Owned stem-grid MISSING"):
+        orchestrator.run_pipeline(audio, tmp_path / "Output", skip_desktop_analyze=True,
+                                  stem_grid=True, stem_sections=True, allow_non_master=True)
+    assert processed == ["First", "Last"]
+    warnings = capsys.readouterr().out
+    assert "WARNING: stem section detection failed for Foreign.wav:" in warnings
+    assert "other-1" in warnings
+    assert "stem section detection failed for First.wav" not in warnings
+    assert "stem section detection failed for Last.wav" not in warnings
+
+
+def test_groove_stage_three_checks_later_protected_cache_before_any_track_write(
+        tmp_path, monkeypatch):
+    audio, stem_dir = _write_analysis_inputs(tmp_path, monkeypatch, [
+        ("First", {"kick_model": False}),
+        ("Second", {"section_detector": "groove-1", "sections_schema": 2, "kick_model": True}),
+    ])
+    first = stem_dir / "SECTIONS_STEM_First.json"
+    original = first.read_bytes()
+    monkeypatch.setattr(stem_grid, "detect_beat_grid", lambda *a, **k: _fake_grid())
+
+    def overwrite_first(*_args, **_kwargs):
+        first.write_text("changed", encoding="utf-8")
+        pytest.fail("Stage 3 ran before checking every cache")
+
+    monkeypatch.setattr(stem_detector, "detect", overwrite_first)
+    with pytest.raises(SectionFormatError, match=r"SECTIONS_STEM_Second.*--kick-model"):
+        orchestrator.run_pipeline(audio, tmp_path / "Output", skip_desktop_analyze=True,
+                                  stem_grid=True, stem_sections=True, section_mode="groove",
+                                  allow_non_master=True)
+    assert first.read_bytes() == original
 
 
 # ---------------------------------------------------------------------------

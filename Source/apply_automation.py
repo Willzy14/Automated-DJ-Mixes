@@ -19,6 +19,7 @@ Example:
 
 from __future__ import annotations
 
+import argparse
 import gzip
 import json
 import os
@@ -31,6 +32,7 @@ from pathlib import Path
 
 from align_engine import LANDMARK_POLICIES
 from automated_dj_mixes.als_generator import split_audio_clips_at_beats
+from section_format import GROOVE, LEGACY, SECTION_MODES, SectionFormatError, track_section_mode
 
 
 class TransitionStyle(Enum):
@@ -1535,21 +1537,60 @@ def _unlink_quiet(path: Path) -> None:
         pass
 
 
-def main() -> None:
-    if len(sys.argv) < 4:
-        print("Usage: python apply_automation.py <sections.als> <sections.json> "
-              "<output.als> [arrangement_report.json] [mix_plan.json]")
-        sys.exit(1)
+def _requires_report_swaps(als_path: Path, tracks: list[TrackInfo],
+                           section_mode: str | None) -> bool:
+    stem_dir = als_path.parent.parent / "_Stem Analysis"
+    if not stem_dir.is_dir():
+        stem_dir = als_path.parent / "_Stem Analysis"
+    if not stem_dir.is_dir():
+        if section_mode == GROOVE:
+            raise SectionFormatError(f"apply_automation: groove requires a _Stem Analysis "
+                                     f"directory beside {als_path} or its Output folder")
+        return False
 
-    als_path = Path(sys.argv[1])
-    json_path = Path(sys.argv[2])
-    output_path = Path(sys.argv[3])
-    arrangement_report_path = Path(sys.argv[4]) if len(sys.argv) >= 5 else None
+    modes = {}
+    errors = []
+    for track in tracks:
+        try:
+            modes[track.name] = track_section_mode(stem_dir, track.name, "apply_automation",
+                                                  required=True)
+        except SectionFormatError as exc:
+            errors.append(exc)
+    has_groove = GROOVE in modes.values()
+    if section_mode != GROOVE and not has_groove:
+        return False
+    if section_mode == LEGACY:
+        raise SectionFormatError("apply_automation: groove analysis found with --section-mode legacy. "
+                                 "Use --section-mode groove or rebuild the layout in legacy mode.")
+    if errors:
+        raise errors[0]
+    for name, mode in modes.items():
+        if mode != GROOVE:
+            raise SectionFormatError(f"apply_automation: {name!r} has legacy sections. "
+                                     "Re-run Phase 1a with --section-mode groove for all tracks.")
+    return True
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("sections_als", type=Path)
+    parser.add_argument("sections_json", type=Path)
+    parser.add_argument("output_als", type=Path)
+    parser.add_argument("arrangement_report", type=Path, nargs="?")
+    parser.add_argument("mix_plan", type=Path, nargs="?")
+    parser.add_argument("--section-mode", choices=SECTION_MODES,
+                        help="Select groove explicitly to require its analysis for every track. "
+                             "By default, detect groove from the available analysis.")
+    args = parser.parse_args()
+    als_path = args.sections_als
+    json_path = args.sections_json
+    output_path = args.output_als
+    arrangement_report_path = args.arrangement_report
     # Optional 5th positional: MixPlan JSON (Phase 2c artefact). When
     # present, the ALS and report are staged and gated before publishing;
     # when absent, behaviour is unchanged (mix.md:344 - a run
     # without Phase 2c has no MixPlan to reconcile, skip the gate).
-    mix_plan_path = Path(sys.argv[5]) if len(sys.argv) >= 6 else None
+    mix_plan_path = args.mix_plan
 
     # Deterministic IDs regardless of what ran before us in this process.
     reset_automation_ids()
@@ -1597,13 +1638,7 @@ def main() -> None:
     # ── plan transitions ──────────────────────────────────────────────
     report_path = _resolve_report_path(als_path, arrangement_report_path)
     report_swaps = _load_arrangement_report(als_path, arrangement_report_path)
-    from section_format import GROOVE, track_section_mode
-
-    stem_dir = als_path.parent.parent / "_Stem Analysis"
-    if not stem_dir.exists():
-        stem_dir = als_path.parent / "_Stem Analysis"
-    groove = any(track_section_mode(stem_dir, t.name, "apply_automation") == GROOVE
-                 for t in tracks)
+    groove = _requires_report_swaps(als_path, tracks, args.section_mode)
     plans = plan_transitions(tracks, report_swaps, require_report_swaps=groove)
     print(f"\n{len(plans)} transitions planned:")
     for i, p in enumerate(plans):

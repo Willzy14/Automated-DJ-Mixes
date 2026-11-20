@@ -670,7 +670,7 @@ class Track:
     loop_quality_context: LoopQualityContext | None = field(
         default=None, repr=False, compare=False
     )
-    section_mode: str = LEGACY
+    section_mode: str = field(default=LEGACY, compare=False)
 
     def boundaries(self) -> list[tuple[float, str]]:
         """(bar, label) for every section start — the markers."""
