@@ -805,6 +805,32 @@ def _resolve_bpm_downbeat_stats(project: Path, wav_stem: str) -> dict | None:
     return _load_stats(blind, wav_stem) if blind else None
 
 
+def _may_overwrite_sections_json(path: Path, kick_model_on: bool) -> bool:
+    """Overwrite guard for SECTIONS_STEM_*.json.
+
+    The pipeline's Phase 1a writes this file WITH the Kick Detector; the
+    arrangement phase reads it afterwards. A later no-kick-model run (for
+    example the documented --write-hints without --kick-model) must not
+    silently replace it with a different analysis. A file with no
+    analysis.kick_model key is legacy: it is overwritten as before. An
+    unreadable file is also overwritten (nothing trustworthy to protect).
+    """
+    if kick_model_on or not path.exists():
+        return True
+    try:
+        prior = json.loads(path.read_text(encoding="utf-8"))
+        prior_kick = bool((prior.get("analysis") or {}).get("kick_model", False))
+    except (ValueError, AttributeError, OSError) as exc:
+        print(f"  [warn] could not read existing {path.name} for the overwrite guard: "
+              f"{type(exc).__name__}: {exc}; overwriting")
+        return True
+    if prior_kick:
+        print(f"  [WARN] {path.name} was written WITH the kick model; this run has it off, "
+              f"so the file was NOT overwritten")
+        return False
+    return True
+
+
 def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, write_json=True,
            kick_model=False, kick_model_path=None, kick_model_device="auto",
            kick_provider=None, soft_intro_outro=True, tier_a=False, width_cues=True):
@@ -1236,12 +1262,15 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
         }
         signals["tier_a"] = tier_a_data
 
+    kick_model_used = bool(kick_model or kick_provider is not None)
     result = {"track": wav.stem, "bpm": round(bpm, 2), "n_bars": n_bars,
-              "sections": sections, "signals": signals}
+              "sections": sections, "signals": signals,
+              "analysis": {"kick_model": kick_model_used}}
     if write_json:
         (project / "_Stem Analysis").mkdir(parents=True, exist_ok=True)
-        (project / "_Stem Analysis" / f"SECTIONS_STEM_{wav.stem}.json").write_text(
-            json.dumps(result, indent=1), encoding="utf-8")
+        json_path = project / "_Stem Analysis" / f"SECTIONS_STEM_{wav.stem}.json"
+        if _may_overwrite_sections_json(json_path, kick_model_used):
+            json_path.write_text(json.dumps(result, indent=1), encoding="utf-8")
 
     if make_viz:
         _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, sections, signals, kick_ref,
@@ -1477,12 +1506,29 @@ def main():
         hints = {}
         print(f"Auto-generating hints from stem detection for {len(wavs)} track(s):")
         for w in wavs:
-            res = detect(
-                w, args.project, make_viz=False,
-                kick_model=args.kick_model,
-                kick_model_path=args.kick_model_path,
-                kick_model_device=args.kick_model_device,
-            )
+            res = None
+            cached = args.project / "_Stem Analysis" / f"SECTIONS_STEM_{w.stem}.json"
+            if cached.exists():
+                try:
+                    res = json.loads(cached.read_text(encoding="utf-8"))
+                    hints_from_stem_result(res)  # shape check before trusting it
+                    print(f"  {w.stem[:42]}: hints from the cached analysis ({cached.name})")
+                except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    print(f"  [warn] malformed cache {cached.name}: {type(exc).__name__}: {exc}; "
+                          f"falling back to a fresh detect")
+                    res = None
+            else:
+                print(f"  [WARN] no cached analysis for {w.stem[:42]} ({cached.name}); running detect")
+            if res is None:
+                if not args.kick_model:
+                    print("  [WARN] this detect runs WITHOUT the kick detector and may disagree "
+                          "with a pipeline run")
+                res = detect(
+                    w, args.project, make_viz=False,
+                    kick_model=args.kick_model,
+                    kick_model_path=args.kick_model_path,
+                    kick_model_device=args.kick_model_device,
+                )
             if not res:
                 continue
             h = hints_from_stem_result(res)
