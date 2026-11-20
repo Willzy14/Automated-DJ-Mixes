@@ -120,22 +120,6 @@ def _section_summary(sections):
     return " ".join(f"{s['label']}{s['end_bar'] - s['start_bar']}" for s in sections)
 
 
-def _intro_block_end(sections):
-    """End bar of the run of contiguous intro sections from bar 0.
-
-    Since the groove-structure detector (answer key 2026-11-20) every section
-    line is a real musical line and same-label neighbours are NOT merged, so
-    an R4-extended intro is two sections (intro, intro) with the kick-drop
-    line kept between them. The intro still runs to the same bar.
-    """
-    end = 0
-    for s in sections:
-        if s["label"] != "intro" or s["start_bar"] != end:
-            break
-        end = s["end_bar"]
-    return end
-
-
 # --- R2: kick-less head extends intro through contiguous kick-less pre-drop ---
 
 def test_r2_kickless_head_extends_intro_through_contiguous_kickless_break(monkeypatch, tmp_path):
@@ -160,29 +144,64 @@ def test_r2_kickless_head_extends_intro_through_contiguous_kickless_break(monkey
          the full extension is R2's walk, not R4 or the flag machinery.
     """
     kick = np.array([0]*32 + [1]*48)                  # kick-less 0-31, kick-in 32-79
-    bass = np.array([0]*16 + [1]*8 + [0]*8 + [1]*48)  # flips at 16/24/32 inside the head
+    bass = np.array([0]*16 + [1]*8 + [0]*8 + [1]*48)  # flips at 16/24/32 -> boundaries
 
-    # CHANGED 2026-11-20 (groove-structure detector, answer key): bass flips
-    # inside a kick-down head no longer cut lines, so the kick-less head is ONE
-    # intro 0-32 with the flag OFF, ON, and with R2's branch neutralised. The
-    # old OFF control (intro 0-16 + break 16-32) and the old neutralised
-    # control (intro to 24) encoded the pre-key behaviour R2 existed to repair.
-    for flag, patch in ((False, None), (True, None), (True, 0)):
-        with monkeypatch.context() as mp:
-            if patch is not None:
-                mp.setattr(sd, "INTRO_KICKLESS_BARS", patch)
-            res = _run_detect(
-                kick_on_per_bar=kick, bass_on_per_bar=bass,
-                soft_intro_outro=flag, monkeypatch=mp, tmp_path=tmp_path,
-            )
-        assert res is not None
-        summary = _section_summary(res["sections"])
-        assert _intro_block_end(res["sections"]) == 32, (
-            f"kick-less head must be intro to bar 32 (flag={flag}, patch={patch}); "
-            f"got {summary}"
+    # Negative control #1: OFF. The hard rule alone forces sections[0]='intro'
+    # but leaves the [16,32) kick-less block as 'break'. If this run produced
+    # end_bar==32, the fixture would be vacuous.
+    res_off = _run_detect(
+        kick_on_per_bar=kick, bass_on_per_bar=bass,
+        soft_intro_outro=False, monkeypatch=monkeypatch, tmp_path=tmp_path,
+    )
+    assert res_off is not None
+    off_summary = _section_summary(res_off["sections"])
+    off_intros = [s for s in res_off["sections"] if s["label"] == "intro"]
+    assert off_intros, f"expected an intro section; got {off_summary}"
+    assert off_intros[0]["end_bar"] == 16, (
+        f"OFF negative control: hard rule alone keeps first intro at 16; "
+        f"got end_bar={off_intros[0]['end_bar']}. Sections: {off_summary}"
+    )
+    assert any(s["start_bar"] == 16 and s["end_bar"] == 32
+               for s in res_off["sections"] if s["label"] == "break"), (
+        f"OFF negative control: the [16,32) kick-less block must stay 'break' "
+        f"to prove the fixture is non-vacuous. Sections: {off_summary}"
+    )
+
+    # R2 ON: walks through both contiguous kick-less pre-drop sections,
+    # relabelling them 'intro' so the merged intro spans 0-32.
+    res_on = _run_detect(
+        kick_on_per_bar=kick, bass_on_per_bar=bass,
+        soft_intro_outro=True, monkeypatch=monkeypatch, tmp_path=tmp_path,
+    )
+    assert res_on is not None
+    on_summary = _section_summary(res_on["sections"])
+    on_intros = [s for s in res_on["sections"] if s["label"] == "intro"]
+    assert on_intros, f"expected an intro section; got {on_summary}"
+    assert on_intros[0]["end_bar"] == 32, (
+        f"R2 must extend intro through both contiguous kick-less breaks "
+        f"(first intro end_bar=32); got end_bar={on_intros[0]['end_bar']}. "
+        f"Sections: {on_summary}"
+    )
+
+    # Negative control #2: flag ON but R2's branch neutralised.
+    # INTRO_KICKLESS_BARS=0 makes head_kf=1.0, so _assign_labels takes the R4
+    # branch instead; R4 only relabels the FIRST pre-first_drop break. Scoped
+    # in monkeypatch.context() so the patch can't leak into other runs.
+    with monkeypatch.context() as mp:
+        mp.setattr(sd, "INTRO_KICKLESS_BARS", 0)
+        res_r4 = _run_detect(
+            kick_on_per_bar=kick, bass_on_per_bar=bass,
+            soft_intro_outro=True, monkeypatch=mp, tmp_path=tmp_path,
         )
-        assert not any(s["label"] == "break" and s["start_bar"] < 32
-                       for s in res["sections"]), summary
+    assert res_r4 is not None
+    r4_summary = _section_summary(res_r4["sections"])
+    r4_intros = [s for s in res_r4["sections"] if s["label"] == "intro"]
+    assert r4_intros, f"expected an intro section; got {r4_summary}"
+    assert r4_intros[0]["end_bar"] == 24, (
+        f"R2-branch-neutralised control: with INTRO_KICKLESS_BARS=0 the R4 "
+        f"branch only relabels the first break (first intro end_bar=24, not "
+        f"32); got end_bar={r4_intros[0]['end_bar']}. Sections: {r4_summary}"
+    )
 
 
 def test_r2_negative_kickin_head_with_kickout_break_not_relabeled(monkeypatch, tmp_path):
@@ -210,10 +229,10 @@ def test_r2_negative_kickin_head_with_kickout_break_not_relabeled(monkeypatch, t
     )
     assert res_on is not None and res_off is not None
     # R4 should change intro from 16 to 24 (covers the 8-bar break).
-    # CHANGED 2026-11-20: the intro block (contiguous intro sections), since
-    # the kick-drop line at 16 is now kept between intro and intro.
-    assert _intro_block_end(res_on["sections"]) == 24
-    assert _intro_block_end(res_off["sections"]) == 16
+    intros_on = [s for s in res_on["sections"] if s["label"] == "intro"]
+    intros_off = [s for s in res_off["sections"] if s["label"] == "intro"]
+    assert intros_on[0]["end_bar"] == 24
+    assert intros_off[0]["end_bar"] == 16
 
 
 # --- R4: kick-in head + pre-first_drop break extends intro through that break -
@@ -235,11 +254,10 @@ def test_r4_kickin_head_pre_first_drop_break_extends_intro(monkeypatch, tmp_path
     )
     assert res_on is not None
     # The 8-bar break should now be intro, not break.
-    # CHANGED 2026-11-20: was "one merged intro 0-24". The kick-drop line at 16
-    # is a real line now and is kept, so the intro is intro(0-16) + intro(16-24).
-    summary = _section_summary(res_on["sections"])
-    assert _intro_block_end(res_on["sections"]) == 24, summary  # 0-16 kick-in + 16-24 break
-    assert [s["start_bar"] for s in res_on["sections"]][:3] == [0, 16, 24], summary
+    intro_sections = [s for s in res_on["sections"] if s["label"] == "intro"]
+    assert len(intro_sections) == 1, f"expected one merged intro, got {_section_summary(res_on['sections'])}"
+    assert intro_sections[0]["start_bar"] == 0
+    assert intro_sections[0]["end_bar"] == 24  # 0-16 kick-in + 16-24 break
 
 
 def test_r4_negative_no_pre_first_drop_break_is_noop(monkeypatch, tmp_path):
@@ -284,12 +302,11 @@ def test_r4_does_not_relabel_subsequent_body_breaks(monkeypatch, tmp_path):
     )
     assert res_on is not None
     # The first intro must end at 24, not extend through the second break at 40.
-    # CHANGED 2026-11-20: measured on the intro block (see _intro_block_end).
-    assert _intro_block_end(res_on["sections"]) == 24, (
+    intros = [s for s in res_on["sections"] if s["label"] == "intro"]
+    assert intros[0]["end_bar"] == 24, (
         f"R4 must stop at first pre-first_drop break; intro ended at "
-        f"{_intro_block_end(res_on['sections'])}. Sections: {_section_summary(res_on['sections'])}"
+        f"{intros[0]['end_bar']}. Sections: {_section_summary(res_on['sections'])}"
     )
-    assert any(s["label"] == "break" and s["start_bar"] == 32 for s in res_on["sections"])
 
 
 # --- R3: kick-less tail triggers soft outro_start ----------------------------

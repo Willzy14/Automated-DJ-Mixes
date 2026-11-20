@@ -682,6 +682,8 @@ def _sec_to_bar(sec: float | None, downbeat: float, spb: float) -> float | None:
 
 def load_track(stem_json: Path) -> Track:
     d = json.loads(stem_json.read_text(encoding="utf-8"))
+    from section_format import require_legacy   # a groove-format file must not mix in silently
+    require_legacy(d, "align_engine.load_track", stem_json.name)
     bpm = d["bpm"]
     spb = 4 * 60.0 / bpm
     secs = d["sections"]
