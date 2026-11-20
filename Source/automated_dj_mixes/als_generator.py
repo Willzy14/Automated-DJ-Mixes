@@ -117,8 +117,8 @@ def compress_als(lines: list[str], output_path: Path,
     partial, raw = _create_partial(output_path)
     try:
         # The gzip header records the file name; give it the FINAL name, not
-        # "<name>.partial", so a valid write is byte-identical to the old
-        # direct write.
+        # "<name>.partial", so a valid write matches the old
+        # direct write at a fixed mtime.
         with raw:
             with gzip.GzipFile(filename=output_path.name, mode="wb",
                                fileobj=raw) as f:

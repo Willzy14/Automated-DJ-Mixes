@@ -1444,7 +1444,7 @@ def _publish_with_reconcile(lines: list[str], output_path: Path,
     (write_final_swaps_to_report is pointed at the copy, never the real
     file); validate_mix_plan_als.reconcile (a HARD GATE, it raises ValueError
     on a mismatch) runs against that staged pair. Only a pass publishes, ALS
-    first and the report second. Any failure, KeyboardInterrupt included,
+    first and the report second. Any failure BEFORE the ALS is published, KeyboardInterrupt included,
     removes both staged files and leaves the real output and the real report
     untouched.
 
