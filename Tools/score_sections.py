@@ -47,7 +47,9 @@ DEFAULT_KEY = (Path(__file__).resolve().parent.parent / "Documentation" / "Golde
 LINE_TOL_BARS = 1.0       # the owner's tolerance: a line within one bar is the same line
 EXACT_TOL_BARS = 0.25     # "on the beat" = within one beat
 _EPS = 1e-6
-VERSION_TAG = re.compile(r"^(\d+ ?[Bb]it MASTER.*|SW V\d+.*|MASTER.*)$")
+_MASTER = r"(\d+ ?[Bb]it )?MASTER( AMENDED( V\d+)?)?"
+VERSION_TAG = re.compile(rf"^({_MASTER}|SW V\d+( {_MASTER})?)$")   # nothing after the tag: a
+                                                                   # "(X Remix)" suffix is another track
 
 
 def match_lines(key_bars, det_bars, tol):
@@ -157,14 +159,16 @@ def score_track(key_track: dict, res: dict) -> dict:
     key_fills = [(float(a), float(b)) for a, b in key_track.get("fills", [])]
     fpairs = match_fills(key_fills, det_fills)
     found_k = [kf for kf, _ in fpairs]
-    found_d = [df for _, df in fpairs]
+    found_d_idx = set()
+    for _, df in fpairs:                  # by position, so duplicate intervals cannot hide
+        found_d_idx.add(next(i for i, d in enumerate(det_fills) if d == df and i not in found_d_idx))
     exact = sum(1 for kf, df in fpairs
                 if abs(kf[0] - df[0]) <= EXACT_TOL_BARS + _EPS and abs(kf[1] - df[1]) <= EXACT_TOL_BARS + _EPS)
     gaps = [(round(to_bar(a), 3), round(to_bar(b), 3))
             for a, b in _kick_gaps((res.get("signals") or {}).get("kick_cues", []))]
     missed_fills = [kf for kf in key_fills if kf not in found_k]
     gap_only = [kf for kf in missed_fills if any(_overlap(kf, g) > _EPS for g in gaps)]
-    extra_fills = [df for df in det_fills if df not in found_d]
+    extra_fills = [df for i, df in enumerate(det_fills) if i not in found_d_idx]
 
     sus = (res.get("analysis") or {}).get("bar_one_suspect") or {}
     return {
@@ -227,7 +231,10 @@ def score_all(key: dict, results_dir: Path) -> dict:
         if path is None:
             missing.append(name)
             continue
-        tracks[name] = score_track(kt, json.loads(path.read_text(encoding="utf-8")))
+        res = json.loads(path.read_text(encoding="utf-8"))
+        if "track" in res and not track_matches(str(res["track"]), name):
+            raise ValueError(f"{path.name} says it is track {res['track']!r}, not {name!r}")
+        tracks[name] = score_track(kt, res)
     total = {k: sum(t[k] for t in tracks.values()) for k in SUM_KEYS}
     total["tracks"] = len(tracks)
     return {"tracks": tracks, "total": total, "missing": missing}
