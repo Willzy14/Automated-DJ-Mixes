@@ -117,6 +117,16 @@ def main():
         print(f"ERROR: {als} not found")
         return 1
 
+    from section_format import SectionFormatError, cached_section_mode
+
+    stem_dir = als.parent.parent / "_Stem Analysis"
+    if not stem_dir.is_dir():
+        stem_dir = als.parent / "_Stem Analysis"
+    try:
+        cached_section_mode(stem_dir, "extract_sections_als")
+    except SectionFormatError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     data = parse_sections_als(als)
 
     out_dir = als.parent.parent / "Sections Review"

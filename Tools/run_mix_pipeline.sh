@@ -1,10 +1,15 @@
 #!/bin/bash
 # Re-lay in Sam's order, then hints gate, phase 2, phase 3, all validators; stops at the first failed gate. RESUME=1 skips the re-lay; DEC=<decisions.json> passes --decisions. See Documentation/Plans and the 2026-10-05 session notes.
-# usage: [SECTION_MODE=groove] runmix.sh "<project dir name>" "<order csv>" <ntracks>
+# usage: [SECTION_MODE=legacy] runmix.sh "<project dir name>" "<order csv>" <ntracks>
 set -u
 cd "/c/Users/Carillon/Wired Masters Dropbox/Sam Wills/0.1---GIT HUB---/Automated DJ Mixes"
 P="Test Project/$1"; ORDER="$2"; N="$3"
-SECTION_MODE="${SECTION_MODE:-legacy}"
+section_mode_override="${SECTION_MODE:-}"
+SECTION_MODE="${SECTION_MODE:-groove}"
+phase3_mode=()
+if [ -z "${RESUME:-}" ] || [ -n "$section_mode_override" ]; then
+    phase3_mode=(--section-mode "$SECTION_MODE")
+fi
 export PYTHONIOENCODING=utf-8 PYTHONPATH=Source
 LOG="$P/Output/runmix.log"; : > "$LOG"
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
@@ -28,7 +33,7 @@ say "phase 2 -> V$A"
 python Source/propose_arrangement.py "$P/Output/Sections V$V.als" "$P/Sections Review/Sections_V$V.json" "$P/Output/Sections V$A.als" --hints "$P/Hints/track_hints.json" --tempo-arc ${DEC:+--decisions "$DEC"} --mix-plan "$P/Output/MIX_PLAN.json" --report "$P/Output/ARRANGEMENT_REPORT.json" > "$P/Output/phase2.log" 2>&1 || fail "phase 2 (see phase2.log)"
 python Source/validate_als.py "$P/Output/Sections V$A.als" >> "$LOG" 2>&1 || fail "validate V$A"
 say "phase 3 -> V$B"
-python Source/apply_automation.py "$P/Output/Sections V$A.als" "$P/Sections Review/Sections_V$V.json" "$P/Output/Sections V$B.als" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/MIX_PLAN.json" --section-mode "$SECTION_MODE" > "$P/Output/phase3.log" 2>&1 || fail "phase 3 (see phase3.log)"
+python Source/apply_automation.py "$P/Output/Sections V$A.als" "$P/Sections Review/Sections_V$V.json" "$P/Output/Sections V$B.als" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/MIX_PLAN.json" "${phase3_mode[@]}" > "$P/Output/phase3.log" 2>&1 || fail "phase 3 (see phase3.log)"
 python Source/validate_als.py "$P/Output/Sections V$B.als" --expected-tracks $N --require-devices --arrangement-report "$P/Output/ARRANGEMENT_REPORT.json" >> "$LOG" 2>&1 || fail "final validate V$B"
 python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/Sections V$B.als" --output "$P/Output/MIX_PLAN_RECONCILIATION.json" >> "$LOG" 2>&1 || fail "reconciliation"
 say "DONE: final = Sections V$B.als"

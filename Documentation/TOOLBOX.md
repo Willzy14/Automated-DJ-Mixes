@@ -10,7 +10,7 @@ Builds a mix playlist from the Neon credits ledger via the read-only role `mix_p
 ### Mix prep tools (2026-10-05, Claude)
 - `Tools/build_folder_index.py` -> `Tools/folder_index.json` (gitignored): every project folder under the work folders + STUDIO-2 backup drives G:/F:.
 - `Tools/resolve_masters.py`: best master WAV for an artist/title (prefers Extended/Original, newest SW V/AMENDED, never acapella/instrumental/dub). Copy with `shutil.copyfile`.
-- `Tools/run_mix_pipeline.sh "<project>" "<order csv>" <n>`: re-lay in Sam's order -> hints gate -> phase 2 -> phase 3 -> all validators; stops at the first failed gate; `RESUME=1` skips the re-lay, `DEC=<decisions.json>` adds `--decisions`.
+- `Tools/run_mix_pipeline.sh "<project>" "<order csv>" <n>`: re-lay in Sam's order -> hints gate -> phase 2 -> phase 3 -> all validators. Defaults to groove. Set `SECTION_MODE=legacy` to opt out. `RESUME=1` skips the re-lay and uses the cached mode unless a mode is set explicitly. `DEC=<decisions.json>` adds `--decisions`.
 - `Tools/scan_pair_alignment.py "<project>"`: runs `align_pair` on every adjacent pair so all unplaceable pairs are found in one go. `Tools/show_sections.py`, `Tools/fix_hints_from_gate.py`: section tables; correct flagged hints to the section boundaries.
 - `Source/apply_loops.compress_als` / `apply_automation.compress_als`: now write `<name>.partial`, validate, then rename (D22).
 

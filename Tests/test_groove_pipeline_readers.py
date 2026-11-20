@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Source"))
 
 import align_engine
 import apply_automation
+import extract_sections_als
 import materialize_section_details
 import propose_arrangement
 import section_format
@@ -20,6 +21,7 @@ from alignment_feasibility import load_tracks
 from automated_dj_mixes import orchestrator
 from automated_dj_mixes.phrase_viz import segments_from_stem_sections
 from extract_musical_landmarks import refresh_track_landmarks
+import validate_hints_vs_sections
 from validate_hints_vs_sections import validate
 
 
@@ -167,8 +169,7 @@ def test_hints_cli_writes_and_gate_warns_on_each_synthetic_hint(
     audio = tmp_path / "Audio"
     audio.mkdir()
     (audio / "T.wav").touch()
-    monkeypatch.setattr(sys, "argv", ["stem_detector.py", str(tmp_path), "--write-hints",
-                                      "--section-mode", "groove"])
+    monkeypatch.setattr(sys, "argv", ["stem_detector.py", str(tmp_path), "--write-hints"])
     stem_detector.main()
     hints_file = tmp_path / "Hints" / "track_hints.json"
     hints = json.loads(hints_file.read_text(encoding="utf-8"))["T.wav"]
@@ -198,13 +199,13 @@ def test_hint_cli_refuses_other_mode_and_leaves_cache_untouched(tmp_path, monkey
     audio.mkdir()
     (audio / "T.wav").touch()
     before = path.read_bytes()
-    args = ["stem_detector.py", str(tmp_path), "--write-hints"]
-    monkeypatch.setattr(sys, "argv", args)
+    args = ["stem_detector.py", str(tmp_path), "--write-hints", "--section-mode"]
+    monkeypatch.setattr(sys, "argv", [*args, "legacy"])
     with pytest.raises(SystemExit) as exc:
         stem_detector.main()
     assert exc.value.code == 2
     assert not (tmp_path / "Hints").exists()
-    monkeypatch.setattr(sys, "argv", [*args, "--section-mode", "groove"])
+    monkeypatch.setattr(sys, "argv", [*args, "groove"])
     stem_detector.main()
     assert json.loads((tmp_path / "Hints" / "track_hints.json").read_text())["T.wav"][
         "last_bass_drop_sec"] == 126
@@ -225,17 +226,122 @@ def test_legacy_overwrite_guard_follows_main_provenance(
     assert stem_detector._may_overwrite_sections_json(path, True) is True
 
 
-@pytest.mark.parametrize("mode", [None, "groove"])
-def test_orchestrator_cli_forwards_section_mode(monkeypatch, tmp_path, mode):
+@pytest.mark.parametrize(("flags", "mode"), [
+    ([], "legacy"),
+    (["--sections-layout", "--stem-sections"], "groove"),
+    (["--stem-sections", "--previews-only"], "legacy"),
+    (["--no-sections-layout", "--stem-sections"], "legacy"),
+    (["--stem-sections", "--section-mode", "legacy"], "legacy"),
+    (["--section-mode", "groove"], "groove"),
+])
+def test_orchestrator_cli_forwards_section_mode(monkeypatch, tmp_path, capsys, flags, mode):
     detected = {}
     monkeypatch.setattr(orchestrator, "run_pipeline",
                         lambda *args, **kwargs: detected.update(kwargs))
     args = ["orchestrator", "--input", str(tmp_path), "--output", str(tmp_path)]
-    if mode:
-        args += ["--section-mode", mode]
-    monkeypatch.setattr(sys, "argv", args)
+    monkeypatch.setattr(sys, "argv", args + flags)
     orchestrator.main()
-    assert detected["section_mode"] == (mode or "legacy")
+    assert detected["section_mode"] == mode
+    output = capsys.readouterr().out
+    if "--section-mode" in flags:
+        assert "AUTO chose" not in output
+    else:
+        assert len(output.splitlines()) == 1
+        assert f"AUTO chose {mode}:" in output
+
+
+def test_orchestrator_explicit_groove_still_rejects_unsupported_flags(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "argv", ["orchestrator", "--input", str(tmp_path),
+                                      "--output", str(tmp_path), "--section-mode", "groove"])
+    with pytest.raises(ValueError, match="groove requires --sections-layout --stem-sections"):
+        orchestrator.main()
+
+
+@pytest.mark.parametrize(("cached", "flags", "mode"), [
+    (None, [], "legacy"),
+    (None, ["--kick-model"], "groove"),
+    ("legacy", ["--kick-model"], "legacy"),
+    ("groove", [], "groove"),
+    ("groove", ["--section-mode", "legacy"], "legacy"),
+    ("legacy", ["--section-mode", "groove"], "groove"),
+])
+def test_stem_detect_cli_resolves_cached_or_fresh_mode(
+        monkeypatch, tmp_path, capsys, groove, cached, flags, mode):
+    audio = tmp_path / "Audio"
+    audio.mkdir()
+    (audio / "T.wav").touch()
+    if cached:
+        _write_cache(tmp_path, groove if cached == "groove" else _legacy(groove))
+    called = []
+    monkeypatch.setattr(stem_detector, "detect", lambda *a, **kw: called.append(kw["section_mode"]))
+    monkeypatch.setattr(sys, "argv", ["stem_detector.py", str(tmp_path), *flags])
+    stem_detector.main()
+    assert called == [mode]
+    output = capsys.readouterr().out
+    if "--section-mode" in flags:
+        assert "AUTO chose" not in output
+    else:
+        assert f"AUTO chose {mode}:" in output
+
+
+@pytest.mark.parametrize("command", ["hints", "detect", "extract", "gate", "arrange"])
+def test_mix_clis_refuse_mixed_project_before_writing(
+        monkeypatch, tmp_path, capsys, groove, command):
+    _write_cache(tmp_path, groove)
+    _write_cache(tmp_path, {**_legacy(groove), "track": "Second"})
+    out = tmp_path / "Output"
+    out.mkdir()
+    layout = out / "Sections V1.als"
+    layout.touch()
+    cli, args = {
+        "hints": (stem_detector.main, [tmp_path, "--write-hints"]),
+        "detect": (stem_detector.main, [tmp_path]),
+        "extract": (extract_sections_als.main, [layout]),
+        "gate": (validate_hints_vs_sections.main, [tmp_path, "--version", "1"]),
+        "arrange": (propose_arrangement.main, [layout, "missing.json", out / "arranged.als"]),
+    }[command]
+    monkeypatch.setattr(sys, "argv", [command, *map(str, args)])
+    if command == "extract":
+        assert cli() == 2
+    else:
+        with pytest.raises(SystemExit) as exc:
+            cli()
+        assert exc.value.code == 2
+    assert "mixed legacy and groove analyses" in capsys.readouterr().err
+    assert not (tmp_path / "Hints").exists()
+    assert not (tmp_path / "Sections Review").exists()
+    assert not (out / "arranged.als").exists()
+
+
+@pytest.mark.parametrize(("cached", "explicit", "expected"), [
+    (None, [], "legacy"),
+    ("legacy", [], "legacy"),
+    ("groove", [], "groove"),
+    ("mixed", [], None),
+    ("mixed", ["--section-mode", "groove"], "groove"),
+])
+def test_cached_replay_cli_resolves_mode(monkeypatch, tmp_path, capsys, groove,
+                                         cached, explicit, expected):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "Tools"))
+    import section_key_replay
+
+    if cached in ("groove", "mixed"):
+        _write_cache(tmp_path, groove)
+    if cached in ("legacy", "mixed"):
+        _write_cache(tmp_path, {**_legacy(groove), "track": "Second"})
+    called = []
+    monkeypatch.setattr(section_key_replay, "run",
+                        lambda *args: called.append(args[6]) or ["T"])
+    args = ["--project", str(tmp_path), "--audio", str(tmp_path), "--out", str(tmp_path)]
+    if expected is None:
+        with pytest.raises(SystemExit) as exc:
+            section_key_replay.main(args)
+        assert exc.value.code == 2
+        assert not called
+        assert "mixed legacy and groove analyses" in capsys.readouterr().err
+    else:
+        assert section_key_replay.main([*args, *explicit]) == 0
+        assert called == [expected]
 
 
 def test_legacy_detail_refinement_refuses_groove_before_touching_the_set(groove):
@@ -280,6 +386,7 @@ def test_phase_three_requires_the_arranger_swap_for_groove():
     (None, "groove", True),
     ("groove", "groove", True),
     (None, "foreign", False),
+    (None, "legacy", False),
     (None, "no_dir", False),
     ("legacy", "groove", None),
     ("groove", "no_dir", None),
@@ -327,7 +434,7 @@ def test_phase_three_cli_arms_report_swaps_only_after_reading_the_project(
         expected = {"groove": "groove analysis found", "no_dir": "_Stem Analysis directory",
                     "missing": "SECTIONS_STEM_T.json",
                     "corrupt": "cannot read section analysis", "legacy": "T.*legacy sections",
-                    "mixed": "Second.*legacy sections"}
+                    "mixed": "mixed legacy and groove analyses"}
         with pytest.raises(section_format.SectionFormatError, match=expected[cache]):
             apply_automation.main()
     else:

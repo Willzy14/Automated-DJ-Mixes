@@ -921,9 +921,9 @@ def main():
                              "(Source/stem_detector.py) as the section source (the only surviving one). "
                              "Analysis-only; envelope cache makes re-runs "
                              "on known tracks instant.")
-    from section_format import LEGACY, SECTION_MODES
-    parser.add_argument("--section-mode", choices=SECTION_MODES, default=LEGACY,
-                        help="Section detector for the stem layout (default: legacy).")
+    from section_format import GROOVE, LEGACY, SECTION_MODES
+    parser.add_argument("--section-mode", choices=SECTION_MODES,
+                        help="Default: groove for a stem sections layout; legacy otherwise.")
     parser.add_argument("--stem-grid", action="store_true",
                         help="Use our own stem-kick beat detector "
                              "(automated_dj_mixes.stem_grid) as the sole beat-grid authority. "
@@ -941,6 +941,15 @@ def main():
                              "insensitive substrings of filenames, e.g. \"Samm,Call Me,Crusy\". "
                              "Bypasses the auto-sequencer.")
     args = parser.parse_args()
+    section_mode = args.section_mode
+    if section_mode is None:
+        if args.sections_layout and args.stem_sections and not args.previews_only:
+            section_mode = GROOVE
+            reason = "stem sections layout outside preview mode"
+        else:
+            section_mode = LEGACY
+            reason = "groove requires --sections-layout --stem-sections outside preview mode"
+        print(f"[section-mode] AUTO chose {section_mode}: {reason}.")
 
     als_path = run_pipeline(
         Path(args.input),
@@ -958,7 +967,7 @@ def main():
         kick_model=args.kick_model,
         kick_model_path=args.kick_model_path,
         kick_model_device=args.kick_model_device,
-        section_mode=args.section_mode,
+        section_mode=section_mode,
         track_order=[k.strip() for k in args.order.split(",")] if args.order else None,
     )
     if als_path is not None:

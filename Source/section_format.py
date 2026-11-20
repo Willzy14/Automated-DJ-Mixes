@@ -99,6 +99,20 @@ def require_uniform_modes(modes, reader: str) -> None:
             "Re-run Phase 1a with one --section-mode for all tracks.")
 
 
+def cached_section_mode(stem_dir: Path, reader: str) -> str | None:
+    """Find the project's known format, leaving file-specific errors to its readers."""
+    modes = set()
+    for path in stem_dir.glob("SECTIONS_STEM_*.json"):
+        try:
+            result = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(result, dict):
+                modes.add(section_mode_of(result, reader, path.name))
+        except (OSError, ValueError):
+            continue
+    require_uniform_modes(modes, reader)
+    return next(iter(modes), None)
+
+
 def track_section_mode(stem_dir: Path, track_name: str, reader: str, *,
                        required: bool = False) -> str:
     """Check a layout track's sibling analysis for consumers of derived clips."""

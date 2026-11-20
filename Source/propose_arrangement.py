@@ -2430,6 +2430,16 @@ def main():
 
     args = parser.parse_args()
 
+    from section_format import SectionFormatError, cached_section_mode
+
+    stem_dir = args.als.parent.parent / "_Stem Analysis"
+    if not stem_dir.is_dir():
+        stem_dir = args.als.parent / "_Stem Analysis"
+    try:
+        cached_section_mode(stem_dir, "propose_arrangement")
+    except SectionFormatError as exc:
+        parser.exit(2, f"ERROR: {exc}\n")
+
     _apply_cue_signals(args.cue_signals, error=parser.error)
 
     plan = propose_arrangement(
