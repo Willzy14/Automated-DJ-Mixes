@@ -1,16 +1,21 @@
 #!/bin/bash
 # Re-lay in Sam's order, gate the hints, arrange, automate, and validate.
-# usage: [RESUME=1] [DEC=path] [PLANNER=off] [SECTION_MODE=legacy] run_mix_pipeline.sh "<project dir name>" "<order csv>" <ntracks>
+# usage: [RESUME=1] [DEC=path] [PLANNER=off] [SECTION_MODE=legacy] run_mix_pipeline.sh "<project dir name, or an absolute project path>" "<order csv>" <ntracks>
+# An inherited PYTHONPATH is kept after Source (e.g. the Audio Analysis Toolkit src on a machine without it installed).
 set -u
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." || exit 1
-P="Test Project/$1"; ORDER="$2"; N="$3"
+case "$1" in
+    /*|[A-Za-z]:[/\\]*) P="$1" ;;
+    *) P="Test Project/$1" ;;
+esac
+ORDER="$2"; N="$3"
 section_mode_override="${SECTION_MODE:-}"
 SECTION_MODE="${SECTION_MODE:-groove}"
 phase3_mode=()
 if [ -z "${RESUME:-}" ] || [ -n "$section_mode_override" ]; then
     phase3_mode=(--section-mode "$SECTION_MODE")
 fi
-export PYTHONIOENCODING=utf-8 PYTHONPATH=Source
+export PYTHONIOENCODING=utf-8 PYTHONPATH="Source${PYTHONPATH:+;$PYTHONPATH}"
 LOG="$P/Output/runmix.log"; : > "$LOG" || exit 1
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 fail() { say "FAILED at: $*"; exit 1; }

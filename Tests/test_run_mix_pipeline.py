@@ -98,9 +98,9 @@ def pipeline(tmp_path):
     if os.name == "nt":
         env["PATH"] = str(Path(bash).parents[1] / "usr" / "bin") + os.pathsep + env["PATH"]
 
-    def run(**options):
+    def run(project="Test Mix", **options):
         calls_path.unlink(missing_ok=True)
-        result = subprocess.run([bash, script.as_posix(), "Test Mix", "A,B,C", "3"],
+        result = subprocess.run([bash, script.as_posix(), project, "A,B,C", "3"],
                                 cwd=tmp_path, env={**env, **options}, capture_output=True,
                                 text=True, timeout=60)
         calls = [json.loads(line) for line in calls_path.read_text().splitlines()] if calls_path.exists() else []
@@ -138,6 +138,18 @@ def test_arranger_selection(pipeline, options, arranger, decision_args):
     else:
         assert not planner_calls
     assert (repo / OUTPUT / "Sections V9.als").is_file()
+
+
+def test_absolute_project_path_outside_test_project(pipeline, tmp_path):
+    repo, run = pipeline
+    project = tmp_path / "bulk drive" / "Abs Mix"
+    (project / "Output").mkdir(parents=True)
+    (project / "Hints").mkdir()
+    result, calls = run(project.as_posix())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (project / "Output" / "Sections V9.als").is_file()
+    assert not (repo / "Test Project" / project.name).exists()
+    assert [call[1] for call in calls if call[0] == PLANNER] == [project.as_posix()]
 
 
 @pytest.mark.parametrize("mode", ["groove", "legacy"])
