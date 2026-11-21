@@ -25,7 +25,7 @@ record="$P/Output/relay-layout.txt"
 if [ -z "${RESUME:-}" ]; then
     rm -f -- "$record" || fail "clear previous relay layout record"
     say "re-lay in Sam's order"
-    python -m automated_dj_mixes.orchestrator --input "$P/Audio" --output "$P/Output" --sections-layout --stem-sections --stem-grid --kick-model --skip-desktop-analyze --allow-non-master --order "$ORDER" --section-mode "$SECTION_MODE" > "$P/Output/relay.log" 2>&1 || fail "relay (see relay.log)"
+    python -m automated_dj_mixes.orchestrator --input "$P/Audio" --output "$P/Output" --sections-layout --stem-sections --stem-grid --kick-model --skip-desktop-analyze --allow-non-master --no-previews --order "$ORDER" --section-mode "$SECTION_MODE" > "$P/Output/relay.log" 2>&1 || fail "relay (see relay.log)"
     grep -q "Custom track order applied ($N tracks)" "$P/Output/relay.log" || fail "order not applied to all $N tracks"
     generated=$(grep -a '^Generated: ' "$P/Output/relay.log" | tail -n 1)
     generated=${generated%$'\r'}

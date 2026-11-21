@@ -160,6 +160,8 @@ def test_absolute_project_path_outside_test_project(pipeline, tmp_path):
     (project / "Hints").mkdir()
     result, calls = run(project.as_posix())
     assert result.returncode == 0, result.stdout + result.stderr
+    relay_call = next(call for call in calls if call[:2] == ["-m", "automated_dj_mixes.orchestrator"])
+    assert "--no-previews" in relay_call
     assert (project / "Output" / "Sections V9.als").is_file()
     assert not (repo / "Test Project" / project.name).exists()
     assert [call[1] for call in calls if call[0] == PLANNER] == [project.as_posix()]
