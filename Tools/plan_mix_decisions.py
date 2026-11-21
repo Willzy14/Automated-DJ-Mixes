@@ -139,33 +139,46 @@ def print_plan(plan, label):
         print(f"    {reason}")
 
 
-def write_decisions(path, names, tracks):
+def write_decisions(path, names, tracks, *, allow_partial=False):
     if len(names) != len(tracks) or len(names) < 2 or len(set(names)) != len(names):
         raise ValueError("The mix order must contain at least two distinct, analysed tracks")
-    decisions, errors = [], []
+    decisions, errors, fallback_pairs = [], [], []
     for index, (outgoing, incoming) in enumerate(zip(tracks, tracks[1:]), 1):
         out_name, in_name = names[index - 1:index + 1]
         print(f"T{index}: {out_name} -> {in_name}")
-        plan = plan_blend(outgoing, incoming)
+        notes = []
+        plan = (plan_blend(outgoing, incoming, why=notes) if allow_partial
+                else plan_blend(outgoing, incoming))
         if plan is None:
-            errors.append(f"T{index}: plan_blend returned None")
-            print(f"  ERROR: {errors[-1]}")
-            continue
-        print_plan(plan, "Top")
-        for rank, alternative in enumerate(plan.alternatives, 1):
-            print_plan(alternative.plan, f"Alternative {rank}")
-            print(f"    {alternative.reason}. {alternative.feel}")
-        try:
-            decision = decision_for_plan(index, out_name, in_name, outgoing, incoming, plan)
-        except (ValueError, OverflowError) as exc:
-            errors.append(f"T{index}: {exc}")
-            print(f"  ERROR: {errors[-1]}")
+            reason = " | ".join(notes) or "plan_blend returned None"
         else:
-            decisions.append(decision)
+            print_plan(plan, "Top")
+            for rank, alternative in enumerate(plan.alternatives, 1):
+                print_plan(alternative.plan, f"Alternative {rank}")
+                print(f"    {alternative.reason}. {alternative.feel}")
+            try:
+                decision = decision_for_plan(index, out_name, in_name, outgoing, incoming, plan)
+            except (ValueError, OverflowError) as exc:
+                reason = str(exc)
+            else:
+                decisions.append(decision)
+                continue
+        if allow_partial:
+            print(f"FALLBACK T{index}: {reason}")
+            fallback_pairs.append({"pair_index": index, "out_track": out_name,
+                                   "in_track": in_name, "reason": reason})
+        else:
+            errors.append(f"T{index}: {reason}")
+            print(f"  ERROR: {errors[-1]}")
     if errors:
         raise ValueError("Decisions file was not written; no substitutions were made. "
                          + " | ".join(errors))
-    write_json_atomically(path, {"transitions": decisions}, indent=2)
+    if not decisions:
+        raise ValueError("Decisions file was not written; the planner found no usable pairs.")
+    payload = {"transitions": decisions}
+    if allow_partial:
+        payload["fallback_pairs"] = fallback_pairs
+    write_json_atomically(path, payload, indent=2)
     return decisions
 
 
@@ -181,6 +194,8 @@ def main(argv=None):
     parser.add_argument("--sections", type=Path, help="Exact layout sections JSON used by Phase 2")
     parser.add_argument("--out", required=True, type=Path, help="Decisions JSON to write")
     parser.add_argument("--content", type=Path, help="Save planner tracks and measured bar content")
+    parser.add_argument("--allow-partial", action="store_true",
+                        help="Leave unusable pairs to the rule-based arranger if at least one pair plans")
     args = parser.parse_args(argv)
     try:
         order_path, is_layout = order_input(args.project, args.sections)
@@ -194,7 +209,7 @@ def main(argv=None):
             reject_aliased_output(args.content, [*inputs, args.out])
         tracks = [convert_track(read_json(sections), envelope)
                   for sections, envelope in stem_inputs]
-        write_decisions(args.out, names, tracks)
+        write_decisions(args.out, names, tracks, allow_partial=args.allow_partial)
         if args.content is not None:
             write_json_atomically(args.content, {"tracks": dict(zip(names, tracks))})
     except (OSError, ValueError, KeyError, IndexError) as exc:
