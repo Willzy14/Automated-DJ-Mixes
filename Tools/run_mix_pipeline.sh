@@ -16,6 +16,7 @@ if [ -z "${RESUME:-}" ] || [ -n "$section_mode_override" ]; then
     phase3_mode=(--section-mode "$SECTION_MODE")
 fi
 export PYTHONIOENCODING=utf-8 PYTHONPATH="Source${PYTHONPATH:+;$PYTHONPATH}"
+(cd -- "$P" && mkdir -p -- Output) || exit 1
 LOG="$P/Output/runmix.log"; : > "$LOG" || exit 1
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 fail() { say "FAILED at: $*"; exit 1; }
@@ -26,7 +27,7 @@ if [ -z "${RESUME:-}" ]; then
     say "re-lay in Sam's order"
     python -m automated_dj_mixes.orchestrator --input "$P/Audio" --output "$P/Output" --sections-layout --stem-sections --stem-grid --kick-model --skip-desktop-analyze --allow-non-master --order "$ORDER" --section-mode "$SECTION_MODE" > "$P/Output/relay.log" 2>&1 || fail "relay (see relay.log)"
     grep -q "Custom track order applied ($N tracks)" "$P/Output/relay.log" || fail "order not applied to all $N tracks"
-    generated=$(tail -n 1 "$P/Output/relay.log")
+    generated=$(grep -a '^Generated: ' "$P/Output/relay.log" | tail -n 1)
     generated=${generated%$'\r'}
     [[ "$generated" == "Generated: "* ]] || fail "relay did not report a layout (see relay.log)"
     generated=${generated#Generated: }
@@ -71,7 +72,7 @@ decision_args=()
 if [ -n "${DEC:-}" ]; then
     say "arranger: hand decisions $DEC"
     decision_args=(--decisions "$DEC")
-elif [ "${PLANNER:-}" = off ]; then
+elif [[ "${PLANNER:-}" == [oO][fF][fF] ]]; then
     say "arranger: rule-based (PLANNER=off)"
 else
     analysis_mode=$(python -c '
