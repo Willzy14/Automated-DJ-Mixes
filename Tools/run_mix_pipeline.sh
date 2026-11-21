@@ -1,8 +1,8 @@
 #!/bin/bash
-# Re-lay in Sam's order, then hints gate, phase 2, phase 3, all validators; stops at the first failed gate. RESUME=1 skips the re-lay; DEC=<decisions.json> passes --decisions. See Documentation/Plans and the 2026-10-05 session notes.
-# usage: [SECTION_MODE=legacy] runmix.sh "<project dir name>" "<order csv>" <ntracks>
+# Re-lay in Sam's order, gate the hints, arrange, automate, and validate.
+# usage: [RESUME=1] [DEC=path] [PLANNER=off] [SECTION_MODE=legacy] run_mix_pipeline.sh "<project dir name>" "<order csv>" <ntracks>
 set -u
-cd "/c/Users/Carillon/Wired Masters Dropbox/Sam Wills/0.1---GIT HUB---/Automated DJ Mixes"
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." || exit 1
 P="Test Project/$1"; ORDER="$2"; N="$3"
 section_mode_override="${SECTION_MODE:-}"
 SECTION_MODE="${SECTION_MODE:-groove}"
@@ -11,29 +11,108 @@ if [ -z "${RESUME:-}" ] || [ -n "$section_mode_override" ]; then
     phase3_mode=(--section-mode "$SECTION_MODE")
 fi
 export PYTHONIOENCODING=utf-8 PYTHONPATH=Source
-LOG="$P/Output/runmix.log"; : > "$LOG"
+LOG="$P/Output/runmix.log"; : > "$LOG" || exit 1
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 fail() { say "FAILED at: $*"; exit 1; }
 
+record="$P/Output/relay-layout.txt"
 if [ -z "${RESUME:-}" ]; then
-say "re-lay in Sam's order"
-python -m automated_dj_mixes.orchestrator --input "$P/Audio" --output "$P/Output" --sections-layout --stem-sections --stem-grid --kick-model --skip-desktop-analyze --allow-non-master --order "$ORDER" --section-mode "$SECTION_MODE" > "$P/Output/relay.log" 2>&1 || fail "relay (see relay.log)"
-grep -q "Custom track order applied ($N tracks)" "$P/Output/relay.log" || fail "order not applied to all $N tracks"
+    rm -f -- "$record" || fail "clear previous relay layout record"
+    say "re-lay in Sam's order"
+    python -m automated_dj_mixes.orchestrator --input "$P/Audio" --output "$P/Output" --sections-layout --stem-sections --stem-grid --kick-model --skip-desktop-analyze --allow-non-master --order "$ORDER" --section-mode "$SECTION_MODE" > "$P/Output/relay.log" 2>&1 || fail "relay (see relay.log)"
+    grep -q "Custom track order applied ($N tracks)" "$P/Output/relay.log" || fail "order not applied to all $N tracks"
+    generated=$(tail -n 1 "$P/Output/relay.log")
+    generated=${generated%$'\r'}
+    [[ "$generated" == "Generated: "* ]] || fail "relay did not report a layout (see relay.log)"
+    generated=${generated#Generated: }
+    generated=${generated//\\//}
+    version_pattern='^Sections V([1-9][0-9]*)\.als$'
+    [[ "${generated##*/}" =~ $version_pattern ]] || fail "unexpected relay layout (see relay.log)"
+    V=${BASH_REMATCH[1]}
+    [[ "$generated" -ef "$P/Output/Sections V$V.als" ]] || fail "relay layout missing from Output (see relay.log)"
+    say "relay produced Sections V$V.als"
+else
+    record_error="relay layout record is missing or stale ($record); run without RESUME"
+    [[ -f "$record" ]] || fail "$record_error"
+    saved=$(cat "$record") || fail "$record_error"
+    record_pattern='^([1-9][0-9]*) ([0-9]+ [0-9]+)$'
+    [[ "$saved" =~ $record_pattern ]] || fail "$record_error"
+    V=${BASH_REMATCH[1]}
+    expected=${BASH_REMATCH[2]}
+    layout="$P/Output/Sections V$V.als"
+    [[ -f "$layout" ]] || fail "$record_error"
+    actual=$(cksum < "$layout") || fail "$record_error"
+    [[ "$actual" == "$expected" ]] || fail "$record_error"
+    say "resuming from relay layout Sections V$V.als"
 fi
-V=$(ls "$P/Output"/Sections\ V[0-9]*.als | sed -E 's/.*Sections V([0-9]+)\.als/\1/' | sort -n | tail -1)
-say "relay produced Sections V$V.als"
-python Source/validate_als.py "$P/Output/Sections V$V.als" >> "$LOG" 2>&1 || fail "validate V$V"
-python Source/extract_sections_als.py "$P/Output/Sections V$V.als" > /dev/null 2>&1 || fail "extract sections"
-[ -f "$P/Sections Review/Sections_V$V.json" ] || fail "sections json missing"
+layout="$P/Output/Sections V$V.als"
+sections="$P/Sections Review/Sections_V$V.json"
+python Source/validate_als.py "$layout" >> "$LOG" 2>&1 || fail "validate V$V"
+if [ -z "${RESUME:-}" ]; then
+    checksum=$(cksum < "$layout") || fail "checksum relay layout"
+    pending_record=$(mktemp "$record.XXXXXX") || fail "create relay layout record"
+    if ! printf '%s %s\n' "$V" "$checksum" > "$pending_record" || ! mv -f -- "$pending_record" "$record"; then
+        rm -f -- "$pending_record"
+        fail "write relay layout record"
+    fi
+fi
+python Source/extract_sections_als.py "$layout" > /dev/null 2>> "$LOG" || fail "extract sections (see runmix.log)"
+[ -f "$sections" ] || fail "sections json missing"
 if [ -z "${RESUME:-}" ]; then python Source/stem_detector.py "$P" --write-hints --section-mode "$SECTION_MODE" > "$P/Output/hints.log" 2>&1 || fail "write hints"; fi
 python Source/validate_hints_vs_sections.py "$P" --version $V > "$P/Output/hints_gate.log" 2>&1 || fail "hints gate (see hints_gate.log)"
 grep -E "errors:" "$P/Output/hints_gate.log" | tee -a "$LOG"
+
+decision_args=()
+if [ -n "${DEC:-}" ]; then
+    say "arranger: hand decisions $DEC"
+    decision_args=(--decisions "$DEC")
+elif [ "${PLANNER:-}" = off ]; then
+    say "arranger: rule-based (PLANNER=off)"
+else
+    analysis_mode=$(python -c '
+import sys
+from pathlib import Path
+from section_format import SectionFormatError, cached_section_mode
+
+try:
+    mode = cached_section_mode(Path(sys.argv[1]), "run_mix_pipeline")
+except SectionFormatError as exc:
+    sys.exit(str(exc))
+if mode is None:
+    sys.exit("No readable section analysis in " + sys.argv[1])
+print(mode)
+' "$P/_Stem Analysis" 2>> "$LOG") || fail "detect section format (see runmix.log)"
+    if [ "$analysis_mode" = legacy ]; then
+        say "arranger: rule-based (legacy sections; the planner needs groove)"
+    elif [ "$analysis_mode" = groove ]; then
+        planned="$P/Hints/planned_decisions.json"
+        python Tools/plan_mix_decisions.py "$P" --sections "$sections" --out "$planned" --content "$P/Output/planner_content.json" --allow-partial > "$P/Output/planner.log" 2>&1 || fail "planner (see planner.log)"
+        summary=$(python -c '
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+planned = len(data["transitions"])
+fallback = ["T{}".format(pair["pair_index"]) for pair in data["fallback_pairs"]]
+summary = f"{planned} of {planned + len(fallback)} pairs planned"
+if fallback:
+    summary += ", fallback: " + ",".join(fallback)
+print(summary)
+' "$planned" 2>> "$P/Output/planner.log") || fail "planner (see planner.log)"
+        say "arranger: planner ($summary)"
+        decision_args=(--decisions "$planned" --decisions-drop-rejected-loops)
+    else
+        fail "unsupported section format: $analysis_mode"
+    fi
+fi
+
 A=$((V+1)); B=$((V+2))
 say "phase 2 -> V$A"
-python Source/propose_arrangement.py "$P/Output/Sections V$V.als" "$P/Sections Review/Sections_V$V.json" "$P/Output/Sections V$A.als" --hints "$P/Hints/track_hints.json" --tempo-arc ${DEC:+--decisions "$DEC"} --mix-plan "$P/Output/MIX_PLAN.json" --report "$P/Output/ARRANGEMENT_REPORT.json" > "$P/Output/phase2.log" 2>&1 || fail "phase 2 (see phase2.log)"
+python Source/propose_arrangement.py "$layout" "$sections" "$P/Output/Sections V$A.als" --hints "$P/Hints/track_hints.json" --tempo-arc "${decision_args[@]}" --mix-plan "$P/Output/MIX_PLAN.json" --report "$P/Output/ARRANGEMENT_REPORT.json" > "$P/Output/phase2.log" 2>&1 || fail "phase 2 (see phase2.log)"
 python Source/validate_als.py "$P/Output/Sections V$A.als" >> "$LOG" 2>&1 || fail "validate V$A"
 say "phase 3 -> V$B"
-python Source/apply_automation.py "$P/Output/Sections V$A.als" "$P/Sections Review/Sections_V$V.json" "$P/Output/Sections V$B.als" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/MIX_PLAN.json" "${phase3_mode[@]}" > "$P/Output/phase3.log" 2>&1 || fail "phase 3 (see phase3.log)"
+python Source/apply_automation.py "$P/Output/Sections V$A.als" "$sections" "$P/Output/Sections V$B.als" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/MIX_PLAN.json" "${phase3_mode[@]}" > "$P/Output/phase3.log" 2>&1 || fail "phase 3 (see phase3.log)"
 python Source/validate_als.py "$P/Output/Sections V$B.als" --expected-tracks $N --require-devices --arrangement-report "$P/Output/ARRANGEMENT_REPORT.json" >> "$LOG" 2>&1 || fail "final validate V$B"
 python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/Sections V$B.als" --output "$P/Output/MIX_PLAN_RECONCILIATION.json" >> "$LOG" 2>&1 || fail "reconciliation"
 say "DONE: final = Sections V$B.als"

@@ -7,7 +7,7 @@ Module reference for all pipeline components.
 ### Groove sections and the answer key (2026-11-20, Claude with Codex and Kimi)
 - `Source/groove_sections.py`: section lines from kick and bass state, fills first-class (`signals.fill_sections`), cue points; `Source/section_format.py`: format marker (`groove-1`, schema 2) and `SectionFormatError`. Default for the production chain; `--section-mode legacy|groove` overrides; commands auto-detect the format from the files they read.
 - `Tools/score_sections.py` (honest scorer against the key), `Tools/section_key_replay.py` (re-run the detector from cached stems), `Tools/section_key_picture.py` (the pictures Sam judges), `Tools/legacy_identity.py` (legacy reader output versus main).
-- `Source/phrase_blend.py`, `Tools/score_blends.py`, `Tools/blend_candidates.py`, `Tools/blend_sensitivity.py`, `Tools/measure_section_content.py`: the cue-point blend planner and its checks (opt-in, wired by `Tools/plan_mix_decisions.py`).
+- `Source/phrase_blend.py`, `Tools/score_blends.py`, `Tools/blend_candidates.py`, `Tools/blend_sensitivity.py`, `Tools/measure_section_content.py`: the cue-point blend planner and its checks. `Tools/plan_mix_decisions.py` feeds the groove pipeline by default.
 - `Documentation/Golden Sections/Answer Key 2026-11-20 DFTD.json`: the truth these are measured against.
 
 ### `Tools/plan_mix_decisions.py` (2026-11-20, Codex)
@@ -15,6 +15,8 @@ Module reference for all pipeline components.
 The planner publishes decisions with a same-directory atomic rename. Phase 2 verifies exact exit bars against the ALS clip and warp geometry with a one-beat detector tolerance. Use `--decisions-drop-rejected-loops` with `--decisions` to remove repeats rejected by the production loop-quality gate. Each drop and any resulting entry or exit change appears in the arrangement report. The original proposal stays on disk.
 
 Reads a project's groove section JSONs and cached stem envelopes, then writes one top-ranked phrase-blend decision per adjacent pair. Pass `--sections` to use the same layout JSON as Phase 2, `--out` for the decisions, and optionally `--content` for the measured per-bar kick, bass, and music flags. The decisions add `out_end_bar` and optional `intro_loop` to name an exact outgoing stop and an incoming phrase repeat for `propose_arrangement.py --decisions`. The normal loop and ALS validators check the resulting geometry.
+
+The standalone command requires a decision for every pair by default. `--allow-partial` lists unplanned pairs in `fallback_pairs` and leaves those pairs to the rule-based arranger. At least one pair must plan, and invalid inputs stop the command.
 ### Phrase blend planner (2026-11-20, Codex)
 
 - `Source/phrase_blend.py` ranks cue-based blends and accepts a fractional audio endpoint in `end_bar`. Pass `why=reasons` to `plan_blend` to collect input warnings and the reason for a `None` result.
@@ -27,7 +29,7 @@ Builds a mix playlist from the Neon credits ledger via the read-only role `mix_p
 ### Mix prep tools (2026-10-05, Claude)
 - `Tools/build_folder_index.py` -> `Tools/folder_index.json` (gitignored): every project folder under the work folders + STUDIO-2 backup drives G:/F:.
 - `Tools/resolve_masters.py`: best master WAV for an artist/title (prefers Extended/Original, newest SW V/AMENDED, never acapella/instrumental/dub). Copy with `shutil.copyfile`.
-- `Tools/run_mix_pipeline.sh "<project>" "<order csv>" <n>`: re-lay in Sam's order -> hints gate -> phase 2 -> phase 3 -> all validators. Defaults to groove. Set `SECTION_MODE=legacy` to opt out. `RESUME=1` skips the re-lay and uses the cached mode unless a mode is set explicitly. `DEC=<decisions.json>` adds `--decisions`.
+- `Tools/run_mix_pipeline.sh "<project>" "<order csv>" <n>` re-lays in Sam's order, gates the hints, arranges, automates, and validates. Groove caches use the phrase-blend planner with `--allow-partial` and drop quality-rejected repeats. `DEC=<decisions.json>` takes precedence. `PLANNER=off` or legacy caches select rule-based arrangement. Use `SECTION_MODE=legacy` to produce legacy caches. `RESUME=1` skips the re-lay and hint rewrite and requires `Output/relay-layout.txt` to match the original layout ALS. Run without `RESUME` if the record is missing or stale.
 - `Tools/scan_pair_alignment.py "<project>"`: runs `align_pair` on every adjacent pair so all unplaceable pairs are found in one go. `Tools/show_sections.py`, `Tools/fix_hints_from_gate.py`: section tables; correct flagged hints to the section boundaries.
 - `Source/apply_loops.compress_als` / `apply_automation.compress_als`: now write `<name>.partial`, validate, then rename (D22).
 
@@ -45,7 +47,7 @@ Library: `check_grid`, `enforce_beatgrid_quality`, `load_grid_overrides`, `apply
 
 ### `Source/automated_dj_mixes/orchestrator.py`
 
-[Codex, 2026-11-20]: Legacy is the default. For groove, run Phase 1a with `--section-mode groove --kick-model` when replacing existing kick-model caches. Then pass `--section-mode groove` to `Source/stem_detector.py --write-hints` and `Source/apply_automation.py`. The hints gate prints a warning for each labeled fallback. Automation requires matching groove analysis for all tracks and a report swap for every transition. Set `SECTION_MODE=groove` in `Tools/run_mix_pipeline.sh` to pass the mode through these steps.
+[Codex, 2026-11-20]: Groove is the Phase 1a default for stem sections layouts outside preview mode. Use `--section-mode legacy` to select the legacy detector. The later commands read the cached format. The hints gate prints a warning for each labeled fallback. Automation requires matching groove analysis for all tracks and a report swap for every transition.
 
 [Codex, 2026-11-20]: `Tools/legacy_identity.py PROJECT --main-source MAIN/Source` compares cached legacy reader snapshots to an exported main Source tree. Use `--track` with an exact track stem to check a single track, or `--help` for the optional automation comparison.
 Main pipeline controller. The canonical `/mix` path uses `--stem-grid --stem-sections --kick-model`: owned per-beat grids, Demucs structure and Kick Detector V3 evidence. The orchestrator runs MIK only for optional key/energy metadata. **Rekordbox was removed entirely (2026-08-20, Sam 2026-08-18: "done away with")**: no desktop driving, no library reads, no phrase enrichment; `enforce_owned_grid_coverage` is the coverage gate for every mode (owned stem grids or `.asd` tick-fit shells; no fallback). `--allow-partial-rekordbox` is accepted-but-ignored with a deprecation warning so documented invocations don't break. CLI: `python -m automated_dj_mixes.orchestrator --input "Tracks/" --output "Output/"`.

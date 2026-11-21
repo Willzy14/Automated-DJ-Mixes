@@ -12,7 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Tools"))
 import plan_mix_decisions as tool
 from align_engine import alignment_from_decision, fills_from_decision
 from phrase_blend import BlendPlan
+from propose_arrangement import propose_arrangement
 from section_format import SectionFormatError
+from test_arrangement_decisions import blend_layout
 
 
 def groove_result():
@@ -108,6 +110,99 @@ def test_writer_reports_unusable_plan_without_writing_partial_file(tmp_path, mon
     with pytest.raises(ValueError, match=error):
         tool.write_decisions(decisions, ["A", "B"], [{"n_bars": 100}, {"n_bars": 60}])
     assert not decisions.exists()
+
+
+@pytest.fixture
+def planner_inputs(tmp_path):
+    sections = tmp_path / "Sections_V1.json"
+    sections.write_text(json.dumps({
+        name: [{"arr_time": i * 40, "arr_end": i * 40 + 12, "source_end_beats": 12}]
+        for i, name in enumerate("ABC")
+    }), encoding="ascii")
+    stem_dir = tmp_path / "_Stem Analysis"
+    stem_dir.mkdir()
+    for name in "ABC":
+        (stem_dir / f"SECTIONS_STEM_{name}.json").write_text(
+            json.dumps(groove_result()), encoding="ascii")
+        np.savez(stem_dir / f"{name}__stemenv.npz", hop_t=0.25, bass=np.ones(32),
+                 drums=np.ones(32), vocals=np.zeros(32), other=np.ones(32),
+                 tiera_band_low=np.ones(32))
+    output = tmp_path / "decisions.json"
+    return [str(tmp_path), "--sections", str(sections), "--out", str(output)], output
+
+
+@pytest.mark.parametrize("failure, reason", [
+    (None, "no admissible blend"),
+    (BlendPlan(1.25, 2, 3, 0, 0), "is not a whole bar"),
+    (BlendPlan(float("inf"), 2, 3, 0, 0), "cannot convert float infinity to integer"),
+])
+def test_partial_cli_writes_other_pairs(planner_inputs, monkeypatch, capsys, failure, reason):
+    results = iter([BlendPlan(1, 2, 3, 0, 0, swap_incoming_bar=1), failure])
+
+    def plan(*_, why):
+        result = next(results)
+        if result is None:
+            why.append("no admissible blend")
+        return result
+
+    monkeypatch.setattr(tool, "plan_blend", plan)
+    args, output = planner_inputs
+    assert tool.main([*args, "--allow-partial"]) == 0
+    data = tool.read_json(output)
+    assert [row["pair_index"] for row in data["transitions"]] == [1]
+    [fallback] = data["fallback_pairs"]
+    assert (fallback["pair_index"], fallback["out_track"], fallback["in_track"]) == (2, "B", "C")
+    assert reason in fallback["reason"]
+    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("FALLBACK")] == [
+        "FALLBACK T2: " + fallback["reason"],
+    ]
+
+
+def test_partial_cli_refuses_when_every_pair_fails(planner_inputs, monkeypatch, capsys):
+    monkeypatch.setattr(tool, "plan_blend", lambda *_, **__: None)
+    args, output = planner_inputs
+    with pytest.raises(SystemExit) as error:
+        tool.main([*args, "--allow-partial"])
+    assert error.value.code == 1
+    log = capsys.readouterr()
+    assert "the planner found no usable pairs" in log.err
+    assert log.out.count("FALLBACK T") == 2
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("invalid, reason", [
+    ("missing envelope", "C__stemenv.npz"),
+    ("bad json", "Expecting value"),
+    ("invalid bpm", "invalid bpm or n_bars"),
+])
+def test_partial_cli_refuses_invalid_inputs(planner_inputs, capsys, invalid, reason):
+    args, output = planner_inputs
+    stem_dir = output.parent / "_Stem Analysis"
+    sections = stem_dir / "SECTIONS_STEM_C.json"
+    if invalid == "missing envelope":
+        (stem_dir / "C__stemenv.npz").unlink()
+    elif invalid == "bad json":
+        sections.write_text("bad json", encoding="ascii")
+    else:
+        sections.write_text(json.dumps({**groove_result(), "bpm": 0}), encoding="ascii")
+    with pytest.raises(SystemExit) as error:
+        tool.main([*args, "--allow-partial"])
+    assert error.value.code == 1
+    log = capsys.readouterr()
+    assert reason in log.err
+    assert "FALLBACK" not in log.out
+    assert not output.exists()
+
+
+def test_phase2_loads_partial_file_and_arranges_omitted_pair(blend_layout):
+    als, sections, output, decisions = blend_layout()
+    data = tool.read_json(decisions)
+    data["transitions"].pop()
+    data["fallback_pairs"] = [dict(pair_index=2, out_track="B", in_track="C", reason="test")]
+    tool.write_json_atomically(decisions, data)
+    plan = propose_arrangement(als, sections, output, decisions_path=decisions)
+    assert [ov.decision_exit for ov in plan.overlaps] == [(96, 384), None]
+    assert output.is_file()
 
 
 def test_writer_keeps_existing_file_if_atomic_publish_fails(tmp_path, monkeypatch):
