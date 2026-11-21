@@ -227,7 +227,11 @@ def run_pipeline(
     kick_model_device: str = "auto",
     track_order: list[str] | None = None,
     section_mode: str = "legacy",
+    no_previews: bool = False,
 ) -> Path | None:
+    if previews_only and no_previews:
+        raise ValueError("--previews-only and --no-previews cannot be used together")
+
     from section_format import GROOVE, SECTION_MODES, SectionFormatError
 
     if section_mode not in SECTION_MODES:
@@ -696,9 +700,12 @@ def run_pipeline(
     # authored. The --previews-only flag exits here, before transition
     # planning. Production gate below also runs after this point.
     preview_dir = output_dir / "Visualisations" / "Previews"
-    preview_count = _render_previews(ordered_analyses, mik_data, project_bpm, preview_dir)
-    if preview_count:
-        print(f"Track previews (for hint authoring): {preview_count}/{len(ordered_analyses)} -> {preview_dir}")
+    if no_previews:
+        print("Track previews skipped (--no-previews).")
+    else:
+        preview_count = _render_previews(ordered_analyses, mik_data, project_bpm, preview_dir)
+        if preview_count:
+            print(f"Track previews (for hint authoring): {preview_count}/{len(ordered_analyses)} -> {preview_dir}")
 
     if previews_only:
         print("--previews-only: stopping before transition planning.")
@@ -899,10 +906,13 @@ def main():
                              "THIRD-PARTY tracks (promo/curated sets). The gate still "
                              "exists to keep stems/freezes out; only set this when every "
                              "file is a confirmed finished release.")
-    parser.add_argument("--previews-only", action="store_true",
-                        help="Render blank-canvas preview PNGs and exit before transition "
-                             "planning. Used by the /mix skill so Claude can read previews "
-                             "and author Hints/track_hints.json. Bypasses the hint gate.")
+    preview_mode = parser.add_mutually_exclusive_group()
+    preview_mode.add_argument("--previews-only", action="store_true",
+                             help="Render blank-canvas preview PNGs and exit before transition "
+                                  "planning. Used by the /mix skill so Claude can read previews "
+                                  "and author Hints/track_hints.json. Bypasses the hint gate.")
+    preview_mode.add_argument("--no-previews", action="store_true",
+                             help="Skip rendering blank-canvas PNGs for hint authoring.")
     parser.add_argument("--no-hints-required", action="store_true",
                         help="Allow the pipeline to run without complete visual hints. "
                              "Production runs require hints (gated by /mix skill); use this "
@@ -957,6 +967,7 @@ def main():
         config_path=Path(args.config) if args.config else None,
         skip_desktop_analyze=args.skip_desktop_analyze,
         previews_only=args.previews_only,
+        no_previews=args.no_previews,
         no_hints_required=args.no_hints_required,
         sections_layout=args.sections_layout,
         allow_partial_rekordbox=args.allow_partial_rekordbox,
