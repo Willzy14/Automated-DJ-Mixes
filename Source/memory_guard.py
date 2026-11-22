@@ -16,15 +16,26 @@ Knobs (environment):
   MEMORY_GUARD=off       disable the guard on the Home PC.
   MEMORY_GUARD=on        force the guard on anywhere (tests only).
   MEMORY_GUARD_CHILD=1   set on the re-launched child; the child never re-launches.
+  MEMORY_GUARD_MIN_START_GB       the HEAVY start floor (a fresh separation is needed).
+  MEMORY_GUARD_MIN_START_LIGHT_GB the LIGHT start floor (every track is cached).
+
+The start floor depends on the WORK, not on the machine: a FRESH Demucs
+separation (and the beat-grid spike right after it) needs 7.0 GB of free
+memory, while a run that reuses the finished stem analysis of every track
+needs only 2.0 GB. So the floor is picked from the cache state of the
+--input folder, and the floor and the reason for it are printed on every
+preflight.
 
 usage:
-  python Source/memory_guard.py [--min-start-gb N] [--min-free-gb N] [--resume-dir DIR]
+  python Source/memory_guard.py [--min-start-gb N] [--min-start-light-gb N]
+      [--input DIR] [--min-free-gb N] [--resume-dir DIR]
       [--max-attempts N] [--threads N] [--log FILE] [--preflight-only] -- <command...>
 """
 from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 import os
 import subprocess
 import sys
@@ -43,9 +54,14 @@ GUARDED_MACHINES = {"CARILLONAC-1-PC"}
 MEMORY_GUARD_ENV = "MEMORY_GUARD"
 MEMORY_GUARD_CHILD_ENV = "MEMORY_GUARD_CHILD"
 MIN_START_GB_ENV = "MEMORY_GUARD_MIN_START_GB"
+MIN_START_LIGHT_GB_ENV = "MEMORY_GUARD_MIN_START_LIGHT_GB"
 
-# The start floor is the beat-grid spike (6-7 GB for one 5-minute track) plus headroom.
+# The HEAVY start floor is the beat-grid spike (6-7 GB for one 5-minute track)
+# plus headroom. It applies when the run will do a FRESH separation.
 DEFAULT_MIN_START_GB = 7.0
+# The LIGHT start floor applies when every track already has a finished stem
+# analysis: no separation, no beat-grid spike, just the cached re-lay.
+DEFAULT_MIN_START_LIGHT_GB = 2.0
 DEFAULT_MIN_FREE_GB = 1.5
 DEFAULT_MAX_ATTEMPTS = 6
 DEFAULT_THREADS = 6
@@ -116,7 +132,7 @@ def require_psutil():
 
 
 def default_min_start_gb() -> float:
-    """The start floor: 7.0 GB (the beat-grid spike), or the env override."""
+    """The HEAVY start floor: 7.0 GB (the beat-grid spike), or the env override."""
     raw = os.environ.get(MIN_START_GB_ENV, "").strip()
     if not raw:
         return DEFAULT_MIN_START_GB
@@ -124,6 +140,107 @@ def default_min_start_gb() -> float:
         return float(raw)
     except ValueError:
         return DEFAULT_MIN_START_GB
+
+
+def default_min_start_light_gb() -> float:
+    """The LIGHT start floor: 2.0 GB (cached run), or the env override."""
+    raw = os.environ.get(MIN_START_LIGHT_GB_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MIN_START_LIGHT_GB
+    try:
+        return float(raw)
+    except ValueError:
+        return DEFAULT_MIN_START_LIGHT_GB
+
+
+# --------------------------------------------------------------------------
+# The cache state: does this run need a FRESH separation?
+# --------------------------------------------------------------------------
+
+# The audio extensions the pipeline reads (the sibling Audio Analysis Toolkit
+# uses the same set).
+AUDIO_EXTENSIONS = (".wav", ".mp3", ".flac", ".aiff", ".aif", ".ogg")
+
+# The folder the finished stem analysis lives in, next to the project.
+STEM_ANALYSIS_DIR = "_Stem Analysis"
+
+
+def stem_analysis_cache_path(project_dir, stem: str) -> Path:
+    """The finished stem analysis of one track: SECTIONS_STEM_<track>.json.
+
+    The name is the orchestrator's own: stem_detector.detect writes
+    `<project>/_Stem Analysis/SECTIONS_STEM_<track>.json` and the orchestrator
+    reads the same file back (Source/stem_detector.py, orchestrator.py).
+    """
+    return Path(project_dir) / STEM_ANALYSIS_DIR / f"SECTIONS_STEM_{stem}.json"
+
+
+def finished_stem_analysis(project_dir, stem: str) -> bool:
+    """True when the track has a FINISHED stem analysis beside the project.
+
+    "Finished" means the analysis file exists and holds a real analysis: a
+    JSON object with a non-empty "sections" list (the same test the hints
+    gate uses on the cached file). A missing, empty or malformed file means
+    the track is not cached, so the run would separate it again.
+    """
+    path = stem_analysis_cache_path(project_dir, stem)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    sections = data.get("sections")
+    return isinstance(sections, list) and bool(sections)
+
+
+def separation_state(input_dir) -> tuple[int, int] | None:
+    """(tracks, tracks that need a fresh separation) for an --input folder.
+
+    None when the folder cannot be read: the caller then assumes the worst
+    (the heavy floor) instead of guessing.
+    """
+    folder = Path(input_dir)
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        return None
+    tracks = sorted(path for path in entries
+                    if path.is_file()
+                    and path.suffix.lower() in AUDIO_EXTENSIONS
+                    and not path.name.startswith("."))
+    project = folder.parent
+    fresh = sum(1 for path in tracks
+                if not finished_stem_analysis(project, path.stem))
+    return len(tracks), fresh
+
+
+def choose_start_floor(min_start_gb: float | None = None, input_dir=None,
+                       min_start_light_gb: float | None = None) -> tuple[float, str]:
+    """The start floor for this run, and the reason it was chosen.
+
+    The HEAVY floor applies when the run will do a FRESH separation for at
+    least one track (the Demucs separation plus the beat-grid spike). The
+    LIGHT floor applies when every track in --input already has a finished
+    stem analysis, so the run only re-lays cached analysis. An explicit
+    --min-start-gb wins over both.
+    """
+    heavy = default_min_start_gb() if min_start_gb is None else float(min_start_gb)
+    light = (default_min_start_light_gb() if min_start_light_gb is None
+             else float(min_start_light_gb))
+    if min_start_gb is not None:
+        return heavy, "requested for this run"
+    if input_dir is None:
+        return heavy, "no input folder given, assuming a fresh separation"
+    state = separation_state(input_dir)
+    if state is None:
+        return heavy, f"cannot read {input_dir}, assuming a fresh separation"
+    total, fresh = state
+    if total == 0:
+        return light, f"no audio files in {input_dir}, nothing to separate"
+    if fresh:
+        return heavy, f"{fresh} of {total} tracks need a fresh separation"
+    return light, f"all {total} tracks cached"
 
 
 # --------------------------------------------------------------------------
@@ -230,16 +347,21 @@ def _note_commit_unavailable() -> None:
 # The preflight: refuse to start a run that will not fit
 # --------------------------------------------------------------------------
 
-def preflight(min_start_gb: float | None = None) -> bool:
+def preflight(min_start_gb: float | None = None, input_dir=None,
+              min_start_light_gb: float | None = None) -> bool:
     """True when there is enough memory to start, False when the run is refused.
 
-    Refuses when the free physical memory OR the commit headroom is below the
-    floor. The biggest memory hogs are printed either way, so the reason (and
-    what to close) is visible in the log.
+    The floor is the heavy one when the run will do a fresh separation and
+    the light one when every track is cached (see choose_start_floor); the
+    floor and the reason for it are printed first, so the log says which one
+    applied. Refuses when the free physical memory OR the commit headroom is
+    below the floor. The biggest memory hogs are printed either way, so the
+    reason (and what to close) is visible in the log.
     """
     psutil = require_psutil()
-    if min_start_gb is None:
-        min_start_gb = default_min_start_gb()
+    min_start_gb, floor_reason = choose_start_floor(min_start_gb, input_dir,
+                                                     min_start_light_gb)
+    print(f"[memory-guard] {min_start_gb:.1f} GB floor: {floor_reason}")
     floor = min_start_gb * GB
     available = psutil.virtual_memory().available
     commit = commit_headroom_bytes()
@@ -264,7 +386,7 @@ def _refuse(reason: str, min_start_gb: float) -> None:
     """The refusal message: what to close and the numbers."""
     print(f"[memory-guard] REFUSING TO START: {reason}.")
     print(f"[memory-guard] Close Chrome and Dropbox (and any other big app) and retry; "
-          f"one track of this pipeline needs about {min_start_gb:.1f} GB of free memory.")
+          f"this run needs about {min_start_gb:.1f} GB of free memory.")
 
 
 # --------------------------------------------------------------------------
@@ -385,7 +507,14 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Run a command under the Home PC memory guard.")
     parser.add_argument("--min-start-gb", type=float, default=None,
-                        help="refuse to start below this much free memory (GB)")
+                        help="the start floor for this run (GB); overrides the "
+                             "automatic heavy/light choice")
+    parser.add_argument("--min-start-light-gb", type=float, default=None,
+                        help="the light start floor (GB), used when every track "
+                             "in --input is already cached")
+    parser.add_argument("--input", type=Path, default=None,
+                        help="the audio folder; the guard reads its cache state "
+                             "to pick the heavy or the light start floor")
     parser.add_argument("--min-free-gb", type=float, default=DEFAULT_MIN_FREE_GB,
                         help="kill the run below this much free memory (GB)")
     parser.add_argument("--resume-dir", type=Path, default=None,
@@ -413,7 +542,8 @@ def main(argv=None) -> int:
     if not cmd and not args.preflight_only:
         parser.error("no command given")
     require_psutil()
-    if not preflight(args.min_start_gb):
+    if not preflight(args.min_start_gb, input_dir=args.input,
+                     min_start_light_gb=args.min_start_light_gb):
         return EXIT_REFUSED
     if args.preflight_only:
         return 0

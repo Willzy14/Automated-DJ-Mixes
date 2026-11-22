@@ -953,7 +953,7 @@ def _memory_guard_exit():
     input_dir = _guard_input_dir(argv)
     if input_dir is None:
         return None  # let the real parser report the missing --input
-    if not guard.preflight():
+    if not guard.preflight(input_dir=input_dir):
         return guard.EXIT_REFUSED
     env = dict(os.environ)
     env[guard.MEMORY_GUARD_CHILD_ENV] = "1"

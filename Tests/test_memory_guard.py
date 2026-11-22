@@ -8,7 +8,9 @@ the commands must keep their own exit codes.
 These tests never create real memory pressure: the memory readings are mocked and the
 machine name is mocked too.
 """
+import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -59,6 +61,7 @@ def _import_orchestrator():
 orchestrator = _import_orchestrator()
 
 GUARD = ROOT / "Source" / "memory_guard.py"
+PIPELINE = ROOT / "Tools" / "run_mix_pipeline.sh"
 HOME_PC = "CARILLONAC-1-PC"
 WORK_PC = "STUDIO-2"
 
@@ -296,6 +299,159 @@ def test_the_start_floor_is_configurable(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# The floor depends on the WORK: a fresh separation needs 7.0 GB, a run that
+# re-lays cached analysis needs 2.0 GB
+# --------------------------------------------------------------------------
+
+def _make_project(tmp_path, count=9, cached=9):
+    """A project folder: <project>/Audio/*.wav + <project>/_Stem Analysis/.
+
+    `cached` tracks get a finished SECTIONS_STEM_<track>.json (the file the
+    orchestrator writes and reads back), the rest have none: those would be
+    separated from scratch.
+    """
+    project = tmp_path / "Mix"
+    audio = project / "Audio"
+    audio.mkdir(parents=True)
+    stem_dir = project / "_Stem Analysis"
+    stem_dir.mkdir()
+    for index in range(count):
+        name = f"Track {index + 1} SW V1"
+        (audio / f"{name}.wav").write_bytes(b"")
+        if index < cached:
+            analysis = {"track": name, "bpm": 124.0, "n_bars": 40,
+                        "sections": [{"start_sec": 0.0, "end_sec": 10.0}]}
+            (stem_dir / f"SECTIONS_STEM_{name}.json").write_text(
+                json.dumps(analysis), encoding="ascii")
+    return project, audio
+
+
+def test_all_tracks_cached_uses_the_light_floor_and_passes_at_3_9_gb(monkeypatch, capsys, tmp_path):
+    _project, audio = _make_project(tmp_path, count=9, cached=9)
+    monkeypatch.setattr(memory_guard, "psutil", FakePsutil([int(3.9 * GB)]))
+    monkeypatch.setattr(memory_guard, "commit_headroom_bytes", lambda: 12 * GB)
+    assert memory_guard.preflight(input_dir=audio) is True
+    out = capsys.readouterr().out
+    assert "2.0 GB floor: all 9 tracks cached" in out
+    assert "REFUSING TO START" not in out
+
+
+def test_one_uncached_track_uses_the_heavy_floor_and_refuses_at_3_9_gb(monkeypatch, capsys, tmp_path):
+    _project, audio = _make_project(tmp_path, count=9, cached=8)
+    monkeypatch.setattr(memory_guard, "psutil", FakePsutil([int(3.9 * GB)]))
+    monkeypatch.setattr(memory_guard, "commit_headroom_bytes", lambda: 12 * GB)
+    assert memory_guard.preflight(input_dir=audio) is False
+    out = capsys.readouterr().out
+    assert "7.0 GB floor: 1 of 9 tracks need a fresh separation" in out
+    assert "REFUSING TO START" in out
+
+
+def test_a_corrupt_cache_counts_as_a_track_that_needs_a_separation(monkeypatch, capsys, tmp_path):
+    project, audio = _make_project(tmp_path, count=2, cached=2)
+    (project / "_Stem Analysis" / "SECTIONS_STEM_Track 1 SW V1.json").write_text(
+        "{not json", encoding="ascii")
+    monkeypatch.setattr(memory_guard, "psutil", FakePsutil([9 * GB]))
+    monkeypatch.setattr(memory_guard, "commit_headroom_bytes", lambda: 12 * GB)
+    assert memory_guard.preflight(input_dir=audio) is True
+    out = capsys.readouterr().out
+    assert "7.0 GB floor: 1 of 2 tracks need a fresh separation" in out
+
+
+def test_the_cli_picks_the_floor_from_the_input_folder(monkeypatch, capsys, tmp_path):
+    _project, audio = _make_project(tmp_path, count=9, cached=9)
+    monkeypatch.setenv("COMPUTERNAME", HOME_PC)
+    monkeypatch.delenv("MEMORY_GUARD", raising=False)
+    monkeypatch.setattr(memory_guard, "psutil", FakePsutil([int(3.9 * GB)]))
+    monkeypatch.setattr(memory_guard, "commit_headroom_bytes", lambda: 12 * GB)
+    assert memory_guard.main(["--preflight-only", "--input", str(audio)]) == 0
+    out = capsys.readouterr().out
+    assert "2.0 GB floor: all 9 tracks cached" in out
+
+
+def test_the_env_overrides_the_heavy_floor(monkeypatch, capsys, tmp_path):
+    _project, audio = _make_project(tmp_path, count=9, cached=8)
+    monkeypatch.setenv(memory_guard.MIN_START_GB_ENV, "4.5")
+    monkeypatch.setattr(memory_guard, "psutil", FakePsutil([5 * GB]))
+    monkeypatch.setattr(memory_guard, "commit_headroom_bytes", lambda: 12 * GB)
+    assert memory_guard.preflight(input_dir=audio) is True
+    out = capsys.readouterr().out
+    assert "4.5 GB floor: 1 of 9 tracks need a fresh separation" in out
+
+
+def test_the_env_overrides_the_light_floor(monkeypatch, capsys, tmp_path):
+    _project, audio = _make_project(tmp_path, count=9, cached=9)
+    monkeypatch.setenv(memory_guard.MIN_START_LIGHT_GB_ENV, "1.0")
+    monkeypatch.setattr(memory_guard, "psutil", FakePsutil([int(1.2 * GB)]))
+    monkeypatch.setattr(memory_guard, "commit_headroom_bytes", lambda: 12 * GB)
+    assert memory_guard.preflight(input_dir=audio) is True
+    out = capsys.readouterr().out
+    assert "1.0 GB floor: all 9 tracks cached" in out
+
+
+def _pipeline_guard_args():
+    """The memory-guard command the pipeline runs, as the shell sees it."""
+    text = PIPELINE.read_text(encoding="utf-8")
+    match = re.search(r"python\s+Source/memory_guard\.py\s+([^\n|]+)", text)
+    assert match, "the pipeline must run the memory guard before its first step"
+    return match.group(1).split()
+
+
+def _stub_psutil_env(tmp_path, available_gb):
+    """An environment whose python reports a fixed amount of free memory.
+
+    sitecustomize is imported by every python process, so the stub is in place
+    before the guard's own imports run.
+    """
+    stub = tmp_path / "stub"
+    stub.mkdir(exist_ok=True)
+    (stub / "sitecustomize.py").write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(ROOT / 'Source')!r})\n"
+        "import psutil\n"
+        "class _Memory:\n"
+        f"    available = int({available_gb} * {GB})\n"
+        "psutil.virtual_memory = lambda: _Memory()\n"
+        "import memory_guard\n"
+        f"memory_guard.commit_headroom_bytes = lambda: {12 * GB}\n",
+        encoding="ascii")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(stub)] + [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part])
+    env["COMPUTERNAME"] = HOME_PC
+    env.pop("MEMORY_GUARD", None)
+    return env
+
+
+def test_the_pipeline_preflight_call_passes_at_3_9_gb(tmp_path):
+    args = _pipeline_guard_args()
+    env = _stub_psutil_env(tmp_path, 3.9)
+    result = subprocess.run([sys.executable, str(GUARD), *args], env=env,
+                            capture_output=True, text=True, timeout=120, cwd=str(ROOT))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "2.0 GB floor" in result.stdout
+
+
+def test_the_heavy_floor_still_refuses_a_run_at_1_5_gb(tmp_path):
+    """The heavy floor still protects the pipeline: it is the orchestrator's job."""
+    env = _stub_psutil_env(tmp_path, 1.5)
+    result = subprocess.run([sys.executable, str(GUARD), "--preflight-only"], env=env,
+                            capture_output=True, text=True, timeout=120, cwd=str(ROOT))
+    assert result.returncode == memory_guard.EXIT_REFUSED
+    assert "7.0 GB floor" in result.stdout
+
+
+def test_the_cli_with_an_input_folder_is_a_no_op_off_the_home_pc(tmp_path):
+    env = dict(os.environ, COMPUTERNAME=WORK_PC)
+    env.pop("MEMORY_GUARD", None)
+    result = subprocess.run([sys.executable, str(GUARD), "--preflight-only",
+                             "--input", str(tmp_path)],
+                            env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+# --------------------------------------------------------------------------
 # The supervisor kills the tree, restarts when the cache grew, gives up otherwise
 # --------------------------------------------------------------------------
 
@@ -428,3 +584,32 @@ def test_orchestrator_refuses_to_start_when_the_preflight_fails(monkeypatch, tmp
         orchestrator.main()
     assert exc.value.code == memory_guard.EXIT_REFUSED
     supervise.assert_not_called()
+
+
+def test_the_orchestrator_preflight_knows_the_input_folder(monkeypatch, tmp_path):
+    """The orchestrator's own guard must see the cache state of --input.
+
+    It is the check that knows whether the re-lay will separate a track, so
+    it is the one that applies the heavy floor when it will.
+    """
+    monkeypatch.setenv("COMPUTERNAME", HOME_PC)
+    monkeypatch.setenv("MEMORY_GUARD", "on")
+    monkeypatch.delenv("MEMORY_GUARD_CHILD", raising=False)
+    seen = {}
+
+    def fake_preflight(*args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return False
+
+    monkeypatch.setattr(memory_guard, "preflight", fake_preflight)
+    monkeypatch.setattr(memory_guard, "supervise", Mock(return_value=0))
+    monkeypatch.setattr(orchestrator, "run_pipeline", Mock(return_value=None))
+    audio = tmp_path / "Audio"
+    audio.mkdir()
+    monkeypatch.setattr(sys, "argv", ["orchestrator", "--input", str(audio),
+                                      "--output", str(tmp_path / "Output")])
+    with pytest.raises(SystemExit) as exc:
+        orchestrator.main()
+    assert exc.value.code == memory_guard.EXIT_REFUSED
+    assert seen["kwargs"].get("input_dir") == audio

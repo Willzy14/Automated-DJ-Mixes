@@ -23,3 +23,7 @@ demucs>=4.0.1
 pywinauto>=0.6.9
 pyautogui>=0.9.54
 pyperclip>=1.11.0
+
+# Process/memory info: the Home PC memory guard (Source/memory_guard.py) and
+# the Ableton UI helper (Source/ableton_ui.py) use it.
+psutil>=5.9.0
