@@ -505,8 +505,10 @@ def supervise(cmd, resume_dir=None, min_free_gb: float = DEFAULT_MIN_FREE_GB,
             _log(log_path, "GIVE UP: no new cache file since the last kill, "
                            "one stage does not fit in memory")
             return EXIT_GUARD_GIVE_UP
+        first_kill = progress_at_last_kill is None
         progress_at_last_kill = progress
-        _log(log_path, "RESTART: the cache folder grew, restarting the run")
+        _log(log_path, "RESTART: first guard kill, restarting once to resume from the caches"
+                       if first_kill else "RESTART: the cache folder grew, restarting the run")
     _log(log_path, "GIVE UP: attempts used up")
     return EXIT_GUARD_GIVE_UP
 
