@@ -81,6 +81,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+[Claude (Opus 5.5), 2026-11-22]: **Memory gate is live on the Home PC only** (merge 03ece8a; MiniMax built rounds 1-2, the lead added the sidecar rule, Claude executing check SOUND). `Source/memory_guard.py`: on COMPUTERNAME CARILLONAC-1-PC the orchestrator re-launches itself under a supervisor (below-normal priority, capped threads, kills the process tree under 1.5 GB free, restarts once per new cache file, gives up with exit 3) after a preflight that refuses to start (exit 4) below 7.0 GB free when any track needs a fresh Demucs separation (missing finished analysis or a missing `__stemenv`/`__drumsstem` sidecar) or 2.0 GB when all are cached, and prints the five biggest processes. `Tools/run_mix_pipeline.sh` runs the light preflight first. Every other machine (STUDIO-2): no-op, proven identical. Overrides: `MEMORY_GUARD=off|on`, `MEMORY_GUARD_MIN_START_GB`, `MEMORY_GUARD_MIN_START_LIGHT_GB`. Full suite on merged main 2357 passed, 9 skipped, when pytest's basetemp is on NTFS (on D:, exFAT, 3 cache/alias tests fail).
+
 [Claude, 2026-11-22]: The blend planner is the default arranger for groove projects (merge 10d7c6d) and `--no-previews` is on the re-lay (00cf5d7). First live run on the new defaults: `Listening Sets/Tech House 2026 Planned.als`, 9 new 2026 tracks, planner 8 of 8, every gate passes, not yet heard. On the Home PC a fresh analysis needs a memory guard and about 7 GB free for the beat-grid step.
 
 [Codex, 2026-11-20]: The Phase 1a CLI defaults to groove for a stem sections layout outside preview mode. Later phases use the cached format and reject mixed legacy and groove analyses. The cached 10-track DFTD replay built nine transitions and passed the hints, ALS, and 71 MixPlan checks. The 16-track August legacy replay passed the same gates as main, with identical deterministic output. Proof logs are under `_scratch/default/`.
@@ -1496,7 +1498,7 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 ## What's Next
 
 - [ ] **Sam** - Listen to `Listening Sets/Tech House 2026 Planned.wav` (bounced 2026-11-22).
-- [ ] **MiniMax or Kimi (Codex capped to 2026-11-27)** - Move the memory guard into the repo and make Phase 1a refuse to start below a free-memory floor; fix the preview leak at the root (matplotlib figures kept until gc) (2026-11-22).
+- [ ] **Ask Sam first (touches both PCs)** - Fix the preview leak at the root (matplotlib figures kept until gc, about 0.5 GB per track). Left out of the memory gate because Sam asked for a Home-PC-only change (2026-11-22).
 - [ ] **Codex** - Cut the beat-grid memory spike after a fresh separation on the Home PC (6 to 7 GB measured) (2026-11-22).
 
 - **Codex** - Rerun DFTD with the upstream Call 911 grid fix and listen to the blends. The cached replay still flags a two-beat offset on Call 911. The Passion into Ninetoes entry and the Ninetoes into Ashibah entry and swap are 16 bars earlier than Sam's key. The hints gate flags fallback outro hints for Call 911 and A Little Affection for review.
