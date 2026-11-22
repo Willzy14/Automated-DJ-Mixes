@@ -14,12 +14,13 @@ Saved to `Output/Visualisations/Previews/Preview_<track>.png`.
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 
 import librosa
-import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
 
 from automated_dj_mixes.analysis import TrackAnalysis
 
@@ -55,8 +56,11 @@ def render_preview(ctx: PreviewContext, out_dir: Path) -> Path:
     bpm = ctx.analysis.bpm or 128.0
     sec_per_beat = 60.0 / bpm
 
-    fig, axes = plt.subplots(
-        2, 1, figsize=(22, 5.5), dpi=110, sharex=True,
+    # A plain Figure, not pyplot: no Tk window and no global figure list,
+    # so nothing outside this function can keep the picture alive.
+    fig = Figure(figsize=(22, 5.5), dpi=110)
+    axes = fig.subplots(
+        2, 1, sharex=True,
         gridspec_kw={"height_ratios": [5, 0.6], "hspace": 0.10},
     )
     ax_wave, ax_energy = axes
@@ -131,10 +135,20 @@ def render_preview(ctx: PreviewContext, out_dir: Path) -> Path:
     ax_energy.set_title("MIK energy (1=blue → 10=red)", fontsize=9, loc="left")
     ax_energy.set_xlabel("Source time (seconds)")
 
-    plt.tight_layout(rect=(0.01, 0.02, 0.99, 0.96))
+    fig.tight_layout(rect=(0.01, 0.02, 0.99, 0.96))
 
     out_name = f"Preview_{ctx.track_index:02d}_{ctx.analysis.path.stem[:60].replace(' ', '_')}.png"
     out_path = out_dir / out_name
     fig.savefig(out_path, dpi=110, bbox_inches="tight")
-    plt.close(fig)
+    # Free the picture NOW, not "later". The old pyplot version only closed
+    # the figure: it stayed alive in reference cycles (figure <-> canvas,
+    # figure <-> axes) until the cyclic garbage collector happened to run,
+    # and with it the Agg raster of the 1.2 M point waveform polygon - about
+    # 1.2 GB per preview on the Home PC, which is what froze it on 2026-11-21.
+    # clear() drops the axes, dropping the names drops the last references,
+    # and collect() frees the whole graph (a collect() works even when the
+    # automatic collector is switched off).
+    fig.clear()
+    del fig, axes, ax_wave, ax_energy
+    gc.collect()
     return out_path
