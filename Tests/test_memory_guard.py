@@ -323,7 +323,24 @@ def _make_project(tmp_path, count=9, cached=9):
                         "sections": [{"start_sec": 0.0, "end_sec": 10.0}]}
             (stem_dir / f"SECTIONS_STEM_{name}.json").write_text(
                 json.dumps(analysis), encoding="ascii")
+            for suffix in ("__stemenv.npz", "__drumsstem.npz"):
+                (stem_dir / f"{name}{suffix}").write_bytes(b"")
     return project, audio
+
+
+def test_a_missing_separation_sidecar_counts_as_a_fresh_separation(monkeypatch, capsys, tmp_path):
+    # The analysis is finished but the drums stem is gone: kick_model_adapter runs
+    # Demucs again, so the heavy floor must apply. Same for the envelope sidecar.
+    for missing in ("__drumsstem.npz", "__stemenv.npz"):
+        case = tmp_path / missing.strip("_.")
+        case.mkdir()
+        project, audio = _make_project(case, count=3, cached=3)
+        (project / "_Stem Analysis" / f"Track 2 SW V1{missing}").unlink()
+        monkeypatch.setattr(memory_guard, "psutil", FakePsutil([int(3.9 * GB)]))
+        monkeypatch.setattr(memory_guard, "commit_headroom_bytes", lambda: 12 * GB)
+        assert memory_guard.preflight(input_dir=audio) is False
+        out = capsys.readouterr().out
+        assert "7.0 GB floor: 1 of 3 tracks need a fresh separation" in out
 
 
 def test_all_tracks_cached_uses_the_light_floor_and_passes_at_3_9_gb(monkeypatch, capsys, tmp_path):

@@ -210,9 +210,22 @@ def separation_state(input_dir) -> tuple[int, int] | None:
                     and path.suffix.lower() in AUDIO_EXTENSIONS
                     and not path.name.startswith("."))
     project = folder.parent
-    fresh = sum(1 for path in tracks
-                if not finished_stem_analysis(project, path.stem))
+    fresh = sum(1 for path in tracks if needs_fresh_separation(project, path.stem))
     return len(tracks), fresh
+
+
+# Demucs is skipped only when BOTH of these sit beside the finished analysis
+# (kick_model_adapter: "CASE A - warm: envelopes + drums stem both cached").
+SEPARATION_SIDECARS = ("__stemenv.npz", "__drumsstem.npz")
+
+
+def needs_fresh_separation(project_dir, stem: str) -> bool:
+    """True when the run would separate this track again: no finished analysis,
+    or a missing envelope or drums-stem sidecar (either one sends it to Demucs)."""
+    if not finished_stem_analysis(project_dir, stem):
+        return True
+    stem_dir = Path(project_dir) / "_Stem Analysis"
+    return any(not (stem_dir / f"{stem}{suffix}").is_file() for suffix in SEPARATION_SIDECARS)
 
 
 def choose_start_floor(min_start_gb: float | None = None, input_dir=None,
