@@ -21,6 +21,15 @@ LOG="$P/Output/runmix.log"; : > "$LOG" || exit 1
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 fail() { say "FAILED at: $*"; exit 1; }
 
+# Memory preflight before the first python step. The guard runs on Sam's Home
+# PC only (CARILLONAC-1-PC, where Phase 1a froze the machine on 2026-11-21);
+# on every other machine it is a no-op that prints nothing and exits 0, so the
+# work PC (STUDIO-2) runs this script exactly as it ran before. The file check
+# keeps the pipeline tests (which run a stripped copy of the repo) unchanged.
+if [ -f Source/memory_guard.py ]; then
+    python Source/memory_guard.py --preflight-only || fail "memory preflight (close Chrome and Dropbox, then retry)"
+fi
+
 record="$P/Output/relay-layout.txt"
 if [ -z "${RESUME:-}" ]; then
     rm -f -- "$record" || fail "clear previous relay layout record"
