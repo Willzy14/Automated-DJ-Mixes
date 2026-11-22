@@ -21,6 +21,21 @@ LOG="$P/Output/runmix.log"; : > "$LOG" || exit 1
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 fail() { say "FAILED at: $*"; exit 1; }
 
+# Memory preflight before the first python step. The guard runs on Sam's Home
+# PC only (CARILLONAC-1-PC, where Phase 1a froze the machine on 2026-11-21);
+# on every other machine it is a no-op that prints nothing and exits 0, so the
+# work PC (STUDIO-2) runs this script exactly as it ran before. The file check
+# keeps the pipeline tests (which run a stripped copy of the repo) unchanged.
+#
+# The floor here is the LIGHT one (2.0 GB): this script re-lays cached
+# analysis and separates nothing itself. The HEAVY floor (7.0 GB) belongs to
+# a fresh Demucs separation, and the orchestrator's own guard applies it -
+# it knows whether the re-lay will separate a track (it does when a track has
+# no finished stem analysis in the _Stem Analysis folder beside it).
+if [ -f Source/memory_guard.py ]; then
+    python Source/memory_guard.py --preflight-only --min-start-gb 2.0 || fail "memory preflight (close Chrome and Dropbox, then retry)"
+fi
+
 record="$P/Output/relay-layout.txt"
 if [ -z "${RESUME:-}" ]; then
     rm -f -- "$record" || fail "clear previous relay layout record"

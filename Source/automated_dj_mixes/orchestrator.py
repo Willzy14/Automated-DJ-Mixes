@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 import traceback
 from pathlib import Path
 
@@ -886,7 +887,86 @@ def run_pipeline(
     )
 
 
+def _memory_guard_module():
+    """The memory guard (Source/memory_guard.py), or None when it is not importable."""
+    try:
+        import memory_guard
+        return memory_guard
+    except ImportError:
+        pass
+    source_dir = str(Path(__file__).resolve().parents[1])
+    if source_dir not in sys.path:
+        sys.path.insert(0, source_dir)
+    try:
+        import memory_guard
+        return memory_guard
+    except ImportError:
+        return None
+
+
+def _guard_input_dir(argv):
+    """The --input folder from argv, read without touching the real parser."""
+    for index, arg in enumerate(argv):
+        if arg == "--input" and index + 1 < len(argv):
+            return Path(argv[index + 1])
+        if arg.startswith("--input="):
+            return Path(arg.split("=", 1)[1])
+    return None
+
+
+def _guard_pythonpath(env):
+    """PYTHONPATH for the guarded child: the Source folder has to stay importable."""
+    source_dir = str(Path(__file__).resolve().parents[1])
+    parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
+    if source_dir not in parts:
+        parts.insert(0, source_dir)
+    return os.pathsep.join(parts)
+
+
+def _guard_log_path(input_dir):
+    """The guard log: Output/guard.log beside the input folder (the project's Output)."""
+    output_dir = input_dir.parent / "Output"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return str(output_dir / "guard.log")
+
+
+def _memory_guard_exit():
+    """Re-launch this run under the memory guard (Home PC only).
+
+    Returns the exit code to leave with, or None to carry on exactly as today.
+    The guard is a no-op on every other machine (Sam's rule, 2026-11-22): the work
+    PC (STUDIO-2) must run the pipeline exactly as it runs now.
+    """
+    guard = _memory_guard_module()
+    if guard is None:
+        return None
+    if os.environ.get(guard.MEMORY_GUARD_CHILD_ENV):
+        return None  # we ARE the guarded child, never re-launch again
+    if not guard.guard_active():
+        return None  # not the Home PC: nothing changes here
+    if guard.in_test_process() and not guard.guard_forced():
+        return None  # the repo's own test suite calls main() in-process
+    argv = sys.argv[1:]
+    input_dir = _guard_input_dir(argv)
+    if input_dir is None:
+        return None  # let the real parser report the missing --input
+    if not guard.preflight(input_dir=input_dir):
+        return guard.EXIT_REFUSED
+    env = dict(os.environ)
+    env[guard.MEMORY_GUARD_CHILD_ENV] = "1"
+    env["PYTHONPATH"] = _guard_pythonpath(env)
+    cmd = [sys.executable, "-m", "automated_dj_mixes.orchestrator", *argv]
+    return guard.supervise(cmd, resume_dir=input_dir.parent / "_Stem Analysis", env=env,
+                           log_path=_guard_log_path(input_dir))
+
+
 def main():
+    guard_exit = _memory_guard_exit()
+    if guard_exit is not None:
+        raise SystemExit(guard_exit)
     parser = argparse.ArgumentParser(description="Generate an Ableton Live session from tagged dance tracks")
     parser.add_argument("--input", required=True, help="Folder containing audio tracks")
     parser.add_argument("--output", required=True, help="Folder for generated ALS output")
