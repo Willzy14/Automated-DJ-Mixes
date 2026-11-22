@@ -81,6 +81,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+[Claude, 2026-11-22]: The blend planner is the default arranger for groove projects (merge 10d7c6d) and `--no-previews` is on the re-lay (00cf5d7). First live run on the new defaults: `Listening Sets/Tech House 2026 Planned.als`, 9 new 2026 tracks, planner 8 of 8, every gate passes, not yet heard. On the Home PC a fresh analysis needs a memory guard and about 7 GB free for the beat-grid step.
+
 [Codex, 2026-11-20]: The Phase 1a CLI defaults to groove for a stem sections layout outside preview mode. Later phases use the cached format and reject mixed legacy and groove analyses. The cached 10-track DFTD replay built nine transitions and passed the hints, ALS, and 71 MixPlan checks. The 16-track August legacy replay passed the same gates as main, with identical deterministic output. Proof logs are under `_scratch/default/`.
 [Codex, 2026-11-20]: Exact planner decisions now check the ALS warp and clip geometry with a one-beat detector tolerance, then verify each applied exit at float precision. Fresh Mix V3 passes the ALS and MixPlan gates after six production loop rejections, with all seven applied exit boundaries verified. Both DFTD runs refuse the Call 911 bar-zero mismatch of 1.936 beats. Both default replays match the saved ALS XML, MixPlan and report byte for byte.
 
@@ -231,7 +233,26 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-11-20 (Latest Session) - Section answer key, groove detector ON, blend planner built and wired (opt-in)
+### 2026-11-21/22 (Latest Session) - Planner is the default arranger; Tech House 2026 Planned built on the Home PC
+
+**Brain:** Claude (Opus 5.5) with Codex builds, Kimi and MiniMax reviews
+
+**Focus:** Sam heard `Listening Sets/Fresh Mix Planned` ("struggled to find much wrong with it") and asked for the planner to become the default and for a fresh 9 to 10 track 2026 tech house mix from Neon.
+
+**Completed:**
+- **Blend planner is the default arranger for groove projects** (merge 10d7c6d; Codex build in 3 rounds, Kimi and MiniMax round 1 CORRECTIONS, Kimi round 3 SOUND). `Tools/run_mix_pipeline.sh` runs `Tools/plan_mix_decisions.py --allow-partial` for groove caches; legacy caches stay rule-based; `PLANNER=off` and `DEC=` override; a mixed cache stops. A pair the planner cannot place falls back and is listed under `fallback_pairs`. The script also takes absolute project paths and keeps an inherited PYTHONPATH (6500023). Tests: `Tests/test_run_mix_pipeline.py`, `Tests/test_plan_mix_decisions.py`; 453 related tests passed after merge.
+- **`--no-previews`** on the orchestrator (merge 00cf5d7, Codex build, Kimi SOUND): the re-lay skips the hint-authoring PNGs, which leaked about 0.5 GB per track. Test: `Tests/test_orchestrator_previews.py`.
+- **`Listening Sets/Tech House 2026 Planned.als`**: 9 tracks mastered in 2026 (Jones, Fallon, Ragie Ban, Rafael Cerato, We Met Offline, VLAD x2, Hiisak, Hiisak and Reeva), 35:32, planner placed 8 of 8 blends, `validate_als` and all 61 MixPlan checks pass. Project folder: `D:/Claude Workspace/Automated DJ Mixes/Projects/21.11.26 Tech House 2026 V2`. Bounced 2026-11-22 by Claude through `Source/ableton_ui.py` to `Listening Sets/Tech House 2026 Planned.wav` (35:32.34, 44.1 kHz 24-bit, median 1 s RMS -16.8 dBFS; 3 single samples at full scale in two blends; the two 1 s quiet spots are gaps in Jones and Ragie Ban themselves). Not heard yet.
+- Self-audit: `Documentation/Reviews/2026-11-22/session_self_audit.md`.
+
+**Key Learnings:**
+- Home PC memory (16 GB, CPU only): Demucs separation peaks about 1.9 GB, but the beat-grid step after a fresh separation spikes to 6 to 7 GB. The first analysis ran with no free-memory check and froze the PC (Sam hard-restarted; one entry on exFAT D: is damaged). Runs then went through a memory guard (`D:/Claude Workspace/Automated DJ Mixes/Projects/run_guarded_command.py`, outside the repo) that kills the tree below a floor and resumes from per-track caches. Closing Dropbox and Chrome was needed for the last track.
+- From Windows Python, `bash` can resolve to WSL; call `C:/Program Files/Git/bin/bash.exe`. The toolkit needs `Audio Analysis Toolkit/src` on PYTHONPATH (Windows `;`).
+- Codex in its sandbox cannot write `index.lock`; queue_runner collects its tree as `wip(codex)` commits. Its pytest temp folders lock; use `--basetemp` (Known Workarounds).
+
+**Next:** Sam listens to `Listening Sets/Tech House 2026 Planned.wav`; the open items are in BURN_LIST START HERE (memory gate in the repo first, preview leak at the root, beat-grid memory on the Home PC, the locked worktree folder, Braydon Terzo online-only). D: was checked and repaired by Sam on 2026-11-22.
+
+### 2026-11-20 - Section answer key, groove detector ON, blend planner built and wired (opt-in)
 
 **Brain:** Claude (Fable 5.2, then Sonnet 5.5) with Codex, Kimi and MiniMax builds and reviews
 
@@ -1473,6 +1494,10 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 **Focus**: Bootstrap → end-to-end pipeline → skills system → tempo automation. V1-V8.
 
 ## What's Next
+
+- [ ] **Sam** - Listen to `Listening Sets/Tech House 2026 Planned.wav` (bounced 2026-11-22).
+- [ ] **MiniMax or Kimi (Codex capped to 2026-11-27)** - Move the memory guard into the repo and make Phase 1a refuse to start below a free-memory floor; fix the preview leak at the root (matplotlib figures kept until gc) (2026-11-22).
+- [ ] **Codex** - Cut the beat-grid memory spike after a fresh separation on the Home PC (6 to 7 GB measured) (2026-11-22).
 
 - **Codex** - Rerun DFTD with the upstream Call 911 grid fix and listen to the blends. The cached replay still flags a two-beat offset on Call 911. The Passion into Ninetoes entry and the Ninetoes into Ashibah entry and swap are 16 bars earlier than Sam's key. The hints gate flags fallback outro hints for Call 911 and A Little Affection for review.
 - [ ] **Codex** - Replay the strict DFTD decision path with a reconciled Call 911 layout and detector clock (2026-11-20).

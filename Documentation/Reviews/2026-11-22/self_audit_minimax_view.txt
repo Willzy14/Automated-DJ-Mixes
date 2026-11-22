@@ -1,0 +1,41 @@
+﻿# Outside view: what should change next time
+
+1. **Hard free-memory gate before every long local job.** Owner: Claude the lead, script by Codex. Evidence: the global rule already says "Check free commit memory before a long local job, and make scripts resume from what is on disk." No check ran before the 14:59/15:03 start. Beat-grid after a fresh separation spikes to 6 to 7 GB, Demucs alone peaks 1.9 GB. The PC froze at 15:10. Check: `preflight_mem` prints free commit bytes and exits 1 unless free >= 8.0 GB, and the analysis wrapper refuses to start without a passing line in its log.
+
+2. **Peak table in the repo, not on D: scratch.** Owner: Codex. Evidence: "The memory guard scripts live on D: in a scratch projects folder, not in the repo." Check: `MEMORY_PEAKS.md` lists demucs 2.5 GB, beat-grid 7.5 GB, preview 0.5 GB per track. The gate reads that file, and a test fails if any long job has no entry.
+
+3. **Resume from disk by default.** Owner: Codex. Evidence: rule says scripts must "resume from what is on disk"; the 9th track was rerun at 22:04 after a 21:26 failure (5.3 GB free vs 8.7). Check: analysis skips tracks holding a valid done-marker. Test: kill during track 3, rerun, assert tracks 1 and 2 are not redone.
+
+4. **Previews off by default.** Owner: Codex. Evidence: "hint-authoring preview pictures leaked about 0.5 GB per track until the --no-previews flag was added." Check: test asserts a default run creates 0 preview images, counted in the output folder.
+
+5. **A validator must be named in every brief.** Owner: Claude the lead (template), Codex (self-check). Evidence: three ledger lines for 9643ac7, 23cb4c9, 020f0a4 read "VERIFY-SKIPPED: no declared validator for this project - NOT verified." Check: brief template has a non-empty VALIDATOR line; queue_runner marks a collection VERIFIED only when that validator exits 0.
+
+6. **Retry rule for an empty collection.** Owner: Claude the lead. Evidence: r1 14:44 and r2 14:46 both logged "NOTHING WRITTEN"; the retry at 15:03 worked, 19 minutes lost. Rule: on 0 collected files, retry the same brief once within 5 minutes and log EMPTY then RETRY, not an inference.
+
+7. **Ledger records quotes, not guesses.** Owner: Claude the lead. Evidence: ledger says "NOTHING WRITTEN - suspect the launcher, not the model", but the lead says r1 answered BLOCKED about groove-format caches. Check: the outcome field contains a quoted string from the seat's answer, or the literal `EMPTY-BYTES`.
+
+8. **Two review seats before a behavioural merge.** Owner: Kimi and MiniMax. Evidence: no-previews merged at 22:56 with one reviewer, Codex not rerun. Rule: a second seat reviews before merge, or the ledger carries a one-line exception with the reason.
+
+9. **ETA only from the guard log, refreshed every 30 minutes.** Owner: Claude the lead. Evidence: "finishing around 8 to 8:30pm" (18:33), "finish around 19:40" (19:07), "roughly 35 minutes" (19:10), "35 to 40 minutes" (20:58) then "12 to 14 minutes" (20:59). Real: 9 of 9 at 22:26. Check: every ETA quotes a measured minutes-per-track and names the log line it came from.
+
+10. **One-line progress ping every 30 minutes.** Owner: Claude the lead. Evidence: Sam asked at 18:28 "how far along did you get" and at 18:34 "ok let me know when it's done". Sam wants one short point at a time. Check: the ping is one line: tracks done, no ETA unless rule 9 is satisfied.
+
+11. **MiniMax takes mechanical bulk and the second review.** Owner: MiniMax. Evidence: MiniMax answered a 43 KB review at 18:52 although its console was signed out; section 8 lists copying and hash-checking 9 files, resolving masters for 10 tracks, folder index copy, lock-file clearing, log polling and memory sampling, "Reason stated for none". Check: count of files copied or hashed by the lead this session = 0.
+
+12. **Zero-byte copy check.** Owner: Codex. Evidence: the 14:55 listing showed "Braydon Terzo - Impressive SW V1.wav" at 0 bytes, and 10 resolved became 9 used. Check: the copy step fails on any 0-byte file and logs SHA256 per file.
+
+## Answers
+
+**(a) Under-used seat and job.** MiniMax, on two jobs: mechanical bulk work (copying and hash-checking, resolving masters, log polling, memory sampling) and the missing second review of no-previews at 22:53. It was available all session and its 18:52 CLI answer of 43055 bytes proves it worked. The Claude subagent seat was also unused: "Subagents: none (subagents.md empty)."
+
+**(b) Single biggest time saver.** Running the free-commit-memory check before the 15:03 start, as a hard gate. It would have seen the 7 GB beat-grid spike plus Dropbox, Chrome and another session's Codex, and avoided the 15:10 freeze: 3h11m dead, plus the damaged D: directory entry.
+
+**(c) Misreadings I would correct.**
+- "Codex r1 returned empty" is wrong. It answered BLOCKED: the planner needs groove-format caches, old projects have legacy caches. So one empty (r2), not two, and the ledger's "suspect the launcher" inference is unsupported.
+- "Kimi 18:37 planner-default sound" and MiniMax 18:52 "verdict wording not in replies" are wrong. Both returned CORRECTIONS. Two of their claims were later rejected after Kimi measured them.
+- "Demucs caused the freeze" is wrong. Demucs peaks 1.9 GB. The beat-grid step after a fresh separation, at 6 to 7 GB, plus the 0.5 GB per track preview leak, is the cause.
+- "Merged" is not "verified". Collection 020f0a4 is UNVERIFIED with one reviewer.
+- "430 tests pass" then "453 on main" is not a false claim: different scopes. Do not list it as an error.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=872d265d7e484fe1a5cc7d99ee3c36f5===
