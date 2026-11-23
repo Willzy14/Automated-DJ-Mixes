@@ -238,20 +238,25 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Recent Session History
 
-### 2026-11-21/22 (Latest Session) - Planner is the default arranger; Tech House 2026 Planned built on the Home PC
+### 2026-11-21/23 (Latest Session) - Planner is the default arranger; Tech House 2026 Planned built; Home PC memory gate and picture leaks fixed
 
-**Brain:** Claude (Opus 5.5) with Codex builds, Kimi and MiniMax reviews
+**Brain:** Claude (Opus 5.5) with Codex, Kimi and MiniMax builds and reviews (Codex capped from 2026-11-22 to about 2026-11-27, Kimi weekly cap hit 2026-11-22)
 
-**Focus:** Sam heard `Listening Sets/Fresh Mix Planned` ("struggled to find much wrong with it") and asked for the planner to become the default and for a fresh 9 to 10 track 2026 tech house mix from Neon.
+**Focus:** Sam heard `Listening Sets/Fresh Mix Planned` ("struggled to find much wrong with it") and asked for the planner to become the default and for a fresh 9 to 10 track 2026 tech house mix from Neon. After the freeze on the Home PC: a memory gate, then the picture memory leaks.
 
 **Completed:**
 - **Blend planner is the default arranger for groove projects** (merge 10d7c6d; Codex build in 3 rounds, Kimi and MiniMax round 1 CORRECTIONS, Kimi round 3 SOUND). `Tools/run_mix_pipeline.sh` runs `Tools/plan_mix_decisions.py --allow-partial` for groove caches; legacy caches stay rule-based; `PLANNER=off` and `DEC=` override; a mixed cache stops. A pair the planner cannot place falls back and is listed under `fallback_pairs`. The script also takes absolute project paths and keeps an inherited PYTHONPATH (6500023). Tests: `Tests/test_run_mix_pipeline.py`, `Tests/test_plan_mix_decisions.py`; 453 related tests passed after merge.
-- **`--no-previews`** on the orchestrator (merge 00cf5d7, Codex build, Kimi SOUND): the re-lay skips the hint-authoring PNGs, which leaked about 0.5 GB per track. Test: `Tests/test_orchestrator_previews.py`.
+- **`--no-previews`** on the orchestrator (merge 00cf5d7, Codex build, Kimi SOUND): the re-lay skips the hint-authoring PNGs (first estimate 0.5 GB per track; measured on 2026-11-23 at about 1.2 GB per real track, now fixed at the root, see below). Test: `Tests/test_orchestrator_previews.py`.
 - **`Listening Sets/Tech House 2026 Planned.als`**: 9 tracks mastered in 2026 (Jones, Fallon, Ragie Ban, Rafael Cerato, We Met Offline, VLAD x2, Hiisak, Hiisak and Reeva), 35:32, planner placed 8 of 8 blends, `validate_als` and all 61 MixPlan checks pass. Project folder: `D:/Claude Workspace/Automated DJ Mixes/Projects/21.11.26 Tech House 2026 V2`. Bounced 2026-11-22 by Claude through `Source/ableton_ui.py` to `Listening Sets/Tech House 2026 Planned.wav` (35:32.34, 44.1 kHz 24-bit, median 1 s RMS -16.8 dBFS; 3 single samples at full scale in two blends; the two 1 s quiet spots are gaps in Jones and Ragie Ban themselves). Not heard yet.
-- Self-audit: `Documentation/Reviews/2026-11-22/session_self_audit.md`.
+- Self-audit: `Documentation/Reviews/2026-11-22/session_self_audit.md` (covers to 2026-11-22 08:38; the rest got the session-end self-check).
+- Three checks from that self-audit built and live (global, outside this repo): the finish-time rule in `reply_style_stop.py`, `.room-validator` + BLOCKED + `-Root` guard in `queue_runner.ps1`, queue counting in `self_audit_extract.py`. Record: `D:/Claude Workspace/Brain Builds/2026-11-22 self-audit checks/README.md`. A checker harness emptied the shared team ledger; restored from Dropbox history.
+- **Memory gate, Home PC only** (merge 03ece8a, Sam: "as long as it only effects this pc"): `Source/memory_guard.py`, details in Current State.
+- **Preview leak fixed** (merge 23c4bd7) and **the other ten pyplot renderers freed** (merge ddb4800, `frees_figures` in `automated_dj_mixes/figure_memory.py`): details in Current State. Full suite on main 2378 passed, 6 skipped. All pushed (90fe881).
 
 **Key Learnings:**
-- Home PC memory (16 GB, CPU only): Demucs separation peaks about 1.9 GB, but the beat-grid step after a fresh separation spikes to 6 to 7 GB. The first analysis ran with no free-memory check and froze the PC (Sam hard-restarted; one entry on exFAT D: is damaged). Runs then went through a memory guard (`D:/Claude Workspace/Automated DJ Mixes/Projects/run_guarded_command.py`, outside the repo) that kills the tree below a floor and resumes from per-track caches. Closing Dropbox and Chrome was needed for the last track.
+- Home PC memory (16 GB, CPU only): Demucs separation peaks about 1.9 GB, but the beat-grid step after a fresh separation spikes to 6 to 7 GB. The first analysis ran with no free-memory check and froze the PC (Sam hard-restarted; one entry on exFAT D: is damaged). Runs then went through a guard outside the repo; that is now `Source/memory_guard.py` (wrap any other heavy job: `python Source/memory_guard.py --min-start-gb N --min-free-gb 1.5 -- <command>`). Closing Dropbox and Chrome was needed for the last track.
+- A pyplot figure closed with `plt.close` stays alive (with its Agg raster) until Python's cyclic gc runs: 3 MB to 1.2 GB per call here. Every pyplot renderer carries `@frees_figures`; `Tests/test_figure_memory.py` checks the list.
+- Keep pytest's `--basetemp` off D: (exFAT breaks 3 cache/alias tests); use %TEMP%. Executing checkers write only under %TEMP%.
 - From Windows Python, `bash` can resolve to WSL; call `C:/Program Files/Git/bin/bash.exe`. The toolkit needs `Audio Analysis Toolkit/src` on PYTHONPATH (Windows `;`).
 - Codex in its sandbox cannot write `index.lock`; queue_runner collects its tree as `wip(codex)` commits. Its pytest temp folders lock; use `--basetemp` (Known Workarounds).
 

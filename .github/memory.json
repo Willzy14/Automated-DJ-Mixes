@@ -99,7 +99,8 @@
       "path": "Source/automated_dj_mixes/waveform_preview.py",
       "purpose": "Blank-canvas preview PNG for visual-hint authoring (no picks shown)",
       "status": "working",
-      "added": "2026-05-18"
+      "added": "2026-05-18",
+      "last_modified": "2026-11-23"
     },
     "desktop_analyzer": {
       "path": "Source/automated_dj_mixes/desktop_analyzer.py",
@@ -111,6 +112,20 @@
       "path": "Source/automated_dj_mixes/config.py",
       "purpose": "Settings loader",
       "status": "working"
+    },
+    "memory_guard": {
+      "path": "Source/memory_guard.py",
+      "purpose": "Home PC only (CARILLONAC-1-PC): free-memory preflight floor (7 GB when a track needs separation, 2 GB when cached) and a kill-and-resume supervisor for Phase 1a; no-op elsewhere",
+      "status": "working",
+      "added": "2026-11-22",
+      "brain": "MiniMax"
+    },
+    "figure_memory": {
+      "path": "Source/automated_dj_mixes/figure_memory.py",
+      "purpose": "frees_figures decorator: gc.collect() after each pyplot renderer returns so closed figures and their Agg rasters are freed",
+      "status": "working",
+      "added": "2026-11-23",
+      "brain": "MiniMax"
     }
   },
   "standalone_scripts": {
@@ -854,7 +869,19 @@
         "delete F:/Worktrees/dj-planner-default by hand (D: chkdsk done by Sam 2026-11-22)",
         "Braydon Terzo - Impressive master is online-only in Dropbox"
       ]
+    },
+    {
+      "date": "2026-11-23",
+      "brain": "Claude (Opus 5.5) with MiniMax builds, Kimi builds and reviews, Sonnet subagent checks",
+      "summary": "Three self-audit checks built and live (reply_style_stop finish-time rule, queue_runner validator/BLOCKED/-Root guard, self_audit_extract queue counting); team ledger restored after a checker harness emptied it; Home-PC-only memory gate merged (03ece8a); preview leak fixed (23c4bd7); the other ten pyplot renderers freed with frees_figures (ddb4800); full suite 2378 passed; pushed at 90fe881.",
+      "pending": [
+        "Sam listens to Listening Sets/Tech House 2026 Planned.wav (bounced 2026-11-22, 35:32)",
+        "cut the beat-grid memory spike on the Home PC (Codex after 2026-11-27)",
+        "the spike inside one waveform preview render (needs a simpler drawing, changes the picture)",
+        "delete F:/Worktrees/dj-planner-default by hand (not a registered worktree)",
+        "Braydon Terzo - Impressive master is online-only in Dropbox"
+      ]
     }
   ],
-  "last_modified": "2026-11-22"
+  "last_modified": "2026-11-23"
 }
