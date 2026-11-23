@@ -144,27 +144,27 @@ def test_drift_fit_recovers_a_linear_drift_within_half_a_ms():
 
 
 def test_drift_fit_recovers_a_constant_offset_and_is_flat_beyond_the_measured_beats():
-    fit = gpf.fit_drift([(b, 3.0) for b in range(10, 90)])
+    fit = gpf.fit_drift([(b, 5.0) for b in range(10, 90)])
     assert fit.status == gpf.FIT
-    assert all(abs(fit.at(b) - 3.0) <= 0.5 for b in (10, 50, 89))
-    assert abs(fit.at(-500) - 3.0) <= 0.5 and abs(fit.at(5000) - 3.0) <= 0.5
+    assert all(abs(fit.at(b) - 5.0) <= 0.5 for b in (10, 50, 89))
+    assert abs(fit.at(-500) - 5.0) <= 0.5 and abs(fit.at(5000) - 5.0) <= 0.5
 
 
 def test_drift_fit_correction_has_the_sign_of_the_offset():
-    assert gpf.fit_drift([(b, 4.0) for b in range(60)]).at(30) > 3.0           # kicks late: a positive correction
-    assert gpf.fit_drift([(b, -4.0) for b in range(60)]).at(30) < -3.0
+    assert gpf.fit_drift([(b, 6.0) for b in range(60)]).at(30) > 5.0           # kicks late: a positive correction
+    assert gpf.fit_drift([(b, -6.0) for b in range(60)]).at(30) < -5.0
 
 
 @pytest.mark.parametrize("count, status", [(39, gpf.CANNOT_FIT), (40, gpf.FIT)])
 def test_a_track_needs_forty_usable_kick_beats(count, status):
-    assert gpf.fit_drift([(b, 1.0) for b in range(count)]).status == status
+    assert gpf.fit_drift([(b, 6.0) for b in range(count)]).status == status
 
 
 def test_outliers_over_15_ms_are_dropped_before_counting_and_fitting():
     wild = [(b, 40.0 if b % 2 else -40.0) for b in range(100, 160)]
-    fit = gpf.fit_drift([(b, 1.0) for b in range(60)] + wild)
-    assert fit.status == gpf.FIT and fit.kicks == 60 and all(abs(fit.at(b) - 1.0) < 0.1 for b in (0, 30, 59))
-    assert gpf.fit_drift([(b, 1.0) for b in range(30)] + wild).status == gpf.CANNOT_FIT
+    fit = gpf.fit_drift([(b, 6.0) for b in range(60)] + wild)
+    assert fit.status == gpf.FIT and fit.kicks == 60 and all(abs(fit.at(b) - 6.0) < 0.1 for b in (0, 30, 59))
+    assert gpf.fit_drift([(b, 6.0) for b in range(30)] + wild).status == gpf.CANNOT_FIT
 
 
 def test_a_correction_over_max_drift_is_refused_and_reported():
@@ -173,6 +173,20 @@ def test_a_correction_over_max_drift_is_refused_and_reported():
     assert fit.status == gpf.REFUSED and "more than 12 ms" in fit.note
     assert fit.at(10) == 0.0                                  # a refused fit corrects nothing
     assert gpf.fit_drift([(b, 11.0) for b in range(60)]).status == gpf.FIT
+
+
+def test_a_wobble_inside_the_noise_is_not_drift(tmp_path):
+    # Taste on the real mix: a correction that never passed 1.9 ms. Applying it only added noise, so it is left alone.
+    wobble = [(b, 1.8 * math.sin(b / 40.0)) for b in range(0, 400)]
+    fit = gpf.fit_drift(wobble)
+    assert fit.status == gpf.NO_DRIFT and "noise, not drift" in fit.note
+    assert gpf.DRIFT_MIN_MS == gpf.WARN_MS
+
+
+def test_a_real_drift_like_get_rights_is_fitted():
+    # Get Right on the real mix: the kicks run from -2.0 ms early at the start to -6.1 ms at the end.
+    fit = gpf.fit_drift([(b, -2.0 - 4.1 * b / 700.0) for b in range(0, 701)])
+    assert fit.status == gpf.FIT and fit.low < -5.5 and fit.high > -2.5
 
 
 def test_a_kick_free_track_is_cannot_fit(tmp_path):

@@ -55,6 +55,11 @@ MAX_SLIDE_MS = 15.0              # one track is never slid further than this
 # lag below this is chasing noise. The slide solve brings every blend inside max(t*, EPS_MS) with the least total slide,
 # instead of paying slides to shave the last millisecond.
 EPS_MS = 1.5
+# DRIFT_MIN_MS: a fitted correction that never reaches this size is noise, not drift: the kick check cannot see a few
+# ms (see EPS_MS), and applying such a wobble only adds noise (on the real mix Taste's fit stayed within 1.9 ms and
+# applying it pushed a good blend 1.2 ms out). The kick check's own warn figure; Get Right, which really drifts, reaches
+# 6.1 ms. A constant offset this large is corrected (the markers are simply late or early).
+DRIFT_MIN_MS = WARN_MS
 MIN_FIT_KICKS = 40               # fewer usable kick beats than this: the track is CANNOT_FIT and gets no correction
 OUTLIER_MS = 15.0                # a kick beat whose offset is this far from its grid is dropped from the fit (see MAX_DRIFT_MS)
 MEDIAN_HALF_WINDOW = 48.0        # running median: this many beats each side ...
@@ -62,7 +67,7 @@ MEDIAN_MIN_KICKS = 8             # ... widened (doubled) until at least this man
 SMOOTH_BEATS = 31                # moving average over the median, flat at both ends
 SLIDE_NOISE_MS = 0.05            # a slide smaller than this is a rounding residue of the solver, not a slide
 
-FIT, CANNOT_FIT, REFUSED, NOT_MEASURED = "FIT", "CANNOT_FIT", "REFUSED", "NOT_MEASURED"
+FIT, CANNOT_FIT, REFUSED, NOT_MEASURED, NO_DRIFT = "FIT", "CANNOT_FIT", "REFUSED", "NOT_MEASURED", "NO_DRIFT"
 PHASED, NOTHING, REFUSED_RESULT = "PHASED", "NOTHING_TO_DO", "REFUSED"
 
 
@@ -70,7 +75,7 @@ PHASED, NOTHING, REFUSED_RESULT = "PHASED", "NOTHING_TO_DO", "REFUSED"
 
 @dataclass
 class DriftFit:
-    status: str                  # FIT, CANNOT_FIT, REFUSED or NOT_MEASURED (nothing needed fixing, so it was not read)
+    status: str                  # FIT, NO_DRIFT, CANNOT_FIT, REFUSED or NOT_MEASURED (nothing needed fixing, so it was not read)
     kicks: int = 0
     first_beat: float = 0.0
     corr: np.ndarray = field(default_factory=lambda: np.zeros(0))   # ms, one per integer source beat from first_beat
@@ -143,6 +148,9 @@ def fit_drift(offsets):
     if max(abs(fit.low), abs(fit.high)) > MAX_DRIFT_MS:
         fit.status = REFUSED
         fit.note = f"correction reaches {max(abs(fit.low), abs(fit.high)):.1f} ms, more than {MAX_DRIFT_MS:g} ms"
+    elif max(abs(fit.low), abs(fit.high)) < DRIFT_MIN_MS:
+        fit.status = NO_DRIFT
+        fit.note = f"correction never reaches {DRIFT_MIN_MS:g} ms (largest {max(abs(fit.low), abs(fit.high)):.1f} ms): noise, not drift"
     return fit
 
 
