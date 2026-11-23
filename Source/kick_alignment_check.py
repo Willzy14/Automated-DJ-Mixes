@@ -25,6 +25,7 @@ is ignored: a beat still counts when both wavs have a kick there, even if the mi
 out. In a full mix the steepest rise can land on a bass note or a snare instead of the kick, so an
 estimator whose beats spread wider than SCATTER_MS (interquartile range) cannot fail a transition
 alone and cannot let it pass: the verdict is then at least WARN and the flag says which one.
+Not covered: a third track in a three-way overlap is not looked at (only neighbouring pairs are).
 The ALS is only read (the pipeline passes --out beside it, in Output; run by hand with no --out the CLI
 makes a "Kick Alignment" folder beside the ALS). A beat counts as a kick only when the 40-120 Hz peak is at least 3 times
 the median of its window, so 2 s around the beat is read; never a whole file.
@@ -50,7 +51,7 @@ WARN_MS = 4.0
 FAIL_MS = 8.0
 MIN_SHARED_KICKS = 16
 SLOW_ATTACK_MS = 4.0          # click and main-hit medians further apart than this
-SCATTER_MS = FAIL_MS          # an estimator whose beats spread (interquartile range) wider than this is not trusted
+SCATTER_MS = 8.0              # an estimator whose beats spread (interquartile range) wider than this is not trusted
 MINORITY_FRACTION = 0.20      # this share of the shared beats at FAIL_MS or more apart is a flam even if the median is fine
 MIN_ESTIMATOR_BEATS = 3       # an estimator with fewer measured beats than this counts as missing
 
@@ -95,12 +96,13 @@ class Clip:
     relative_path: str
     wav: str                     # file name only, for messages
     audio: Path | None = None    # the file that will be read, set by check_als
+    warped: bool = True
 
     @property
     def supported(self):
-        """Only a plain front-trimmed clip is mapped, as render_check.py does: a looped clip or a
-        StartRelative offset would need a mapping nobody has reviewed, so it is refused, not guessed."""
-        return not self.loop_on and self.start_relative == 0
+        """Only a plain front-trimmed warped clip is mapped, as render_check.py does: a looped clip, a
+        StartRelative offset or an unwarped clip would need a mapping nobody has reviewed, so it is refused."""
+        return not self.loop_on and self.start_relative == 0 and self.warped
 
 
 @dataclass
@@ -160,7 +162,8 @@ def read_als(path):
                 start_relative=float(_value(loop, "StartRelative", "0")),
                 markers=np.array(sorted(markers)), path=clip_path,
                 relative_path=_value(node, "SampleRef/FileRef/RelativePath", ""),
-                wav=re.split(r"[\\/]", clip_path)[-1]))
+                wav=re.split(r"[\\/]", clip_path)[-1],
+                warped=_value(node, "IsWarped", "true") != "false"))
         if clips:
             tracks.append(Track(name, sorted(clips, key=lambda c: c.start)))
     return sorted(tracks, key=lambda t: t.first_start)
@@ -403,6 +406,9 @@ class TransitionResult:
     dropped: dict = field(default_factory=dict)   # beats of the overlap that could not be measured, by reason
     padded_windows: int = 0                        # windows zero-padded at the start or end of a wav (kept)
     click_range_edge: int = 0                      # shared beats whose click lag sat on the +-30 ms edge
+    kicks_out: int | None = None                   # kick beats of each track on its own inside the overlap
+    kicks_in: int | None = None
+    kick_span: int | None = None                   # beats where both tracks' kicks mostly are at once
 
     @property
     def label(self):
@@ -416,7 +422,8 @@ class TransitionResult:
 def _stats(values, beats, middle):
     a = np.array(values, dtype=float)
     ok = ~np.isnan(a)
-    out = dict(n=int(ok.sum()), median=None, iqr=None, first_half=None, second_half=None, big=0)
+    out = dict(n=int(ok.sum()), median=None, iqr=None, first_half=None, second_half=None, big=0,
+               n_first_half=0, n_second_half=0)
     if not ok.any():
         return out
     q25, q75 = np.percentile(a[ok], [25, 75])
@@ -425,23 +432,37 @@ def _stats(values, beats, middle):
     out["big"] = int((np.abs(a[ok]) >= FAIL_MS).sum())
     b = np.array(beats)
     for key, sel in (("first_half", ok & (b < middle)), ("second_half", ok & (b >= middle))):
+        out["n_" + key] = int(sel.sum())
         if sel.any():
             out[key] = round(float(np.median(a[sel])), 3)
     return out
 
 
 def _present(stat):
-    return stat.get("median") is not None and stat.get("n", 0) >= MIN_ESTIMATOR_BEATS
+    return stat is not None and stat.get("median") is not None and stat.get("n", 0) >= MIN_ESTIMATOR_BEATS
 
 
 def _minority(stat, shared):
-    return stat.get("big", 0) >= MINORITY_FRACTION * shared and abs(stat["median"]) < FAIL_MS
+    """A fifth of the shared beats or more at the fail figure while the median stays under it."""
+    return stat.get("big", 0) >= round(MINORITY_FRACTION * shared, 9) and abs(stat["median"]) < FAIL_MS
 
 
-def judge(shared, click, main):
-    """Verdict and flags from the shared-kick count and the two lag summaries."""
+def judge(shared, click, main, edge=None, kicks=None):
+    """Verdict and flags from the shared-kick count, the lag summaries and each track's own kick count.
+
+    The worse |median| of the two estimators decides. A scattered estimator (its beats spread wider than
+    SCATTER_MS) may fail the transition only when the other estimator corroborates it with a median of at
+    least WARN_MS; alone it is capped at WARN (LARGE_SCATTERED). A half of the blend whose median is at the
+    fail figure on a trusted or corroborated estimator is DRIFT_FLAM and fails. The leading edge only raises
+    a PASS to WARN (EDGE_DISAGREES)."""
     flags = []
+    out_kicks, in_kicks, span = (tuple(kicks) + (None,))[:3] if kicks else (None, None, None)
     have = {"CLICK": _present(click), "MAIN": _present(main)}
+    if (shared < MIN_SHARED_KICKS / 2 and out_kicks is not None and min(out_kicks, in_kicks) >= MIN_SHARED_KICKS
+            and (span is None or span >= MIN_SHARED_KICKS)):
+        # both tracks have kicks over a stretch long enough to judge, but not on the same beats; a hand-over,
+        # where one track's kicks stop before the other's start, has no such stretch and stays CANNOT_JUDGE
+        return "FAIL", ["OFF_GRID"]
     if shared < MIN_SHARED_KICKS or not any(have.values()):
         seen = [abs(st["median"]) for st in (click, main) if st.get("median") is not None]
         if seen and max(seen) >= WARN_MS:
@@ -449,27 +470,42 @@ def judge(shared, click, main):
         if shared >= MIN_SHARED_KICKS:
             flags += ["NO_CLICK", "NO_MAIN"]
         return "CANNOT_JUDGE", flags
-    present = [(name, st) for name, st in (("CLICK", click), ("MAIN", main)) if have[name]]
+    present = {name: st for name, st in (("CLICK", click), ("MAIN", main)) if have[name]}
     flags += ["NO_" + name for name in have if not have[name]]
-    # an estimator whose beats disagree with each other by more than the fail figure has no trustworthy
-    # median: it cannot fail the transition alone, and it stops it from passing
-    scattered = [(name, st) for name, st in present if st["iqr"] > SCATTER_MS]
-    trusted = [abs(st["median"]) for name, st in present if st["iqr"] <= SCATTER_MS]
-    flags.extend("SCATTER_" + name for name, _ in scattered)
-    if any(abs(st["median"]) >= FAIL_MS for _, st in scattered):
+    scattered = {name for name, st in present.items() if st["iqr"] > SCATTER_MS}
+    flags.extend("SCATTER_" + name for name in present if name in scattered)
+    meds = {name: abs(st["median"]) for name, st in present.items()}
+    fail = capped = False
+    for name, value in meds.items():
+        if value >= FAIL_MS:
+            if name not in scattered or any(meds[o] >= WARN_MS for o in meds if o != name):
+                fail = True
+            else:
+                capped = True
+    if capped:
         flags.append("LARGE_SCATTERED")
-    worst = max(trusted) if trusted else None
-    verdict = "WARN" if worst is None else "FAIL" if worst >= FAIL_MS else "WARN" if worst >= WARN_MS else "PASS"
-    if scattered and verdict == "PASS":
-        verdict = "WARN"
+    # a blend that is fine in one half and flammed in the other
+    for half in ("first_half", "second_half"):
+        halves = {name: abs(st[half]) for name, st in present.items()
+                  if st.get(half) is not None and st.get("n_" + half, st["n"]) >= MIN_ESTIMATOR_BEATS}
+        if any(v >= FAIL_MS and (name not in scattered or any(halves.get(o, -1.0) >= WARN_MS for o in present if o != name))
+               for name, v in halves.items()):
+            if "DRIFT_FLAM" not in flags:
+                flags.append("DRIFT_FLAM")
+            fail = True
+    verdict = "FAIL" if fail else "WARN" if (max(meds.values()) >= WARN_MS or scattered) else "PASS"
     if len(present) == 2 and not scattered and abs(click["median"] - main["median"]) > SLOW_ATTACK_MS:
         flags.append("SLOW_ATTACK")
         if verdict == "PASS":
             verdict = "WARN"
-    # a flam on a minority of the beats does not move the median: count the beats (when the median is already
-    # at the fail figure the transition is failed on it and there is nothing hidden)
-    if any(_minority(st, shared) for _, st in present):
+    # a flam on a minority of the beats does not move the median: count the beats (only from an estimator
+    # that is not scattered, and only while its median is under the fail figure, so nothing is hidden)
+    if any(_minority(st, shared) for name, st in present.items() if name not in scattered):
         flags.append("MINORITY_FLAM")
+        if verdict == "PASS":
+            verdict = "WARN"
+    if _present(edge) and have["CLICK"] and abs(edge["median"] - click["median"]) > WARN_MS:
+        flags.append("EDGE_DISAGREES")
         if verdict == "PASS":
             verdict = "WARN"
     return verdict, flags
@@ -482,16 +518,33 @@ def explain(res):
     window = f"search window of plus or minus {SEARCH_MS[1]:g} ms"
     if res.note:
         return [res.note]
-    if res.verdict == "CANNOT_JUDGE" and res.shared_kicks == 0:
+    known = res.kicks_out is not None and res.kicks_in is not None
+    few_tracks = [(name, k) for name, k in ((res.outgoing_short, res.kicks_out), (res.incoming_short, res.kicks_in))
+                  if known and k < MIN_ESTIMATOR_BEATS]
+    if "OFF_GRID" in flags:
+        out.append(f"both tracks have kicks ({res.kicks_out} and {res.kicks_in} beats) but only {res.shared_kicks} "
+                   f"on the same beats over the {res.kick_span} beats where both play: the kicks are on different beats "
+                   f"or far apart")
+    elif res.verdict == "CANNOT_JUDGE" and few_tracks:
+        for name, k in few_tracks:
+            out.append(f"{name} has {k} kick beats in this overlap within plus or minus {SEARCH_MS[1]:g} ms of the beat "
+                       f"(a kick further off the beat than that cannot be measured)")
+    elif res.verdict == "CANNOT_JUDGE" and res.shared_kicks == 0:
         out.append(f"no beat where both tracks have a kick in the {window}; a lag larger than that cannot be measured")
     elif res.verdict == "CANNOT_JUDGE" and res.shared_kicks < MIN_SHARED_KICKS:
         out.append(f"only {res.shared_kicks} beats where both tracks have a kick in the {window} "
                    f"(need {MIN_SHARED_KICKS}); a lag larger than that cannot be measured")
     elif res.verdict == "CANNOT_JUDGE":
         out.append("no usable click lag and no usable main hit lag")
-    if "LARGE_LAG_FEW_KICKS" in flags:
+    if res.verdict == "CANNOT_JUDGE" and not few_tracks and known and res.kick_span is not None \
+            and res.kick_span < MIN_SHARED_KICKS:
+        out.append("the two tracks' kicks hardly play at the same time here (a hand-over)")
+    if "LARGE_LAG_FEW_KICKS" in flags and not few_tracks:
         seen = max((abs(v) for v in (cm, mm) if v is not None), default=0.0)
-        out.append(f"a lag of {seen:.1f} ms was seen but on too few kicks to judge")
+        if res.click_range_edge:
+            out.append("lag outside the measurable range")
+        else:
+            out.append(f"a lag of {seen:.1f} ms was seen but on too few kicks to judge")
     if "NO_CLICK" in flags and res.verdict != "CANNOT_JUDGE":
         out.append("no usable click lag; judged on the main hit alone")
     if "NO_MAIN" in flags and res.verdict != "CANNOT_JUDGE":
@@ -503,12 +556,17 @@ def explain(res):
             out.append("main hit lined up, click late: look at the picture")
         else:
             out.append(f"click and main hit disagree by {abs(cm - mm):.1f} ms: look at the picture")
+    if "EDGE_DISAGREES" in flags:
+        out.append(f"leading edge {res.edge['median']:+.1f} ms but click {cm:+.1f} ms: the two clicks disagree, "
+                   f"look at the picture")
+    if "DRIFT_FLAM" in flags:
+        out.append(f"one half of the blend is {FAIL_MS:g} ms or more off")
     for name, st in (("click", res.click), ("main hit", res.main)):
         if st.get("median") is None:
             continue
         if "LARGE_SCATTERED" in flags and st["iqr"] > SCATTER_MS and abs(st["median"]) >= FAIL_MS:
             out.append(f"{name} median {st['median']:+.1f} ms but the beats spread {st['iqr']:.1f} ms: not a clean number")
-        if "MINORITY_FLAM" in flags and _minority(st, res.shared_kicks):
+        if "MINORITY_FLAM" in flags and st["iqr"] <= SCATTER_MS and _minority(st, res.shared_kicks):
             out.append(f"{st['big']} of {res.shared_kicks} shared beats are {FAIL_MS:g} ms or more apart on {name}")
         fh, sh = st.get("first_half"), st.get("second_half")
         if fh is not None and sh is not None and abs(sh - fh) > WARN_MS:
@@ -534,7 +592,8 @@ def measure_transition(tr, readers):
         return result
     if any(not c.supported for c in clips):
         result.flags.append("UNSUPPORTED_CLIP")
-        result.note = "a clip in this blend uses LoopOn or StartRelative, which is not mapped (refused, not guessed)"
+        result.note = ("a clip in this blend uses LoopOn or StartRelative or is not warped, which is not mapped "
+                       "(refused, not guessed)")
         return result
     pairs = []
     dropped = {"no_position": 0, "no_window": 0}
@@ -569,6 +628,16 @@ def measure_transition(tr, readers):
             row.out_edge, row.out_main, row.in_edge, row.in_main = wo.edge_ms, wo.main_ms, wi.edge_ms, wi.main_ms
             row.edge_lag, row.main_lag = wi.edge_ms - wo.edge_ms, wi.main_ms - wo.main_ms
         result.beats.append(row)
+    result.kicks_out = sum(wo.kick for _, wo, _ in pairs)
+    result.kicks_in = sum(wi.kick for _, _, wi in pairs)
+    out_at = [row.beat for row, wo, _ in pairs if wo.kick]
+    in_at = [row.beat for row, _, wi in pairs if wi.kick]
+    if out_at and in_at:                     # where each track's kicks mostly are (10th to 90th percentile of the beats)
+        lo_o, hi_o = np.percentile(out_at, [10, 90])
+        lo_i, hi_i = np.percentile(in_at, [10, 90])
+        result.kick_span = int(max(0.0, min(hi_o, hi_i) - max(lo_o, lo_i) + 1))
+    else:
+        result.kick_span = 0
     shared = [r for r in result.beats if r.shared]
     result.shared_kicks = len(shared)
     nums = [r.beat for r in shared]
@@ -576,29 +645,49 @@ def measure_transition(tr, readers):
     result.click = _stats([r.click_lag for r in shared], nums, middle)
     result.main = _stats([r.main_lag for r in shared], nums, middle)
     result.edge = _stats([r.edge_lag for r in shared], nums, middle)
-    result.verdict, flags = judge(result.shared_kicks, result.click, result.main)
+    result.verdict, flags = judge(result.shared_kicks, result.click, result.main, result.edge,
+                                  (result.kicks_out, result.kicks_in, result.kick_span))
     result.flags.extend(flags)
     return result
 
 
 # ------------------------------------------------------------------ the picture
 
+def _score(row):
+    """How far apart the two kicks are on this beat, by the worse of click and main hit; -1 when not measured."""
+    vals = [abs(v) for v in (row.click_lag, row.main_lag) if not math.isnan(v)]
+    return max(vals) if vals else -1.0
+
+
+def worst_beats(rows, k=2):
+    """The k shared beats with the largest lag (only beats that were measured)."""
+    measured = [r for r in rows if r.shared and _score(r) >= 0]
+    return sorted(measured, key=lambda r: (-_score(r), r.beat))[:k]
+
+
 def pick_beats(rows, count=PIC_COLUMNS):
-    """Spread early, middle and late over the shared kick beats."""
+    """The two worst shared beats, then evenly spread others early to late, in beat order."""
     beats = [r for r in rows if r.shared]
     if len(beats) <= count:
         return beats
-    chosen, seen = [], set()
-    for q in np.linspace(0.08, 0.92, count):
-        i = int(round(q * (len(beats) - 1)))
+    chosen = {r.beat: r for r in worst_beats(rows)}
+    rest = [r for r in beats if r.beat not in chosen]
+    slots = count - len(chosen)
+    seen = set()
+    for q in np.linspace(0.08, 0.92, slots):
+        i = int(round(q * (len(rest) - 1)))
         if i not in seen:
             seen.add(i)
-            chosen.append(beats[i])
-    return chosen
+            chosen[rest[i].beat] = rest[i]
+    return [chosen[b] for b in sorted(chosen)]
 
 
 def _fmt(v):
     return "n/a" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:+.1f} ms"
+
+
+def _short(v):
+    return "n/a" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:+.1f}"
 
 
 def build_figure(result, readers):
@@ -607,11 +696,12 @@ def build_figure(result, readers):
     from matplotlib.figure import Figure
 
     rows = pick_beats(result.beats)
+    worst = {r.beat for r in worst_beats(result.beats) if _score(r) >= WARN_MS}
     fig = Figure(figsize=PIC_SIZE_IN, dpi=100)
     FigureCanvasAgg(fig)
-    title = (f"{result.label}   {result.verdict}   click {_fmt(result.click.get('median'))}   "
-             f"main hit {_fmt(result.main.get('median'))}   shared kicks {result.shared_kicks}"
-             + ("   " + " ".join(result.flags) if result.flags else ""))
+    title = (f"{result.label}   {result.verdict}   edge {_fmt(result.edge.get('median'))}   "
+             f"click {_fmt(result.click.get('median'))}   main hit {_fmt(result.main.get('median'))}   "
+             f"shared kicks {result.shared_kicks}" + ("   " + " ".join(result.flags) if result.flags else ""))
     fig.suptitle(title, fontsize=15, fontweight="bold")
     if not rows:
         fig.text(0.5, 0.5, "no beat where both tracks have a kick: nothing to draw", ha="center", fontsize=16)
@@ -641,8 +731,10 @@ def build_figure(result, readers):
                 ax.set_ylabel(name, color=colour, fontsize=12, fontweight="bold")
             if row == 1:
                 ax.set_xlabel("ms from the beat line")
-        axes[0][col].set_title(f"beat {r.beat}   click {_fmt(r.click_lag)}   main hit {_fmt(r.main_lag)}", fontsize=11)
-    fig.text(0.5, 0.005, "dashed = beat line   black tick (bottom) = click, leading edge of the >150 Hz envelope   "
+        axes[0][col].set_title(f"{'WORST ' if r.beat in worst else ''}beat {r.beat}   edge {_short(r.edge_lag)}   "
+                               f"click {_short(r.click_lag)}   main {_short(r.main_lag)} ms",
+                               fontsize=10, color="#b00020" if r.beat in worst else "black")
+    fig.text(0.5, 0.005, "dashed = beat line   black tick (bottom) = click edge, leading edge of the >150 Hz envelope   "
              "blue tick (top) = main hit, steepest rise of the >40 Hz envelope   lag > 0: incoming later",
              ha="center", fontsize=9)
     fig.subplots_adjust(left=0.04, right=0.995, top=0.87, bottom=0.12, wspace=0.08, hspace=0.12)
@@ -671,8 +763,23 @@ def resolve_audio(clip, als_dir, audio_dir):
     return None
 
 
+_OWN_PICTURE = re.compile(r"T\d\d .*\.png")
+
+
+def clear_old_outputs(out_dir):
+    """Delete the pictures and the json an earlier run of this tool left, and nothing else."""
+    out = Path(out_dir)
+    if not out.is_dir():
+        return
+    for f in out.iterdir():
+        if f.is_file() and (_OWN_PICTURE.fullmatch(f.name) or f.name == "kick_alignment.json"):
+            f.unlink()
+
+
 def check_als(als_path, audio_dir=None, out_dir=None):
     """Measure every transition of the ALS; draw one picture each into out_dir when given."""
+    if out_dir is not None:
+        clear_old_outputs(out_dir)
     tracks = read_als(als_path)
     transitions = find_transitions(tracks)
     als_dir = Path(als_path).resolve().parent
@@ -704,8 +811,8 @@ def check_als(als_path, audio_dir=None, out_dir=None):
 def summary_line(res):
     text = f"{res.label}: {res.verdict}"
     if not res.note:
-        text += (f" click {_fmt(res.click.get('median'))} main {_fmt(res.main.get('median'))}"
-                 f" shared kicks {res.shared_kicks}")
+        text += (f" edge {_fmt(res.edge.get('median'))} click {_fmt(res.click.get('median'))} "
+                 f"main {_fmt(res.main.get('median'))} shared kicks {res.shared_kicks}")
     if res.flags:
         text += " " + " ".join(res.flags)
     reasons = explain(res)
@@ -734,6 +841,7 @@ def results_json(results):
                  end_beat=r.end_beat, shared_kicks=r.shared_kicks, verdict=r.verdict, flags=r.flags,
                  note=r.note, click=r.click, main=r.main, edge=r.edge, picture=r.picture,
                  dropped=r.dropped, padded_windows=r.padded_windows, click_range_edge=r.click_range_edge,
+                 kicks_out=r.kicks_out, kicks_in=r.kicks_in, kick_span=r.kick_span,
                  beats=[{k: clean(v) for k, v in vars(b).items()} for b in r.beats if b.shared])
             for r in results]
 

@@ -363,3 +363,25 @@ def test_kick_alignment_stderr_reaches_the_log(pipeline):
     result, _ = run(PIPELINE_TEST_KICK_STDERR="ParseError: something broke", PIPELINE_TEST_KICK_RC="2")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ParseError: something broke" in (repo / OUTPUT / "runmix.log").read_text()
+
+
+@pytest.mark.parametrize("status, message", [
+    (1, "FAILED at: kick alignment FAIL"),
+    (2, "FAILED at: kick alignment could not run (status 2)"),
+    (3, "FAILED at: kick alignment judged nothing (status 3"),
+    (127, "FAILED at: kick alignment could not run (status 127)"),
+])
+def test_kick_alignment_fail_mode_says_which_status_it_was(pipeline, status, message):
+    _, run = pipeline
+    result, _ = run(KICK_ALIGNMENT_MODE="fail", PIPELINE_TEST_KICK_RC=str(status))
+    assert result.returncode == 1
+    assert message in result.stdout
+    others = [m for s, m in [(1, "kick alignment FAIL"), (2, "could not run (status 2)"), (3, "judged nothing")] if s != status]
+    assert not any(m in result.stdout for m in others)
+
+
+def test_kick_alignment_status_3_does_not_stop_a_warn_build(pipeline):
+    _, run = pipeline
+    result, _ = run(PIPELINE_TEST_KICK_RC="3")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "kick alignment check did not finish (status 3); warn mode, the build goes on" in result.stdout

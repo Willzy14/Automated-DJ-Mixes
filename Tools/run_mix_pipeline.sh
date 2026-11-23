@@ -146,6 +146,9 @@ if [ "$kick_status" -ne 0 ]; then
         if [ "$kick_status" -eq 1 ]; then
             fail "kick alignment FAIL (pictures in Output/Kick Alignment, details in runmix.log)"
         fi
+        if [ "$kick_status" -eq 3 ]; then
+            fail "kick alignment judged nothing (status 3; every blend was CANNOT_JUDGE, see runmix.log)"
+        fi
         fail "kick alignment could not run (status $kick_status)"
     fi
     say "kick alignment check did not finish (status $kick_status); warn mode, the build goes on"

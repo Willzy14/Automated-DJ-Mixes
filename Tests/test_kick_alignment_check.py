@@ -1,6 +1,7 @@
 """Kick alignment check: synthetic kicks with a known delay, a tiny ALS, the CLI run for real."""
 import gzip
 import math
+import re
 import struct
 import subprocess
 import sys
@@ -58,11 +59,14 @@ def write_wav(path, kind, delay_ms=0.0, kick_beats=range(WAV_BEATS)):
 
 
 def _clip_xml(start, end, loop_start, loop_end, wav_name, path=None, relative="", beat_offset=0,
-              markers_to=WAV_BEATS, loop_on=False, start_relative=0):
-    """beat_offset: marker i has BeatTime i - beat_offset (negative BeatTime when it is above 0)."""
-    markers = "".join(f'<WarpMarker SecTime="{i * BEAT_S}" BeatTime="{i - beat_offset}" />'
+              markers_to=WAV_BEATS, loop_on=False, start_relative=0, warped=True, sec_of=None):
+    """beat_offset: marker i has BeatTime i - beat_offset (negative BeatTime when it is above 0).
+    sec_of: marker i is at sec_of(i) seconds instead of i * BEAT_S (uneven markers, a tempo change)."""
+    sec_of = sec_of or (lambda i: i * BEAT_S)
+    markers = "".join(f'<WarpMarker SecTime="{sec_of(i)}" BeatTime="{i - beat_offset}" />'
                       for i in range(markers_to + 1))
     return (f'<AudioClip><CurrentStart Value="{start}" /><CurrentEnd Value="{end}" />'
+            f'<IsWarped Value="{str(warped).lower()}" />'
             f'<Loop><LoopStart Value="{loop_start}" /><LoopEnd Value="{loop_end}" />'
             f'<StartRelative Value="{start_relative}" /><LoopOn Value="{str(loop_on).lower()}" /></Loop>'
             f'<SampleRef><FileRef><RelativePath Value={quoteattr(relative)} />'
@@ -110,6 +114,9 @@ def sets(tmp_path_factory):
         "late20": make_set(root, "late20", in_delay_ms=20.0),
         "late32": make_set(root, "late32", in_delay_ms=32.0),
         "ramp": make_set(root, "ramp", in_delay_ms=lambda b: 2.0 + 0.6 * b),
+        "late60": make_set(root, "late60", in_delay_ms=60.0),
+        "every4": make_set(root, "every4", in_delay_ms=lambda b: 15.0 if b % 4 == 0 else 0.0),
+        "every5": make_set(root, "every5", in_delay_ms=lambda b: 15.0 if b % 5 == 0 else 0.0),
     }
 
 
@@ -299,7 +306,8 @@ def test_cli_warn_mode_prints_one_line_per_transition_and_exits_zero(sets, tmp_p
     result = run_cli(als, "--audio", audio, "--out", tmp_path / "pics")
     assert result.returncode == 0, result.stdout + result.stderr
     lines = result.stdout.splitlines()
-    assert lines[0].startswith("T01 First Song to Second Song: FAIL click +20")
+    assert lines[0].startswith("T01 First Song to Second Song: FAIL edge +")
+    assert " click +20" in lines[0]
     assert " main +20" in lines[0] and "shared kicks " in lines[0]
     assert lines[-1] == f"LOOK AT THESE PICTURES: {tmp_path / 'pics'}"
     assert (tmp_path / "pics" / "T01 First Song to Second Song.png").stat().st_size > 5000
@@ -440,7 +448,7 @@ def test_cannot_judge_says_why_when_there_are_few_or_no_shared_kicks(measured):
     assert "only " in few and "(need 16)" in few
     assert "search window of plus or minus 35 ms" in few and "cannot be measured" in few
     none = kac.summary_line(fake_result(0, NO_STAT, NO_STAT))
-    assert ("CANNOT_JUDGE click n/a main n/a shared kicks 0 | no beat where both tracks have a kick in the "
+    assert ("CANNOT_JUDGE edge n/a click n/a main n/a shared kicks 0 | no beat where both tracks have a kick in the "
             "search window of plus or minus 35 ms; a lag larger than that cannot be measured") in none
 
 
@@ -460,15 +468,16 @@ REL = dict(path="../Audio/o.wav", relative="../Audio/o.wav")
 
 
 def _small_set(root, out_delay=0.0, in_delay=8.0, out_clip=(0, 60, 0, 60), in_clip=(40, 100, 0, 60),
-               out_extras=None, in_extras=None):
+               out_extras=None, in_extras=None, out_kicks=range(WAV_BEATS), in_kicks=range(WAV_BEATS),
+               in_name="In - B"):
     (root / "Audio").mkdir(parents=True, exist_ok=True)
     (root / "Output").mkdir(parents=True, exist_ok=True)
-    write_wav(root / "Audio" / "o.wav", "sharp", out_delay)
-    write_wav(root / "Audio" / "i.wav", "sharp", in_delay)
+    write_wav(root / "Audio" / "o.wav", "sharp", out_delay, out_kicks)
+    write_wav(root / "Audio" / "i.wav", "sharp", in_delay, in_kicks)
     als = root / "Output" / "Set.als"
     write_als(als, [
         ("Out - A", "o.wav", [(*out_clip, out_extras or dict(path="../Audio/o.wav", relative="../Audio/o.wav"))]),
-        ("In - B", "i.wav", [(*in_clip, in_extras or dict(path="../Audio/i.wav", relative="../Audio/i.wav"))]),
+        (in_name, "i.wav", [(*in_clip, in_extras or dict(path="../Audio/i.wav", relative="../Audio/i.wav"))]),
     ])
     return als
 
@@ -651,7 +660,7 @@ def test_cli_says_loudly_when_nothing_could_be_judged_and_fail_mode_exits_one(se
     assert "1 transitions: 0 PASS, 0 WARN, 0 FAIL, 1 CANNOT_JUDGE" in warn.stdout
     assert "NOTHING COULD BE JUDGED" in warn.stdout
     fail = run_cli(als, "--audio", audio, "--out", tmp_path / "f", "--mode", "fail")
-    assert fail.returncode == 1 and "NOTHING COULD BE JUDGED" in fail.stdout
+    assert fail.returncode == 3 and "NOTHING COULD BE JUDGED" in fail.stdout
 
 
 def test_cli_does_not_point_at_an_empty_picture_folder(sets, tmp_path):
@@ -697,3 +706,275 @@ def test_cli_without_out_writes_a_kick_alignment_folder_beside_the_als(tmp_path)
     folder = als.parent / "Kick Alignment"
     assert (folder / "T01 First Song to Second Song.png").stat().st_size > 5000
     assert result.stdout.splitlines()[-1] == f"LOOK AT THESE PICTURES: {folder}"
+
+
+# ================================================================ round 3: fixes from the Opus review
+
+def stats_for(values):
+    return kac._stats(list(values), list(range(len(values))), len(values) / 2)
+
+
+def readers_for(res, rows):
+    return {w: kac.WavReader(w) for r in rows for w in (r.wav_out, r.wav_in)}
+
+
+# ---- 1: a scattered estimator no longer hides a bigger flam
+
+@pytest.mark.parametrize("end", [24.0, 40.0])
+def test_a_drift_from_0_to_24_or_40_ms_fails(end):
+    st = stats_for(np.linspace(0.0, end, 40))
+    verdict, flags = kac.judge(40, st, dict(st))
+    assert verdict == "FAIL", (verdict, flags)
+
+
+def test_a_12_ms_flam_on_62_percent_of_the_beats_fails():
+    values = np.array([0.0] * 38 + [12.0] * 62)
+    np.random.default_rng(3).shuffle(values)
+    st = stats_for(values)
+    assert kac.judge(100, st, dict(st))[0] == "FAIL"
+
+
+def test_a_15_ms_flam_on_the_last_45_percent_of_the_beats_is_a_drift_flam():
+    st = stats_for([0.0] * 55 + [15.0] * 45)
+    verdict, flags = kac.judge(100, st, dict(st))
+    assert verdict == "FAIL" and "DRIFT_FLAM" in flags
+
+
+def test_a_scattered_worst_estimator_needs_the_other_to_corroborate_it():
+    scattered = stat(median=-9.0, iqr=22.0)
+    assert kac.judge(40, stat(median=0.5), scattered) == ("WARN", ["SCATTER_MAIN", "LARGE_SCATTERED"])
+    assert kac.judge(40, stat(median=3.9), scattered)[0] == "WARN"
+    assert kac.judge(40, stat(median=5.0), scattered)[0] == "FAIL"           # click at WARN_MS or more corroborates
+    both = stat(median=12.0, iqr=20.0)
+    assert kac.judge(40, both, dict(both))[0] == "FAIL"                       # both scattered, both over FAIL_MS
+
+
+def test_scatter_ms_is_its_own_figure_not_derived_from_fail_ms():
+    source = (ROOT / "Source" / "kick_alignment_check.py").read_text()
+    assert re.search(r"^SCATTER_MS = 8\.0\b", source, re.M)
+    assert kac.SCATTER_MS == 8.0
+
+
+# ---- 2: edge, click and main are all printed
+
+def test_the_summary_the_json_and_the_titles_carry_edge_click_and_main(measured):
+    res = measured["later"][0]
+    line = kac.summary_line(res)
+    assert re.search(r"edge \+\d+\.\d ms click \+\d+\.\d ms main \+\d+\.\d ms shared kicks \d+", line), line
+    row = kac.results_json([res])[0]
+    assert row["edge"]["median"] is not None and row["click"]["median"] is not None
+    assert all(k in row["beats"][0] for k in ("edge_lag", "click_lag", "main_lag"))
+
+
+def test_edge_disagreeing_with_the_click_raises_a_pass_to_warn_and_never_changes_a_fail():
+    quiet = stat(median=0.5)
+    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=6.0)) == ("WARN", ["EDGE_DISAGREES"])
+    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=4.0)) == ("PASS", [])
+    big = stat(median=10.0)
+    verdict, flags = kac.judge(40, big, dict(big), edge=stat(median=0.0))
+    assert verdict == "FAIL" and "EDGE_DISAGREES" in flags
+    assert "leading edge +6.0 ms but click +0.5 ms" in kac.summary_line(
+        fake_result_with_edge(40, quiet, dict(quiet), stat(median=6.0)))
+
+
+def fake_result_with_edge(shared, click, main, edge):
+    r = fake_result(shared, click, main)
+    r.edge = edge
+    r.verdict, r.flags = kac.judge(shared, click, main, edge)
+    return r
+
+
+def test_the_leading_edge_is_measured_drawn_and_its_tick_is_the_edge(measured):
+    res = measured["later"][0]
+    assert res.edge["n"] >= kac.MIN_SHARED_KICKS and abs(res.edge["median"] - 8.0) <= 1.5, res.edge
+    rows = kac.pick_beats(res.beats)
+    readers = readers_for(res, rows)
+    try:
+        fig = kac.build_figure(res, readers)
+        assert "edge " in fig._suptitle.get_text() and "click " in fig._suptitle.get_text()
+        for col, r in enumerate(rows):
+            assert "edge " in fig.axes[col].get_title() and "main " in fig.axes[col].get_title()
+            for ax, want in ((fig.axes[col], r.out_edge), (fig.axes[len(rows) + col], r.in_edge)):
+                ticks = [ln for ln in ax.get_lines() if ln.get_color() == "black" and ln.get_linewidth() == 2.5]
+                assert len(ticks) == 1 and ticks[0].get_xdata()[0] == pytest.approx(want)
+    finally:
+        for reader in readers.values():
+            reader.close()
+
+
+# ---- 3: kicks on different beats are OFF_GRID, a missing track is said plainly
+
+def test_kicks_on_different_beats_fail_as_off_grid(tmp_path):
+    als = _small_set(tmp_path, in_delay=0.0, out_clip=(0, 100, 0, 100), out_kicks=range(0, WAV_BEATS, 2),
+                     in_kicks=range(1, WAV_BEATS, 2))
+    res = kac.check_als(als, None)[0]
+    assert res.kicks_out >= 16 and res.kicks_in >= 16 and res.shared_kicks < 8
+    assert res.verdict == "FAIL" and res.flags == ["OFF_GRID"]
+    assert "kicks are on different beats or far apart" in kac.summary_line(res)
+
+
+def test_off_grid_needs_kicks_on_both_tracks_and_fewer_than_half_the_minimum_shared():
+    assert kac.judge(4, NO_STAT, NO_STAT, kicks=(30, 30)) == ("FAIL", ["OFF_GRID"])
+    assert kac.judge(4, NO_STAT, NO_STAT, kicks=(30, 5))[0] == "CANNOT_JUDGE"       # a breakdown, not a mismatch
+    assert kac.judge(8, NO_STAT, NO_STAT, kicks=(30, 30))[0] == "CANNOT_JUDGE"      # 8 shared is not under half of 16
+    assert kac.judge(3, NO_STAT, NO_STAT, kicks=(30, 30, 5))[0] == "CANNOT_JUDGE"   # a hand-over: they hardly coexist
+    assert kac.judge(3, NO_STAT, NO_STAT, kicks=(30, 30, 16)) == ("FAIL", ["OFF_GRID"])
+
+
+def test_a_60_ms_flam_names_the_track_with_no_kicks_and_does_not_invent_a_lag(measured):
+    res = measured["late60"][0]
+    line = kac.summary_line(res)
+    assert res.verdict == "CANNOT_JUDGE" and res.kicks_in < kac.MIN_ESTIMATOR_BEATS <= res.kicks_out, (res.kicks_out, res.kicks_in)
+    assert "Second Song has " in line and "a kick further off the beat than that cannot be measured" in line
+    assert "was seen" not in line and "a lag larger than that cannot be measured" not in line
+
+
+def test_a_lag_outside_the_click_range_says_so():
+    res = fake_result(12, stat(n=12, median=20.3), stat(n=12, median=20.3))
+    res.kicks_out = res.kicks_in = 30
+    res.click_range_edge = 5
+    line = kac.summary_line(res)
+    assert "lag outside the measurable range" in line and "was seen" not in line
+
+
+# ---- 4: the picture shows the worst beats
+
+@pytest.mark.parametrize("name", ["every4", "every5"])
+def test_the_picture_shows_at_least_two_flammed_beats_and_marks_them(measured, name):
+    res = measured[name][0]
+    rows = kac.pick_beats(res.beats)
+    assert len(rows) == 4
+    assert sum(kac._score(r) >= kac.FAIL_MS for r in rows) >= 2, [(r.beat, kac._score(r)) for r in rows]
+    readers = readers_for(res, rows)
+    try:
+        fig = kac.build_figure(res, readers)
+        titles = [fig.axes[c].get_title() for c in range(len(rows))]
+        assert sum(t.startswith("WORST ") for t in titles) >= 2, titles
+    finally:
+        for reader in readers.values():
+            reader.close()
+
+
+# ---- 5: old pictures are cleared
+
+def test_pictures_from_an_earlier_run_are_deleted_and_only_those(sets, tmp_path):
+    als, audio = sets["late20"]
+    out = tmp_path / "pics"
+    assert run_cli(als, "--audio", audio, "--out", out).returncode == 0
+    assert list(out.glob("T01 *.png"))
+    (out / "keep.png").write_bytes(b"x")
+    (out / "notes.txt").write_text("keep")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = run_cli(als, "--audio", empty, "--out", out, "--mode", "fail")
+    assert result.returncode == 3 and "LOOK AT THESE PICTURES" not in result.stdout
+    assert not list(out.glob("T[0-9][0-9] *.png"))
+    assert (out / "keep.png").exists() and (out / "notes.txt").exists()
+    assert '"verdict": "CANNOT_JUDGE"' in (out / "kick_alignment.json").read_text()
+
+
+def test_a_run_that_cannot_run_leaves_no_old_pictures_behind(sets, tmp_path):
+    als, audio = sets["late20"]
+    out = tmp_path / "pics"
+    run_cli(als, "--audio", audio, "--out", out)
+    bad = tmp_path / "bad.als"
+    bad.write_bytes(b"not an als")
+    assert run_cli(bad, "--audio", audio, "--out", out).returncode == 2
+    assert not list(out.glob("T[0-9][0-9] *.png")) and not (out / "kick_alignment.json").exists()
+
+
+# ---- 6: distinct exit codes
+
+def test_cli_missing_library_is_exit_two_not_a_traceback(sets, tmp_path):
+    fake = tmp_path / "fake"
+    (fake / "scipy").mkdir(parents=True)
+    (fake / "scipy" / "__init__.py").write_text("raise ImportError('fake scipy is not installed')\n")
+    als, audio = sets["aligned"]
+    for mode in ("warn", "fail"):
+        result = run_cli(als, "--audio", audio, "--out", tmp_path / "p", "--mode", mode, env={"PYTHONPATH": str(fake)})
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert "ImportError" in result.stderr and "fake scipy" in result.stderr and "Traceback" not in result.stderr
+
+
+def test_cli_exit_codes_are_distinct(sets, tmp_path):
+    codes = {
+        "ok": run_cli(*sets["aligned"][:1], "--audio", sets["aligned"][1], "--out", tmp_path / "a", "--mode", "fail"),
+        "fail": run_cli(*sets["late20"][:1], "--audio", sets["late20"][1], "--out", tmp_path / "b", "--mode", "fail"),
+        "nothing": run_cli(*sets["few"][:1], "--audio", sets["few"][1], "--out", tmp_path / "c", "--mode", "fail"),
+        "warn nothing": run_cli(*sets["few"][:1], "--audio", sets["few"][1], "--out", tmp_path / "d"),
+    }
+    assert {k: v.returncode for k, v in codes.items()} == {"ok": 0, "fail": 1, "nothing": 3, "warn nothing": 0}
+
+
+# ---- 7: mutants the first 62 tests let through
+
+def test_source_position_follows_uneven_markers_not_a_straight_line(tmp_path):
+    # tempo change at beat 50: 0.5 s a beat before it, 0.6 s a beat after it
+    als = tmp_path / "uneven.als"
+    write_als(als, [("A", "a.wav", [(0, 100, 0, 100, dict(sec_of=lambda i: i * 0.5 if i <= 50 else 25.0 + (i - 50) * 0.6))])])
+    track = kac.read_als(als)[0]
+    for beat, want in ((10.0, 5.0), (50.0, 25.0), (70.0, 37.0), (99.5, 25.0 + 49.5 * 0.6)):
+        assert kac.source_position(track, beat).sec == pytest.approx(want), beat
+
+
+@pytest.mark.parametrize("zeros, flams, flagged", [(24, 6, True), (25, 5, False), (16, 4, True), (17, 3, False)])
+def test_the_minority_rule_is_exactly_one_fifth_of_the_shared_beats(zeros, flams, flagged):
+    st = stats_for([0.0] * zeros + [12.0] * flams)
+    assert st["iqr"] == 0.0 and st["big"] == flams
+    verdict, flags = kac.judge(zeros + flams, st, dict(st))
+    assert ("MINORITY_FLAM" in flags) is flagged and verdict == ("WARN" if flagged else "PASS")
+
+
+def test_building_a_picture_never_imports_pyplot(sets, tmp_path):
+    als, audio = sets["later"]
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); import kick_alignment_check as k; "
+            "k.check_als(sys.argv[2], sys.argv[3], sys.argv[4]); print('matplotlib.pyplot' in sys.modules)")
+    result = subprocess.run([sys.executable, "-c", code, str(ROOT / "Source"), str(als), str(audio), str(tmp_path)],
+                            capture_output=True, text=True, timeout=300)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+
+
+def test_the_audio_folder_wins_over_a_stored_path_that_exists(tmp_path):
+    (tmp_path / "stored").mkdir()
+    (tmp_path / "audio").mkdir()
+    write_wav(tmp_path / "audio" / "Out.wav", "sharp", 0.0)
+    write_wav(tmp_path / "audio" / "Track.wav", "sharp", 8.0)          # the folder holds the right audio ...
+    write_wav(tmp_path / "stored" / "Track.wav", "sharp", 20.0)        # ... the stored path holds a stale one
+    als = tmp_path / "Set.als"
+    write_als(als, [
+        ("Out - A", "Out.wav", [(0, 60, 0, 60)]),
+        ("In - B", "Track.wav", [(40, 100, 0, 60, dict(path=(tmp_path / "stored" / "Track.wav").as_posix()))]),
+    ])
+    res = kac.check_als(als, tmp_path / "audio")[0]
+    assert abs(res.click["median"] - 8.0) <= 1.0, res.click
+
+
+# ---- 8: smaller
+
+def test_a_scattered_estimator_does_not_count_towards_a_minority_flam():
+    scattered_click = stat(median=1.0, iqr=20.0, big=15)
+    verdict, flags = kac.judge(40, scattered_click, stat(median=0.5, big=0))
+    assert "MINORITY_FLAM" not in flags and "SCATTER_CLICK" in flags and verdict == "WARN"
+
+
+def test_an_unwarped_clip_is_refused_not_guessed(tmp_path):
+    als = _small_set(tmp_path, in_extras=dict(path="../Audio/i.wav", warped=False))
+    res = kac.check_als(als, None)[0]
+    assert res.flags == ["UNSUPPORTED_CLIP"] and "not warped" in kac.summary_line(res)
+
+
+def test_cli_never_crashes_on_a_name_the_console_cannot_show(tmp_path):
+    als = _small_set(tmp_path, in_name="In - B☃")
+    result = run_cli(als, "--out", tmp_path / "p", env={"PYTHONIOENCODING": "cp1252"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.startswith("T01 A to B?: ")
+
+
+def test_a_hand_over_where_the_kicks_never_play_together_is_not_off_grid(tmp_path):
+    als = _small_set(tmp_path, in_delay=0.0, out_clip=(0, 100, 0, 100), out_kicks=range(40, 70),
+                     in_kicks=range(30, 60))            # out kicks on arrangement beats 40-69, in kicks on 70-99
+    res = kac.check_als(als, None)[0]
+    assert res.kicks_out >= 16 and res.kicks_in >= 16 and res.kick_span < kac.MIN_SHARED_KICKS
+    assert res.verdict == "CANNOT_JUDGE" and "OFF_GRID" not in res.flags
+    assert "a hand-over" in kac.summary_line(res)
