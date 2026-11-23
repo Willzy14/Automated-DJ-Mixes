@@ -101,7 +101,9 @@ def measure_offsets(track, readers):
             seen.add(key)
             got = reader.window(pos.sec)
             if got is not None:
-                rows.append((source_beat, kac.analyse_window(got[0], reader.sr, got[1])))
+                w = kac.analyse_window(got[0], reader.sr, got[1])
+                w.grid = None                     # only the kick check's cross-correlation needs it, and it is large
+                rows.append((source_beat, w))
     bodies = [w.body for _, w in rows if w.candidate]
     floor = kac.BODY_FRACTION * float(np.median(bodies)) if bodies else math.inf
     return [(b, w.edge_ms) for b, w in rows if w.candidate and w.body >= floor and not math.isnan(w.edge_ms)]
