@@ -61,6 +61,10 @@ elif args[0] == "Tools/plan_mix_decisions.py":
         encoding="ascii")
 elif args[0] in {"Source/propose_arrangement.py", "Source/apply_automation.py"}:
     Path(args[3]).write_bytes(b"later phase")
+elif args[0] == "Tools/check_kick_alignment.py":
+    print("T01 A to B: WARN click +7.3 ms main +15.7 ms shared kicks 38 SLOW_ATTACK")
+    print("LOOK AT THESE PICTURES: " + args[args.index("--out") + 1])
+    sys.exit(int(os.environ.get("PIPELINE_TEST_KICK_RC", "0")))
 '''
 
 
@@ -288,3 +292,55 @@ def test_planner_error_stops_pipeline(pipeline):
     assert "FAILED at: planner (see planner.log)" in result.stdout
     assert any(call[0] == PLANNER for call in calls)
     assert not any(call[0] == ARRANGE for call in calls)
+
+
+KICK = "Tools/check_kick_alignment.py"
+
+
+def test_kick_alignment_runs_once_after_the_final_validate_and_prints_into_the_log(pipeline):
+    repo, run = pipeline
+    result, calls = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    kick_calls = [call for call in calls if call[0] == KICK]
+    assert kick_calls == [[KICK, f"{OUTPUT}/Sections V9.als", "--audio", f"{PROJECT}/Audio",
+                           "--out", f"{OUTPUT}/Kick Alignment", "--mode", "warn"]]
+    finals = [i for i, call in enumerate(calls) if call[0] == "Source/validate_als.py" and "--require-devices" in call]
+    assert finals and finals[-1] < calls.index(kick_calls[0])
+    log = (repo / OUTPUT / "runmix.log").read_text()
+    assert "T01 A to B: WARN click +7.3 ms main +15.7 ms shared kicks 38 SLOW_ATTACK" in log
+    assert f"LOOK AT THESE PICTURES: {OUTPUT}/Kick Alignment" in log
+    assert "LOOK AT THESE PICTURES" in result.stdout
+    assert "DONE: final = Sections V9.als" in result.stdout
+
+
+def test_kick_alignment_that_cannot_run_does_not_break_a_warn_build(pipeline):
+    _, run = pipeline
+    result, calls = run(PIPELINE_TEST_KICK_RC="2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "kick alignment check did not finish (status 2); warn mode, the build goes on" in result.stdout
+    assert "DONE: final = Sections V9.als" in result.stdout
+    assert any(call[0] == "Source/validate_mix_plan_als.py" for call in calls)
+
+
+def test_kick_alignment_in_fail_mode_stops_the_build(pipeline):
+    _, run = pipeline
+    result, calls = run(KICK_ALIGNMENT_MODE="fail", PIPELINE_TEST_KICK_RC="1")
+    assert result.returncode == 1
+    assert "FAILED at: kick alignment" in result.stdout
+    assert [call for call in calls if call[0] == KICK][0][-2:] == ["--mode", "fail"]
+    assert not any(call[0] == "Source/validate_mix_plan_als.py" for call in calls)
+    assert "DONE" not in result.stdout
+
+
+def test_kick_alignment_in_fail_mode_lets_a_clean_check_through(pipeline):
+    _, run = pipeline
+    result, _ = run(KICK_ALIGNMENT_MODE="fail")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DONE: final = Sections V9.als" in result.stdout
+
+
+def test_kick_alignment_mode_other_than_fail_is_warn(pipeline):
+    _, run = pipeline
+    result, calls = run(KICK_ALIGNMENT_MODE="banana", PIPELINE_TEST_KICK_RC="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [call for call in calls if call[0] == KICK][0][-2:] == ["--mode", "warn"]
