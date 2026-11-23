@@ -107,6 +107,11 @@ Blank-canvas PNG render for the visual-hint authoring workflow. ZERO candidate p
 Key types: `PreviewContext`.
 Key functions: `render_preview()`.
 
+### `Source/automated_dj_mixes/figure_memory.py`
+Added by: MiniMax (2026-11-23). `frees_figures` decorator: runs `gc.collect()` after a pyplot renderer returns, because a figure closed with `plt.close` stays alive in a reference cycle (with its Agg raster) until the cyclic gc runs (measured 3 to 127 MB per call). Every pyplot renderer carries it; `Tests/test_figure_memory.py` checks the list.
+
+Key functions: `frees_figures()`.
+
 ### `Source/automated_dj_mixes/warping.py`
 Warp marker calculation. Two modes: (1) 2-marker linear from BPM + downbeat (fallback), (2) per-beat grid (`beat_times_ms` from the owned stem grid / tick fits) — one marker per downbeat using exact ms timestamps (165-252 markers per track, eliminates up to 13-beat drift). Now also the home of the **one-clock converter** that fixes the 2026-06-11 warp/cut regression: `grid_bpm_and_downbeat(beat_times_ms, first_downbeat_offset, db_bpm)` returns the effective constant BPM + true-downbeat anchor seconds; `sec_to_clip_beats(sec, beat_times_ms, first_downbeat_offset)` maps audio time → clip warp-beat coordinate via the same grid the warp markers use, so section cuts land on warped audio by construction. **5+ tests in Tests/test_one_clock.py.**
 
