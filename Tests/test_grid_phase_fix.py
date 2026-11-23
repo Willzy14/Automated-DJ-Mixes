@@ -1076,3 +1076,16 @@ def test_cli_never_removes_the_input_when_it_is_also_the_output(sets, tmp_path):
     als.write_bytes(sets["good"][0].read_bytes())
     result = run_cli(als, "--audio", sets["good"][1], "--out", als, "--report", tmp_path / "r")
     assert result.returncode == 2 and als.read_bytes() == sets["good"][0].read_bytes()
+
+
+def test_a_transition_that_appears_only_in_the_result_is_refused():
+    assert gpf.refusals([_blend(1, 2.0)], [_blend(1, 2.0), _blend(2, 2.0)])
+
+
+def test_the_edge_and_main_hit_report_reaches_the_outcome_of_a_run(sets, tmp_path, monkeypatch):
+    marker = [dict(label="T01 Alpha to Bravo", estimator="main", before=0.0, after=9.0)]
+    monkeypatch.setattr(gpf, "edge_main_worse", lambda before, after: marker)
+    als, audio = sets["slide"]
+    out = gpf.run(als, audio, tmp_path / "Phased.als", tmp_path / "report")
+    assert out.status == gpf.PHASED and out.edge_main_worse == marker
+    assert "main +0.0 -> +9.0 ms: aligned by click, as chosen by ear for this mix: check the picture" in gpf.report_text(out, als)
