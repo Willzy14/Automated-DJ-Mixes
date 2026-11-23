@@ -64,6 +64,7 @@ from _tier_a_features import (
 )
 from automated_dj_mixes.musical_landmarks import extract_kick_dropout_landmarks
 from automated_dj_mixes.display_sections import refine_intro_drop_boundary
+from automated_dj_mixes.figure_memory import frees_figures
 
 STEMS = ("drums", "bass", "vocals", "other")
 STEM_COLORS = {"drums": "#e4572e", "bass": "#2e86ab", "vocals": "#8e44ad", "other": "#3a3a3a"}
@@ -1446,6 +1447,7 @@ def detect(wav: Path, project: Path, bpm=None, downbeat=None, make_viz=True, wri
     return result
 
 
+@frees_figures
 def _visualize(wav, project, envs, hop_t, downbeat, sec_per_bar, n_bars, sections, signals, kick_ref=None,
                tier_a_data=None):
     order = [s for s in STEMS if s in envs]

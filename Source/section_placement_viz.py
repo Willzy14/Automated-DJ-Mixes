@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from stem_section_probe import _separate_envelopes
+from automated_dj_mixes.figure_memory import frees_figures
 
 STAMP = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -46,6 +47,7 @@ def _grid(ax, downbeat, sec_per_bar, n_bars, bold=False):
                    lw=(1.0 if is16 else 0.4), alpha=0.7, zorder=0)
 
 
+@frees_figures
 def render(project: Path, wav: Path, data: dict, out_dir: Path):
     from section_format import GROOVE, groove_fills, section_mode_of
 

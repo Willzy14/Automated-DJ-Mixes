@@ -2,7 +2,7 @@
 Re-exports + registers the lazy Demucs separator + keeps the project CLI (main_build/
 main_compare/main_viz) and project path constants. No algorithm logic lives here."""
 from __future__ import annotations
-import json, os, sys
+import gc, json, os, sys
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
@@ -17,6 +17,11 @@ from audio_analysis.stem_grid import (  # noqa: F401
     CLICK_FLOOR, CLICK_HP, SNARE_CONTRAST, DOWNBEAT_PRIOR_AGREE,
 )
 import audio_analysis.stem_grid as _aa_stem_grid
+
+try:  # imported as a package module (automated_dj_mixes.stem_grid)
+    from automated_dj_mixes.figure_memory import frees_figures
+except ImportError:  # run as a script: this folder is on sys.path
+    from figure_memory import frees_figures
 
 
 def _sidecar_dir(wav_path: Path) -> Path | None:
@@ -194,6 +199,7 @@ def main_compare() -> None:
             print(f"  [{f:4s}] {n[:46]:46s}  (kick {kf:.1f}ms)")
 
 
+@frees_figures
 def main_viz() -> None:
     """Render each track's grid over its biggest breakdown, so the bridging + downbeat
     lock are visible at a glance."""
@@ -238,6 +244,11 @@ def main_viz() -> None:
         ax.set_yticks([]); ax.set_xlabel("time (s)")
         ax.legend(loc="upper right", fontsize=8)
         fig.tight_layout(); fig.savefig(vdir / f"{Path(name).stem}.png", dpi=90); plt.close(fig)
+        # Free this picture NOW: the next track's is drawn in the same call and
+        # a closed pyplot figure stays alive in a reference cycle (with the Agg
+        # raster on its canvas) until the collector runs.
+        del fig, ax
+        gc.collect()
         print(f"  {name[:44]}")
     print(f"\nwrote {len(cache)} -> {vdir}")
 

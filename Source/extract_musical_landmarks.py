@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from automated_dj_mixes.musical_landmarks import extract_kick_dropout_landmarks
+from automated_dj_mixes.figure_memory import frees_figures
 from section_format import section_mode_of
 
 
@@ -19,6 +20,7 @@ def _section_signature(sections: list[dict]) -> str:
     )
 
 
+@frees_figures
 def _render(path: Path, result: dict) -> None:
     import matplotlib
     matplotlib.use("Agg")

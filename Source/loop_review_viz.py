@@ -25,6 +25,8 @@ import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 
+from automated_dj_mixes.figure_memory import frees_figures
+
 
 # Reuse the same 3-band bands as the section viz so the look is consistent.
 def _compute_bands(audio: np.ndarray, sr: int):
@@ -87,6 +89,7 @@ def _quality(full_env: np.ndarray, low_env: np.ndarray) -> tuple[float, str]:
     return score, verdict
 
 
+@frees_figures
 def render_loop(audio: np.ndarray, sr: int, bpm: float,
                 src_beat_start: float, src_beat_end: float,
                 track_name: str, loop_type: str, count: int,

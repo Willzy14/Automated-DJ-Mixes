@@ -14,6 +14,7 @@ at non-multiple-of-4-bar boundaries. Claude reads these PNGs to drive fixes.
 
 from __future__ import annotations
 
+import gc
 import json
 import sys
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from pathlib import Path
 import librosa
 import matplotlib.pyplot as plt
 import numpy as np
+
+from automated_dj_mixes.figure_memory import frees_figures
 
 
 LABEL_COLOURS = {
@@ -68,6 +71,7 @@ def is_nice_delta(delta_bars: float) -> bool:
     return abs(delta_bars - rounded) < 0.3 and rounded in NICE_DELTAS
 
 
+@frees_figures
 def render_track_quarters(
     track_name: str,
     audio_path: Path,
@@ -213,6 +217,12 @@ def render_track_quarters(
         fig.tight_layout()
         fig.savefig(out_path, facecolor=fig.get_facecolor(), bbox_inches="tight")
         plt.close(fig)
+        # Free this quarter before the next one is drawn: a closed pyplot
+        # figure stays alive in a reference cycle (with the Agg raster on its
+        # canvas) until the collector runs. The loop variable over ax.spines
+        # still points at one of the figure's artists, so it goes too.
+        del fig, ax, spine
+        gc.collect()
         out_paths.append(out_path)
 
     return out_paths

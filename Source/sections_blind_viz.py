@@ -11,6 +11,7 @@ shown (yellow dashed) + bar gridlines + waveform envelope.
 
 from __future__ import annotations
 
+import gc
 import json
 import sys
 from pathlib import Path
@@ -18,6 +19,8 @@ from pathlib import Path
 import librosa
 import matplotlib.pyplot as plt
 import numpy as np
+
+from automated_dj_mixes.figure_memory import frees_figures
 
 
 LABEL_COLOURS = {
@@ -50,6 +53,7 @@ def src_beat_to_sec(src_beat: float, bpm: float, first_downbeat_sec: float) -> f
     return first_downbeat_sec + src_beat * 60.0 / bpm
 
 
+@frees_figures
 def render_blind_quarters(track_name, audio_path, bpm, first_downbeat_sec,
                           v12_clips, out_dir, quarters=8):
     # Load at 22050 Hz so we can resolve bass (<200 Hz) properly via LP filter.
@@ -383,6 +387,12 @@ def render_blind_quarters(track_name, audio_path, bpm, first_downbeat_sec,
     fig_ov.tight_layout()
     fig_ov.savefig(overview_path, facecolor=fig_ov.get_facecolor(), bbox_inches="tight")
     plt.close(fig_ov)
+    # Free this picture NOW: the quarters below are drawn in the same call and
+    # a closed pyplot figure stays alive in a reference cycle (with the Agg
+    # raster on its canvas) until the collector runs. The loop variable over
+    # ax_ov.spines still points at one of the figure's artists, so it goes too.
+    del fig_ov, ax_ov, spine
+    gc.collect()
     out_paths.append(overview_path)
 
     # ---------- STATS JSON ----------
@@ -504,6 +514,9 @@ def render_blind_quarters(track_name, audio_path, bpm, first_downbeat_sec,
         fig.tight_layout()
         fig.savefig(out_path, facecolor=fig.get_facecolor(), bbox_inches="tight")
         plt.close(fig)
+        # Free this quarter before the next one is drawn (see the overview above).
+        del fig, ax, spine
+        gc.collect()
         out_paths.append(out_path)
 
     return out_paths, flags, clips, proposals
