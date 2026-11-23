@@ -107,6 +107,9 @@ Blank-canvas PNG render for the visual-hint authoring workflow. ZERO candidate p
 Key types: `PreviewContext`.
 Key functions: `render_preview()`.
 
+### `Source/kick_alignment_check.py` and `Tools/check_kick_alignment.py`
+Added by: Claude (Sonnet 5.5) lead, Sonnet subagent build, MiniMax and Opus-subagent reviews (2026-11-23). After a mix is built it checks, for every blend, whether the two kick drums land together: maps the overlap through each track's per-beat warp markers (extended past the end markers at the last tempo, as Live does), reads short windows, and measures the lag three ways (edge = leading edge of the click, click = cross-correlation above 150 Hz, main hit = steepest rise above 40 Hz; positive = incoming later). Verdict per blend: PASS, WARN, FAIL or CANNOT_JUDGE (under 16 shared kick beats), with flags (SLOW_ATTACK, SCATTER_*, MINORITY_FLAM, DRIFT_FLAM, EDGE_DISAGREES, OFF_GRID, ...). Writes one picture per blend under `Output/Kick Alignment/` (worst and typical beats, both kicks stacked, beat line). `Tools/run_mix_pipeline.sh` runs it after the final validate; mode `warn` by default, `KICK_ALIGNMENT_MODE=fail` stops the build on a FAIL. WARN 4 ms, FAIL 8 ms are starting figures Sam sets. Exit codes: 0 ok, 1 FAIL in fail mode, 2 could not run, 3 nothing judged. `Tests/test_kick_alignment_check.py` (93 tests). Mix command step 3b+ says to LOOK at the pictures.
+
 ### `Source/automated_dj_mixes/figure_memory.py`
 Added by: MiniMax (2026-11-23). `frees_figures` decorator: runs `gc.collect()` after a pyplot renderer returns, because a figure closed with `plt.close` stays alive in a reference cycle (with its Agg raster) until the cyclic gc runs (measured 3 to 127 MB per call). Every pyplot renderer carries it; `Tests/test_figure_memory.py` checks the list.
 
