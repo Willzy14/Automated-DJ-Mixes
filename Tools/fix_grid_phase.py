@@ -38,6 +38,9 @@ def main(argv=None):
     src = Path(args.als)
     out = Path(args.out) if args.out else src.resolve().parent / (src.stem + " Phased.als")
     report = Path(args.report) if args.report else src.resolve().parent / "Grid Phase"
+    if out.resolve() != src.resolve():             # nothing from an earlier run may pass for this run's result
+        for old in (out, out.with_name(out.stem + " REFUSED.als"), out.with_name(out.name + ".partial")):
+            old.unlink(missing_ok=True)
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Source"))
         import grid_phase_fix as gpf

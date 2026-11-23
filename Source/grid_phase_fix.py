@@ -20,7 +20,12 @@ Steps (see run):
   4. slide solve in two stages: the best worst lag t* any slides could reach, then the least total slide that keeps every
      blend within max(t*, EPS_MS), |s_i| <= MAX_SLIDE_MS;
   5. write a NEW ALS (text patch of the SecTime of WarpMarker lines only), run the kick check on it (after), refuse
-     the result when any judged blend got worse or a blend became FAIL.
+     the result when the patch changed nothing or would write a negative SecTime, when any judged blend got worse (by
+     more than REFUSE_TOL_MS) or a blend became FAIL, or when a re-measured blend lag differs from the additive
+     prediction by more than PREDICT_TOL_MS.
+A track that sits in any blend the kick check could not judge is neither slid nor drift-corrected (nothing could check
+the move), and a track whose clips carry fewer than one warp marker per 4 source beats is slid but never drift-corrected
+(a correction would land on the few marker beats only).
 The input is only read. Windows of 2 s are read around each beat, never a whole wav.
 The phased file is a suggestion: the MixPlan reconciliation pins the original grid (warp_grid_sha256, source_grid_bpm), so
 it covers the unphased original only.
@@ -34,6 +39,7 @@ import json
 import math
 import re
 import shutil
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -55,11 +61,24 @@ MAX_SLIDE_MS = 15.0              # one track is never slid further than this
 # lag below this is chasing noise. The slide solve brings every blend inside max(t*, EPS_MS) with the least total slide,
 # instead of paying slides to shave the last millisecond.
 EPS_MS = 1.5
-# DRIFT_MIN_MS: a fitted correction that never reaches this size is noise, not drift: the kick check cannot see a few
-# ms (see EPS_MS), and applying such a wobble only adds noise (on the real mix Taste's fit stayed within 1.9 ms and
-# applying it pushed a good blend 1.2 ms out). The kick check's own warn figure; Get Right, which really drifts, reaches
-# 6.1 ms. A constant offset this large is corrected (the markers are simply late or early).
+# DRIFT_MIN_MS: a fitted correction smaller than this, in size AND in swing, is noise, not drift: the kick check cannot
+# see a few ms (see EPS_MS), and applying such a wobble only adds noise (on the real mix Taste's fit stayed within 1.9 ms,
+# swung 3.7 ms, and applying it pushed a good blend 1.2 ms out). The size is max(|largest correction|, high minus low),
+# so a track swinging -3.9 to +2.6 (6.5 ms) is drift although neither end reaches 4 ms. The kick check's own warn figure;
+# Get Right, which really drifts, reaches 6.1 ms. A constant offset this large is corrected (the markers are late or early).
 DRIFT_MIN_MS = WARN_MS
+# MAX_SWING_MS: a fit whose high minus low exceeds this is refused: a mid-track excursion that large is a change of kick
+# sound (a different kick, a layered hit), not a grid drifting. Killa (-9.2 to +3.0, a swing of 12.2) passes. A starting
+# figure, like the others.
+MAX_SWING_MS = 14.0
+# REFUSE_TOL_MS: a judged blend counts as worse only when its worst click lag grew by more than this. The kick check's
+# re-measure of a shifted blend differs from the additive prediction by 0.2 to 1.1 ms on the real mixes (shifted windows
+# hold slightly different content), so a smaller change is not a worse blend.
+REFUSE_TOL_MS = 0.4
+# PREDICT_TOL_MS: the re-measured median click lag of every judged blend must be within this of the lag the model
+# predicted, or the written file is not the file the solve meant (a patch that missed markers, a wrong track).
+PREDICT_TOL_MS = 2.5
+MIN_MARKER_BEATS = 4             # fewer than one warp marker per this many source beats of a clip: SPARSE_MARKERS
 MIN_FIT_KICKS = 40               # fewer usable kick beats than this: the track is CANNOT_FIT and gets no correction
 OUTLIER_MS = 15.0                # a kick beat whose offset is this far from its grid is dropped from the fit (see MAX_DRIFT_MS)
 MEDIAN_HALF_WINDOW = 48.0        # running median: this many beats each side ...
@@ -67,7 +86,8 @@ MEDIAN_MIN_KICKS = 8             # ... widened (doubled) until at least this man
 SMOOTH_BEATS = 31                # moving average over the median, flat at both ends
 SLIDE_NOISE_MS = 0.05            # a slide smaller than this is a rounding residue of the solver, not a slide
 
-FIT, CANNOT_FIT, REFUSED, NOT_MEASURED, NO_DRIFT = "FIT", "CANNOT_FIT", "REFUSED", "NOT_MEASURED", "NO_DRIFT"
+FIT, CANNOT_FIT, REFUSED, NOT_MEASURED, NO_DRIFT, SPARSE_MARKERS = (
+    "FIT", "CANNOT_FIT", "REFUSED", "NOT_MEASURED", "NO_DRIFT", "SPARSE_MARKERS")
 PHASED, NOTHING, REFUSED_RESULT = "PHASED", "NOTHING_TO_DO", "REFUSED"
 
 
@@ -75,7 +95,8 @@ PHASED, NOTHING, REFUSED_RESULT = "PHASED", "NOTHING_TO_DO", "REFUSED"
 
 @dataclass
 class DriftFit:
-    status: str                  # FIT, NO_DRIFT, CANNOT_FIT, REFUSED or NOT_MEASURED (nothing needed fixing, so it was not read)
+    status: str                  # FIT, NO_DRIFT, CANNOT_FIT, REFUSED, SPARSE_MARKERS or NOT_MEASURED (not read: nothing
+                                 # needed fixing, or the track is not moved)
     kicks: int = 0
     first_beat: float = 0.0
     corr: np.ndarray = field(default_factory=lambda: np.zeros(0))   # ms, one per integer source beat from first_beat
@@ -101,10 +122,12 @@ def measure_offsets(track, readers):
 
     Offset = kick minus grid, positive = the kick is late. The kick test is the kick check's own (a clear 40-120 Hz
     peak, a sharp >150 Hz attack, a body at least BODY_FRACTION of the typical kick of the track). Clips the kick
-    check does not map (loop on, StartRelative, unwarped) and clips without audio are not read."""
+    check does not map (loop on, StartRelative, unwarped) and clips without audio are not read. The beat label is the
+    position's own source beat, the same one the blend lags are keyed by. Every beat is read: a thinner sampling
+    (every 4th beat) moved Get Right's fit by 0.45 ms and the fit of sparse-kick tracks by up to 9 ms."""
     rows, seen = [], set()
     for clip in track.clips:
-        if clip.audio is None or not clip.supported:
+        if clip.audio is None or clip.loop_on or clip.start_relative or not clip.warped:
             continue
         reader = readers[str(clip.audio)]
         single = kac.Track(track.name, [clip])
@@ -116,9 +139,8 @@ def measure_offsets(track, readers):
             seen.add(key)
             got = reader.window(pos.sec)
             if got is not None:
-                w = kac.analyse_window(got[0], reader.sr, got[1])
-                w.grid = None                     # only the kick check's cross-correlation needs it, and it is large
-                rows.append((source_beat, w))
+                w = kac.analyse_window(got[0], reader.sr, got[1], edge_only=True)
+                rows.append((pos.source_beat, w))
     bodies = [w.body for _, w in rows if w.candidate]
     floor = kac.BODY_FRACTION * float(np.median(bodies)) if bodies else math.inf
     return [(b, w.edge_ms) for b, w in rows if w.candidate and w.body >= floor and not math.isnan(w.edge_ms)]
@@ -145,13 +167,29 @@ def fit_drift(offsets):
     pad = SMOOTH_BEATS // 2
     smooth = np.convolve(np.pad(raw, (pad, pad), mode="edge"), np.ones(SMOOTH_BEATS) / SMOOTH_BEATS, mode="valid")
     fit = DriftFit(FIT, len(kept), float(first), smooth)
-    if max(abs(fit.low), abs(fit.high)) > MAX_DRIFT_MS:
+    largest, swing = max(abs(fit.low), abs(fit.high)), fit.high - fit.low
+    if largest > MAX_DRIFT_MS:
         fit.status = REFUSED
-        fit.note = f"correction reaches {max(abs(fit.low), abs(fit.high)):.1f} ms, more than {MAX_DRIFT_MS:g} ms"
-    elif max(abs(fit.low), abs(fit.high)) < DRIFT_MIN_MS:
+        fit.note = f"correction reaches {largest:.1f} ms, more than {MAX_DRIFT_MS:g} ms"
+    elif swing > MAX_SWING_MS:
+        fit.status = REFUSED
+        fit.note = f"correction swings {swing:.1f} ms, more than {MAX_SWING_MS:g} ms: a change of kick sound, not drift"
+    elif max(largest, swing) < DRIFT_MIN_MS:
         fit.status = NO_DRIFT
-        fit.note = f"correction never reaches {DRIFT_MIN_MS:g} ms (largest {max(abs(fit.low), abs(fit.high)):.1f} ms): noise, not drift"
+        fit.note = (f"correction stays within {largest:.1f} ms and swings {swing:.1f} ms, under {DRIFT_MIN_MS:g} ms: "
+                    f"noise, not drift")
     return fit
+
+
+def sparse_markers(track):
+    """True when a clip of the track carries fewer than one warp marker per MIN_MARKER_BEATS source beats of the part it
+    uses (a hand re-warp with two markers): a drift correction would land on those few marker beats only."""
+    for clip in track.clips:
+        low, high = clip.loop_start, clip.loop_start + (clip.end - clip.start)
+        inside = int(((clip.markers[:, 0] >= low) & (clip.markers[:, 0] <= high)).sum()) if len(clip.markers) else 0
+        if inside < (high - low) / MIN_MARKER_BEATS:
+            return True
+    return False
 
 
 # ------------------------------------------------------------------ blend lags, computed not re-measured
@@ -227,53 +265,64 @@ def _linprog(cost, rows, rhs, bounds):
     return sol
 
 
-def solve_slides(lags, pairs, n_tracks, movable=None, was=None):
+def solve_slides(lags, pairs, n_tracks, movable=None, was=None, must_fix=None, headroom=None):
     """Slides (ms, one per track) and the worst lag left, in two stages.
 
-    lags[k] is the lag of blend k with no slide, pairs[k] = (outgoing position, incoming position); the lag of blend k
-    after slides is lags[k] + s_out - s_in. Only tracks in `movable` (default: every track that sits in a blend) may
-    slide, each within MAX_SLIDE_MS. A worst lag already under WARN_MS is left alone (a good mix is never touched).
-      stage 1  minimise t = max |lag|, with no cost on the slides: the best any slides could do, t*.
-      stage 2  eps = max(t*, EPS_MS); minimise the total slide sum |s_i| with every |lag| <= eps (see `was`). The least total slide
-               often has several answers (+4.2 on one track, or +2.6 and -1.6 on two); the tie goes to the answer that
-               weighs the tracks 1, 2, 3 ... by their order in the mix, so the slide sits on one track and the earlier
-               track takes it. A tie on "smallest largest slide" was tried first and split Sam's case over two tracks.
-      `was[k]` (optional) is the |lag| blend k had in the input: a blend that was inside EPS_MS is held to that, not to
-      EPS_MS (but never below t*), so the result cannot leave a fine blend worse than it was, which the refusal rule
-      would refuse.
+    lags[k] is the lag of blend k with no slide (after any drift correction), pairs[k] = (outgoing position, incoming
+    position); the lag of blend k after slides is lags[k] + s_out - s_in. Only tracks in `movable` (default: every track
+    that sits in a blend) may slide, each within MAX_SLIDE_MS.
+      `was[k]` (optional) is the |lag| blend k had in the input, `must_fix[k]` whether it needed fixing (default: its
+      was is WARN_MS or more; with no `was` every blend must be fixed).
+      do nothing   when the worst lag is under WARN_MS and no blend is further out than max(was, EPS_MS): a good mix is
+                   never touched. A blend that was fine and that a drift correction pushed out is NOT left: it is repaired.
+      stage 1      minimise t = max |lag| over the blends that must be fixed, with no cost on the slides: the best any
+                   slides could do, t*. The blends that did not need fixing are held, meanwhile and in stage 2, to what
+                   they were plus REFUSE_TOL_MS (which the refusal rule allows) and never above max(was, EPS_MS): not
+                   merely to t*, which can be large. A fix that cannot be had without worsening them is not made. If even
+                   those holds cannot be met within the slide limits they are dropped.
+      stage 2      eps = max(t*, EPS_MS); minimise the total slide sum |s_i| with every blend that must be fixed inside
+                   eps and every other blend inside its hold. The least total slide often has several answers (+4.2 on
+                   one track, or +2.6 and -1.6 on two); the tie goes to the answer that weighs the tracks 1, 2, 3 ... by
+                   their order in the mix, so the slide sits on one track and the earlier track takes it. A tie on
+                   "smallest largest slide" was tried first and split Sam's case over two tracks.
+      `headroom[i]` (optional) is how far track i may slide EARLIER-in-the-file (negative) before one of its warp markers
+      would get a negative SecTime: its smallest SecTime in ms, after any drift correction.
       Deterministic: HiGHS simplex, no seed."""
     s = np.zeros(n_tracks)
     if not len(lags):
         return s, 0.0
+    lags = np.asarray(lags, dtype=float)
     worst = float(np.max(np.abs(lags)))
-    if worst < WARN_MS:
+    if worst < WARN_MS and (was is None or all(abs(l) <= max(w, EPS_MS) for l, w in zip(lags, was))):
         return s, worst
-    n = n_tracks
+    n, count = n_tracks, len(lags)
+    fix = [True] * count if was is None else ([w >= WARN_MS for w in was] if must_fix is None else list(must_fix))
+    hold = [None if fix[k] else min(max(was[k], EPS_MS), was[k] + REFUSE_TOL_MS) for k in range(count)]
     can_slide = {i for pair in pairs for i in pair} if movable is None else set(movable)
     width = 2 * n + 1                                        # s_0..s_n-1, u_0..u_n-1 (u_i >= |s_i|), z
-    reach = [(-MAX_SLIDE_MS, MAX_SLIDE_MS) if i in can_slide else (0.0, 0.0) for i in range(n)]
+    low = [-MAX_SLIDE_MS if headroom is None else max(-MAX_SLIDE_MS, -float(headroom[i])) for i in range(n)]
+    reach = [(low[i], MAX_SLIDE_MS) if i in can_slide else (0.0, 0.0) for i in range(n)]
     free_u = [(0.0, None)] * n
 
-    def lag_rows(limit):
-        """|lag_k| <= limit_k (a list), or <= z when limit is None."""
+    def lag_rows(limits):
+        """|lag_k| <= limits[k] (a number), or <= z when limits[k] is None."""
         rows, rhs = [], []
         for k, (lag, (a, b)) in enumerate(zip(lags, pairs)):
             up, down = np.zeros(width), np.zeros(width)
             up[a], up[b], down[a], down[b] = 1.0, -1.0, -1.0, 1.0       # lag + s_a - s_b, and its negative
-            if limit is None:
+            if limits[k] is None:
                 up[-1] = down[-1] = -1.0
             rows += [up, down]
-            rhs += [-lag + (0.0 if limit is None else limit[k]), lag + (0.0 if limit is None else limit[k])]
+            rhs += [-lag + (limits[k] or 0.0), lag + (limits[k] or 0.0)]
         return rows, rhs
 
-    def abs_rows(into_z):
-        """u_i >= |s_i|, or z >= |s_i|."""
+    def abs_rows():
+        """u_i >= |s_i|."""
         rows = []
         for i in range(n):
             for sign in (1.0, -1.0):
                 row = np.zeros(width)
-                row[i] = sign
-                row[width - 1 if into_z else n + i] = -1.0
+                row[i], row[n + i] = sign, -1.0
                 rows.append(row)
         return rows, [0.0] * len(rows)
 
@@ -283,15 +332,20 @@ def solve_slides(lags, pairs, n_tracks, movable=None, was=None):
         c[-1] = z
         return c
 
-    # stage 1: the best worst lag
-    rows, rhs = lag_rows(None)
-    sol = _linprog(cost(z=1.0), rows, rhs, reach + free_u + [(0.0, None)])
-    t_star = float(sol.x[-1])
-    floor = [EPS_MS] * len(lags) if was is None else [min(EPS_MS, w) for w in was]
-    limits = [max(t_star, f) + 1e-7 for f in floor]
+    # stage 1: the best worst lag of the blends that must be fixed, the others held
+    try:
+        rows, rhs = lag_rows(hold)
+        sol = _linprog(cost(z=1.0), rows, rhs, reach + free_u + [(0.0, None)])
+    except RuntimeError:                                     # the holds cannot all be met within the slide limits
+        hold = [None] * count
+        fix = [True] * count
+        rows, rhs = lag_rows(hold)
+        sol = _linprog(cost(z=1.0), rows, rhs, reach + free_u + [(0.0, None)])
+    eps = max(float(sol.x[-1]), EPS_MS) + 1e-7
     # stage 2a: the least total slide inside the limits
+    more, zero = abs_rows()
+    limits = [eps if fix[k] else hold[k] + 1e-7 for k in range(count)]
     rows, rhs = lag_rows(limits)
-    more, zero = abs_rows(False)
     rows, rhs = rows + more, rhs + zero
     total = float(_linprog(cost(u=1.0), rows, rhs, reach + free_u + [(0.0, 0.0)]).fun)
     cap = np.zeros(width)
@@ -315,13 +369,32 @@ def _lines(text):
     return re.findall(r"[^\n]*\n|[^\n]+", text)
 
 
+class AlsLayoutError(ValueError):
+    """The text patch and the XML disagree about which track is which (or the file is not laid out one element per line)."""
+
+
+class NegativeSecTime(ValueError):
+    """A patch would write a SecTime below zero (a marker at the very start of the file, moved earlier)."""
+
+    def __init__(self, doc_index, beat, value):
+        super().__init__(f"marker at beat {beat:g} would get SecTime {value:.6f}")
+        self.doc_index, self.beat, self.value = doc_index, beat, value
+
+
 def patch_als(src, dst, shifts):
     """Copy src to dst with the SecTime of the WarpMarker lines of the chosen tracks moved by shifts[doc_index](beat) ms.
 
     Text patch of the lines only: nothing else is parsed or written back, line endings are kept, floats are written
-    with 18 significant digits. A marker whose shift is exactly 0 is not touched. Returns markers changed per track."""
-    text = gzip.open(src, "rb").read().decode("utf-8")
+    in the shortest positional form that round-trips (never with an exponent). A marker whose shift is exactly 0 is not touched. Returns the markers changed per track, keyed by the track's position in the file (doc_index).
+    Raises NegativeSecTime rather than write a SecTime below zero."""
+    with gzip.open(src, "rb") as fh:
+        text = fh.read().decode("utf-8")
     lines = _lines(text)
+    in_text = sum(1 for line in lines if line.lstrip().startswith("<AudioTrack "))
+    in_xml = sum(1 for _ in ET.fromstring(text).iter("AudioTrack"))
+    if in_text != in_xml:                # doc_index counts the XML elements, the patch counts these lines: they must agree
+        raise AlsLayoutError(f"the text patch finds {in_text} '<AudioTrack ' lines but the document has {in_xml} "
+                             f"AudioTrack elements (is the ALS laid out one element per line, as Live writes it?)")
     track_no, current, in_markers, changed = -1, None, False, {}
     for i, line in enumerate(lines):
         bare = line.lstrip()
@@ -342,7 +415,9 @@ def patch_als(src, dst, shifts):
             if move == 0.0:
                 continue
             value = float(sec.group(1)) + move / 1000.0
-            lines[i] = line[:sec.start(1)] + format(value, ".18g") + line[sec.end(1):]
+            if value < 0.0:
+                raise NegativeSecTime(track_no, float(beat.group(1)), value)
+            lines[i] = line[:sec.start(1)] + np.format_float_positional(value, unique=True, trim="-") + line[sec.end(1):]
             changed[track_no] = changed.get(track_no, 0) + 1
     with open(dst, "wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as fh:
@@ -359,6 +434,8 @@ class TrackReport:
     fit: DriftFit
     applied: bool = False
     slide: float = 0.0
+    doc_index: int = -1
+    note: str = ""                                    # why the track was not moved, when it was not
 
 
 @dataclass
@@ -373,7 +450,9 @@ class Outcome:
     out_path: str = ""
     refused_path: str = ""
     refusals: list = field(default_factory=list)
-    changed: dict = field(default_factory=dict)      # markers patched per track name
+    changed: dict = field(default_factory=dict)      # markers patched, by the track's position in the file (doc_index)
+    still_flamming: list = field(default_factory=list)    # blends whose predicted half is still at the FAIL figure or more
+    edge_main_worse: list = field(default_factory=list)   # judged blends whose edge or main hit got worse (see edge_main_worse)
 
 
 def _open_readers(tracks, als_path, audio_dir, wanted):
@@ -388,19 +467,66 @@ def _open_readers(tracks, als_path, audio_dir, wanted):
 
 
 def refusals(before, after):
-    """Why the result must not be kept: a judged blend whose worst |click lag| got worse, one that can no longer be
-    judged, or a blend that is FAIL now and was not before."""
+    """Why the result must not be kept: a judged blend whose worst |click lag| (median or either half) got worse by
+    more than REFUSE_TOL_MS, one that can no longer be judged, or a blend that is FAIL now and was not before.
+    Blends are matched by transition number, and a different number of transitions is itself a refusal. (One way only:
+    a blend that could not be judged before and can be now is not compared, there is nothing to compare it with.)"""
+    if len(before) != len(after):
+        return [f"the kick check found {len(before)} transitions before and {len(after)} after"]
+    later = {a.index: a for a in after}
     out = []
-    for b, a in zip(before, after):
+    for b in before:
+        a = later.get(b.index)
+        if a is None:
+            out.append(f"{b.label}: not in the result")
+            continue
         name = b.label
         if a.verdict == "FAIL" and b.verdict != "FAIL":
             out.append(f"{name}: {b.verdict} before, FAIL after")
         if usable(b):
             if not usable(a):
                 out.append(f"{name}: judged before, {a.verdict} after")
-            elif worst_click(a) > worst_click(b):
+            elif worst_click(a) > worst_click(b) + REFUSE_TOL_MS:
                 out.append(f"{name}: worst click lag {worst_click(b):.2f} ms before, {worst_click(a):.2f} ms after")
     return out
+
+
+def prediction_refusals(blends, predicted, after):
+    """The file that was written must be the file the solve meant: every judged blend's re-measured median click lag
+    is within PREDICT_TOL_MS of the lag predicted for it."""
+    out = []
+    for blend in blends:
+        res = after[blend.index - 1]
+        if usable(res) and blend.index in predicted and abs(res.click["median"] - predicted[blend.index]) > PREDICT_TOL_MS:
+            out.append(f"{res.label}: predicted click lag {predicted[blend.index]:+.2f} ms, measured "
+                       f"{res.click['median']:+.2f} ms (more than {PREDICT_TOL_MS:g} ms apart)")
+    return out
+
+
+def edge_main_worse(before, after):
+    """Judged blends whose edge or main hit lag got worse by more than WARN_MS. Reported, never a reason to refuse: the
+    solve aligns the click (as the ear chose for the Tech House mix), and the other two are allowed to differ."""
+    found = []
+    for b, a in zip(before, after):
+        if not (usable(b) and usable(a)):
+            continue
+        for kind in ("edge", "main"):
+            was, now = getattr(b, kind).get("median"), getattr(a, kind).get("median")
+            if was is not None and now is not None and abs(now) - abs(was) > WARN_MS:
+                found.append(dict(label=b.label, estimator=kind, before=was, after=now))
+    return found
+
+
+def still_flamming(blends, fits, slides):
+    """Blends in which a half is still at FAIL_MS or more after the corrections and slides the solve chose (the solve
+    works on the median only, so a drift it cannot fit leaves its halves apart)."""
+    found = []
+    for b in blends:
+        s = b.summary(fits[b.out].at, fits[b.inc].at, slides[b.out], slides[b.inc])
+        for half in ("first_half", "second_half"):
+            if s[half] is not None and abs(s[half]) >= kac.FAIL_MS:
+                found.append(dict(index=b.index, half=half, predicted=s[half]))
+    return found
 
 
 def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
@@ -408,6 +534,10 @@ def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
     als_path, out_path = Path(als_path), Path(out_path)
     if out_path.resolve() == als_path.resolve():
         raise ValueError("the output must be a new file, never the input")
+    refused_path = out_path.with_name(out_path.stem + " REFUSED.als")
+    partial = out_path.with_name(out_path.name + ".partial")
+    for old in (out_path, refused_path, partial):      # nothing from an earlier run may pass for this run's result
+        old.unlink(missing_ok=True)
     tracks = kac.read_als(als_path)
     transitions = kac.find_transitions(tracks)
     progress("kick check on the input")
@@ -415,8 +545,8 @@ def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
     outcome = Outcome(NOTHING, before=before, out_path=str(out_path))
     blends = build_blends(before, transitions, tracks)
     in_transition = sorted({tracks.index(t) for tr in transitions for t in (tr.outgoing, tr.incoming)})
-    outcome.tracks = [TrackReport(tracks[i].name, kac.short_name(tracks[i].name), DriftFit(NOT_MEASURED))
-                      for i in range(len(tracks))]
+    outcome.tracks = [TrackReport(tracks[i].name, kac.short_name(tracks[i].name), DriftFit(NOT_MEASURED),
+                                  doc_index=tracks[i].doc_index) for i in range(len(tracks))]
 
     def nothing(reason):
         outcome.status, outcome.reason = NOTHING, reason
@@ -424,40 +554,63 @@ def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
         shutil.copyfile(als_path, out_path)
         return outcome
 
+    def refuse(reason):
+        outcome.status, outcome.reason = REFUSED_RESULT, reason
+        if partial.exists():
+            partial.replace(refused_path)
+            outcome.refused_path = str(refused_path)
+        return outcome
+
     if not blends:
         return nothing("no blend could be judged, so there is nothing to fix")
     zero = lambda beat: 0.0
-    needs_fix = {i for b in blends if needs_fixing(b.summary(zero, zero)) for i in (b.out, b.inc)}
+    untouched = {b.index: b.summary(zero, zero) for b in blends}
+    needs_fix = {i for b in blends if needs_fixing(untouched[b.index]) for i in (b.out, b.inc)}
     if not needs_fix:
         return nothing(f"every judged blend is already under {WARN_MS:g} ms (median click lag)")
 
-    readers = _open_readers(tracks, als_path, audio_dir, in_transition)
+    # A track in any blend the check could not judge is not moved at all: nothing could verify the move there.
+    frozen = {tracks.index(t) for tr, res in zip(transitions, before) if not usable(res) for t in (tr.outgoing, tr.incoming)}
+    sparse = {i for i in needs_fix if sparse_markers(tracks[i])}
+    for i in frozen:
+        outcome.tracks[i].note = "not moved: sits in a blend the check could not judge"
+    to_measure = sorted(needs_fix - frozen)              # only these can have a drift correction applied
+    readers = _open_readers(tracks, als_path, audio_dir, to_measure)
     try:
-        for index in in_transition:
-            progress(f"drift fit: {outcome.tracks[index].short}")
-            outcome.tracks[index].fit = fit_drift(measure_offsets(tracks[index], readers))
+        for index in to_measure:
+            report = outcome.tracks[index]
+            if index in sparse:
+                report.fit = DriftFit(SPARSE_MARKERS, note=f"fewer than one warp marker per {MIN_MARKER_BEATS} source beats")
+                continue
+            progress(f"drift fit: {report.short}")
+            report.fit = fit_drift(measure_offsets(tracks[index], readers))
     finally:
         for reader in readers.values():
             reader.close()
     for i, report in enumerate(outcome.tracks):
-        report.applied = i in needs_fix and report.fit.status == FIT
+        report.applied = i in needs_fix and i not in frozen and report.fit.status == FIT
     fits = {i: (outcome.tracks[i].fit if outcome.tracks[i].applied else DriftFit(CANNOT_FIT)) for i in range(len(tracks))}
 
     # Slides are confined to the blends that need fixing and their neighbours: a track in no such blend stays put, and
     # a blend with no sliding track is not in the problem (its lag cannot change, and chasing a 0.5 ms lag on a blend
     # that is already fine would move tracks for nothing). A blend that touches a sliding track is in the problem, so
-    # a slide can never leave it worse than the worst lag the solve reports.
+    # a slide cannot leave it worse than it was.
     progress("slide solve")
     touching = lambda ids: [b for b in blends if b.out in ids or b.inc in ids]
-    movable = {i for b in touching(needs_fix) for i in (b.out, b.inc)}
+    movable = {i for b in touching(needs_fix) for i in (b.out, b.inc)} - frozen
     in_play = touching(movable)
     lags = [b.summary(fits[b.out].at, fits[b.inc].at)["median"] for b in in_play]
-    was = [abs(b.summary(zero, zero)["median"]) for b in in_play]
-    slides, outcome.t_predicted = solve_slides(np.array(lags), [(b.out, b.inc) for b in in_play], len(tracks), movable, was)
+    was = [abs(untouched[b.index]["median"]) for b in in_play]
+    must_fix = [needs_fixing(untouched[b.index]) for b in in_play]
+    headroom = [min((sec * 1000.0 + fits[i].at(beat) for clip in tracks[i].clips for beat, sec in clip.markers),
+                    default=math.inf) for i in range(len(tracks))]
+    slides, outcome.t_predicted = solve_slides(np.array(lags), [(b.out, b.inc) for b in in_play], len(tracks), movable,
+                                               was, must_fix, headroom)
     for i, s in enumerate(slides):
         outcome.tracks[i].slide = float(s)
     outcome.predicted = {b.index: b.summary(fits[b.out].at, fits[b.inc].at, slides[b.out], slides[b.inc])["median"]
                          for b in blends}
+    outcome.still_flamming = still_flamming(in_play, fits, slides)
 
     shifts = {}
     for i, report in enumerate(outcome.tracks):
@@ -466,26 +619,38 @@ def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
     if not shifts:
         return nothing("the drift fit and the slide solve found nothing to move")
 
-    partial = out_path.with_name(out_path.name + ".partial")
-    names = {tracks[i].doc_index: tracks[i].name for i in range(len(tracks))}
+    names = {r.doc_index: r.short for r in outcome.tracks}
     try:
-        outcome.changed = {names[k]: v for k, v in patch_als(als_path, partial, shifts).items()}
+        outcome.changed = patch_als(als_path, partial, shifts)
+    except NegativeSecTime as exc:
+        partial.unlink(missing_ok=True)
+        return refuse(f"{names[exc.doc_index]}: {exc}; refused rather than write a negative SecTime")
+    except AlsLayoutError as exc:
+        partial.unlink(missing_ok=True)
+        return refuse(str(exc))
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    missed = [names[k] for k in shifts if not outcome.changed.get(k)]
+    if missed:
+        return refuse("the patch changed no warp marker line on " + ", ".join(missed)
+                      + " (is the ALS laid out one element per line, as Live writes it?)")
+    try:
         progress("kick check on the result")
         outcome.after = kac.check_als(partial, audio_dir, report_dir)
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
-    outcome.refusals = refusals(before, outcome.after)
+    outcome.edge_main_worse = edge_main_worse(before, outcome.after)
+    outcome.refusals = refusals(before, outcome.after) + prediction_refusals(blends, outcome.predicted, outcome.after)
     if outcome.refusals:
-        refused = out_path.with_name(out_path.stem + " REFUSED.als")
-        partial.replace(refused)
-        out_path.unlink(missing_ok=True)               # an older result at this path must not pass for a kept one
-        outcome.status, outcome.refused_path = REFUSED_RESULT, str(refused)
-        outcome.reason = "the result is worse than the input: " + "; ".join(outcome.refusals)
-        return outcome
+        return refuse("the result is not the improvement that was meant: " + "; ".join(outcome.refusals))
     partial.replace(out_path)
     outcome.status = PHASED
     outcome.reason = "drift corrected and slid" if any(r.slide for r in outcome.tracks) else "drift corrected"
+    if outcome.still_flamming:
+        blends_left = ", ".join(sorted({f"T{f['index']:02d}" for f in outcome.still_flamming}))
+        outcome.reason = f"NOT FIXED, {blends_left} still flamming in a half ({outcome.reason}, but the fix does not reach it)"
     return outcome
 
 
@@ -496,7 +661,9 @@ def _num(v):
 
 
 PHASED_NOTE = ("grid phase: phased file written, open it instead of {name} if the report shows it is tighter; "
-               "the MixPlan reconciliation covers the unphased original (the phased markers differ by under 15 ms)")
+               "the MixPlan reconciliation covers the unphased original (the phased markers differ from the original by "
+               "the corrections shown in the report: drift up to 12 ms, slide up to 15 ms)")
+EDGE_MAIN_NOTE = "aligned by click, as chosen by ear for this mix: check the picture"
 
 
 def report_text(outcome, als_path):
@@ -511,15 +678,23 @@ def report_text(outcome, als_path):
         pair = lambda key: f"{_num(b.__dict__[key].get('median'))} -> {_num(a.__dict__[key].get('median'))}"
         lines.append(f"{'':3}{b.label[:35]:36}{b.verdict + ' -> ' + a.verdict:30}{pair('edge'):16}{pair('click'):16}{pair('main'):16}"
                      f"{_num(outcome.predicted.get(b.index)):>16}")
-    lines += ["", "Tracks", f"{'':3}{'track':28}{'drift fit':34}{'correction range (ms)':26}{'applied':9}{'slide (ms)':>10}"]
+    lines += ["", "Tracks", f"{'':3}{'track':28}{'drift fit':34}{'correction range (ms)':26}{'applied':9}{'slide (ms)':>10}  note"]
     for r in outcome.tracks:
         fit = f"{r.fit.status} ({r.fit.kicks} kicks)" if r.fit.kicks else r.fit.status
         rng = f"{r.fit.low:+.1f} to {r.fit.high:+.1f}" if r.fit.status == FIT else "-"
-        lines.append(f"{'':3}{r.short[:27]:28}{fit:34}{rng:26}{'yes' if r.applied else 'no':9}{r.slide:+10.2f}")
+        lines.append(f"{'':3}{r.short[:27]:28}{fit:34}{rng:26}{'yes' if r.applied else 'no':9}{r.slide:+10.2f}" + (f"  {r.note}" if r.note else ""))
     if outcome.t_predicted is not None:
         lines += ["", f"worst median click lag the solve expects after the slides: {outcome.t_predicted:.2f} ms"]
-    for name, count in outcome.changed.items():
-        lines.append(f"markers changed on {kac.short_name(name)}: {count}")
+    names = {r.doc_index: r.short for r in outcome.tracks}
+    for doc_index, count in outcome.changed.items():
+        lines.append(f"markers changed on {names.get(doc_index, doc_index)}: {count}")
+    for f in outcome.still_flamming:
+        lines += ["", f"STILL FLAMMING (half): the fix does not reach it: T{f['index']:02d} {f['half'].replace('_', ' ')} "
+                      f"is predicted at {_num(f['predicted'])} ms (FAIL figure {kac.FAIL_MS:g} ms)"]
+    if outcome.edge_main_worse:
+        lines += ["", f"Edge or main hit lag got worse by more than {WARN_MS:g} ms ({EDGE_MAIN_NOTE}):"]
+        for w in outcome.edge_main_worse:
+            lines.append(f"   {w['label']}: {w['estimator']} {_num(w['before'])} -> {_num(w['after'])} ms: {EDGE_MAIN_NOTE}")
     if outcome.refused_path:
         lines += ["", f"REFUSED, kept for inspection only: {outcome.refused_path}"]
     return "\n".join(lines) + "\n"
@@ -529,8 +704,11 @@ def report_json(outcome):
     return dict(
         status=outcome.status, reason=outcome.reason, t_predicted=outcome.t_predicted, refusals=outcome.refusals,
         predicted={str(k): round(v, 3) for k, v in outcome.predicted.items()},
-        changed_markers=outcome.changed, out=outcome.out_path, refused=outcome.refused_path,
-        tracks=[dict(name=r.name, fit=r.fit.status, kicks=r.fit.kicks, note=r.fit.note, applied=r.applied,
+        changed_markers={str(k): v for k, v in outcome.changed.items()}, out=outcome.out_path,
+        refused=outcome.refused_path, edge_main_worse=outcome.edge_main_worse,
+        still_flamming=[dict(f, note='STILL FLAMMING (half): the fix does not reach it') for f in outcome.still_flamming],
+        tracks=[dict(name=r.name, doc_index=r.doc_index, note=r.note, fit=r.fit.status, kicks=r.fit.kicks,
+                     fit_note=r.fit.note, applied=r.applied,
                      slide=r.slide, first_beat=r.fit.first_beat, correction_ms=[round(float(v), 3) for v in r.fit.corr])
                 for r in outcome.tracks],
         before=kac.results_json(outcome.before) if outcome.before else [],

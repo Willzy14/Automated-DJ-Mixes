@@ -73,9 +73,11 @@ elif args[0] == "Tools/fix_grid_phase.py":
     if os.environ.get("PIPELINE_TEST_GRID_STDERR"):
         print(os.environ["PIPELINE_TEST_GRID_STDERR"], file=sys.stderr)
     rc = int(os.environ.get("PIPELINE_TEST_GRID_RC", "0"))
-    if rc == 0:
+    if rc == 0 or os.environ.get("PIPELINE_TEST_GRID_WRITE_ANYWAY"):
         out.write_bytes(Path(args[1]).read_bytes() if os.environ.get("PIPELINE_TEST_GRID_SAME") else b"phased als")
     sys.exit(rc)
+elif args[0] == "Source/validate_als.py" and "Phased" in args[1]:
+    sys.exit(1 if os.environ.get("PIPELINE_TEST_PHASED_VALIDATE_FAIL") else 0)
 '''
 
 
@@ -401,7 +403,8 @@ FINAL = f"{OUTPUT}/Sections V9.als"
 PHASED = f"{OUTPUT}/Sections V9 Phased.als"
 RECONCILE = "Source/validate_mix_plan_als.py"
 PHASED_LINE = ("grid phase: phased file written, open it instead of Sections V9.als if the report shows it is tighter; "
-               "the MixPlan reconciliation covers the unphased original (the phased markers differ by under 15 ms)")
+               "the MixPlan reconciliation covers the unphased original (the phased markers differ from the original by "
+               "the corrections shown in the report: drift up to 12 ms, slide up to 15 ms)")
 
 
 def _reconciliations(calls):
@@ -421,7 +424,7 @@ def test_grid_phase_runs_once_after_the_kick_alignment_and_never_changes_the_fin
     assert (repo / PHASED).is_file() and (repo / FINAL).read_bytes() == b"later phase"
     assert "DONE: final = Sections V9.als" in result.stdout
     assert [call[3] for call in _reconciliations(calls)] == [FINAL]
-    assert not any("Phased" in " ".join(call) for call in calls if call[0] in ("Source/validate_als.py", RECONCILE))
+    assert not any("Phased" in " ".join(call) for call in calls if call[0] == RECONCILE)       # the reconciliation never sees it
 
 
 @pytest.mark.parametrize("value", ["suggest", "apply", "banana"])
@@ -434,9 +437,10 @@ def test_any_grid_mode_but_off_is_suggest(pipeline, value):
     assert "APPLIED" not in result.stdout
 
 
-def test_grid_mode_off_skips_the_step_with_one_line(pipeline):
+@pytest.mark.parametrize("value", ["off", "OFF", "Off", "oFF"])
+def test_grid_mode_off_skips_the_step_with_one_line(pipeline, value):
     repo, run = pipeline
-    result, calls = run(GRID_PHASE_MODE="off")
+    result, calls = run(GRID_PHASE_MODE=value)
     assert result.returncode == 0, result.stdout + result.stderr
     assert not any(call[0] == GRID for call in calls) and not (repo / PHASED).exists()
     assert result.stdout.count("grid phase") == 1
@@ -473,7 +477,43 @@ def test_a_phased_file_identical_to_the_final_is_reported_as_nothing_to_change(p
     assert "grid phase: nothing to change" in result.stdout and PHASED_LINE not in result.stdout
 
 
-def test_grid_phase_does_not_run_when_an_earlier_step_failed(pipeline):
+@pytest.mark.parametrize("status", [1, 2, 3])
+def test_grid_phase_runs_even_when_the_kick_alignment_fails_the_build_and_the_failure_still_stops_it(pipeline, status):
+    repo, run = pipeline
+    result, calls = run(KICK_ALIGNMENT_MODE="fail", PIPELINE_TEST_KICK_RC=str(status))
+    assert result.returncode == 1
+    assert [call[0] for call in calls].count(GRID) == 1 and (repo / PHASED).is_file()
+    assert "FAILED at: kick alignment" in result.stdout and "DONE" not in result.stdout
+    assert result.stdout.index("grid phase") < result.stdout.index("FAILED at: kick alignment")
+    assert not _reconciliations(calls)                 # the build stopped before the reconciliation
+
+
+def test_stale_refused_and_partial_files_of_an_earlier_build_are_removed(pipeline):
+    repo, run = pipeline
+    for name in ("Sections V9 Phased.als", "Sections V9 Phased REFUSED.als", "Sections V9 Phased.als.partial"):
+        (repo / OUTPUT / name).write_bytes(b"old")
+    result, _ = run(PIPELINE_TEST_GRID_RC="4")
+    assert result.returncode == 0
+    assert [p.name for p in (repo / OUTPUT).glob("Sections V9 Phased*")] == []
+
+
+def test_a_tool_that_fails_after_writing_the_phased_file_leaves_no_phased_file(pipeline):
+    repo, run = pipeline
+    result, _ = run(PIPELINE_TEST_GRID_RC="2", PIPELINE_TEST_GRID_WRITE_ANYWAY="1")
+    assert result.returncode == 0 and not (repo / PHASED).exists()
+
+
+def test_the_phased_file_is_validated_and_deleted_loudly_when_it_fails(pipeline):
+    repo, run = pipeline
+    result, calls = run(PIPELINE_TEST_PHASED_VALIDATE_FAIL="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "GRID PHASE FILE FAILED VALIDATION and was deleted" in result.stdout and PHASED_LINE not in result.stdout
+    assert not (repo / PHASED).exists() and "DONE: final = Sections V9.als" in result.stdout
+    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED] == [["Source/validate_als.py", PHASED]]
+
+
+def test_a_valid_phased_file_is_validated_before_the_line_is_printed(pipeline):
     _, run = pipeline
-    result, calls = run(KICK_ALIGNMENT_MODE="fail", PIPELINE_TEST_KICK_RC="1")
-    assert result.returncode == 1 and not any(call[0] == GRID for call in calls)
+    result, calls = run()
+    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED]
+    assert PHASED_LINE in result.stdout

@@ -299,7 +299,9 @@ def _on_grid(hi, sr, t0, lo_ms, hi_ms):
     return np.interp(np.arange(lo, up + 1) / GRID_HZ, t0 + np.arange(len(hi)) / sr, hi)
 
 
-def analyse_window(x, sr, t0):
+def analyse_window(x, sr, t0, edge_only=False):
+    """One window analysed. edge_only skips what the cross-correlation and the main hit need (the common grid, the click
+    ratio, the >40 Hz envelope): kick test and click leading edge are identical, in about half the time."""
     low_sos, high_sos, broad_sos = _filters(float(sr))
     w = Window(sr, t0, None)
     low = _box(_envelope(signal.sosfiltfilt(low_sos, x)), sr, 2.0)
@@ -308,12 +310,13 @@ def analyse_window(x, sr, t0):
     xc, tc = x[c0:c1 + 1], t0 + c0 / sr
     hi_env = _envelope(signal.sosfiltfilt(high_sos, xc))
     hi1, hi05 = _box(hi_env, sr, 1.0), _box(hi_env, sr, 0.5)
-    broad = _box(_envelope(signal.sosfiltfilt(broad_sos, xc)), sr, 1.5)
     ci = lambda ms: int(round((ms / 1000.0 - tc) * sr))
-    w.grid = _on_grid(hi1, sr, tc, *GRID_MS)
-    core = _on_grid(hi1, sr, tc, *XCORR_REF_MS)
-    cm = float(np.median(core))
-    w.click_ratio = float(core.max() / cm) if cm > 0 else math.inf
+    if not edge_only:
+        broad = _box(_envelope(signal.sosfiltfilt(broad_sos, xc)), sr, 1.5)
+        w.grid = _on_grid(hi1, sr, tc, *GRID_MS)
+        core = _on_grid(hi1, sr, tc, *XCORR_REF_MS)
+        cm = float(np.median(core))
+        w.click_ratio = float(core.max() / cm) if cm > 0 else math.inf
 
     # is there a kick: a clear 40-120 Hz peak just after the beat, and a sharp >150 Hz attack
     seg = low[w.index(-10.0):w.index(100.0) + 1]
@@ -346,6 +349,8 @@ def analyse_window(x, sr, t0):
         w.edge_ms = ((j - 1 + frac) / sr + tc) * 1000.0
 
     # main hit: steepest rise of the >40 Hz envelope, from just before the click to 25 ms after it
+    if edge_only:
+        return w
     m0, m1 = k - int(MAIN_BEFORE_MS / 1000.0 * sr), k + int(MAIN_AFTER_MS / 1000.0 * sr)
     db = broad[m0 + h:m1 + 1 + h] - broad[m0 - h:m1 + 1 - h]
     b = int(np.argmax(db))
