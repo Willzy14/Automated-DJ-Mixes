@@ -81,6 +81,8 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 
 ## Current State
 
+[Claude (Opus 5.5), 2026-11-23]: **Preview leak fixed on both PCs** (merge 23c4bd7, Sam: "Fix"; MiniMax built 4900311, lead test fix 99ec4be, MiniMax review of the lead fix, Claude executing check SOUND). `render_preview` in `waveform_preview.py` now draws on a plain `matplotlib.figure.Figure` (no pyplot, no Tk window) and frees it before returning (`fig.clear()`, `del`, `gc.collect()`, about 0.16 s). Cause (measured): the pyplot canvas cached the Agg renderer that rasterised the 1.2-million-point waveform, and the closed figure stayed alive until Python's cyclic gc ran, about 1.2 GB per real 5-minute track (2.5 GB on noise). Lead check on 3 real tracks, 6 renders: private memory flat at about 550 MB, PNG bytes identical to the old code. Known limit: the spike during one render (about 1.2 to 2.5 GB) remains; cutting it needs a simpler waveform drawing, which changes the picture. `Tests/test_waveform_preview_memory.py` fails on the old code. `--no-previews` is now only a speed option.
+
 [Claude (Opus 5.5), 2026-11-22]: **Memory gate is live on the Home PC only** (merge 03ece8a; MiniMax built rounds 1-2, the lead added the sidecar rule, Claude executing check SOUND). `Source/memory_guard.py`: on COMPUTERNAME CARILLONAC-1-PC the orchestrator re-launches itself under a supervisor (below-normal priority, capped threads, kills the process tree under 1.5 GB free, restarts once per new cache file, gives up with exit 3) after a preflight that refuses to start (exit 4) below 7.0 GB free when any track needs a fresh Demucs separation (missing finished analysis or a missing `__stemenv`/`__drumsstem` sidecar) or 2.0 GB when all are cached, and prints the five biggest processes. `Tools/run_mix_pipeline.sh` runs the light preflight first. Every other machine (STUDIO-2): no-op, proven identical. Overrides: `MEMORY_GUARD=off|on`, `MEMORY_GUARD_MIN_START_GB`, `MEMORY_GUARD_MIN_START_LIGHT_GB`. Full suite on merged main 2357 passed, 9 skipped, when pytest's basetemp is on NTFS (on D:, exFAT, 3 cache/alias tests fail).
 
 [Claude, 2026-11-22]: The blend planner is the default arranger for groove projects (merge 10d7c6d) and `--no-previews` is on the re-lay (00cf5d7). First live run on the new defaults: `Listening Sets/Tech House 2026 Planned.als`, 9 new 2026 tracks, planner 8 of 8, every gate passes, not yet heard. On the Home PC a fresh analysis needs a memory guard and about 7 GB free for the beat-grid step.
@@ -252,7 +254,7 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - From Windows Python, `bash` can resolve to WSL; call `C:/Program Files/Git/bin/bash.exe`. The toolkit needs `Audio Analysis Toolkit/src` on PYTHONPATH (Windows `;`).
 - Codex in its sandbox cannot write `index.lock`; queue_runner collects its tree as `wip(codex)` commits. Its pytest temp folders lock; use `--basetemp` (Known Workarounds).
 
-**Next:** Sam listens to `Listening Sets/Tech House 2026 Planned.wav`; the open items are in BURN_LIST START HERE (memory gate in the repo first, preview leak at the root, beat-grid memory on the Home PC, the locked worktree folder, Braydon Terzo online-only). D: was checked and repaired by Sam on 2026-11-22.
+**Next:** Sam listens to `Listening Sets/Tech House 2026 Planned.wav`; the open items are in BURN_LIST START HERE (memory gate and preview leak done 2026-11-22/23; beat-grid memory on the Home PC, the locked worktree folder, Braydon Terzo online-only). D: was checked and repaired by Sam on 2026-11-22.
 
 ### 2026-11-20 - Section answer key, groove detector ON, blend planner built and wired (opt-in)
 
@@ -1498,7 +1500,7 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 ## What's Next
 
 - [ ] **Sam** - Listen to `Listening Sets/Tech House 2026 Planned.wav` (bounced 2026-11-22).
-- [ ] **Ask Sam first (touches both PCs)** - Fix the preview leak at the root (matplotlib figures kept until gc, about 0.5 GB per track). Left out of the memory gate because Sam asked for a Home-PC-only change (2026-11-22).
+- [ ] **Claude** - Measure the other pyplot renderers for the same leak (closed figures kept until gc): `stem_detector.py` (DETECT pictures, Phase 1a, per track), `align_engine.py`, `section_placement_viz.py`, `loop_review_viz.py`, `sections_blind_viz.py`, `sections_compare_viz.py`, `transition_review_viz.py`, `stem_section_probe.py`, `stem_grid.py`. Fix only those that grow when measured (2026-11-23).
 - [ ] **Codex** - Cut the beat-grid memory spike after a fresh separation on the Home PC (6 to 7 GB measured) (2026-11-22).
 
 - **Codex** - Rerun DFTD with the upstream Call 911 grid fix and listen to the blends. The cached replay still flags a two-beat offset on Call 911. The Passion into Ninetoes entry and the Ninetoes into Ashibah entry and swap are 16 bars earlier than Sam's key. The hints gate flags fallback outro hints for Call 911 and A Little Affection for review.
