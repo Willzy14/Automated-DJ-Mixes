@@ -139,10 +139,15 @@ python Source/validate_als.py "$P/Output/Sections V$B.als" --expected-tracks $N 
 # Sam flips KICK_ALIGNMENT_MODE=fail; in warn mode a check that cannot run never stops the build.
 case "${KICK_ALIGNMENT_MODE:-warn}" in fail) kick_mode=fail ;; *) kick_mode=warn ;; esac
 say "kick alignment check ($kick_mode)"
-python Tools/check_kick_alignment.py "$P/Output/Sections V$B.als" --audio "$P/Audio" --out "$P/Output/Kick Alignment" --mode "$kick_mode" 2>> "$LOG" | tee -a "$LOG"
+{ python Tools/check_kick_alignment.py "$P/Output/Sections V$B.als" --audio "$P/Audio" --out "$P/Output/Kick Alignment" --mode "$kick_mode"; } 2>> "$LOG" | tee -a "$LOG"
 kick_status=${PIPESTATUS[0]}
 if [ "$kick_status" -ne 0 ]; then
-    [ "$kick_mode" = fail ] && fail "kick alignment (pictures in Output/Kick Alignment, details in runmix.log)"
+    if [ "$kick_mode" = fail ]; then
+        if [ "$kick_status" -eq 1 ]; then
+            fail "kick alignment FAIL (pictures in Output/Kick Alignment, details in runmix.log)"
+        fi
+        fail "kick alignment could not run (status $kick_status)"
+    fi
     say "kick alignment check did not finish (status $kick_status); warn mode, the build goes on"
 fi
 python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/Sections V$B.als" --output "$P/Output/MIX_PLAN_RECONCILIATION.json" >> "$LOG" 2>&1 || fail "reconciliation"

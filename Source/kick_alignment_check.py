@@ -25,7 +25,8 @@ is ignored: a beat still counts when both wavs have a kick there, even if the mi
 out. In a full mix the steepest rise can land on a bass note or a snare instead of the kick, so an
 estimator whose beats spread wider than SCATTER_MS (interquartile range) cannot fail a transition
 alone and cannot let it pass: the verdict is then at least WARN and the flag says which one.
-The ALS is only read. A beat counts as a kick only when the 40-120 Hz peak is at least 3 times
+The ALS is only read (the pipeline passes --out beside it, in Output; run by hand with no --out the CLI
+makes a "Kick Alignment" folder beside the ALS). A beat counts as a kick only when the 40-120 Hz peak is at least 3 times
 the median of its window, so 2 s around the beat is read; never a whole file.
 """
 from __future__ import annotations
@@ -44,12 +45,14 @@ import numpy as np
 import soundfile as sf
 from scipy import fft, signal
 
-# Sam sets the real figures (2026-11-23); these are the starting values.
+# Decision figures: starting figures only, Sam will set the real ones (2026-11-23).
 WARN_MS = 4.0
 FAIL_MS = 8.0
 MIN_SHARED_KICKS = 16
 SLOW_ATTACK_MS = 4.0          # click and main-hit medians further apart than this
 SCATTER_MS = FAIL_MS          # an estimator whose beats spread (interquartile range) wider than this is not trusted
+MINORITY_FRACTION = 0.20      # this share of the shared beats at FAIL_MS or more apart is a flam even if the median is fine
+MIN_ESTIMATOR_BEATS = 3       # an estimator with fewer measured beats than this counts as missing
 
 KICK_RATIO_MIN = 3.0          # 40-120 Hz peak vs the window median (also the >150 Hz click window)
 BODY_FRACTION = 0.3           # a kick's 40-120 Hz peak must be this much of the typical kick in the same overlap
@@ -89,7 +92,15 @@ class Clip:
     start_relative: float
     markers: np.ndarray          # rows of (beat, wav seconds), one per beat
     path: str
-    wav: str                     # file name only
+    relative_path: str
+    wav: str                     # file name only, for messages
+    audio: Path | None = None    # the file that will be read, set by check_als
+
+    @property
+    def supported(self):
+        """Only a plain front-trimmed clip is mapped, as render_check.py does: a looped clip or a
+        StartRelative offset would need a mapping nobody has reviewed, so it is refused, not guessed."""
+        return not self.loop_on and self.start_relative == 0
 
 
 @dataclass
@@ -134,9 +145,10 @@ def read_als(path):
     for track in root.iter("AudioTrack"):
         name = _value(track, "Name/EffectiveName", "")
         events = track.find("DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events")
-        nodes = events.findall("AudioClip") if events is not None else list(track.iter("AudioClip"))
+        if events is None:           # session-view clips live in another coordinate space: not read
+            continue
         clips = []
-        for node in nodes:
+        for node in events.findall("AudioClip"):
             loop = node.find("Loop")
             markers = [(float(m.get("BeatTime")), float(m.get("SecTime")))
                        for m in node.find("WarpMarkers")]
@@ -147,6 +159,7 @@ def read_als(path):
                 loop_on=_value(loop, "LoopOn", "false") == "true",
                 start_relative=float(_value(loop, "StartRelative", "0")),
                 markers=np.array(sorted(markers)), path=clip_path,
+                relative_path=_value(node, "SampleRef/FileRef/RelativePath", ""),
                 wav=re.split(r"[\\/]", clip_path)[-1]))
         if clips:
             tracks.append(Track(name, sorted(clips, key=lambda c: c.start)))
@@ -168,10 +181,7 @@ def source_position(track, beat):
     """Arrangement beat -> clip, source beat and wav seconds; None outside every clip or marker range."""
     for clip in track.clips:
         if clip.start <= beat < clip.end:
-            offset = clip.start_relative + (beat - clip.start)
-            if clip.loop_on and clip.loop_end > clip.loop_start:
-                offset = offset % (clip.loop_end - clip.loop_start)
-            source_beat = clip.loop_start + offset
+            source_beat = clip.loop_start + (beat - clip.start)
             m = clip.markers
             if len(m) < 2 or source_beat < m[0, 0] or source_beat > m[-1, 0]:
                 return None
@@ -232,16 +242,22 @@ class WavReader:
         self.file.close()
 
     def window(self, sec):
-        """Mono samples around `sec`, and the time of the first sample relative to `sec`, in seconds."""
+        """Mono samples around `sec`, the time of the first sample relative to `sec` in seconds, and
+        whether the window ran past the start or end of the file and was zero-padded (the beat is kept).
+        None only when the beat itself is outside the file."""
         sr = self.sr
         centre = int(round(sec * sr))
+        if centre < 0 or centre >= self.file.frames:
+            return None
         i0 = centre - int(READ_BEFORE_S * sr)
         i1 = centre + int(READ_AFTER_S * sr)
-        if i0 < 0 or i1 > self.file.frames:
-            return None
-        self.file.seek(i0)
-        x = self.file.read(i1 - i0, dtype="float64", always_2d=True).mean(axis=1)
-        return x, i0 / sr - sec
+        lo, hi = max(i0, 0), min(i1, self.file.frames)
+        self.file.seek(lo)
+        x = self.file.read(hi - lo, dtype="float64", always_2d=True).mean(axis=1)
+        padded = lo > i0 or hi < i1
+        if padded:
+            x = np.concatenate([np.zeros(lo - i0), x, np.zeros(i1 - hi)])
+        return x, i0 / sr - sec, padded
 
 
 @dataclass
@@ -324,14 +340,15 @@ def analyse_window(x, sr, t0):
 
 
 def click_lag_ms(w_out, w_in):
-    """Lag of the incoming's >150 Hz envelope behind the outgoing's, ms, and the correlation. NaN at the edge."""
+    """Lag of the incoming's >150 Hz envelope behind the outgoing's (ms), the correlation, and whether the
+    peak sat on the edge of the plus or minus 30 ms range (then the lag is NaN: it is not known)."""
     lag_samples = int(round(XCORR_MAX_LAG_MS / 1000.0 * GRID_HZ))
     ref = w_out.grid[lag_samples:len(w_out.grid) - lag_samples]
     wide = w_in.grid
     ref = ref - ref.mean()
     norm = math.sqrt(float((ref ** 2).sum()))
     if norm <= 0:
-        return math.nan, math.nan
+        return math.nan, math.nan, False
     m = len(ref)
     c = signal.correlate(wide, ref, mode="valid", method="fft")
     s1 = np.concatenate([[0.0], np.cumsum(wide)])
@@ -341,8 +358,8 @@ def click_lag_ms(w_out, w_in):
     r = c / (norm * np.sqrt(var))
     j = int(np.argmax(r))
     if j == 0 or j == len(r) - 1:
-        return math.nan, float(r[j])
-    return (j + _parabola(r, j) - lag_samples) / GRID_HZ * 1000.0, float(r[j])
+        return math.nan, float(r[j]), True
+    return (j + _parabola(r, j) - lag_samples) / GRID_HZ * 1000.0, float(r[j]), False
 
 
 # ------------------------------------------------------------------ one transition
@@ -383,21 +400,29 @@ class TransitionResult:
     flags: list = field(default_factory=list)
     note: str = ""
     picture: str = ""
+    dropped: dict = field(default_factory=dict)   # beats of the overlap that could not be measured, by reason
+    padded_windows: int = 0                        # windows zero-padded at the start or end of a wav (kept)
+    click_range_edge: int = 0                      # shared beats whose click lag sat on the +-30 ms edge
 
     @property
     def label(self):
         return f"T{self.index:02d} {self.outgoing_short} to {self.incoming_short}"
 
+    @property
+    def has_picture_inputs(self):
+        return not ({"MISSING_AUDIO", "UNSUPPORTED_CLIP"} & set(self.flags))
+
 
 def _stats(values, beats, middle):
     a = np.array(values, dtype=float)
     ok = ~np.isnan(a)
-    out = dict(n=int(ok.sum()), median=None, iqr=None, first_half=None, second_half=None)
+    out = dict(n=int(ok.sum()), median=None, iqr=None, first_half=None, second_half=None, big=0)
     if not ok.any():
         return out
     q25, q75 = np.percentile(a[ok], [25, 75])
     out["median"] = round(float(np.median(a[ok])), 3)
     out["iqr"] = round(float(q75 - q25), 3)
+    out["big"] = int((np.abs(a[ok]) >= FAIL_MS).sum())
     b = np.array(beats)
     for key, sel in (("first_half", ok & (b < middle)), ("second_half", ok & (b >= middle))):
         if sel.any():
@@ -405,51 +430,129 @@ def _stats(values, beats, middle):
     return out
 
 
+def _present(stat):
+    return stat.get("median") is not None and stat.get("n", 0) >= MIN_ESTIMATOR_BEATS
+
+
+def _minority(stat, shared):
+    return stat.get("big", 0) >= MINORITY_FRACTION * shared and abs(stat["median"]) < FAIL_MS
+
+
 def judge(shared, click, main):
     """Verdict and flags from the shared-kick count and the two lag summaries."""
     flags = []
-    cm, mm = click.get("median"), main.get("median")
-    if shared < MIN_SHARED_KICKS or cm is None or mm is None:
-        seen = [abs(v) for v in (cm, mm) if v is not None]
-        if seen and max(seen) >= FAIL_MS:
+    have = {"CLICK": _present(click), "MAIN": _present(main)}
+    if shared < MIN_SHARED_KICKS or not any(have.values()):
+        seen = [abs(st["median"]) for st in (click, main) if st.get("median") is not None]
+        if seen and max(seen) >= WARN_MS:
             flags.append("LARGE_LAG_FEW_KICKS")
+        if shared >= MIN_SHARED_KICKS:
+            flags += ["NO_CLICK", "NO_MAIN"]
         return "CANNOT_JUDGE", flags
+    present = [(name, st) for name, st in (("CLICK", click), ("MAIN", main)) if have[name]]
+    flags += ["NO_" + name for name in have if not have[name]]
     # an estimator whose beats disagree with each other by more than the fail figure has no trustworthy
     # median: it cannot fail the transition alone, and it stops it from passing
-    scattered = [(name, st) for name, st in (("CLICK", click), ("MAIN", main)) if st["iqr"] > SCATTER_MS]
-    trusted = [abs(st["median"]) for st in (click, main) if st["iqr"] <= SCATTER_MS]
+    scattered = [(name, st) for name, st in present if st["iqr"] > SCATTER_MS]
+    trusted = [abs(st["median"]) for name, st in present if st["iqr"] <= SCATTER_MS]
     flags.extend("SCATTER_" + name for name, _ in scattered)
+    if any(abs(st["median"]) >= FAIL_MS for _, st in scattered):
+        flags.append("LARGE_SCATTERED")
     worst = max(trusted) if trusted else None
     verdict = "WARN" if worst is None else "FAIL" if worst >= FAIL_MS else "WARN" if worst >= WARN_MS else "PASS"
     if scattered and verdict == "PASS":
         verdict = "WARN"
-    if not scattered and abs(cm - mm) > SLOW_ATTACK_MS:
+    if len(present) == 2 and not scattered and abs(click["median"] - main["median"]) > SLOW_ATTACK_MS:
         flags.append("SLOW_ATTACK")
+        if verdict == "PASS":
+            verdict = "WARN"
+    # a flam on a minority of the beats does not move the median: count the beats (when the median is already
+    # at the fail figure the transition is failed on it and there is nothing hidden)
+    if any(_minority(st, shared) for _, st in present):
+        flags.append("MINORITY_FLAM")
         if verdict == "PASS":
             verdict = "WARN"
     return verdict, flags
 
 
+def explain(res):
+    """Plain-words reasons behind the flags, for the summary line."""
+    out = []
+    flags, cm, mm = set(res.flags), res.click.get("median"), res.main.get("median")
+    window = f"search window of plus or minus {SEARCH_MS[1]:g} ms"
+    if res.note:
+        return [res.note]
+    if res.verdict == "CANNOT_JUDGE" and res.shared_kicks == 0:
+        out.append(f"no beat where both tracks have a kick in the {window}; a lag larger than that cannot be measured")
+    elif res.verdict == "CANNOT_JUDGE" and res.shared_kicks < MIN_SHARED_KICKS:
+        out.append(f"only {res.shared_kicks} beats where both tracks have a kick in the {window} "
+                   f"(need {MIN_SHARED_KICKS}); a lag larger than that cannot be measured")
+    elif res.verdict == "CANNOT_JUDGE":
+        out.append("no usable click lag and no usable main hit lag")
+    if "LARGE_LAG_FEW_KICKS" in flags:
+        seen = max((abs(v) for v in (cm, mm) if v is not None), default=0.0)
+        out.append(f"a lag of {seen:.1f} ms was seen but on too few kicks to judge")
+    if "NO_CLICK" in flags and res.verdict != "CANNOT_JUDGE":
+        out.append("no usable click lag; judged on the main hit alone")
+    if "NO_MAIN" in flags and res.verdict != "CANNOT_JUDGE":
+        out.append("no usable main hit lag; judged on the click alone")
+    if "SLOW_ATTACK" in flags:
+        if abs(cm) < WARN_MS <= abs(mm):
+            out.append("click lined up, main hit late: look at the picture")
+        elif abs(mm) < WARN_MS <= abs(cm):
+            out.append("main hit lined up, click late: look at the picture")
+        else:
+            out.append(f"click and main hit disagree by {abs(cm - mm):.1f} ms: look at the picture")
+    for name, st in (("click", res.click), ("main hit", res.main)):
+        if st.get("median") is None:
+            continue
+        if "LARGE_SCATTERED" in flags and st["iqr"] > SCATTER_MS and abs(st["median"]) >= FAIL_MS:
+            out.append(f"{name} median {st['median']:+.1f} ms but the beats spread {st['iqr']:.1f} ms: not a clean number")
+        if "MINORITY_FLAM" in flags and _minority(st, res.shared_kicks):
+            out.append(f"{st['big']} of {res.shared_kicks} shared beats are {FAIL_MS:g} ms or more apart on {name}")
+        fh, sh = st.get("first_half"), st.get("second_half")
+        if fh is not None and sh is not None and abs(sh - fh) > WARN_MS:
+            out.append(f"{name} drifts {fh:+.1f} ms to {sh:+.1f} ms")
+    if res.click_range_edge:
+        out.append(f"{res.click_range_edge} click lags sat on the +-{XCORR_MAX_LAG_MS:g} ms edge and are not counted")
+    return out
+
+
+def _clips_in(track, start, end):
+    return [c for c in track.clips if c.end > start and c.start < end]
+
+
 def measure_transition(tr, readers):
-    """readers: wav file name -> WavReader (or None when the audio is missing)."""
+    """readers: resolved wav path (str) -> WavReader. A clip whose audio was not found has audio None."""
     result = TransitionResult(tr.index, tr.outgoing.name, tr.incoming.name,
                               short_name(tr.outgoing.name), short_name(tr.incoming.name), tr.start, tr.end)
-    missing = sorted({c.wav for t in (tr.outgoing, tr.incoming) for c in t.clips if readers.get(c.wav) is None})
+    clips = _clips_in(tr.outgoing, tr.start, tr.end) + _clips_in(tr.incoming, tr.start, tr.end)
+    missing = sorted({c.wav for c in clips if c.audio is None})
     if missing:
         result.flags.append("MISSING_AUDIO")
         result.note = "audio not found: " + ", ".join(missing)
         return result
+    if any(not c.supported for c in clips):
+        result.flags.append("UNSUPPORTED_CLIP")
+        result.note = "a clip in this blend uses LoopOn or StartRelative, which is not mapped (refused, not guessed)"
+        return result
     pairs = []
+    dropped = {"no_position": 0, "no_window": 0}
     for beat in range(int(math.ceil(tr.start)), int(math.ceil(tr.end))):
         po, pi = source_position(tr.outgoing, float(beat)), source_position(tr.incoming, float(beat))
         if po is None or pi is None:
+            dropped["no_position"] += 1
             continue
-        got_o, got_i = readers[po.clip.wav].window(po.sec), readers[pi.clip.wav].window(pi.sec)
+        ro, ri = readers[str(po.clip.audio)], readers[str(pi.clip.audio)]
+        got_o, got_i = ro.window(po.sec), ri.window(pi.sec)
         if got_o is None or got_i is None:
+            dropped["no_window"] += 1
             continue
-        wo = analyse_window(got_o[0], readers[po.clip.wav].sr, got_o[1])
-        wi = analyse_window(got_i[0], readers[pi.clip.wav].sr, got_i[1])
-        pairs.append((BeatMeasure(beat, po.clip.wav, po.sec, pi.clip.wav, pi.sec, False), wo, wi))
+        result.padded_windows += int(got_o[2]) + int(got_i[2])
+        wo = analyse_window(got_o[0], ro.sr, got_o[1])
+        wi = analyse_window(got_i[0], ri.sr, got_i[1])
+        pairs.append((BeatMeasure(beat, str(po.clip.audio), po.sec, str(pi.clip.audio), pi.sec, False), wo, wi))
+    result.dropped = dropped
     # the body test: a kick's 40-120 Hz peak is a fair fraction of the typical kick of that track here
     floor = []
     for which in (1, 2):
@@ -461,7 +564,8 @@ def measure_transition(tr, readers):
         row.shared = wo.kick and wi.kick
         if row.shared:
             if wo.click_ratio >= KICK_RATIO_MIN and wi.click_ratio >= KICK_RATIO_MIN:
-                row.click_lag, row.click_r = click_lag_ms(wo, wi)
+                row.click_lag, row.click_r, at_edge = click_lag_ms(wo, wi)
+                result.click_range_edge += int(at_edge)
             row.out_edge, row.out_main, row.in_edge, row.in_main = wo.edge_ms, wo.main_ms, wi.edge_ms, wi.main_ms
             row.edge_lag, row.main_lag = wi.edge_ms - wo.edge_ms, wi.main_ms - wo.main_ms
         result.beats.append(row)
@@ -497,7 +601,7 @@ def _fmt(v):
     return "n/a" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:+.1f} ms"
 
 
-def draw_transition(result, readers, path):
+def build_figure(result, readers):
     """Outgoing above, incoming below, one column per chosen kick, beat line at 0. For a human to look at."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
@@ -511,15 +615,14 @@ def draw_transition(result, readers, path):
     fig.suptitle(title, fontsize=15, fontweight="bold")
     if not rows:
         fig.text(0.5, 0.5, "no beat where both tracks have a kick: nothing to draw", ha="center", fontsize=16)
-        fig.savefig(path, dpi=100)
-        return
+        return fig
     axes = fig.subplots(2, len(rows), sharex=True, squeeze=False)
     for col, r in enumerate(rows):
         for row, (wav, sec, edge, main, colour, name) in enumerate((
                 (r.wav_out, r.sec_out, r.out_edge, r.out_main, OUT_COLOUR, result.outgoing_short),
                 (r.wav_in, r.sec_in, r.in_edge, r.in_main, IN_COLOUR, result.incoming_short))):
             ax = axes[row][col]
-            x, t0 = readers[wav].window(sec)
+            x, t0, _ = readers[wav].window(sec)
             ms = (t0 + np.arange(len(x)) / readers[wav].sr) * 1000.0
             sel = (ms >= PIC_X_MS[0] - 5) & (ms <= PIC_X_MS[1] + 5)
             y = x[sel] / max(float(np.max(np.abs(x[sel]))), 1e-9)
@@ -543,36 +646,50 @@ def draw_transition(result, readers, path):
              "blue tick (top) = main hit, steepest rise of the >40 Hz envelope   lag > 0: incoming later",
              ha="center", fontsize=9)
     fig.subplots_adjust(left=0.04, right=0.995, top=0.87, bottom=0.12, wspace=0.08, hspace=0.12)
-    fig.savefig(path, dpi=100)
+    return fig
+
+
+def draw_transition(result, readers, path):
+    build_figure(result, readers).savefig(path, dpi=100)
 
 
 # ------------------------------------------------------------------ the whole set
 
-def resolve_audio(clip_wav, clip_path, audio_dir):
-    for candidate in ((Path(audio_dir) / clip_wav) if audio_dir else None, Path(clip_path) if clip_path else None):
-        if candidate is not None and candidate.is_file():
-            return candidate
+def resolve_audio(clip, als_dir, audio_dir):
+    """The audio folder wins when it holds the file name; then the path the ALS stores (absolute as given,
+    relative to the ALS's own folder); then the ALS's relative path."""
+    candidates = []
+    if audio_dir:
+        candidates.append(Path(audio_dir) / clip.wav)
+    for stored in (clip.path, clip.relative_path):
+        if stored:
+            p = Path(stored)
+            candidates.append(p if p.is_absolute() else Path(als_dir) / p)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
     return None
 
 
-def check_als(als_path, audio_dir, out_dir=None):
+def check_als(als_path, audio_dir=None, out_dir=None):
     """Measure every transition of the ALS; draw one picture each into out_dir when given."""
     tracks = read_als(als_path)
     transitions = find_transitions(tracks)
+    als_dir = Path(als_path).resolve().parent
     readers = {}
     try:
         for tr in transitions:
             for track in (tr.outgoing, tr.incoming):
                 for clip in track.clips:
-                    if clip.wav not in readers:
-                        found = resolve_audio(clip.wav, clip.path, audio_dir)
-                        readers[clip.wav] = WavReader(found) if found else None
+                    clip.audio = resolve_audio(clip, als_dir, audio_dir)
+                    if clip.audio is not None and str(clip.audio) not in readers:
+                        readers[str(clip.audio)] = WavReader(clip.audio)
         results = [measure_transition(tr, readers) for tr in transitions]
         if out_dir is not None:
             out = Path(out_dir)
             out.mkdir(parents=True, exist_ok=True)
             for res in results:
-                if res.flags and "MISSING_AUDIO" in res.flags:
+                if not res.has_picture_inputs:
                     continue
                 target = out / f"{res.label}.png"
                 draw_transition(res, readers, target)
@@ -580,17 +697,29 @@ def check_als(als_path, audio_dir, out_dir=None):
                 gc.collect()
     finally:
         for reader in readers.values():
-            if reader is not None:
-                reader.close()
+            reader.close()
     return results
 
 
 def summary_line(res):
-    if res.note:
-        return f"{res.label}: {res.verdict} {res.note}"
-    text = (f"{res.label}: {res.verdict} click {_fmt(res.click.get('median'))} "
-            f"main {_fmt(res.main.get('median'))} shared kicks {res.shared_kicks}")
-    return text + (" " + " ".join(res.flags) if res.flags else "")
+    text = f"{res.label}: {res.verdict}"
+    if not res.note:
+        text += (f" click {_fmt(res.click.get('median'))} main {_fmt(res.main.get('median'))}"
+                 f" shared kicks {res.shared_kicks}")
+    if res.flags:
+        text += " " + " ".join(res.flags)
+    reasons = explain(res)
+    return text + (" | " + "; ".join(reasons) if reasons else "")
+
+
+def count_line(results):
+    counts = {v: sum(r.verdict == v for r in results) for v in ("PASS", "WARN", "FAIL", "CANNOT_JUDGE")}
+    return (f"{len(results)} transitions: {counts['PASS']} PASS, {counts['WARN']} WARN, "
+            f"{counts['FAIL']} FAIL, {counts['CANNOT_JUDGE']} CANNOT_JUDGE")
+
+
+def nothing_judged(results):
+    return all(r.verdict == "CANNOT_JUDGE" for r in results)
 
 
 def results_json(results):
@@ -604,6 +733,7 @@ def results_json(results):
     return [dict(index=r.index, outgoing=r.outgoing, incoming=r.incoming, start_beat=r.start_beat,
                  end_beat=r.end_beat, shared_kicks=r.shared_kicks, verdict=r.verdict, flags=r.flags,
                  note=r.note, click=r.click, main=r.main, edge=r.edge, picture=r.picture,
+                 dropped=r.dropped, padded_windows=r.padded_windows, click_range_edge=r.click_range_edge,
                  beats=[{k: clean(v) for k, v in vars(b).items()} for b in r.beats if b.shared])
             for r in results]
 

@@ -64,6 +64,8 @@ elif args[0] in {"Source/propose_arrangement.py", "Source/apply_automation.py"}:
 elif args[0] == "Tools/check_kick_alignment.py":
     print("T01 A to B: WARN click +7.3 ms main +15.7 ms shared kicks 38 SLOW_ATTACK")
     print("LOOK AT THESE PICTURES: " + args[args.index("--out") + 1])
+    if os.environ.get("PIPELINE_TEST_KICK_STDERR"):
+        print(os.environ["PIPELINE_TEST_KICK_STDERR"], file=sys.stderr)
     sys.exit(int(os.environ.get("PIPELINE_TEST_KICK_RC", "0")))
 '''
 
@@ -326,7 +328,8 @@ def test_kick_alignment_in_fail_mode_stops_the_build(pipeline):
     _, run = pipeline
     result, calls = run(KICK_ALIGNMENT_MODE="fail", PIPELINE_TEST_KICK_RC="1")
     assert result.returncode == 1
-    assert "FAILED at: kick alignment" in result.stdout
+    assert "FAILED at: kick alignment FAIL" in result.stdout
+    assert "could not run" not in result.stdout
     assert [call for call in calls if call[0] == KICK][0][-2:] == ["--mode", "fail"]
     assert not any(call[0] == "Source/validate_mix_plan_als.py" for call in calls)
     assert "DONE" not in result.stdout
@@ -344,3 +347,19 @@ def test_kick_alignment_mode_other_than_fail_is_warn(pipeline):
     result, calls = run(KICK_ALIGNMENT_MODE="banana", PIPELINE_TEST_KICK_RC="1")
     assert result.returncode == 0, result.stdout + result.stderr
     assert [call for call in calls if call[0] == KICK][0][-2:] == ["--mode", "warn"]
+
+
+def test_kick_alignment_that_could_not_run_is_not_reported_as_a_kick_failure_in_fail_mode(pipeline):
+    _, run = pipeline
+    result, calls = run(KICK_ALIGNMENT_MODE="fail", PIPELINE_TEST_KICK_RC="2")
+    assert result.returncode == 1
+    assert "FAILED at: kick alignment could not run (status 2)" in result.stdout
+    assert "kick alignment FAIL" not in result.stdout
+    assert not any(call[0] == "Source/validate_mix_plan_als.py" for call in calls)
+
+
+def test_kick_alignment_stderr_reaches_the_log(pipeline):
+    repo, run = pipeline
+    result, _ = run(PIPELINE_TEST_KICK_STDERR="ParseError: something broke", PIPELINE_TEST_KICK_RC="2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ParseError: something broke" in (repo / OUTPUT / "runmix.log").read_text()
