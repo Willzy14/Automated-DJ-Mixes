@@ -17,10 +17,15 @@ Steps (see run):
   2. drift fit per track: the leading-edge click offset on every kick beat the track's clips use, a running median then
      a moving average (flat at the ends); the correction is that offset (kick minus grid, positive = kick late);
   3. blend lags after the virtual drift correction, computed from the measured per-beat lags;
-  4. slide solve: a small linear program, minimise t + LAMBDA * sum |s_i| with |lag_k| <= t, |s_i| <= MAX_SLIDE_MS;
+  4. slide solve in two stages: the best worst lag t* any slides could reach, then the least total slide that keeps every
+     blend within max(t*, EPS_MS), |s_i| <= MAX_SLIDE_MS;
   5. write a NEW ALS (text patch of the SecTime of WarpMarker lines only), run the kick check on it (after), refuse
      the result when any judged blend got worse or a blend became FAIL.
 The input is only read. Windows of 2 s are read around each beat, never a whole wav.
+The phased file is a suggestion: the MixPlan reconciliation pins the original grid (warp_grid_sha256, source_grid_bpm), so
+it covers the unphased original only.
+OPEN: apply mode needs the MixPlan reconciliation to accept a recorded grid phase (hash of the original grid plus the
+applied corrections)
 """
 from __future__ import annotations
 
@@ -39,14 +44,19 @@ import kick_alignment_check as kac
 
 # Decision figures: starting figures, Sam sets the real ones (2026-11-23).
 WARN_MS = kac.WARN_MS            # a mix whose worst judged lag is under this is left alone
-MAX_DRIFT_MS = 15.0              # a drift correction larger than this is refused for that track
+# MAX_DRIFT_MS and OUTLIER_MS are separate cuts: a kick beat whose offset is OUTLIER_MS or more from its grid is dropped
+# from the fit (it is another sound, not a drifting kick); a fitted correction beyond MAX_DRIFT_MS is refused for the
+# track (a grid that far out is more likely a wrong grid or a wrong kick than a drift to repair). OUTLIER_MS is the
+# larger, so the refusal is reachable by a track whose kicks all sit 12 to 15 ms from the grid.
+MAX_DRIFT_MS = 12.0
 MAX_SLIDE_MS = 15.0              # one track is never slid further than this
-# LAMBDA: how many ms of worst lag one ms of total slide is worth (0.02: a 1 ms better worst lag is worth up to 50 ms of
-# sliding). Small on purpose: the minimax decides how well the blends line up and the L1 term only breaks ties towards
-# fewer and smaller slides (Sam's case: 4.1 + 1.6 ms of slide on two tracks beats 4.1 + 5.7 ms on three).
-LAMBDA = 0.02
+# EPS_MS: the kick check's lag has a resolution of about 1 to 3 ms (it is a median of cross-correlations of short
+# windows, and a re-measure after a shift differed from the additive prediction by 1.1 ms on the real mix), so chasing a
+# lag below this is chasing noise. The slide solve brings every blend inside max(t*, EPS_MS) with the least total slide,
+# instead of paying slides to shave the last millisecond.
+EPS_MS = 1.5
 MIN_FIT_KICKS = 40               # fewer usable kick beats than this: the track is CANNOT_FIT and gets no correction
-OUTLIER_MS = 15.0                # a kick beat whose offset is this far from its grid is dropped from the fit
+OUTLIER_MS = 15.0                # a kick beat whose offset is this far from its grid is dropped from the fit (see MAX_DRIFT_MS)
 MEDIAN_HALF_WINDOW = 48.0        # running median: this many beats each side ...
 MEDIAN_MIN_KICKS = 8             # ... widened (doubled) until at least this many kick beats are inside
 SMOOTH_BEATS = 31                # moving average over the median, flat at both ends
@@ -202,13 +212,28 @@ def needs_fixing(summary):
 
 # ------------------------------------------------------------------ the slide solve
 
-def solve_slides(lags, pairs, n_tracks, movable=None):
-    """Slides (ms, one per track) and the achieved worst lag t.
+def _linprog(cost, rows, rhs, bounds):
+    sol = optimize.linprog(cost, A_ub=np.array(rows), b_ub=np.array(rhs), bounds=bounds, method="highs")
+    if not sol.success:
+        raise RuntimeError("slide solve failed: " + str(sol.message))
+    return sol
 
-    lags[k] is the lag of blend k with no slide, pairs[k] = (outgoing position, incoming position). Minimise
-    t + LAMBDA * sum |s_i| subject to |lags[k] + s_out - s_in| <= t and |s_i| <= MAX_SLIDE_MS. Only tracks in `movable`
-    (default: every track that sits in a blend) may slide. A worst lag already under WARN_MS is left alone (a good mix
-    is never touched)."""
+
+def solve_slides(lags, pairs, n_tracks, movable=None, was=None):
+    """Slides (ms, one per track) and the worst lag left, in two stages.
+
+    lags[k] is the lag of blend k with no slide, pairs[k] = (outgoing position, incoming position); the lag of blend k
+    after slides is lags[k] + s_out - s_in. Only tracks in `movable` (default: every track that sits in a blend) may
+    slide, each within MAX_SLIDE_MS. A worst lag already under WARN_MS is left alone (a good mix is never touched).
+      stage 1  minimise t = max |lag|, with no cost on the slides: the best any slides could do, t*.
+      stage 2  eps = max(t*, EPS_MS); minimise the total slide sum |s_i| with every |lag| <= eps (see `was`). The least total slide
+               often has several answers (+4.2 on one track, or +2.6 and -1.6 on two); the tie goes to the answer that
+               weighs the tracks 1, 2, 3 ... by their order in the mix, so the slide sits on one track and the earlier
+               track takes it. A tie on "smallest largest slide" was tried first and split Sam's case over two tracks.
+      `was[k]` (optional) is the |lag| blend k had in the input: a blend that was inside EPS_MS is held to that, not to
+      EPS_MS (but never below t*), so the result cannot leave a fine blend worse than it was, which the refusal rule
+      would refuse.
+      Deterministic: HiGHS simplex, no seed."""
     s = np.zeros(n_tracks)
     if not len(lags):
         return s, 0.0
@@ -217,28 +242,58 @@ def solve_slides(lags, pairs, n_tracks, movable=None):
         return s, worst
     n = n_tracks
     can_slide = {i for pair in pairs for i in pair} if movable is None else set(movable)
-    cost = np.concatenate([np.zeros(n), np.full(n, LAMBDA), [1.0]])
-    rows, rhs = [], []
-    for lag, (a, b) in zip(lags, pairs):
-        up = np.zeros(2 * n + 1)
-        up[a], up[b], up[-1] = 1.0, -1.0, -1.0              # lag + s_a - s_b <= t
-        down = np.zeros(2 * n + 1)
-        down[a], down[b], down[-1] = -1.0, 1.0, -1.0        # -(lag + s_a - s_b) <= t
-        rows += [up, down]
-        rhs += [-lag, lag]
-    for i in range(n):
-        for sign in (1.0, -1.0):
-            row = np.zeros(2 * n + 1)
-            row[i], row[n + i] = sign, -1.0                  # |s_i| <= u_i
-            rows.append(row)
-            rhs.append(0.0)
-    bounds = ([(-MAX_SLIDE_MS, MAX_SLIDE_MS) if i in can_slide else (0.0, 0.0) for i in range(n)]
-              + [(0.0, None)] * n + [(0.0, None)])
-    sol = optimize.linprog(cost, A_ub=np.array(rows), b_ub=np.array(rhs), bounds=bounds, method="highs")
-    if not sol.success:
-        raise RuntimeError("slide solve failed: " + str(sol.message))
+    width = 2 * n + 1                                        # s_0..s_n-1, u_0..u_n-1 (u_i >= |s_i|), z
+    reach = [(-MAX_SLIDE_MS, MAX_SLIDE_MS) if i in can_slide else (0.0, 0.0) for i in range(n)]
+    free_u = [(0.0, None)] * n
+
+    def lag_rows(limit):
+        """|lag_k| <= limit_k (a list), or <= z when limit is None."""
+        rows, rhs = [], []
+        for k, (lag, (a, b)) in enumerate(zip(lags, pairs)):
+            up, down = np.zeros(width), np.zeros(width)
+            up[a], up[b], down[a], down[b] = 1.0, -1.0, -1.0, 1.0       # lag + s_a - s_b, and its negative
+            if limit is None:
+                up[-1] = down[-1] = -1.0
+            rows += [up, down]
+            rhs += [-lag + (0.0 if limit is None else limit[k]), lag + (0.0 if limit is None else limit[k])]
+        return rows, rhs
+
+    def abs_rows(into_z):
+        """u_i >= |s_i|, or z >= |s_i|."""
+        rows = []
+        for i in range(n):
+            for sign in (1.0, -1.0):
+                row = np.zeros(width)
+                row[i] = sign
+                row[width - 1 if into_z else n + i] = -1.0
+                rows.append(row)
+        return rows, [0.0] * len(rows)
+
+    def cost(u=0.0, z=0.0):
+        c = np.zeros(width)
+        c[n:2 * n] = u
+        c[-1] = z
+        return c
+
+    # stage 1: the best worst lag
+    rows, rhs = lag_rows(None)
+    sol = _linprog(cost(z=1.0), rows, rhs, reach + free_u + [(0.0, None)])
+    t_star = float(sol.x[-1])
+    floor = [EPS_MS] * len(lags) if was is None else [min(EPS_MS, w) for w in was]
+    limits = [max(t_star, f) + 1e-7 for f in floor]
+    # stage 2a: the least total slide inside the limits
+    rows, rhs = lag_rows(limits)
+    more, zero = abs_rows(False)
+    rows, rhs = rows + more, rhs + zero
+    total = float(_linprog(cost(u=1.0), rows, rhs, reach + free_u + [(0.0, 0.0)]).fun)
+    cap = np.zeros(width)
+    cap[n:2 * n] = 1.0
+    rows, rhs = rows + [cap], rhs + [total + 1e-7]           # from here on, no more total slide than that
+    # stage 2b: among solutions with that total, the slide on the lowest track indices
+    sol = _linprog(cost(u=np.arange(1.0, n + 1.0)), rows, rhs, reach + free_u + [(0.0, 0.0)])
     s = np.where(np.abs(sol.x[:n]) < SLIDE_NOISE_MS, 0.0, np.round(sol.x[:n], 3))
-    return s, float(sol.x[-1])
+    left = max(abs(lag + s[a] - s[b]) for lag, (a, b) in zip(lags, pairs))
+    return s, float(left)
 
 
 # ------------------------------------------------------------------ the ALS text patch
@@ -389,7 +444,8 @@ def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
     movable = {i for b in touching(needs_fix) for i in (b.out, b.inc)}
     in_play = touching(movable)
     lags = [b.summary(fits[b.out].at, fits[b.inc].at)["median"] for b in in_play]
-    slides, outcome.t_predicted = solve_slides(np.array(lags), [(b.out, b.inc) for b in in_play], len(tracks), movable)
+    was = [abs(b.summary(zero, zero)["median"]) for b in in_play]
+    slides, outcome.t_predicted = solve_slides(np.array(lags), [(b.out, b.inc) for b in in_play], len(tracks), movable, was)
     for i, s in enumerate(slides):
         outcome.tracks[i].slide = float(s)
     outcome.predicted = {b.index: b.summary(fits[b.out].at, fits[b.inc].at, slides[b.out], slides[b.inc])["median"]
@@ -431,8 +487,15 @@ def _num(v):
     return "n/a" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:+.1f}"
 
 
+PHASED_NOTE = ("grid phase: phased file written, open it instead of {name} if the report shows it is tighter; "
+               "the MixPlan reconciliation covers the unphased original (the phased markers differ by under 15 ms)")
+
+
 def report_text(outcome, als_path):
-    lines = [f"Grid phase fix of {Path(als_path).name}", f"result: {outcome.status}: {outcome.reason}", ""]
+    lines = [f"Grid phase fix of {Path(als_path).name}", f"result: {outcome.status}: {outcome.reason}"]
+    if outcome.status == PHASED:
+        lines.append(PHASED_NOTE.format(name=Path(als_path).name))
+    lines.append("")
     lines.append("Transitions, before -> after (ms: positive = the incoming kick is later)")
     lines.append(f"{'':3}{'transition':36}{'verdict':30}{'edge':16}{'click':16}{'main':16}{'click predicted':>16}")
     after = outcome.after or outcome.before

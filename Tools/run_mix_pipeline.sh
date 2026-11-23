@@ -153,33 +153,29 @@ if [ "$kick_status" -ne 0 ]; then
     fi
     say "kick alignment check did not finish (status $kick_status); warn mode, the build goes on"
 fi
-# Grid phase: a drift fit and a slide per track, measured by the kick check, into a NEW file. suggest (default) writes
-# Sections V$B Phased.als and the report and leaves the final alone; apply swaps the phased file in only when it passes
-# the validator and the MixPlan reconciliation. Whatever happens here never stops the build.
-case "${GRID_PHASE_MODE:-suggest}" in apply) grid_mode=apply ;; *) grid_mode=suggest ;; esac
-final="$P/Output/Sections V$B.als"
+# Grid phase: a drift fit and a slide per track, measured by the kick check, into a NEW file. It is a suggestion only:
+# the final stays Sections V$B.als (the MixPlan reconciliation pins that file's warp grid), and whatever happens here
+# never stops the build. GRID_PHASE_MODE=off skips it; anything else (default) is suggest.
+case "${GRID_PHASE_MODE:-suggest}" in off) grid_mode=off ;; *) grid_mode=suggest ;; esac
 phased="$P/Output/Sections V$B Phased.als"
-say "grid phase fix ($grid_mode): report in $P/Output/Grid Phase"
-rm -f -- "$phased"
-{ python Tools/fix_grid_phase.py "$final" --audio "$P/Audio" --out "$phased" --report "$P/Output/Grid Phase"; } 2>> "$LOG" | tee -a "$LOG"
-grid_status=${PIPESTATUS[0]}
-if [ "$grid_status" -ne 0 ]; then
+if [ "$grid_mode" = off ]; then
+    say "grid phase fix: off (GRID_PHASE_MODE=off), step skipped"
+else
+    say "grid phase fix ($grid_mode): report in $P/Output/Grid Phase"
+    rm -f -- "$phased"
+    { python Tools/fix_grid_phase.py "$P/Output/Sections V$B.als" --audio "$P/Audio" --out "$phased" --report "$P/Output/Grid Phase"; } 2>> "$LOG" | tee -a "$LOG"
+    grid_status=${PIPESTATUS[0]}
     if [ "$grid_status" -eq 4 ]; then
-        say "grid phase fix REFUSED its own result (status 4, details in Output/Grid Phase); the final stays Sections V$B.als"
+        say "grid phase fix REFUSED its own result (status 4, details in Output/Grid Phase); no phased file, the final is Sections V$B.als"
+    elif [ "$grid_status" -ne 0 ]; then
+        say "grid phase fix did not finish (status $grid_status); no phased file, the final is Sections V$B.als"
+    elif [ ! -f "$phased" ]; then
+        say "grid phase fix wrote no phased file; the final is Sections V$B.als"
+    elif cmp -s -- "$P/Output/Sections V$B.als" "$phased"; then
+        say "grid phase: nothing to change (the phased file is a copy of Sections V$B.als)"
     else
-        say "grid phase fix did not finish (status $grid_status); the final stays Sections V$B.als"
-    fi
-elif [ "$grid_mode" = apply ]; then
-    if [ ! -f "$phased" ]; then
-        say "GRID PHASE FIX NOT APPLIED: no phased file was written; the final stays Sections V$B.als"
-    elif cmp -s -- "$final" "$phased"; then
-        say "grid phase fix: nothing to change, the final stays Sections V$B.als"
-    elif python Source/validate_als.py "$phased" --expected-tracks $N --require-devices --arrangement-report "$P/Output/ARRANGEMENT_REPORT.json" >> "$LOG" 2>&1          && python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$phased" --output "$P/Output/Grid Phase/MIX_PLAN_RECONCILIATION_phased.json" >> "$LOG" 2>&1; then
-        final="$phased"
-        say "grid phase fix APPLIED: the final is Sections V$B Phased.als"
-    else
-        say "GRID PHASE FIX NOT APPLIED: the phased file failed validation or the MixPlan reconciliation (see runmix.log); the final stays Sections V$B.als"
+        say "grid phase: phased file written, open it instead of Sections V$B.als if the report shows it is tighter; the MixPlan reconciliation covers the unphased original (the phased markers differ by under 15 ms)"
     fi
 fi
-python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$final" --output "$P/Output/MIX_PLAN_RECONCILIATION.json" >> "$LOG" 2>&1 || fail "reconciliation"
-say "DONE: final = ${final##*/}"
+python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/Sections V$B.als" --output "$P/Output/MIX_PLAN_RECONCILIATION.json" >> "$LOG" 2>&1 || fail "reconciliation"
+say "DONE: final = Sections V$B.als"

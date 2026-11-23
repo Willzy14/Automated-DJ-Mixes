@@ -26,6 +26,7 @@ WAV_BEATS = 100                                # 50 s
 CLIPS = {"A": (0, 60), "B": (40, 100), "C": (80, 140)}   # arrangement start and end; source beat = arrangement - start
 NAMES = {"A": "Out - Alpha SW V1", "B": "Mid - Bravo SW V1", "C": "In - Charlie SW V1"}
 CRLF = "\r\n"
+LEFT = 2.0                                     # EPS_MS the solve leaves, plus what a re-measure can differ by
 
 
 # ---------------------------------------------------------------- fixtures: kicks, wavs, a pretty-printed ALS
@@ -110,8 +111,8 @@ def sets(tmp_path_factory):
         "late": make_mix(root, "late", {"A": 0.0, "B": 8.0, "C": 8.0}, doc_order="BCA"),
         # B has too few kicks to be fitted, so only a slide can fix its +8 ms
         "slide": make_mix(root, "slide", {"A": 0.0, "B": 8.0}, kick_beats={"B": range(0, 30)}),
-        # B drifts from 0 to 15 ms over its source beats: no constant slide can fix both of its blends
-        "drift": make_mix(root, "drift", {"A": 0.0, "B": lambda b: 0.25 * b, "C": 0.0}, doc_order="CAB"),
+        # B drifts from 0 to 10.6 ms over its source beats: no constant slide can fix both of its blends
+        "drift": make_mix(root, "drift", {"A": 0.0, "B": lambda b: 0.18 * b, "C": 0.0}, doc_order="CAB"),
         "good": make_mix(root, "good", {"A": 0.0, "B": 2.0, "C": 0.0}),
         "plain": make_mix(root, "plain", {"A": 0.0, "B": 8.0}, saved_marker=True),
     }
@@ -166,11 +167,12 @@ def test_outliers_over_15_ms_are_dropped_before_counting_and_fitting():
     assert gpf.fit_drift([(b, 1.0) for b in range(30)] + wild).status == gpf.CANNOT_FIT
 
 
-def test_a_correction_over_max_drift_is_refused_and_reported(monkeypatch):
-    monkeypatch.setattr(gpf, "MAX_DRIFT_MS", 3.0)           # the brief makes it equal to the outlier limit, so lower it here
-    fit = gpf.fit_drift([(b, 6.0) for b in range(60)])
-    assert fit.status == gpf.REFUSED and "more than 3 ms" in fit.note
+def test_a_correction_over_max_drift_is_refused_and_reported():
+    assert gpf.MAX_DRIFT_MS < gpf.OUTLIER_MS                  # separate cuts: the refusal is reachable
+    fit = gpf.fit_drift([(b, 13.0) for b in range(60)])      # not an outlier (under 15), but further out than 12
+    assert fit.status == gpf.REFUSED and "more than 12 ms" in fit.note
     assert fit.at(10) == 0.0                                  # a refused fit corrects nothing
+    assert gpf.fit_drift([(b, 11.0) for b in range(60)]).status == gpf.FIT
 
 
 def test_a_kick_free_track_is_cannot_fit(tmp_path):
@@ -210,51 +212,95 @@ def test_measured_offsets_follow_a_known_linear_delay(tmp_path):
 
 # ---------------------------------------------------------------- the slide solve
 
-def test_sams_case_slides_the_middle_track_and_barely_moves_its_neighbours():
-    s, t = gpf.solve_slides(np.array([4.1, -5.7]), [(0, 1), (1, 2)], 3)
-    assert 3.0 <= s[1] <= 7.0, s
-    assert abs(s[0]) <= 2.0 and abs(s[2]) <= 2.0, s
-    assert t < 0.5
-    assert abs(4.1 + s[0] - s[1]) <= t + 1e-6 and abs(-5.7 + s[1] - s[2]) <= t + 1e-6
+def _old_single_stage(lags, pairs, n, movable=None):
+    """The objective of 5979206: the worst lag and 0.02 per ms of slide in ONE linear program."""
+    from scipy import optimize
+    can = {i for p in pairs for i in p} if movable is None else set(movable)
+    c = np.concatenate([np.zeros(n), np.full(n, 0.02), [1.0]])
+    rows, rhs = [], []
+    for lag, (a, b) in zip(lags, pairs):
+        for sign in (1.0, -1.0):
+            r = np.zeros(2 * n + 1)
+            r[a], r[b], r[-1] = sign, -sign, -1.0
+            rows.append(r)
+            rhs.append(-sign * lag)
+    for i in range(n):
+        for sign in (1.0, -1.0):
+            r = np.zeros(2 * n + 1)
+            r[i], r[n + i] = sign, -1.0
+            rows.append(r)
+            rhs.append(0.0)
+    bounds = [(-gpf.MAX_SLIDE_MS, gpf.MAX_SLIDE_MS) if i in can else (0.0, 0.0) for i in range(n)] + [(0.0, None)] * (n + 1)
+    return optimize.linprog(c, A_ub=np.array(rows), b_ub=np.array(rhs), bounds=bounds, method="highs").x[:n]
 
 
-def test_a_chain_that_three_slides_could_zero_still_prefers_the_few_small_ones():
-    # lags +6 and -6 around the middle track: (0, 6, 0) zeroes both with 6 ms of slide; (-6, 0, -6) does it with 12
-    s, t = gpf.solve_slides(np.array([6.0, -6.0]), [(0, 1), (1, 2)], 3)
-    assert t < 0.01
-    assert s == pytest.approx([0.0, 6.0, 0.0], abs=0.01), s
+def _sam_case_is_met(s):
+    return 4.2 - 0.01 <= s[1] <= 5.6 and s[0] == pytest.approx(0.0, abs=0.01) and s[2] == pytest.approx(0.0, abs=0.01)
+
+
+def test_sams_case_slides_only_the_middle_track_and_by_just_enough():
+    s, left = gpf.solve_slides(np.array([4.1, -5.7]), [(0, 1), (1, 2)], 3)
+    assert _sam_case_is_met(s), s
+    assert left <= gpf.EPS_MS + 1e-6
+    assert abs(4.1 + s[0] - s[1]) <= gpf.EPS_MS + 1e-6 and abs(-5.7 + s[1] - s[2]) <= gpf.EPS_MS + 1e-6
+
+
+def test_the_old_single_stage_objective_fails_sams_case():
+    # the test above is not vacuous: 0.02 per ms of slide against the worst lag shaves the last ms with a slide on the neighbour
+    assert not _sam_case_is_met(_old_single_stage(np.array([4.1, -5.7]), [(0, 1), (1, 2)], 3))
+
+
+def test_the_slides_stop_where_the_lags_are_inside_the_measurement_resolution():
+    s, left = gpf.solve_slides(np.array([6.0, -6.0]), [(0, 1), (1, 2)], 3)
+    assert s == pytest.approx([0.0, 6.0 - gpf.EPS_MS, 0.0], abs=0.01)      # not 6.0: the last 1.5 ms is not chased
+    assert left == pytest.approx(gpf.EPS_MS, abs=1e-6)
+
+
+def test_a_blend_that_was_fine_is_not_left_worse_than_it_was():
+    # blend 1 has a lag of 8 to fix; blend 2 sits at 1.5 after the drift fit but was 0.3 in the input
+    lags, pairs = np.array([8.0, 1.5]), [(0, 1), (1, 2)]
+    loose, _ = gpf.solve_slides(lags, pairs, 3)
+    held, _ = gpf.solve_slides(lags, pairs, 3, was=[8.0, 0.3])
+    assert abs(lags[1] + loose[1] - loose[2]) == pytest.approx(1.5, abs=0.01)    # inside EPS_MS, so left alone
+    assert abs(lags[1] + held[1] - held[2]) <= 0.3 + 1e-6                        # held to what it was
+
+
+def test_a_worst_lag_the_slides_cannot_reduce_below_eps_sets_the_limit():
+    # lag 40 with 15 ms each way: t* = 10, so the blend is brought to 10 and no further
+    s, left = gpf.solve_slides(np.array([40.0]), [(0, 1)], 2)
+    assert np.abs(s).max() <= gpf.MAX_SLIDE_MS + 1e-9
+    assert left == pytest.approx(40.0 - 2 * gpf.MAX_SLIDE_MS, abs=0.01)
 
 
 def test_the_slide_has_the_sign_that_cancels_the_lag():
-    s, _ = gpf.solve_slides(np.array([10.0]), [(0, 1)], 2)
-    assert s[0] - s[1] == pytest.approx(-10.0, abs=0.01)       # incoming later by 10: out slides + or in slides -
-    s, _ = gpf.solve_slides(np.array([-10.0]), [(0, 1)], 2)
-    assert s[0] - s[1] == pytest.approx(10.0, abs=0.01)
+    for lag in (10.0, -10.0):
+        s, left = gpf.solve_slides(np.array([lag]), [(0, 1)], 2)
+        assert abs(lag + s[0] - s[1]) <= gpf.EPS_MS + 1e-6 and left <= gpf.EPS_MS + 1e-6
+        assert (s[0] - s[1]) * lag < 0                             # incoming later (lag > 0): outgoing slides -, or incoming +
+
+
+def test_a_tie_between_equal_total_slides_goes_to_one_track_the_earlier_one():
+    s, _ = gpf.solve_slides(np.array([10.0]), [(0, 1)], 2)        # -8.5 on track 0, or +8.5 on track 1, or any split
+    assert s == pytest.approx([-8.5, 0.0], abs=0.01)
 
 
 @pytest.mark.parametrize("lags", [[3.9, -3.9], [2.0, -1.5, 0.3], [0.0]])
 def test_a_worst_lag_under_warn_changes_nothing(lags):
     pairs = [(i, i + 1) for i in range(len(lags))]
-    s, t = gpf.solve_slides(np.array(lags), pairs, len(lags) + 1)
-    assert not s.any() and t == pytest.approx(max(abs(v) for v in lags))
+    s, left = gpf.solve_slides(np.array(lags), pairs, len(lags) + 1)
+    assert not s.any() and left == pytest.approx(max(abs(v) for v in lags))
 
 
 def test_a_worst_lag_of_exactly_warn_is_fixed():
-    s, _ = gpf.solve_slides(np.array([gpf.WARN_MS]), [(0, 1)], 2)
-    assert abs(s[0] - s[1] + gpf.WARN_MS) < 0.01
-
-
-def test_max_slide_is_respected():
-    s, t = gpf.solve_slides(np.array([40.0]), [(0, 1)], 2)
-    assert np.abs(s).max() <= gpf.MAX_SLIDE_MS + 1e-9
-    assert t == pytest.approx(40.0 - 2 * gpf.MAX_SLIDE_MS, abs=0.01)
+    s, left = gpf.solve_slides(np.array([gpf.WARN_MS]), [(0, 1)], 2)
+    assert s.any() and abs(gpf.WARN_MS + s[0] - s[1]) <= gpf.EPS_MS + 1e-6
 
 
 def test_only_movable_tracks_slide():
     s, _ = gpf.solve_slides(np.array([6.0, -6.0]), [(0, 1), (1, 2)], 3, movable={0, 1})
     assert s[2] == 0.0 and abs(s[0]) + abs(s[1]) > 1.0
-    s, t = gpf.solve_slides(np.array([6.0, -6.0]), [(0, 1), (1, 2)], 3, movable={1})
-    assert s[0] == 0.0 and s[2] == 0.0 and s[1] == pytest.approx(6.0, abs=0.01) and t < 0.01
+    s, left = gpf.solve_slides(np.array([6.0, -6.0]), [(0, 1), (1, 2)], 3, movable={1})
+    assert s[0] == 0.0 and s[2] == 0.0 and s[1] == pytest.approx(4.5, abs=0.01)
 
 
 def test_a_track_in_no_blend_never_slides():
@@ -384,18 +430,21 @@ def test_a_late_track_is_pulled_onto_the_grid_by_its_own_drift_fit(outcomes, set
     assert out.status == gpf.PHASED, out.reason
     first = kac.check_als(out.out_path, sets["late"][1])
     assert all(r.verdict in ("PASS", "WARN") for r in first)
-    assert abs(first[0].click["median"]) < 1.5 and abs(first[1].click["median"]) < 1.5
+    assert abs(first[0].click["median"]) <= LEFT and abs(first[1].click["median"]) <= LEFT
     moved = _marker_secs(out.out_path, NAMES["B"])[:, 1] - _marker_secs(sets["late"][0], NAMES["B"])[:, 1]
-    assert np.median(moved) * 1000.0 == pytest.approx(8.0, abs=1.0)  # B's kicks were 8 ms late: its markers move +8 ms
+    assert np.median(moved) * 1000.0 == pytest.approx(8.0, abs=2.0)  # B's kicks were 8 ms late: its markers move about +8 ms
     by_name = {r.name: r for r in out.tracks}
     assert by_name[NAMES["B"]].applied and by_name[NAMES["B"]].fit.status == gpf.FIT
     assert not by_name[NAMES["C"]].applied                         # C sits in no blend that needed fixing
 
 
-def test_the_track_that_matched_the_late_one_takes_the_slide(outcomes):
-    slides = {r.name: r.slide for r in outcomes["late"].tracks}
-    assert slides[NAMES["C"]] == pytest.approx(8.0, abs=1.5)       # C stays 8 ms late of the corrected B: it moves 8 earlier
-    assert abs(slides[NAMES["A"]]) < 1.0 and abs(slides[NAMES["B"]]) < 1.0
+def test_the_late_track_that_the_corrected_one_left_behind_is_brought_in_with_the_least_slide(outcomes, sets):
+    # B is pulled onto A by its drift fit; C, 8 ms late like B was, then differs from B by 8 ms. The slides add up to
+    # that 8 ms less EPS_MS (spread over B and C by the tie-break), and no more.
+    out = outcomes["late"]
+    total = sum(abs(r.slide) for r in out.tracks)
+    assert 8.0 - gpf.EPS_MS - 0.7 <= total <= 8.0
+    assert abs(kac.check_als(out.out_path, sets["late"][1])[1].click["median"]) <= LEFT
 
 
 def test_a_track_that_cannot_be_fitted_is_fixed_by_a_slide(outcomes, sets):
@@ -404,22 +453,22 @@ def test_a_track_that_cannot_be_fitted_is_fixed_by_a_slide(outcomes, sets):
     by_name = {r.name: r for r in out.tracks}
     assert by_name[NAMES["B"]].fit.status == gpf.CANNOT_FIT and not by_name[NAMES["B"]].applied
     after = kac.check_als(out.out_path, sets["slide"][1])[0]
-    assert abs(after.click["median"]) < 1.5, after.click
-    assert sum(abs(r.slide) for r in out.tracks) == pytest.approx(8.0, abs=1.5)
+    assert abs(after.click["median"]) <= LEFT, after.click
+    assert sum(abs(r.slide) for r in out.tracks) == pytest.approx(8.0 - gpf.EPS_MS, abs=1.0)
     # the lag fell: the slide moved the kicks the right way, whichever of the two tracks took it
-    assert (by_name[NAMES["A"]].slide - by_name[NAMES["B"]].slide) == pytest.approx(-8.0, abs=1.5)
+    assert (by_name[NAMES["A"]].slide - by_name[NAMES["B"]].slide) == pytest.approx(-(8.0 - gpf.EPS_MS), abs=1.0)
 
 
 def test_a_drifting_track_is_corrected_along_its_length_not_by_one_slide(outcomes, sets):
     out = outcomes["drift"]
     assert out.status == gpf.PHASED, out.reason
     after = kac.check_als(out.out_path, sets["drift"][1])
-    assert all(abs(r.click["median"]) < 1.5 for r in after), [r.click for r in after]
+    assert all(abs(r.click["median"]) <= LEFT for r in after), [r.click for r in after]
     old = _marker_secs(sets["drift"][0], NAMES["B"])
     new = _marker_secs(out.out_path, NAMES["B"])
     moved = (new[:, 1] - old[:, 1]) * 1000.0
-    assert moved[5] == pytest.approx(0.25 * 5, abs=1.0) and moved[50] == pytest.approx(0.25 * 50, abs=1.5)
-    assert moved[50] - moved[5] > 8.0                               # it really is a drift, not a constant
+    assert moved[5] == pytest.approx(0.18 * 5, abs=1.5) and moved[50] == pytest.approx(0.18 * 50, abs=2.0)
+    assert moved[50] - moved[5] > 5.0                               # it really is a drift, not a constant
 
 
 def test_a_good_mix_is_untouched_and_the_copy_is_byte_identical(outcomes, sets):
@@ -488,6 +537,13 @@ def test_the_report_is_plain_ascii_without_em_dashes(outcomes, sets):
         assert text.isascii() and "\u2014" not in text and "->" in text
         data = json.dumps(gpf.report_json(outcomes[key]))
         assert data.isascii()
+
+
+def test_the_report_says_the_phased_file_is_a_suggestion(outcomes, sets):
+    note = ("grid phase: phased file written, open it instead of Set.als if the report shows it is tighter; "
+            "the MixPlan reconciliation covers the unphased original (the phased markers differ by under 15 ms)")
+    assert note in gpf.report_text(outcomes["late"], sets["late"][0])
+    assert "phased file written" not in gpf.report_text(outcomes["good"], sets["good"][0])
 
 
 def test_only_short_windows_are_read_and_pyplot_stays_out(sets, tmp_path, monkeypatch):
