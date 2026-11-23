@@ -109,6 +109,7 @@ class Clip:
 class Track:
     name: str
     clips: list
+    doc_index: int = -1          # position among every AudioTrack of the file, so a text patch can find the track
 
     @property
     def first_start(self):
@@ -144,7 +145,7 @@ def read_als(path):
     """Audio tracks with arrangement clips, ordered by where they start. Never writes."""
     root = ET.fromstring(gzip.open(path).read())
     tracks = []
-    for track in root.iter("AudioTrack"):
+    for doc_index, track in enumerate(root.iter("AudioTrack")):
         name = _value(track, "Name/EffectiveName", "")
         events = track.find("DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events")
         if events is None:           # session-view clips live in another coordinate space: not read
@@ -165,7 +166,7 @@ def read_als(path):
                 wav=re.split(r"[\\/]", clip_path)[-1],
                 warped=_value(node, "IsWarped", "true") != "false"))
         if clips:
-            tracks.append(Track(name, sorted(clips, key=lambda c: c.start)))
+            tracks.append(Track(name, sorted(clips, key=lambda c: c.start), doc_index))
     return sorted(tracks, key=lambda t: t.first_start)
 
 
