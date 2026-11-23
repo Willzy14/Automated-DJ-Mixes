@@ -260,7 +260,7 @@ Later: `pyproject.toml` + editable install (`pip install -e .`).
 - From Windows Python, `bash` can resolve to WSL; call `C:/Program Files/Git/bin/bash.exe`. The toolkit needs `Audio Analysis Toolkit/src` on PYTHONPATH (Windows `;`).
 - Codex in its sandbox cannot write `index.lock`; queue_runner collects its tree as `wip(codex)` commits. Its pytest temp folders lock; use `--basetemp` (Known Workarounds).
 
-**Next:** Sam listens to `Listening Sets/Tech House 2026 Planned.wav`; the open items are in BURN_LIST START HERE (memory gate, preview leak and the other picture leaks done 2026-11-22/23; beat-grid memory on the Home PC, the locked worktree folder, Braydon Terzo online-only). D: was checked and repaired by Sam on 2026-11-22.
+**Next:** Sam listens to `Listening Sets/Tech House 2026 Planned.wav`; the open items are in BURN_LIST START HERE (memory gate, preview leak and the other picture leaks done 2026-11-22/23; beat-grid memory on the Home PC, Braydon Terzo online-only). D: was checked and repaired by Sam on 2026-11-22.
 
 ### 2026-11-20 - Section answer key, groove detector ON, blend planner built and wired (opt-in)
 
