@@ -33,6 +33,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import soundfile as sf
 
+from automated_dj_mixes.figure_memory import frees_figures
+
 STEM_COLORS = {"drums": "#e4572e", "bass": "#2e86ab", "vocals": "#8e44ad", "other": "#3a3a3a"}
 # Coloured section zones (overlaid on both the track and the stems).
 SECTION_COLORS = {
@@ -128,6 +130,7 @@ def _load_stats(blind_dir: Path, track_stem: str):
     return None
 
 
+@frees_figures
 def probe_track(wav: Path, project: Path):
     blind_dir = next((project / "Sections Review").glob("Blind_V*"), None)
     stats = _load_stats(blind_dir, wav.stem) if blind_dir else None

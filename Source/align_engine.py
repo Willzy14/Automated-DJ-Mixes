@@ -39,6 +39,7 @@ from matplotlib.patches import Rectangle
 from stem_section_probe import _seccol  # shared section colour map
 from section_format import GROOVE, LEGACY, groove_fills, require_uniform_modes, section_mode_of
 from automated_dj_mixes.transition_policy import INTERIM_V1, beats_to_bars
+from automated_dj_mixes.figure_memory import frees_figures
 
 PHRASE_GRID = 16          # 16-bar phrase grid (viz gridlines)
 
@@ -1743,6 +1744,7 @@ def align_pair(o: Track, i: Track, policy=None) -> Alignment:
     return best
 
 
+@frees_figures
 def visualize_transition(o: Track, i: Track, al: Alignment, out_png: Path, idx: int):
     """Draw both tracks' sections on one arrangement-bar axis, with the bass
     markers, the bass-swap mix point, and the overlap zone."""

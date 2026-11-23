@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from extract_sections_als import parse_sections_als
+from automated_dj_mixes.figure_memory import frees_figures
 
 
 LABEL_COLOURS = {
@@ -141,6 +142,7 @@ def _sample_envelope_at_arrangement(envelope, bin_sec, bpm, sections,
     return values
 
 
+@frees_figures
 def render_transition_full_context(out_name, out_secs, out_bpm, out_audio,
                                    in_name, in_secs, in_bpm, in_audio,
                                    out_path: Path, t_index: int,
@@ -249,6 +251,7 @@ def render_transition_full_context(out_name, out_secs, out_bpm, out_audio,
     plt.close(fig)
 
 
+@frees_figures
 def render_transition(out_name, out_secs, out_bpm, out_audio,
                       in_name, in_secs, in_bpm, in_audio,
                       out_path: Path, t_index: int,
