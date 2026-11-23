@@ -579,12 +579,23 @@ def test_negative_beat_time_markers_map_to_the_right_seconds(tmp_path):
     assert pos.source_beat == 4.0 and pos.sec == pytest.approx(3.0)       # beat -2 is at 0 s, so beat 4 is at 3 s
 
 
-def test_markers_that_stop_short_of_the_clip_end_drop_the_beats_and_say_so(tmp_path):
+def test_markers_that_stop_short_of_the_clip_end_extend_at_the_last_segment_tempo(tmp_path):
     als = _small_set(tmp_path, in_extras=dict(path="../Audio/i.wav", markers_to=10))
     tracks = kac.read_als(als)
-    assert kac.source_position(tracks[1], 50.0) is not None and kac.source_position(tracks[1], 51.0) is None
-    res = kac.check_als(als, None)[0]
-    assert res.dropped["no_position"] == 9 and res.verdict == "CANNOT_JUDGE"
+    inside, beyond = kac.source_position(tracks[1], 50.0), kac.source_position(tracks[1], 61.0)
+    assert inside.source_beat == 10.0 and inside.sec == pytest.approx(5.0)
+    assert beyond.source_beat == 21.0 and beyond.sec == pytest.approx(10.5)     # Live keeps the last tempo past the last marker
+    assert kac.check_als(als, None)[0].dropped["no_position"] == 0
+
+
+def test_a_hand_rewarp_with_two_markers_close_together_maps_the_whole_clip(tmp_path):
+    als = _small_set(tmp_path, in_extras=dict(path="../Audio/i.wav", markers_to=1))
+    tracks = kac.read_als(als)
+    assert len(tracks[1].clips[0].markers) == 2
+    for beat in (40.0, 70.0, 99.0):                                             # far past both markers
+        pos = kac.source_position(tracks[1], beat)
+        assert pos is not None and pos.sec == pytest.approx(0.5 * pos.source_beat)
+    assert kac.check_als(als, None)[0].dropped["no_position"] == 0
 
 
 def test_an_outgoing_track_with_several_clips_and_a_gap(tmp_path):

@@ -181,14 +181,25 @@ def find_transitions(tracks):
 
 
 def source_position(track, beat):
-    """Arrangement beat -> clip, source beat and wav seconds; None outside every clip or marker range."""
+    """Arrangement beat -> clip, source beat and wav seconds; None outside every clip or without two markers.
+
+    Beyond the first or last marker Live keeps the tempo of the nearest segment, so the line is extended
+    the same way (a hand re-warp with two markers close together maps the whole clip this way)."""
     for clip in track.clips:
         if clip.start <= beat < clip.end:
             source_beat = clip.loop_start + (beat - clip.start)
             m = clip.markers
-            if len(m) < 2 or source_beat < m[0, 0] or source_beat > m[-1, 0]:
+            if len(m) < 2:
                 return None
-            return Position(clip, source_beat, float(np.interp(source_beat, m[:, 0], m[:, 1])))
+            if source_beat < m[0, 0]:
+                a, b = m[0], m[1]
+            elif source_beat > m[-1, 0]:
+                a, b = m[-2], m[-1]
+            else:
+                return Position(clip, source_beat, float(np.interp(source_beat, m[:, 0], m[:, 1])))
+            if b[0] == a[0]:
+                return None
+            return Position(clip, source_beat, float(a[1] + (source_beat - a[0]) * (b[1] - a[1]) / (b[0] - a[0])))
     return None
 
 
