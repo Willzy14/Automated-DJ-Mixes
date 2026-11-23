@@ -141,17 +141,51 @@ case "${KICK_ALIGNMENT_MODE:-warn}" in fail) kick_mode=fail ;; *) kick_mode=warn
 say "kick alignment check ($kick_mode)"
 { python Tools/check_kick_alignment.py "$P/Output/Sections V$B.als" --audio "$P/Audio" --out "$P/Output/Kick Alignment" --mode "$kick_mode"; } 2>> "$LOG" | tee -a "$LOG"
 kick_status=${PIPESTATUS[0]}
+kick_fail=""
 if [ "$kick_status" -ne 0 ]; then
     if [ "$kick_mode" = fail ]; then
+        # the failure stops the build, but only after the grid phase step below has had its say about the same blends
         if [ "$kick_status" -eq 1 ]; then
-            fail "kick alignment FAIL (pictures in Output/Kick Alignment, details in runmix.log)"
+            kick_fail="kick alignment FAIL (pictures in Output/Kick Alignment, details in runmix.log)"
+        elif [ "$kick_status" -eq 3 ]; then
+            kick_fail="kick alignment judged nothing (status 3; every blend was CANNOT_JUDGE, see runmix.log)"
+        else
+            kick_fail="kick alignment could not run (status $kick_status)"
         fi
-        if [ "$kick_status" -eq 3 ]; then
-            fail "kick alignment judged nothing (status 3; every blend was CANNOT_JUDGE, see runmix.log)"
-        fi
-        fail "kick alignment could not run (status $kick_status)"
+    else
+        say "kick alignment check did not finish (status $kick_status); warn mode, the build goes on"
     fi
-    say "kick alignment check did not finish (status $kick_status); warn mode, the build goes on"
 fi
+# Grid phase: a drift fit and a slide per track, measured by the kick check, into a NEW file. It is a suggestion only:
+# the final stays Sections V$B.als (the MixPlan reconciliation pins that file's warp grid), and whatever happens here
+# never stops the build. GRID_PHASE_MODE=off (any case) skips it; anything else (default) is suggest.
+case "${GRID_PHASE_MODE:-suggest}" in [oO][fF][fF]) grid_mode=off ;; *) grid_mode=suggest ;; esac
+phased="$P/Output/Sections V$B Phased.als"
+if [ "$grid_mode" = off ]; then
+    say "grid phase fix: off (GRID_PHASE_MODE=off), step skipped"
+else
+    say "grid phase fix ($grid_mode): report in $P/Output/Grid Phase"
+    rm -f -- "$P/Output/Sections V$B Phased"*          # the phased file, its REFUSED copy and any .partial of an earlier build
+    { python Tools/fix_grid_phase.py "$P/Output/Sections V$B.als" --audio "$P/Audio" --out "$phased" --report "$P/Output/Grid Phase"; } 2>> "$LOG" | tee -a "$LOG"
+    grid_status=${PIPESTATUS[0]}
+    if [ "$grid_status" -ne 0 ]; then
+        rm -f -- "$P/Output/Sections V$B Phased"*.partial "$phased"      # a tool that failed leaves no phased file behind
+        if [ "$grid_status" -eq 4 ]; then
+            say "grid phase fix REFUSED its own result (status 4, details in Output/Grid Phase); no phased file, the final is Sections V$B.als"
+        else
+            say "grid phase fix did not finish (status $grid_status); no phased file, the final is Sections V$B.als"
+        fi
+    elif [ ! -f "$phased" ]; then
+        say "grid phase fix wrote no phased file; the final is Sections V$B.als"
+    elif cmp -s -- "$P/Output/Sections V$B.als" "$phased"; then
+        say "grid phase: nothing to change (the phased file is a copy of Sections V$B.als)"
+    elif ! python Source/validate_als.py "$phased" >> "$LOG" 2>&1; then
+        rm -f -- "$phased"
+        say "GRID PHASE FILE FAILED VALIDATION and was deleted (details in runmix.log); the final is Sections V$B.als"
+    else
+        say "grid phase: phased file written, open it instead of Sections V$B.als if the report shows it is tighter; the MixPlan reconciliation covers the unphased original (the phased markers differ from the original by the corrections shown in the report: drift up to 12 ms, slide up to 15 ms)"
+    fi
+fi
+[ -z "$kick_fail" ] || fail "$kick_fail"
 python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/Sections V$B.als" --output "$P/Output/MIX_PLAN_RECONCILIATION.json" >> "$LOG" 2>&1 || fail "reconciliation"
 say "DONE: final = Sections V$B.als"

@@ -67,6 +67,17 @@ elif args[0] == "Tools/check_kick_alignment.py":
     if os.environ.get("PIPELINE_TEST_KICK_STDERR"):
         print(os.environ["PIPELINE_TEST_KICK_STDERR"], file=sys.stderr)
     sys.exit(int(os.environ.get("PIPELINE_TEST_KICK_RC", "0")))
+elif args[0] == "Tools/fix_grid_phase.py":
+    out = Path(args[args.index("--out") + 1])
+    print("RESULT PHASED: " + str(out))
+    if os.environ.get("PIPELINE_TEST_GRID_STDERR"):
+        print(os.environ["PIPELINE_TEST_GRID_STDERR"], file=sys.stderr)
+    rc = int(os.environ.get("PIPELINE_TEST_GRID_RC", "0"))
+    if rc == 0 or os.environ.get("PIPELINE_TEST_GRID_WRITE_ANYWAY"):
+        out.write_bytes(Path(args[1]).read_bytes() if os.environ.get("PIPELINE_TEST_GRID_SAME") else b"phased als")
+    sys.exit(rc)
+elif args[0] == "Source/validate_als.py" and "Phased" in args[1]:
+    sys.exit(1 if os.environ.get("PIPELINE_TEST_PHASED_VALIDATE_FAIL") else 0)
 '''
 
 
@@ -385,3 +396,124 @@ def test_kick_alignment_status_3_does_not_stop_a_warn_build(pipeline):
     result, _ = run(PIPELINE_TEST_KICK_RC="3")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "kick alignment check did not finish (status 3); warn mode, the build goes on" in result.stdout
+
+
+GRID = "Tools/fix_grid_phase.py"
+FINAL = f"{OUTPUT}/Sections V9.als"
+PHASED = f"{OUTPUT}/Sections V9 Phased.als"
+RECONCILE = "Source/validate_mix_plan_als.py"
+PHASED_LINE = ("grid phase: phased file written, open it instead of Sections V9.als if the report shows it is tighter; "
+               "the MixPlan reconciliation covers the unphased original (the phased markers differ from the original by "
+               "the corrections shown in the report: drift up to 12 ms, slide up to 15 ms)")
+
+
+def _reconciliations(calls):
+    return [call for call in calls if call[0] == RECONCILE]
+
+
+def test_grid_phase_runs_once_after_the_kick_alignment_and_never_changes_the_final(pipeline):
+    repo, run = pipeline
+    result, calls = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    grid_calls = [call for call in calls if call[0] == GRID]
+    assert grid_calls == [[GRID, FINAL, "--audio", f"{PROJECT}/Audio", "--out", PHASED, "--report", f"{OUTPUT}/Grid Phase"]]
+    assert calls.index([call for call in calls if call[0] == KICK][0]) < calls.index(grid_calls[0])
+    assert f"grid phase fix (suggest): report in {OUTPUT}/Grid Phase" in result.stdout
+    assert PHASED_LINE in result.stdout and PHASED_LINE in (repo / OUTPUT / "runmix.log").read_text()
+    assert "RESULT PHASED" in (repo / OUTPUT / "runmix.log").read_text()
+    assert (repo / PHASED).is_file() and (repo / FINAL).read_bytes() == b"later phase"
+    assert "DONE: final = Sections V9.als" in result.stdout
+    assert [call[3] for call in _reconciliations(calls)] == [FINAL]
+    assert not any("Phased" in " ".join(call) for call in calls if call[0] == RECONCILE)       # the reconciliation never sees it
+
+
+@pytest.mark.parametrize("value", ["suggest", "apply", "banana"])
+def test_any_grid_mode_but_off_is_suggest(pipeline, value):
+    _, run = pipeline
+    result, calls = run(GRID_PHASE_MODE=value)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "grid phase fix (suggest)" in result.stdout and "DONE: final = Sections V9.als" in result.stdout
+    assert [call[3] for call in _reconciliations(calls)] == [FINAL]
+    assert "APPLIED" not in result.stdout
+
+
+@pytest.mark.parametrize("value", ["off", "OFF", "Off", "oFF"])
+def test_grid_mode_off_skips_the_step_with_one_line(pipeline, value):
+    repo, run = pipeline
+    result, calls = run(GRID_PHASE_MODE=value)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any(call[0] == GRID for call in calls) and not (repo / PHASED).exists()
+    assert result.stdout.count("grid phase") == 1
+    assert "grid phase fix: off (GRID_PHASE_MODE=off), step skipped" in result.stdout
+    assert "DONE: final = Sections V9.als" in result.stdout
+
+
+@pytest.mark.parametrize("status, message", [
+    (2, "grid phase fix did not finish (status 2); no phased file, the final is Sections V9.als"),
+    (4, "grid phase fix REFUSED its own result (status 4"),
+    (127, "grid phase fix did not finish (status 127)"),
+])
+def test_a_grid_phase_tool_that_fails_never_stops_the_build(pipeline, status, message):
+    repo, run = pipeline
+    result, calls = run(PIPELINE_TEST_GRID_RC=str(status), PIPELINE_TEST_GRID_STDERR="Traceback: boom")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert message in result.stdout and "DONE: final = Sections V9.als" in result.stdout
+    assert "Traceback: boom" in (repo / OUTPUT / "runmix.log").read_text()
+    assert PHASED_LINE not in result.stdout and not (repo / PHASED).exists()
+    assert [call[3] for call in _reconciliations(calls)] == [FINAL]
+
+
+def test_a_stale_phased_file_from_an_earlier_build_is_removed_when_the_tool_fails(pipeline):
+    repo, run = pipeline
+    (repo / PHASED).write_bytes(b"old phased file")
+    result, _ = run(PIPELINE_TEST_GRID_RC="2")
+    assert result.returncode == 0 and not (repo / PHASED).exists()
+
+
+def test_a_phased_file_identical_to_the_final_is_reported_as_nothing_to_change(pipeline):
+    _, run = pipeline
+    result, _ = run(PIPELINE_TEST_GRID_SAME="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "grid phase: nothing to change" in result.stdout and PHASED_LINE not in result.stdout
+
+
+@pytest.mark.parametrize("status", [1, 2, 3])
+def test_grid_phase_runs_even_when_the_kick_alignment_fails_the_build_and_the_failure_still_stops_it(pipeline, status):
+    repo, run = pipeline
+    result, calls = run(KICK_ALIGNMENT_MODE="fail", PIPELINE_TEST_KICK_RC=str(status))
+    assert result.returncode == 1
+    assert [call[0] for call in calls].count(GRID) == 1 and (repo / PHASED).is_file()
+    assert "FAILED at: kick alignment" in result.stdout and "DONE" not in result.stdout
+    assert result.stdout.index("grid phase") < result.stdout.index("FAILED at: kick alignment")
+    assert not _reconciliations(calls)                 # the build stopped before the reconciliation
+
+
+def test_stale_refused_and_partial_files_of_an_earlier_build_are_removed(pipeline):
+    repo, run = pipeline
+    for name in ("Sections V9 Phased.als", "Sections V9 Phased REFUSED.als", "Sections V9 Phased.als.partial"):
+        (repo / OUTPUT / name).write_bytes(b"old")
+    result, _ = run(PIPELINE_TEST_GRID_RC="4")
+    assert result.returncode == 0
+    assert [p.name for p in (repo / OUTPUT).glob("Sections V9 Phased*")] == []
+
+
+def test_a_tool_that_fails_after_writing_the_phased_file_leaves_no_phased_file(pipeline):
+    repo, run = pipeline
+    result, _ = run(PIPELINE_TEST_GRID_RC="2", PIPELINE_TEST_GRID_WRITE_ANYWAY="1")
+    assert result.returncode == 0 and not (repo / PHASED).exists()
+
+
+def test_the_phased_file_is_validated_and_deleted_loudly_when_it_fails(pipeline):
+    repo, run = pipeline
+    result, calls = run(PIPELINE_TEST_PHASED_VALIDATE_FAIL="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "GRID PHASE FILE FAILED VALIDATION and was deleted" in result.stdout and PHASED_LINE not in result.stdout
+    assert not (repo / PHASED).exists() and "DONE: final = Sections V9.als" in result.stdout
+    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED] == [["Source/validate_als.py", PHASED]]
+
+
+def test_a_valid_phased_file_is_validated_before_the_line_is_printed(pipeline):
+    _, run = pipeline
+    result, calls = run()
+    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED]
+    assert PHASED_LINE in result.stdout

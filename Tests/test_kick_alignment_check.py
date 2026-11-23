@@ -253,6 +253,15 @@ def test_als_parse_gives_the_transition_and_the_source_beat_mapping(tmp_path):
     assert kac.source_position(t.outgoing, 48.0) is None and kac.source_position(t.incoming, 39.0) is None
 
 
+def test_a_track_knows_its_position_in_the_file_whatever_its_place_in_the_arrangement(tmp_path):
+    als = tmp_path / "tiny.als"
+    write_als(als, [
+        ("Second", "second.wav", [(40, 100, 8, 68)]),
+        ("First", "first.wav", [(0, 24, 0, 24)]),
+    ])
+    assert {t.name: t.doc_index for t in kac.read_als(als)} == {"Second": 0, "First": 1}
+
+
 def test_als_is_only_read(tmp_path):
     als = tmp_path / "tiny.als"
     write_als(als, [("First", "a.wav", [(0, 8, 0, 8)]), ("Second", "b.wav", [(4, 12, 0, 8)])])
