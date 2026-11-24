@@ -61,13 +61,19 @@ elif args[0] == "Tools/plan_mix_decisions.py":
         planned["whole_bar_alternatives"] = json.loads(os.environ["PIPELINE_TEST_WHOLE_BAR"])
     Path(args[args.index("--out") + 1]).write_text(json.dumps(planned), encoding="ascii")
 elif args[0] in {"Source/propose_arrangement.py", "Source/apply_automation.py"}:
-    Path(args[3]).write_bytes(b"later phase")
+    final_from = os.environ.get("PIPELINE_TEST_FINAL_FROM")
+    real = final_from and args[0] == "Source/apply_automation.py"
+    Path(args[3]).write_bytes(Path(final_from).read_bytes() if real else b"later phase")
 elif args[0] == "Tools/check_kick_alignment.py":
     print("T01 A to B: WARN click +7.3 ms main +15.7 ms shared kicks 38 SLOW_ATTACK")
     print("LOOK AT THESE PICTURES: " + args[args.index("--out") + 1])
     if os.environ.get("PIPELINE_TEST_KICK_STDERR"):
         print(os.environ["PIPELINE_TEST_KICK_STDERR"], file=sys.stderr)
     sys.exit(int(os.environ.get("PIPELINE_TEST_KICK_RC", "0")))
+elif args[0] == "Tools/fix_grid_phase.py" and os.environ.get("PIPELINE_TEST_REAL_TOOL"):
+    import subprocess
+    root = os.environ["PIPELINE_TEST_ROOT"]
+    sys.exit(subprocess.run([sys.executable, root + "/Tools/fix_grid_phase.py", *args[1:]]).returncode)
 elif args[0] == "Tools/fix_grid_phase.py":
     out = Path(args[args.index("--out") + 1])
     print("RESULT PHASED: " + str(out))
@@ -75,10 +81,38 @@ elif args[0] == "Tools/fix_grid_phase.py":
         print(os.environ["PIPELINE_TEST_GRID_STDERR"], file=sys.stderr)
     rc = int(os.environ.get("PIPELINE_TEST_GRID_RC", "0"))
     if rc == 0 or os.environ.get("PIPELINE_TEST_GRID_WRITE_ANYWAY"):
-        out.write_bytes(Path(args[1]).read_bytes() if os.environ.get("PIPELINE_TEST_GRID_SAME") else b"phased als")
+        phased_from = os.environ.get("PIPELINE_TEST_PHASED_FROM")
+        out.write_bytes(Path(args[1]).read_bytes() if os.environ.get("PIPELINE_TEST_GRID_SAME")
+                        else Path(phased_from).read_bytes() if phased_from else b"phased als")
+        report = Path(args[args.index("--report") + 1])
+        same = os.environ.get("PIPELINE_TEST_GRID_SAME")
+        if rc == 0:
+            report.mkdir(parents=True, exist_ok=True)
+            if not os.environ.get("PIPELINE_TEST_GRID_NO_REPORT"):
+                body = os.environ.get("PIPELINE_TEST_REPORT_JSON", '{"still_flamming": [], "edge_main_worse": []}')
+                (report / "grid_phase_report.json").write_text(body)
+        if rc == 0 and not os.environ.get("PIPELINE_TEST_GRID_NO_RECORD") and (not same or os.environ.get("PIPELINE_TEST_RECORD_ANYWAY")):
+            record_from = os.environ.get("PIPELINE_TEST_RECORD_FROM")
+            (report / "grid_phase.json").write_bytes(Path(record_from).read_bytes() if record_from else b'{"stub": "record"}')
     sys.exit(rc)
 elif args[0] == "Source/validate_als.py" and "Phased" in args[1]:
     sys.exit(1 if os.environ.get("PIPELINE_TEST_PHASED_VALIDATE_FAIL") else 0)
+elif args[0] == "Source/validate_mix_plan_als.py":
+    if os.environ.get("PIPELINE_TEST_REAL_VALIDATOR"):
+        import subprocess
+        root = os.environ["PIPELINE_TEST_ROOT"]
+        done = subprocess.run([sys.executable, root + "/Source/validate_mix_plan_als.py", *args[1:]],
+                              env=dict(os.environ, PYTHONPATH=root + "/Source"))
+        sys.exit(done.returncode)
+    if "--grid-phase" in args:
+        rc = int(os.environ.get("PIPELINE_TEST_PHASED_RECON_RC", "0"))
+        body = '{"status": "FAIL", "error": "stub"}' if rc else "{}" if os.environ.get("PIPELINE_TEST_PHASED_RECON_NO_SECTION") else '{"grid_phase": {"track_count": 1}}'
+        Path(args[args.index("--output") + 1]).write_text(body)
+        sys.exit(rc)
+    rc = int(os.environ.get("PIPELINE_TEST_RECON_RC", "0"))
+    if rc == 0 and "--output" in args:
+        Path(args[args.index("--output") + 1]).write_text('{"plain": true}')
+    sys.exit(rc)
 '''
 
 
@@ -119,7 +153,8 @@ def pipeline(tmp_path):
     calls_path = tmp_path / "calls.jsonl"
     env = dict(os.environ, BASH_ENV=bash_env.as_posix(),
                PIPELINE_TEST_PYTHON=Path(sys.executable).as_posix(),
-               PIPELINE_TEST_STUB=stub.as_posix(), PIPELINE_TEST_CALLS=str(calls_path))
+               PIPELINE_TEST_STUB=stub.as_posix(), PIPELINE_TEST_CALLS=str(calls_path),
+               PIPELINE_TEST_ROOT=ROOT.as_posix())
     for name in ("DEC", "PLANNER", "RESUME", "SECTION_MODE"):
         env.pop(name, None)
     if os.name == "nt":
@@ -331,7 +366,7 @@ def test_kick_alignment_runs_once_after_the_final_validate_and_prints_into_the_l
     kick_calls = [call for call in calls if call[0] == KICK]
     assert kick_calls == [[KICK, f"{OUTPUT}/Sections V9.als", "--audio", f"{PROJECT}/Audio",
                            "--out", f"{OUTPUT}/Kick Alignment", "--mode", "warn"]]
-    finals = [i for i, call in enumerate(calls) if call[0] == "Source/validate_als.py" and "--require-devices" in call]
+    finals = [i for i, call in enumerate(calls) if call[0] == "Source/validate_als.py" and call[1] == FINAL and "--require-devices" in call]
     assert finals and finals[-1] < calls.index(kick_calls[0])
     log = (repo / OUTPUT / "runmix.log").read_text()
     assert "T01 A to B: WARN click +7.3 ms main +15.7 ms shared kicks 38 SLOW_ATTACK" in log
@@ -441,14 +476,15 @@ def test_grid_phase_runs_once_after_the_kick_alignment_and_never_changes_the_fin
     assert not any("Phased" in " ".join(call) for call in calls if call[0] == RECONCILE)       # the reconciliation never sees it
 
 
-@pytest.mark.parametrize("value", ["suggest", "apply", "banana"])
-def test_any_grid_mode_but_off_is_suggest(pipeline, value):
+@pytest.mark.parametrize("value", ["suggest", "banana", "Apply", "APPLY", "applyy", "", "apply "])
+def test_any_grid_mode_but_off_and_exactly_apply_is_suggest(pipeline, value):
     _, run = pipeline
     result, calls = run(GRID_PHASE_MODE=value)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "grid phase fix (suggest)" in result.stdout and "DONE: final = Sections V9.als" in result.stdout
     assert [call[3] for call in _reconciliations(calls)] == [FINAL]
-    assert "APPLIED" not in result.stdout
+    assert "APPLIED" not in result.stdout and "grid phase applied" not in result.stdout
+    assert not [call for call in calls if "--grid-phase" in call]
 
 
 @pytest.mark.parametrize("value", ["off", "OFF", "Off", "oFF"])
@@ -523,11 +559,313 @@ def test_the_phased_file_is_validated_and_deleted_loudly_when_it_fails(pipeline)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "GRID PHASE FILE FAILED VALIDATION and was deleted" in result.stdout and PHASED_LINE not in result.stdout
     assert not (repo / PHASED).exists() and "DONE: final = Sections V9.als" in result.stdout
-    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED] == [["Source/validate_als.py", PHASED]]
+    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED] == [PHASED_VALIDATE]
 
 
 def test_a_valid_phased_file_is_validated_before_the_line_is_printed(pipeline):
     _, run = pipeline
     result, calls = run()
-    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED]
+    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED] == [PHASED_VALIDATE]
     assert PHASED_LINE in result.stdout
+
+
+# ---------------------------------------------------------------- apply mode: the phased file becomes the final only when everything passes
+
+RECORD = f"{OUTPUT}/Grid Phase/grid_phase.json"
+PHASED_RECON = f"{OUTPUT}/MIX_PLAN_RECONCILIATION_PHASED.json"
+PHASED_RECONCILIATION_CALL = [RECONCILE, f"{OUTPUT}/MIX_PLAN.json", f"{OUTPUT}/ARRANGEMENT_REPORT.json", PHASED,
+                              "--grid-phase", RECORD, "--grid-phase-original", FINAL, "--output", PHASED_RECON]
+PHASED_VALIDATE = ["Source/validate_als.py", PHASED, "--expected-tracks", "3", "--require-devices",
+                   "--arrangement-report", f"{OUTPUT}/ARRANGEMENT_REPORT.json"]
+RECON = f"{OUTPUT}/MIX_PLAN_RECONCILIATION.json"
+RECON_ORIGINAL = f"{OUTPUT}/MIX_PLAN_RECONCILIATION_ORIGINAL.json"
+PHASED_FAILED = f"{OUTPUT}/MIX_PLAN_RECONCILIATION_PHASED.FAILED.json"
+APPLIED = "DONE: final = Sections V9 Phased.als (grid phase applied)"
+
+
+def _not_applied(reason):
+    return f"DONE: final = Sections V9.als (grid phase NOT applied: {reason})"
+
+
+def _phased_reconciliations(calls):
+    return [call for call in calls if call[0] == RECONCILE and "--grid-phase" in call]
+
+
+def test_apply_makes_the_phased_file_the_final_when_everything_passes(pipeline):
+    repo, run = pipeline
+    result, calls = run(GRID_PHASE_MODE="apply")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert APPLIED in result.stdout and APPLIED in (repo / OUTPUT / "runmix.log").read_text()
+    assert "grid phase fix (apply): report in" in result.stdout
+    assert _reconciliations(calls)[0][3] == FINAL and "--grid-phase" not in _reconciliations(calls)[0]      # the original still reconciles first
+    assert _phased_reconciliations(calls) == [PHASED_RECONCILIATION_CALL] and len(_reconciliations(calls)) == 2
+    assert not (repo / PHASED_RECON).exists() and (repo / RECON).is_file() and (repo / RECON_ORIGINAL).is_file()      # adopted: renamed
+    assert (repo / PHASED).is_file() and (repo / FINAL).read_bytes() == b"later phase"
+    assert "final = Sections V9 Phased.als (grid phase applied)" in result.stdout
+
+
+def test_apply_runs_the_checks_in_order_validate_then_reconcile_original_then_reconcile_phased(pipeline):
+    _, run = pipeline
+    _, calls = run(GRID_PHASE_MODE="apply")
+    names = [(call[0], call[1]) for call in calls]
+    validate = names.index(("Source/validate_als.py", PHASED))
+    plain = [i for i, call in enumerate(calls) if call[0] == RECONCILE and "--grid-phase" not in call][0]
+    phased = [i for i, call in enumerate(calls) if call[0] == RECONCILE and "--grid-phase" in call][0]
+    assert [call[0] for call in calls].index(GRID) < validate < plain < phased
+
+
+@pytest.mark.parametrize("rc", [1, 2, 127])
+def test_apply_keeps_the_original_as_final_when_the_phased_reconciliation_fails(pipeline, rc):
+    repo, run = pipeline
+    result, calls = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_PHASED_RECON_RC=str(rc))
+    assert result.returncode == 0, result.stdout + result.stderr
+    reason = "the MixPlan reconciliation of the phased file failed (details in runmix.log, kept as MIX_PLAN_RECONCILIATION_PHASED.FAILED.json)"
+    assert _not_applied(reason) in result.stdout
+    assert APPLIED not in result.stdout and "grid phase applied" not in result.stdout
+    assert not (repo / PHASED_RECON).exists()
+    assert json.loads((repo / PHASED_FAILED).read_text())["status"] == "FAIL"       # the evidence is kept
+    assert json.loads((repo / RECON).read_text()) == {"plain": True} and not (repo / RECON_ORIGINAL).exists()    # nothing renamed
+    assert len(_phased_reconciliations(calls)) == 1
+
+
+def test_apply_does_not_trust_a_phased_reconciliation_that_has_no_grid_phase_section(pipeline):
+    repo, run = pipeline
+    result, _ = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_PHASED_RECON_NO_SECTION="1")
+    assert result.returncode == 0
+    assert _not_applied("the phased reconciliation passed without a grid_phase section (not trusted)") in result.stdout
+    assert not (repo / PHASED_RECON).exists() and (repo / PHASED_FAILED).is_file()
+    assert json.loads((repo / RECON).read_text()) == {"plain": True} and not (repo / RECON_ORIGINAL).exists()
+
+
+@pytest.mark.parametrize("options, reason", [
+    ({"PIPELINE_TEST_GRID_RC": "2"}, "the grid phase tool did not finish (status 2)"),
+    ({"PIPELINE_TEST_GRID_RC": "4"}, "the grid phase tool refused its own result (status 4)"),
+    ({"PIPELINE_TEST_GRID_SAME": "1"}, "nothing to change (the phased file is a copy of Sections V9.als)"),
+    ({"PIPELINE_TEST_PHASED_VALIDATE_FAIL": "1"}, "the phased file failed validate_als.py"),
+    ({"PIPELINE_TEST_GRID_NO_RECORD": "1"}, "the grid phase tool wrote no record (Output/Grid Phase/grid_phase.json)"),
+])
+def test_apply_keeps_the_original_when_an_earlier_step_did_not_give_a_valid_phased_file_and_record(pipeline, options, reason):
+    repo, run = pipeline
+    result, calls = run(GRID_PHASE_MODE="apply", **options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _not_applied(reason) in result.stdout
+    assert not _phased_reconciliations(calls) and not (repo / PHASED_RECON).exists()
+    assert [call[3] for call in _reconciliations(calls)] == [FINAL]
+    assert (repo / FINAL).read_bytes() == b"later phase"
+
+
+def test_apply_without_a_tool_run_leaves_no_phased_file_or_record_behind(pipeline):
+    repo, run = pipeline
+    for path in (PHASED, RECORD, PHASED_RECON):
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_bytes(b"left by an earlier build")
+    result, _ = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_GRID_RC="2")
+    assert result.returncode == 0 and not (repo / PHASED).exists() and not (repo / RECORD).exists() and not (repo / PHASED_RECON).exists()
+
+
+@pytest.mark.parametrize("mode", ["suggest", "apply"])
+def test_a_stale_record_and_phased_reconciliation_never_survive_a_new_build(pipeline, mode):
+    repo, run = pipeline
+    for path in (RECORD, PHASED_RECON):
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_bytes(b"left by an earlier build")
+    result, _ = run(GRID_PHASE_MODE=mode, PIPELINE_TEST_GRID_SAME="1")
+    assert result.returncode == 0 and not (repo / RECORD).exists() and not (repo / PHASED_RECON).exists()
+
+
+def test_apply_never_runs_when_the_original_reconciliation_fails_and_the_build_fails(pipeline):
+    repo, run = pipeline
+    result, calls = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_RECON_RC="1")
+    assert result.returncode == 1 and "FAILED at: reconciliation" in result.stdout and "DONE" not in result.stdout
+    assert not _phased_reconciliations(calls)
+
+
+def test_apply_does_not_decide_when_the_kick_alignment_stops_the_build(pipeline):
+    result, calls = pipeline[1](GRID_PHASE_MODE="apply", KICK_ALIGNMENT_MODE="fail", PIPELINE_TEST_KICK_RC="1")
+    assert result.returncode == 1 and "FAILED at: kick alignment" in result.stdout and "DONE" not in result.stdout
+    assert not _reconciliations(calls)
+
+
+@pytest.mark.parametrize("value", ["off", "OFF", "suggest"])
+def test_off_and_suggest_never_ask_for_a_phased_reconciliation(pipeline, value):
+    _, run = pipeline
+    result, calls = run(GRID_PHASE_MODE=value)
+    assert not _phased_reconciliations(calls) and "grid phase applied" not in result.stdout
+    assert "DONE: final = Sections V9.als\n" in result.stdout
+
+
+# the real validator behind the hook: real files, real exit codes
+
+@pytest.fixture
+def real_case(pipeline, tmp_path, monkeypatch):
+    from test_grid_phase_apply import make_case
+    (tmp_path / "case").mkdir()
+    case = make_case(tmp_path / "case", monkeypatch)
+    repo, run = pipeline
+    (repo / OUTPUT / "MIX_PLAN.json").write_bytes(case.plan.read_bytes())
+    (repo / OUTPUT / "ARRANGEMENT_REPORT.json").write_bytes(case.report.read_bytes())
+    options = dict(PIPELINE_TEST_REAL_VALIDATOR="1", PIPELINE_TEST_FINAL_FROM=str(case.original),
+                   PIPELINE_TEST_PHASED_FROM=str(case.phased), PIPELINE_TEST_RECORD_FROM=str(case.record),
+                   GRID_PHASE_MODE="apply")
+    return repo, run, case, options
+
+
+def test_the_real_validator_applies_a_phased_file_with_its_record(real_case):
+    repo, run, case, options = real_case
+    result, calls = run(**options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert APPLIED in result.stdout
+    recon = json.loads((repo / RECON).read_text())
+    assert recon["status"] == "PASS" and recon["grid_phase"]["track_count"] == 1
+    assert "grid_phase" not in json.loads((repo / RECON_ORIGINAL).read_text())          # the original's own reconciliation, kept
+
+
+def test_the_real_validator_keeps_the_original_when_the_record_is_tampered(real_case, tmp_path):
+    repo, run, case, options = real_case
+    record = json.loads(case.record.read_text())
+    record["tracks"][0]["original_markers"][1][0] += 1e-6            # one microsecond: no longer the pinned grid
+    forged = tmp_path / "forged.json"
+    forged.write_text(json.dumps(record))
+    result, _ = run(**dict(options, PIPELINE_TEST_RECORD_FROM=str(forged)))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "(grid phase NOT applied: the MixPlan reconciliation of the phased file failed" in result.stdout
+    assert "grid phase applied" not in result.stdout and not (repo / PHASED_RECON).exists()
+    log = (repo / OUTPUT / "runmix.log").read_text()
+    assert "grid phase record does not hold the pinned original warp grid" in log
+
+
+def test_the_real_validator_keeps_the_original_when_the_record_is_for_another_phased_file(real_case, tmp_path, monkeypatch):
+    repo, run, case, options = real_case
+    from test_grid_phase_apply import make_case
+    (tmp_path / "other").mkdir()
+    other = make_case(tmp_path / "other", monkeypatch, shifts={0: 6.0}).phased       # a different phasing of the same original
+    result, _ = run(**dict(options, PIPELINE_TEST_PHASED_FROM=str(other)))
+    assert result.returncode == 0 and "grid phase NOT applied" in result.stdout
+    assert "belongs to another ALS" in (repo / OUTPUT / "runmix.log").read_text()
+
+
+def test_the_real_tool_behind_the_hook_writes_the_record_where_the_hook_looks_for_it(pipeline, tmp_path):
+    import hashlib
+    from test_grid_phase_fix import make_mix
+    repo, run = pipeline
+    (tmp_path / "set").mkdir()
+    als, audio = make_mix(tmp_path / "set", "tiny", {"A": 0.0, "B": 8.0}, kick_beats={"B": range(0, 30)})
+    shutil.copytree(audio, repo / PROJECT / "Audio")
+    result, calls = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_REAL_TOOL="1", PIPELINE_TEST_FINAL_FROM=str(als))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert APPLIED in result.stdout and _phased_reconciliations(calls) == [PHASED_RECONCILIATION_CALL]
+    record = json.loads((repo / RECORD).read_text())
+    assert record["schema"] == "grid-phase/1" and record["tracks"]
+    assert record["phased_als_sha256"] == hashlib.sha256((repo / PHASED).read_bytes()).hexdigest()
+    assert record["original_als_sha256"] == hashlib.sha256((repo / FINAL).read_bytes()).hexdigest()
+
+
+# ---------------------------------------------------------------- fix round 1
+
+STALE = (PHASED, f"{OUTPUT}/Sections V9 Phased REFUSED.als", f"{OUTPUT}/Sections V9 Phased.als.partial", RECORD,
+         PHASED_RECON, PHASED_FAILED, RECON_ORIGINAL)
+
+
+@pytest.mark.parametrize("mode", ["off", "OFF", "suggest", "apply"])
+def test_every_mode_clears_what_an_earlier_build_left(pipeline, mode):
+    repo, run = pipeline
+    for path in STALE:
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_bytes(b"left by an earlier build")
+    result, _ = run(GRID_PHASE_MODE=mode, PIPELINE_TEST_GRID_RC="2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [path for path in STALE if (repo / path).exists()] == []
+
+
+def test_a_record_the_tool_left_beside_an_unchanged_file_is_removed(pipeline):
+    # a tool that writes a record next to a byte copy of the final: the record must not survive (the stale-file sweep
+    # before the tool runs cannot help, the tool wrote it after)
+    repo, run = pipeline
+    result, _ = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_GRID_SAME="1", PIPELINE_TEST_RECORD_ANYWAY="1")
+    assert result.returncode == 0 and "nothing to change" in result.stdout
+    assert not (repo / RECORD).exists()
+
+
+@pytest.mark.parametrize("mode", ["suggest", "apply"])
+def test_the_phased_file_is_validated_with_the_flags_of_the_original(pipeline, mode):
+    _, run = pipeline
+    _, calls = run(GRID_PHASE_MODE=mode)
+    assert [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == PHASED] == [PHASED_VALIDATE]
+    original = [call for call in calls if call[0] == "Source/validate_als.py" and call[1] == FINAL and "--require-devices" in call]
+    assert original and original[0][2:] == PHASED_VALIDATE[2:]
+
+
+def test_adopting_the_phased_file_makes_the_canonical_reconciliation_describe_the_final(pipeline):
+    import hashlib
+    repo, run = pipeline
+    result, _ = run(GRID_PHASE_MODE="apply")
+    assert result.returncode == 0 and APPLIED in result.stdout
+    assert json.loads((repo / RECON).read_text()) == {"grid_phase": {"track_count": 1}}       # the phased one is canonical
+    assert json.loads((repo / RECON_ORIGINAL).read_text()) == {"plain": True}
+    assert not (repo / PHASED_RECON).exists() and not (repo / PHASED_FAILED).exists()
+    digest = hashlib.sha256((repo / PHASED).read_bytes()).hexdigest()
+    line = [l for l in result.stdout.splitlines() if "final ALS:" in l][0]
+    assert line.endswith(f"Sections V9 Phased.als sha256 {digest}") and os.path.isabs(line.split("final ALS: ")[1].split(" sha256")[0])
+
+
+def test_when_the_phased_file_is_not_adopted_the_final_line_names_the_original_and_nothing_is_renamed(pipeline):
+    import hashlib
+    repo, run = pipeline
+    result, _ = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_PHASED_RECON_RC="1")
+    line = [l for l in result.stdout.splitlines() if "final ALS:" in l][0]
+    assert line.endswith(f"Sections V9.als sha256 {hashlib.sha256((repo / FINAL).read_bytes()).hexdigest()}")
+    assert json.loads((repo / RECON).read_text()) == {"plain": True} and not (repo / RECON_ORIGINAL).exists()
+
+
+def test_suggest_and_off_say_nothing_new_and_rename_nothing(pipeline):
+    repo, run = pipeline
+    for mode in ("suggest", "off"):
+        result, _ = run(GRID_PHASE_MODE=mode)
+        assert "final ALS:" not in result.stdout and not (repo / RECON_ORIGINAL).exists()
+        assert json.loads((repo / RECON).read_text()) == {"plain": True}
+
+
+@pytest.mark.parametrize("report, extra", [
+    ('{"still_flamming": [{"index": 7, "half": "first_half", "predicted": 9.0}], "edge_main_worse": []}',
+     "; still flamming: T07"),
+    ('{"still_flamming": [{"index": 7}, {"index": 3}, {"index": 7}], "edge_main_worse": []}', "; still flamming: T03,T07"),
+    ('{"still_flamming": [], "edge_main_worse": [{"label": "T02 No Panties to Taste", "estimator": "edge", "before": 0.5, "after": 4.7}]}',
+     "; edge or main hit worse: T02 edge"),
+    ('{"still_flamming": [{"index": 7}], "edge_main_worse": [{"label": "T02 A to B", "estimator": "edge"}, {"label": "T05 C to D", "estimator": "main"}]}',
+     "; still flamming: T07; edge or main hit worse: T02 edge, T05 main"),
+])
+def test_the_final_line_names_every_blend_the_tool_could_not_make_clean(pipeline, report, extra):
+    _, run = pipeline
+    result, _ = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_REPORT_JSON=report)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"DONE: final = Sections V9 Phased.als (grid phase applied{extra})" in result.stdout
+
+
+@pytest.mark.parametrize("options", [
+    {"PIPELINE_TEST_GRID_NO_REPORT": "1"},
+    {"PIPELINE_TEST_REPORT_JSON": "{not json"},
+    {"PIPELINE_TEST_REPORT_JSON": '{"edge_main_worse": []}'},
+])
+def test_an_unreadable_tool_report_keeps_the_original(pipeline, options):
+    repo, run = pipeline
+    result, _ = run(GRID_PHASE_MODE="apply", **options)
+    assert result.returncode == 0
+    assert "grid phase NOT applied: Output/Grid Phase/grid_phase_report.json is missing or unreadable" in result.stdout
+    assert json.loads((repo / RECON).read_text()) == {"plain": True} and not (repo / RECON_ORIGINAL).exists()
+    assert (repo / PHASED_FAILED).is_file()
+
+
+def test_a_project_path_with_an_ampersand_and_a_space(pipeline):
+    repo, run = pipeline
+    name = "Fish & Chips Mix"
+    for directory in ("Output", "Hints"):
+        (repo / "Test Project" / name / directory).mkdir(parents=True)
+    result, calls = run(project=name, GRID_PHASE_MODE="apply")
+    assert result.returncode == 0, result.stdout + result.stderr
+    base = f"Test Project/{name}/Output"
+    assert f"DONE: final = Sections V9 Phased.als (grid phase applied)" in result.stdout
+    assert [call for call in calls if call[0] == RECONCILE and "--grid-phase" in call] == [
+        [RECONCILE, f"{base}/MIX_PLAN.json", f"{base}/ARRANGEMENT_REPORT.json", f"{base}/Sections V9 Phased.als",
+         "--grid-phase", f"{base}/Grid Phase/grid_phase.json", "--grid-phase-original", f"{base}/Sections V9.als",
+         "--output", f"{base}/MIX_PLAN_RECONCILIATION_PHASED.json"]]
+    assert (repo / "Test Project" / name / "Output" / "MIX_PLAN_RECONCILIATION_ORIGINAL.json").is_file()

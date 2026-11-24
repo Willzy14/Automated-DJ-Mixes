@@ -631,9 +631,9 @@ def test_cli_writes_the_new_file_the_report_and_the_pictures_and_exits_zero(sets
     assert result.returncode == 0, result.stdout + result.stderr
     assert "RESULT PHASED" in result.stdout and "REPORT:" in result.stdout and "FAIL -> " in result.stdout
     assert out.is_file() and als.read_bytes() == before
-    assert (report / "grid_phase_report.txt").is_file() and (report / "grid_phase.json").is_file()
+    assert (report / "grid_phase_report.txt").is_file() and (report / "grid_phase_report.json").is_file()
     assert list(report.glob("T01 *.png"))
-    data = json.loads((report / "grid_phase.json").read_text())
+    data = json.loads((report / "grid_phase_report.json").read_text())
     assert data["status"] == gpf.PHASED and data["tracks"] and data["before"] and data["after"]
 
 
@@ -1089,3 +1089,106 @@ def test_the_edge_and_main_hit_report_reaches_the_outcome_of_a_run(sets, tmp_pat
     out = gpf.run(als, audio, tmp_path / "Phased.als", tmp_path / "report")
     assert out.status == gpf.PHASED and out.edge_main_worse == marker
     assert "main +0.0 -> +9.0 ms: aligned by click, as chosen by ear for this mix: check the picture" in gpf.report_text(out, als)
+
+
+# ---------------------------------------------------------------- the record (grid_phase.json) beside a phased file
+
+def _sha(path):
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def test_a_phased_run_writes_the_record_of_exactly_the_tracks_it_changed(outcomes, sets):
+    out = outcomes["late"]
+    assert out.status == gpf.PHASED
+    folder = Path(out.out_path).parent
+    record_path = folder / "late report" / gpf.RECORD_NAME
+    data = json.loads(record_path.read_text())
+    assert data["schema"] == "grid-phase/1" and data["tool"] == "Source/grid_phase_fix.py"
+    assert data["original_als_sha256"] == _sha(sets["late"][0]) and data["phased_als_sha256"] == _sha(out.out_path)
+    assert {t["doc_index"] for t in data["tracks"]} == set(out.changed)
+    root = gpf.ET.fromstring(text_of(sets["late"][0]))
+    tracks = list(root.iter("AudioTrack"))
+    for entry in data["tracks"]:
+        element = tracks[entry["doc_index"]]
+        assert entry["name"] == next(element.iter("EffectiveName")).get("Value")
+        original = [(float(m.get("SecTime")), float(m.get("BeatTime"))) for m in next(element.iter("AudioClip")).iter("WarpMarker")]
+        assert [tuple(pair) for pair in entry["original_markers"]] == original         # bit for bit
+        assert entry["max_abs_shift_ms"] > 0
+    assert not list((folder / "late report").glob("*.partial")) and record_path.read_text().isascii()
+
+
+def test_a_nothing_to_do_run_writes_no_record(outcomes):
+    out = outcomes["good"]
+    assert out.status == gpf.NOTHING
+    assert not (Path(out.out_path).parent / "good report" / gpf.RECORD_NAME).exists()
+
+
+def _stale_record(report):
+    report.mkdir(parents=True)
+    (report / gpf.RECORD_NAME).write_text("{\"stale\": true}")
+    (report / (gpf.RECORD_NAME + ".partial")).write_text("{")
+
+
+def test_a_run_that_writes_nothing_or_is_refused_leaves_no_stale_record(sets, tmp_path, monkeypatch):
+    als, audio = sets["good"]
+    _stale_record(tmp_path / "r1")
+    assert gpf.run(als, audio, tmp_path / "Phased.als", tmp_path / "r1").status == gpf.NOTHING
+    assert not list((tmp_path / "r1").glob("grid_phase.json*"))
+    monkeypatch.setattr(gpf, "solve_slides", lambda *a, **k: (np.array([8.0, 0.0]), 0.0))
+    als, audio = sets["slide"]
+    _stale_record(tmp_path / "r2")
+    assert gpf.run(als, audio, tmp_path / "Phased2.als", tmp_path / "r2").status == gpf.REFUSED_RESULT
+    assert not list((tmp_path / "r2").glob("grid_phase.json*"))
+
+
+def test_a_record_that_cannot_be_built_refuses_the_result_and_keeps_no_record(sets, tmp_path, monkeypatch):
+    monkeypatch.setattr(gpf, "build_record", lambda *a: (_ for _ in ()).throw(ValueError("forced")))
+    als, audio = sets["slide"]
+    out = gpf.run(als, audio, tmp_path / "Phased.als", tmp_path / "r")
+    assert out.status == gpf.REFUSED_RESULT and "grid phase record could not be made: forced" in out.reason
+    assert not (tmp_path / "Phased.als").exists() and Path(out.refused_path).exists()
+    assert not list((tmp_path / "r").glob("grid_phase.json*"))
+
+
+def test_an_unexpected_failure_while_writing_the_record_leaves_no_phased_file_and_no_partial(sets, tmp_path, monkeypatch):
+    monkeypatch.setattr(gpf, "build_record", lambda *a: (_ for _ in ()).throw(OSError("disk")))
+    als, audio = sets["slide"]
+    with pytest.raises(OSError):
+        gpf.run(als, audio, tmp_path / "Phased.als", tmp_path / "r")
+    assert not (tmp_path / "Phased.als").exists() and not list(tmp_path.glob("*.partial")) and not list((tmp_path / "r").glob("grid_phase.json*"))
+
+
+def test_cli_a_phased_run_writes_the_record_and_a_rerun_that_does_nothing_removes_it(sets, tmp_path):
+    als, audio = sets["slide"]
+    out, report = tmp_path / "Set Phased.als", tmp_path / "Grid Phase"
+    assert run_cli(als, "--audio", audio, "--out", out, "--report", report).returncode == 0
+    record = json.loads((report / "grid_phase.json").read_text())
+    assert record["phased_als_sha256"] == _sha(out) and (report / "grid_phase_report.json").is_file()
+    good, good_audio = sets["good"]
+    assert run_cli(good, "--audio", good_audio, "--out", out, "--report", report).returncode == 0
+    assert not (report / "grid_phase.json").exists()
+
+
+def test_cli_a_run_that_cannot_start_leaves_no_stale_record(tmp_path):
+    report = tmp_path / "r"
+    _stale_record(report)
+    bad = tmp_path / "bad.als"
+    bad.write_bytes(b"not gzip")
+    assert run_cli(bad, "--out", tmp_path / "o.als", "--report", report).returncode == 2
+    assert not list(report.glob("grid_phase.json*"))
+
+
+def test_the_validator_accepts_the_record_the_tool_wrote_on_a_real_run(outcomes, sets):
+    import validate_mix_plan_als as vmp
+    from automated_dj_mixes.warp_contract import summarize_track_warp_grids
+    out = outcomes["late"]
+    record, problems = vmp._load_grid_phase(Path(out.out_path).parent / "late report" / gpf.RECORD_NAME)
+    assert record is not None and not problems
+    before = list(gpf.ET.fromstring(text_of(sets["late"][0])).iter("AudioTrack"))
+    after = list(gpf.ET.fromstring(text_of(out.out_path)).iter("AudioTrack"))
+    for entry in record["tracks"]:
+        pin = summarize_track_warp_grids(before[entry["doc_index"]])        # what the plan pinned for the original
+        contract = dict(warp_marker_count=pin.marker_count, warp_grid_sha256=pin.grid_sha256, source_grid_bpm=pin.source_grid_bpm)
+        errors, worst = vmp._check_phased_track(entry["name"], contract, entry, after[entry["doc_index"]])
+        assert errors == [] and 0.0 < worst <= vmp.MAX_ABS_SHIFT_MS
