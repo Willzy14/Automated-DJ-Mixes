@@ -156,36 +156,70 @@ if [ "$kick_status" -ne 0 ]; then
         say "kick alignment check did not finish (status $kick_status); warn mode, the build goes on"
     fi
 fi
-# Grid phase: a drift fit and a slide per track, measured by the kick check, into a NEW file. It is a suggestion only:
-# the final stays Sections V$B.als (the MixPlan reconciliation pins that file's warp grid), and whatever happens here
-# never stops the build. GRID_PHASE_MODE=off (any case) skips it; anything else (default) is suggest.
-case "${GRID_PHASE_MODE:-suggest}" in [oO][fF][fF]) grid_mode=off ;; *) grid_mode=suggest ;; esac
+# Grid phase: a drift fit and a slide per track, measured by the kick check, into a NEW file. It never stops the build.
+# GRID_PHASE_MODE=off (any case) skips it; apply (exactly that spelling) lets the phased file become the final when it passes
+# validate_als.py and the MixPlan reconciliation against grid_phase.json (checked at the end, see below); anything else
+# (default) is suggest: the phased file is only offered, the final stays Sections V$B.als.
+case "${GRID_PHASE_MODE:-suggest}" in [oO][fF][fF]) grid_mode=off ;; apply) grid_mode=apply ;; *) grid_mode=suggest ;; esac
 phased="$P/Output/Sections V$B Phased.als"
+grid_record="$P/Output/Grid Phase/grid_phase.json"
+phased_recon="$P/Output/MIX_PLAN_RECONCILIATION_PHASED.json"
+apply_blocker=""
 if [ "$grid_mode" = off ]; then
     say "grid phase fix: off (GRID_PHASE_MODE=off), step skipped"
 else
     say "grid phase fix ($grid_mode): report in $P/Output/Grid Phase"
-    rm -f -- "$P/Output/Sections V$B Phased"*          # the phased file, its REFUSED copy and any .partial of an earlier build
+    rm -f -- "$P/Output/Sections V$B Phased"* "$phased_recon" "$grid_record"   # the phased file, its REFUSED copy, any .partial, its record and its reconciliation of an earlier build
     { python Tools/fix_grid_phase.py "$P/Output/Sections V$B.als" --audio "$P/Audio" --out "$phased" --report "$P/Output/Grid Phase"; } 2>> "$LOG" | tee -a "$LOG"
     grid_status=${PIPESTATUS[0]}
     if [ "$grid_status" -ne 0 ]; then
-        rm -f -- "$P/Output/Sections V$B Phased"*.partial "$phased"      # a tool that failed leaves no phased file behind
+        rm -f -- "$P/Output/Sections V$B Phased"*.partial "$phased" "$grid_record"      # a tool that failed leaves no phased file and no record behind
         if [ "$grid_status" -eq 4 ]; then
+            apply_blocker="the grid phase tool refused its own result (status 4)"
             say "grid phase fix REFUSED its own result (status 4, details in Output/Grid Phase); no phased file, the final is Sections V$B.als"
         else
+            apply_blocker="the grid phase tool did not finish (status $grid_status)"
             say "grid phase fix did not finish (status $grid_status); no phased file, the final is Sections V$B.als"
         fi
     elif [ ! -f "$phased" ]; then
+        apply_blocker="the grid phase tool wrote no phased file"
         say "grid phase fix wrote no phased file; the final is Sections V$B.als"
     elif cmp -s -- "$P/Output/Sections V$B.als" "$phased"; then
+        apply_blocker="nothing to change (the phased file is a copy of Sections V$B.als)"
+        rm -f -- "$grid_record"
         say "grid phase: nothing to change (the phased file is a copy of Sections V$B.als)"
     elif ! python Source/validate_als.py "$phased" >> "$LOG" 2>&1; then
-        rm -f -- "$phased"
+        apply_blocker="the phased file failed validate_als.py"
+        rm -f -- "$phased" "$grid_record"
         say "GRID PHASE FILE FAILED VALIDATION and was deleted (details in runmix.log); the final is Sections V$B.als"
+    elif [ "$grid_mode" = apply ] && [ ! -f "$grid_record" ]; then
+        apply_blocker="the grid phase tool wrote no record (Output/Grid Phase/grid_phase.json)"
+        say "grid phase: the phased file has no record (grid_phase.json); the final is Sections V$B.als"
+    elif [ "$grid_mode" = apply ]; then
+        say "grid phase: phased file written and valid; its MixPlan reconciliation against grid_phase.json decides the final (below)"
     else
         say "grid phase: phased file written, open it instead of Sections V$B.als if the report shows it is tighter; the MixPlan reconciliation covers the unphased original (the phased markers differ from the original by the corrections shown in the report: drift up to 12 ms, slide up to 15 ms)"
     fi
 fi
 [ -z "$kick_fail" ] || fail "$kick_fail"
 python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/Sections V$B.als" --output "$P/Output/MIX_PLAN_RECONCILIATION.json" >> "$LOG" 2>&1 || fail "reconciliation"
-say "DONE: final = Sections V$B.als"
+# Apply mode: the original above still had to reconcile. The phased file is the final only if the tool wrote it (PHASED, which
+# the tool only says when no judged blend got worse), validate_als.py passed it (above) and the reconciliation of it against
+# the record passes now. The first thing that fails keeps the original as the final, loudly, and never fails the build.
+final_text="Sections V$B.als"
+if [ "$grid_mode" = apply ]; then
+    if [ -z "$apply_blocker" ]; then
+        if ! python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$phased" --grid-phase "$grid_record" --output "$phased_recon" >> "$LOG" 2>&1; then
+            apply_blocker="the MixPlan reconciliation of the phased file failed (details in runmix.log)"
+        elif ! grep -q '"grid_phase"' "$phased_recon" 2>/dev/null; then
+            apply_blocker="the phased reconciliation passed without a grid_phase section (not trusted)"
+        fi
+    fi
+    if [ -z "$apply_blocker" ]; then
+        final_text="Sections V$B Phased.als (grid phase applied)"
+    else
+        rm -f -- "$phased_recon"
+        final_text="Sections V$B.als (grid phase NOT applied: $apply_blocker)"
+    fi
+fi
+say "DONE: final = $final_text"
