@@ -22,7 +22,8 @@ edge is reported only and never decides a verdict. A soft-attack kick (clean cli
 0 and a main-hit lag well away from it: more than 8 ms apart is flagged SLOW_ATTACK; an edge more than 8 ms from the
 click is flagged EDGE_DISAGREES (each only raises a PASS to WARN). The two per-beat rules (MINORITY_FLAM and the
 half-blend DRIFT_FLAM) judge a click beat or half at 8.0 ms, because single beats are noisier than medians; the main
-hit uses its 14.0 ms fail figure for them.
+hit uses its 14.0 ms fail figure for them. A half is a median of 8 to 40 beats, so a trusted click half of 5.0 ms or
+more that is still under 8.0 ms raises a PASS to WARN (HALF_OFF).
 
 Limits (not measured away): lags are in source milliseconds, not stretched milliseconds (the
 difference is the warp ratio times the lag, under about 3 percent). Fader, EQ and filter automation
@@ -30,8 +31,8 @@ is ignored: a beat still counts when both wavs have a kick there, even if the mi
 out. In a full mix the steepest rise can land on a bass note or a snare instead of the kick, so an
 estimator whose beats spread wider than SCATTER_MS (interquartile range) cannot fail a transition
 alone and cannot let it pass: the verdict is then at least WARN and the flag says which one. The one exception is a
-scattered main hit (the secondary number) beside a clean, trusted click: with the click median under 2.5 ms and the main
-median under 8 ms the verdict is not forced to WARN, and the SCATTER_MAIN flag is still printed.
+scattered main hit (the secondary number) beside a trusted click: it does not force the WARN by itself (a click median
+of 2.5 ms or more, or a main median of 8 ms or more, still gives one), and the SCATTER_MAIN flag is still printed.
 Not covered: a third track in a three-way overlap is not looked at (only neighbouring pairs are).
 The ALS is only read (the pipeline passes --out beside it, in Output; run by hand with no --out the CLI
 makes a "Kick Alignment" folder beside the ALS). A beat counts as a kick only when the 40-120 Hz peak is at least 3 times
@@ -483,8 +484,9 @@ def _minority(stat, shared, beat):
 
 
 def _lag_seen(click, main):
-    """The |median| of the estimator furthest past its own warn figure, or None when neither reaches it."""
-    seen = [(abs(st["median"]) / _WARN[name], abs(st["median"]))
+    """The |median| of the estimator furthest past its own fail figure, or None when neither reaches it (a lag
+    under it, on too few kicks, is within the noise and not worth printing)."""
+    seen = [(abs(st["median"]) / _FAIL[name], abs(st["median"]))
             for name, st in (("CLICK", click), ("MAIN", main)) if st.get("median") is not None]
     reached = [s for s in seen if s[0] >= 1.0]
     return max(reached)[1] if reached else None
@@ -493,13 +495,14 @@ def _lag_seen(click, main):
 def judge(shared, click, main, edge=None, kicks=None):
     """Verdict and flags from the shared-kick count, the lag summaries and each track's own kick count.
 
-    Each estimator is judged by its own figures (CLICK_* and MAIN_*): the transition is as bad as its worst
-    estimator. A scattered estimator (its beats spread wider than SCATTER_MS) may fail the transition only when
-    the other estimator corroborates it with a median of at least ITS OWN warn figure; alone it is capped at WARN
-    (LARGE_SCATTERED). A scattered estimator also forces at least WARN, except a scattered main hit while the click is
-    trusted with a median under CLICK_WARN_MS and the main median is under MAIN_WARN_MS (flag still printed). A half of the blend whose median is at its estimator's per-beat figure (CLICK_BEAT_FLAM_MS
-    for the click, MAIN_FAIL_MS for the main hit) on a trusted or corroborated estimator is DRIFT_FLAM and fails. The leading edge never decides a verdict: it only raises a
-    PASS to WARN when it sits more than EDGE_DISAGREE_MS from the click (EDGE_DISAGREES)."""
+    Each estimator is judged by its own figures (CLICK_* and MAIN_*): the transition is as bad as its worst estimator.
+    A scattered estimator (its beats spread wider than SCATTER_MS) may fail the transition only when the other estimator
+    corroborates it with a median of at least ITS OWN warn figure; alone it is capped at WARN (LARGE_SCATTERED). A
+    scattered estimator also forces at least WARN, except a scattered main hit while the click is trusted (the flag is
+    still printed). A half of the blend at its estimator's per-beat figure (CLICK_BEAT_FLAM_MS for the click, MAIN_FAIL_MS
+    for the main hit), on a trusted or corroborated estimator, is DRIFT_FLAM and fails; a trusted click half at
+    CLICK_FAIL_MS or more, short of that, raises a PASS to WARN (HALF_OFF). The leading edge never decides a verdict: it
+    only raises a PASS to WARN when it sits more than EDGE_DISAGREE_MS from the click (EDGE_DISAGREES)."""
     flags = []
     out_kicks, in_kicks, span = (tuple(kicks) + (None,))[:3] if kicks else (None, None, None)
     have = {"CLICK": _present(click), "MAIN": _present(main)}
@@ -539,11 +542,10 @@ def judge(shared, click, main, edge=None, kicks=None):
                 flags.append("DRIFT_FLAM")
             fail = True
     # a scattered estimator cannot let a blend pass, with one exception: the main hit is the secondary number (a slow-attack
-    # kick scatters it), so a scattered main hit alone does not force a WARN while the click is trusted and clean and the
-    # main median is under its own warn figure. The SCATTER_MAIN flag is still printed. A scattered click always forces it.
-    main_only = (scattered == {"MAIN"} and "CLICK" in present and meds["CLICK"] < CLICK_WARN_MS
-                 and meds["MAIN"] < MAIN_WARN_MS)
-    forced = bool(scattered) and not main_only
+    # kick scatters it), so a scattered main hit alone does not force a WARN while the click is present and trusted. A click
+    # median at CLICK_WARN_MS or more, or a main median at MAIN_WARN_MS or more, still gives a WARN through the ordinary warn
+    # test below. The SCATTER_MAIN flag is still printed. A scattered click always forces it.
+    forced = bool(scattered) and not (scattered == {"MAIN"} and "CLICK" in present)
     verdict = "FAIL" if fail else "WARN" if (any(v >= _WARN[name] for name, v in meds.items()) or forced) else "PASS"
     if len(present) == 2 and not scattered and abs(click["median"] - main["median"]) > SLOW_ATTACK_MS:
         flags.append("SLOW_ATTACK")
@@ -553,6 +555,14 @@ def judge(shared, click, main, edge=None, kicks=None):
     # that is not scattered, and only while its median is under its own per-beat figure, so nothing is hidden)
     if any(_minority(st, shared, _BEAT[name]) for name, st in present.items() if name not in scattered):
         flags.append("MINORITY_FLAM")
+        if verdict == "PASS":
+            verdict = "WARN"
+    # a half is a median of 8 to 40 beats, so the single-beat noise that sets CLICK_BEAT_FLAM_MS does not apply to it: a trusted
+    # click half at the median fail figure or more is a WARN even when it is under the half-blend flam figure
+    if ("CLICK" in present and "CLICK" not in scattered and "DRIFT_FLAM" not in flags
+            and any(click.get(h) is not None and click.get("n_" + h, click["n"]) >= MIN_ESTIMATOR_BEATS
+                    and abs(click[h]) >= CLICK_FAIL_MS for h in ("first_half", "second_half"))):
+        flags.append("HALF_OFF")
         if verdict == "PASS":
             verdict = "WARN"
     if _present(edge) and have["CLICK"] and abs(edge["median"] - click["median"]) > EDGE_DISAGREE_MS:
@@ -621,8 +631,11 @@ def explain(res):
         if "MINORITY_FLAM" in flags and st["iqr"] <= SCATTER_MS and _minority(st, res.shared_kicks, _BEAT[key]):
             out.append(f"{st['big']} of {res.shared_kicks} shared beats are {_BEAT[key]:g} ms or more apart on {name}")
         fh, sh = st.get("first_half"), st.get("second_half")
-        if fh is not None and sh is not None and abs(sh - fh) > _WARN[key]:
+        if fh is not None and sh is not None and abs(sh - fh) > _FAIL[key] and st["iqr"] <= SCATTER_MS:
             out.append(f"{name} drifts {fh:+.1f} ms to {sh:+.1f} ms")
+    if "HALF_OFF" in flags:
+        out.append(f"a click half of the blend is {_FAIL['CLICK']:g} ms or more off "
+                   f"({_fmt(res.click.get('first_half'))} then {_fmt(res.click.get('second_half'))}): look at the picture")
     if res.click_range_edge:
         out.append(f"{res.click_range_edge} click lags sat on the +-{XCORR_MAX_LAG_MS:g} ms edge and are not counted")
     return out

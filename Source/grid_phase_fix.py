@@ -48,8 +48,9 @@ from scipy import optimize
 
 import kick_alignment_check as kac
 
-# Decision figures: starting figures, Sam sets the real ones (2026-11-23).
-WARN_MS = kac.CLICK_WARN_MS      # a mix whose worst judged lag is under this is left alone
+# Decision figures: this tool's own starting figures (the kick check's verdict figures are separate: Sam set those on 2026-11-24).
+NEEDS_FIX_MS = 4.0              # a mix whose worst judged lag is under this is left alone: the tool's own noise floor (the kick check
+                                # resolves only 1 to 3 ms), not the kick check's 2.5 ms click warn figure
 # MAX_DRIFT_MS and OUTLIER_MS are separate cuts: a kick beat whose offset is OUTLIER_MS or more from its grid is dropped
 # from the fit (it is another sound, not a drifting kick); a fitted correction beyond MAX_DRIFT_MS is refused for the
 # track (a grid that far out is more likely a wrong grid or a wrong kick than a drift to repair). OUTLIER_MS is the
@@ -251,10 +252,10 @@ def build_blends(results, transitions, tracks):
 
 
 def needs_fixing(summary):
-    """A blend needs fixing when its median click lag is WARN_MS or more, or either half of it is at the kick check's
+    """A blend needs fixing when its median click lag is NEEDS_FIX_MS or more, or either half of it is at the kick check's
     CLICK_BEAT_FLAM_MS or more (a drift flam). A blend under both is left alone however far it is from zero."""
     halves = (summary.get("first_half"), summary.get("second_half"))
-    return abs(summary["median"]) >= WARN_MS or any(h is not None and abs(h) >= kac.CLICK_BEAT_FLAM_MS for h in halves)
+    return abs(summary["median"]) >= NEEDS_FIX_MS or any(h is not None and abs(h) >= kac.CLICK_BEAT_FLAM_MS for h in halves)
 
 
 # ------------------------------------------------------------------ the slide solve
@@ -273,8 +274,8 @@ def solve_slides(lags, pairs, n_tracks, movable=None, was=None, must_fix=None, h
     position); the lag of blend k after slides is lags[k] + s_out - s_in. Only tracks in `movable` (default: every track
     that sits in a blend) may slide, each within MAX_SLIDE_MS.
       `was[k]` (optional) is the |lag| blend k had in the input, `must_fix[k]` whether it needed fixing (default: its
-      was is WARN_MS or more; with no `was` every blend must be fixed).
-      do nothing   when the worst lag is under WARN_MS and no blend is further out than max(was, EPS_MS): a good mix is
+      was is NEEDS_FIX_MS or more; with no `was` every blend must be fixed).
+      do nothing   when the worst lag is under NEEDS_FIX_MS and no blend is further out than max(was, EPS_MS): a good mix is
                    never touched. A blend that was fine and that a drift correction pushed out is NOT left: it is repaired.
       stage 1      minimise t = max |lag| over the blends that must be fixed, with no cost on the slides: the best any
                    slides could do, t*. The blends that did not need fixing are held, meanwhile and in stage 2, to what
@@ -294,10 +295,10 @@ def solve_slides(lags, pairs, n_tracks, movable=None, was=None, must_fix=None, h
         return s, 0.0
     lags = np.asarray(lags, dtype=float)
     worst = float(np.max(np.abs(lags)))
-    if worst < WARN_MS and (was is None or all(abs(l) <= max(w, EPS_MS) for l, w in zip(lags, was))):
+    if worst < NEEDS_FIX_MS and (was is None or all(abs(l) <= max(w, EPS_MS) for l, w in zip(lags, was))):
         return s, worst
     n, count = n_tracks, len(lags)
-    fix = [True] * count if was is None else ([w >= WARN_MS for w in was] if must_fix is None else list(must_fix))
+    fix = [True] * count if was is None else ([w >= NEEDS_FIX_MS for w in was] if must_fix is None else list(must_fix))
     hold = [None if fix[k] else min(max(was[k], EPS_MS), was[k] + REFUSE_TOL_MS) for k in range(count)]
     can_slide = {i for pair in pairs for i in pair} if movable is None else set(movable)
     width = 2 * n + 1                                        # s_0..s_n-1, u_0..u_n-1 (u_i >= |s_i|), z
@@ -452,7 +453,7 @@ class Outcome:
     refused_path: str = ""
     refusals: list = field(default_factory=list)
     changed: dict = field(default_factory=dict)      # markers patched, by the track's position in the file (doc_index)
-    still_flamming: list = field(default_factory=list)    # blends whose predicted half is still at the FAIL figure or more
+    still_flamming: list = field(default_factory=list)    # blends whose predicted half is still at the click half figure (8 ms) or more
     edge_main_worse: list = field(default_factory=list)   # judged blends whose edge or main hit got worse (see edge_main_worse)
 
 
@@ -469,7 +470,8 @@ def _open_readers(tracks, als_path, audio_dir, wanted):
 
 def refusals(before, after):
     """Why the result must not be kept: a judged blend whose worst |click lag| (median or either half) got worse by
-    more than REFUSE_TOL_MS, one that can no longer be judged, or a blend that is FAIL now and was not before.
+    more than REFUSE_TOL_MS, one that can no longer be judged, or a blend that is FAIL now and was not before and whose worst
+    click lag also got worse by more than REFUSE_TOL_MS (a FAIL figure crossed by measurement drift is not a worse blend).
     Blends are matched by transition number, and a different number of transitions is itself a refusal. (One way only:
     a blend that could not be judged before and can be now is not compared, there is nothing to compare it with.)"""
     if len(before) != len(after):
@@ -482,7 +484,8 @@ def refusals(before, after):
             out.append(f"{b.label}: not in the result")
             continue
         name = b.label
-        if a.verdict == "FAIL" and b.verdict != "FAIL":
+        if a.verdict == "FAIL" and b.verdict != "FAIL" and not (
+                usable(a) and usable(b) and worst_click(a) <= worst_click(b) + REFUSE_TOL_MS):
             out.append(f"{name}: {b.verdict} before, FAIL after")
         if usable(b):
             if not usable(a):
@@ -519,7 +522,7 @@ def edge_main_worse(before, after):
 
 
 def still_flamming(blends, fits, slides):
-    """Blends in which a half is still at FAIL_MS or more after the corrections and slides the solve chose (the solve
+    """Blends in which a half is still at CLICK_BEAT_FLAM_MS or more after the corrections and slides the solve chose (the solve
     works on the median only, so a drift it cannot fit leaves its halves apart)."""
     found = []
     for b in blends:
@@ -568,7 +571,7 @@ def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
     untouched = {b.index: b.summary(zero, zero) for b in blends}
     needs_fix = {i for b in blends if needs_fixing(untouched[b.index]) for i in (b.out, b.inc)}
     if not needs_fix:
-        return nothing(f"every judged blend is already under {WARN_MS:g} ms (median click lag)")
+        return nothing(f"every judged blend is already under {NEEDS_FIX_MS:g} ms (median click lag)")
 
     # A track in any blend the check could not judge is not moved at all: nothing could verify the move there.
     frozen = {tracks.index(t) for tr, res in zip(transitions, before) if not usable(res) for t in (tr.outgoing, tr.incoming)}
@@ -691,7 +694,7 @@ def report_text(outcome, als_path):
         lines.append(f"markers changed on {names.get(doc_index, doc_index)}: {count}")
     for f in outcome.still_flamming:
         lines += ["", f"STILL FLAMMING (half): the fix does not reach it: T{f['index']:02d} {f['half'].replace('_', ' ')} "
-                      f"is predicted at {_num(f['predicted'])} ms (FAIL figure {kac.CLICK_BEAT_FLAM_MS:g} ms)"]
+                      f"is predicted at {_num(f['predicted'])} ms (half figure {kac.CLICK_BEAT_FLAM_MS:g} ms)"]
     if outcome.edge_main_worse:
         lines += ["", f"Edge or main hit lag got worse by more than {EDGE_MAIN_WORSE_MS:g} ms ({EDGE_MAIN_NOTE}):"]
         for w in outcome.edge_main_worse:
