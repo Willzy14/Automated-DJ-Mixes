@@ -40,6 +40,9 @@ KEY = find_data_file(ROOT, Path("Documentation") / "Golden Sections" / "Answer K
 CONTENT = find_data_file(ROOT, Path("Documentation") / "Golden Sections" / "Content 2026-11-20 DFTD.json",
                          "Content*.json")
 
+VOCAL_KEY = find_data_file(ROOT, Path("Documentation") / "Golden Sections" / "Vocal Key 2026-11-24 DFTD.json",
+                           "Vocal Key*.json")
+
 # Per-section `carries` overrides, applied to a COPY of the key data (the key is not edited).
 # Kept only for the OVERRIDES column: with labels alone R6 calls blends 3, 4 and 6 flat.  They
 # were INFERRED from Sam accepting those blends, not measured, so that column is partly
@@ -79,7 +82,21 @@ def prepare(track, name, mode, content):
         c = (content.get("tracks") or {}).get(name)   # a missing track falls back to labels
         if c:
             t["content"] = {k: c[k] for k in ("has_bass", "has_music", "has_kick") if k in c}
+            _add_vocal_key(t, name)
     return t
+
+
+def _add_vocal_key(track, name):
+    """Optional per-bar vocal flags and a Camelot key for a measured track (Tools/measure_vocal_key.py);
+    the file is absent or silent on a track, and then the track is exactly what it was."""
+    try:
+        data = json.loads(VOCAL_KEY.read_text(encoding="utf-8")).get("tracks", {}).get(name) or {}
+    except FileNotFoundError:
+        return
+    if data.get("has_vocal"):
+        track["content"]["has_vocal"] = list(data["has_vocal"])
+    if data.get("key"):
+        track["key"] = data["key"]
 
 
 def sam_numbers(blend, out_t):

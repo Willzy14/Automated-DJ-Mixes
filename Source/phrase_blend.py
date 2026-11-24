@@ -60,6 +60,8 @@ flat-blend check (rule R6).  A track may also carry "content": {"has_bass": [...
 [...], "has_kick": [...]} (0/1 per bar, from Tools/measure_section_content.py); R6 then uses
 MEASURED content.  A track without usable content (none, empty lists, lists of different
 lengths, or no has_kick under the bottom-end rule) falls back to labels, and `why` says so.
+Two more OPTIONAL inputs feed soft clash costs (2026-11-24): content["has_vocal"] (per bar, the same bar
+clock and length as the others) and track["key"] (a Camelot code such as "8A").  Without them nothing changes.
 
 Blend geometry (all numbers are the OUTGOING track's own bar numbers):
   in_starts_at_out_bar   where the incoming track's bar 0 plays
@@ -195,6 +197,28 @@ LONG_INTRO_SECONDS = 20.0
 MIN_BLEND_SECONDS = 30.0
 W_SHORT_BLEND = 0.25
 
+# Vocal and key clash (2026-11-24, Sam: "make vocal clash and key actually influence the blend").  Two SOFT
+# terms, never a ban: a clash that cannot be avoided is still plannable and is reported on the plan.
+# Both need data the planner treats as OPTIONAL: content["has_vocal"] (per bar, same clock as has_kick) and
+# track["key"] (a Camelot code).  A track without them gives the plan it always gave.
+# Weights come from Sam's own blends (Tools/measure_vocal_key.py; the table is in the 2026-11-24 build note):
+#  - vocals: on his 7 DFTD answer-key blends and the 7 scoreable Tech House blends he left or made, the
+#    overlap bars with a vocal on both tracks are 0 in every one (median 0, maximum 0).  His data caps nothing
+#    from above, so the rate is the planner's own per-bar clock rate, 0.25 (W_SWITCH_TIME, W_TRIM): a phrase of
+#    8 clashing vocal bars costs 2.0, the price of moving the swap by a phrase.
+#  - key: on the DFTD blends his worst case is blend 7 (Call 911 into Back In The Dance, 8A to 2A, 6 steps)
+#    over 3 tonal bars = 12 step-bars.  A first weight of 0.125 (12 step-bars = 1.5, under the 2.0 a phrase
+#    move costs) overturned his own blend 7 (his placement wins by 0.94 over the best clash-free plan, so
+#    the 12 step-bars must cost under 0.94).  His clash is deliberate, so the weight is the one his own
+#    placement survives: 0.0625 (12 step-bars = 0.75).  It is per tonal bar, so a long overlap of clashing
+#    music, which he never leaves in, still costs up to MAX_CLASH_COST.  The Tech House set has no keys
+#    (8 of 9 tracks are not in the Mixed In Key database), so it adds nothing there.
+# MAX_CLASH_COST keeps every long overlap of the worst clash below W_CUT: neither term can veto.
+W_VOCAL_CLASH = 0.25     # cost per overlap bar in which BOTH tracks have a vocal
+W_KEY_CLASH = 0.0625     # cost per Camelot step beyond compatible, per overlap bar in which BOTH tracks are tonal
+KEY_STEP_CAP = 4         # steps beyond compatible stop costing more here
+MAX_CLASH_COST = 8.0     # each clash term stops here, below W_CUT (12)
+
 CARRY_LABELS = ("DROP", "BUILD", "BREAK")     # v1: INTRO and OUTRO do not carry unless flagged
 CARRY_LABELS_BE = ("DROP", "BUILD")           # BE: a BREAK is not assumed to have a kick
 
@@ -226,6 +250,11 @@ class BlendPlan:
     in_point_kind: str = ""                         # what the swap lines up on, on the incoming
     out_point_kind: str = ""                        # ... and on the outgoing ("" when none)
     alternatives: list = field(default_factory=list)  # [Alternative]: other defensible swaps
+    vocal_clash_bars: float | None = None           # overlap bars with a vocal on BOTH tracks; None = unknown
+    key_clash: float | None = None                  # Camelot steps beyond compatible x tonal bars; None = unknown
+    key_steps: int | None = None                    # Camelot steps between the two keys (<= 1 is compatible)
+    key_tonal_bars: float = 0.0                     # overlap bars in which both tracks have music
+    key_pair: tuple = None                          # (outgoing key, incoming key) when both are known
 
     def __post_init__(self):
         if self.swap_incoming_bar is None:
@@ -660,6 +689,79 @@ def flat_cost(runs, r6=R6_BE):
     return W_FLAT_RUN * sum(max(0.0, n - FREE_FLAT_BARS) ** 2 for _, n in runs)
 
 
+# ---- vocal and key clash (optional data: has_vocal per bar, key as a Camelot code) -------
+def _bar_flags(track, name):
+    """The per-bar 0/1 list `name` from track["content"], or None when it is absent, empty, or not on the
+    same bar clock as the measured has_bass/has_music (lists of different lengths)."""
+    c = track.get("content")
+    flags = c.get(name) if isinstance(c, dict) else None
+    if not flags:
+        return None
+    for other in ("has_bass", "has_music"):
+        if c.get(other) and len(c[other]) != len(flags):
+            return None
+    return flags
+
+
+def _flag_at(flags, bar):
+    return bool(flags[min(max(int(bar + 1e-9), 0), len(flags) - 1)])
+
+
+def overlap_walk(out_t, in_t, a, e, loop_p=0.0, loop_l=0.0, out_src=None, in_cut=0.0):
+    """(length, outgoing bar, incoming bar) for each stretch of the heard overlap [a, e), stepped exactly as
+    content_check steps it: looped outgoing bars read their loop source, a cut incoming starts in_cut bars in."""
+    n_out = natural_end_bar(out_t)
+    if out_src is None and e > n_out + 1e-9:
+        out_src = loop_source(out_t)
+    x = a
+    while x < e - 1e-9:
+        nxt = min(x + 1.0, e)
+        if x < n_out - 1e-9 and n_out < nxt:
+            nxt = n_out
+        yield nxt - x, _out_bar(out_t, x, out_src or (0.0, 1.0)), max(_in_bar(x, a, loop_p, loop_l) + in_cut, 0.0)
+        x = nxt
+
+
+def vocal_clash_bars(out_t, in_t, a, e, loop_p=0.0, loop_l=0.0, out_src=None, in_cut=0.0):
+    """Overlap bars in which BOTH tracks have a vocal (the whole overlap, before and after the swap: the
+    outgoing's vocal still plays when its low end has gone).  None when either track has no has_vocal."""
+    ov, iv = _bar_flags(out_t, "has_vocal"), _bar_flags(in_t, "has_vocal")
+    if ov is None or iv is None:
+        return None
+    return sum(n for n, ob, ib in overlap_walk(out_t, in_t, a, e, loop_p, loop_l, out_src, in_cut)
+               if _flag_at(ov, ob) and _flag_at(iv, ib))
+
+
+def tonal_overlap_bars(out_t, in_t, a, e, loop_p=0.0, loop_l=0.0, out_src=None, in_cut=0.0):
+    """Overlap bars in which BOTH tracks have measured music.  A kick-and-bass-only bar cannot clash in key.
+    None when either track has no usable has_music."""
+    om, im = _bar_flags(out_t, "has_music"), _bar_flags(in_t, "has_music")
+    if om is None or im is None:
+        return None
+    return sum(n for n, ob, ib in overlap_walk(out_t, in_t, a, e, loop_p, loop_l, out_src, in_cut)
+               if _flag_at(om, ob) and _flag_at(im, ib))
+
+
+def camelot_steps(key_a, key_b):
+    """Moves between two Camelot codes: one per number step round the wheel, one for a letter flip.  0 is the
+    same key; 1 is a neighbour or the relative major/minor.  None when either is not a Camelot code."""
+    def parse(k):
+        k = str(k).strip().upper() if k is not None else ""
+        if len(k) < 2 or k[-1] not in "AB" or not k[:-1].isdigit() or not 1 <= int(k[:-1]) <= 12:
+            return None
+        return int(k[:-1]), k[-1]
+    pa, pb_ = parse(key_a), parse(key_b)
+    if pa is None or pb_ is None:
+        return None
+    d = abs(pa[0] - pb_[0])
+    return min(d, 12 - d) + (pa[1] != pb_[1])
+
+
+def key_excess(steps):
+    """Steps beyond compatible, capped: 0 for the same key, a neighbour or the relative key."""
+    return min(max(steps - 1, 0), KEY_STEP_CAP)
+
+
 # ---- candidate generation and scoring ---------------------------------------------------
 def _is_trim(out_t, e, out_pts):
     """Tail trim test (round 5): dropping the outgoing's last bars is allowed only when it is plainly
@@ -884,6 +986,34 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE, in_c
                 why.append("R6: %s content unusable under bottom end (no has_kick, empty or mismatched "
                            "lists); fell back to labels for it" % nm)
 
+    # vocal and key clash: optional soft terms, zero and silent without the data
+    vocal_bars = vocal_clash_bars(out_t, in_t, a, out_end, loop_p, loop_l, src, in_cut)
+    k_out, k_in = out_t.get("key"), in_t.get("key")
+    steps = camelot_steps(k_out, k_in)
+    tonal = tonal_overlap_bars(out_t, in_t, a, out_end, loop_p, loop_l, src, in_cut) if steps is not None else None
+    key_clash = None if steps is None or tonal is None else key_excess(steps) * tonal
+    if vocal_bars is not None:
+        v_cost = min(W_VOCAL_CLASH * vocal_bars, MAX_CLASH_COST)
+        if v_cost:
+            cost += v_cost
+            terms["vocal_clash"] = v_cost
+        if vocal_bars:
+            why.append("vocals overlap %g bars (both tracks have a vocal)" % vocal_bars)
+    if steps is not None and tonal is not None:
+        k_cost = min(W_KEY_CLASH * key_clash, MAX_CLASH_COST)
+        if k_cost:
+            cost += k_cost
+            terms["key_clash"] = k_cost
+        why.append("key %s to %s: %s over %g tonal bars" % (
+            k_out, k_in, "compatible" if steps <= 1 else "%d steps apart" % steps, tonal))
+    elif steps is not None:
+        why.append("key %s to %s: tonal content unknown, no key cost" % (k_out, k_in))
+    elif k_out is not None or k_in is not None:
+        why.append("key unknown for %s: no key cost" % ("both" if camelot_steps(k_out, "1A") is None
+                                                         and camelot_steps(k_in, "1A") is None else
+                                                         "the outgoing" if camelot_steps(k_out, "1A") is None
+                                                         else "the incoming"))
+
     # round 6 sane tier, round 8 fix 4: the window and length cliffs are gone; sane means a
     # both-sided pairing that keeps bottom end and does not cut the outgoing's usable outro.  The
     # swap's distance from the 30 s mark and the blend's length are graded costs, not tier gates.
@@ -899,7 +1029,9 @@ def _score(out_t, in_t, a, s, e, loop_p, loop_l, out_pts, in_pts, r6=R6_BE, in_c
                      in_loop_phrase_end=loop_p if loop_l > 0 else 0.0, minute_mark=minute,
                      out_trim_bars=trim, swap_at_bass_in=at_bass_in, swap_incoming_bar=k,
                      swap_anchored=anchored, paired=paired, sane=sane, in_point_kind=kind or k_type,
-                     out_point_kind=s_type)
+                     out_point_kind=s_type, vocal_clash_bars=vocal_bars, key_clash=key_clash,
+                     key_steps=steps, key_tonal_bars=tonal or 0.0,
+                     key_pair=(k_out, k_in) if steps is not None else None)
 
 
 def _rank_key(b):

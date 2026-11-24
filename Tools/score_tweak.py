@@ -46,6 +46,7 @@ def planner_tracks_from_project(project, names):
         if not (sections.is_file() and env.is_file()):
             raise ValueError("no analysis cache for %r in %s" % (n, stem_dir))
         found[n] = pmd.convert_track(pmd.read_json(sections), env)
+        found[n]["key"] = pmd.read_camelot(Path(project) / "Audio" / ("%s.wav" % n))
     return found
 
 

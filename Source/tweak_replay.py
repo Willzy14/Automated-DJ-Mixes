@@ -755,7 +755,9 @@ def _plan_json(plan):
             "intro_loop_bars": plan.in_intro_looped_bars, "intro_loop_phrase_end": plan.in_loop_phrase_end,
             "intro_cut_bars": plan.in_intro_cut_bars, "cost": round(plan.cost, 4),
             "terms": {t: round(v, 4) for t, v in sorted(plan.terms.items())}, "sane": plan.sane,
-            "out_cut_bars": plan.out_cut_bars, "out_trim_bars": plan.out_trim_bars}
+            "out_cut_bars": plan.out_cut_bars, "out_trim_bars": plan.out_trim_bars,
+            "vocal_clash_bars": plan.vocal_clash_bars, "key_clash": plan.key_clash,
+            "key_steps": plan.key_steps, "key_tonal_bars": plan.key_tonal_bars}
 
 
 def _assess(o, n, cs, top, pl, r6):

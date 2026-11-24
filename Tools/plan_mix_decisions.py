@@ -48,12 +48,63 @@ def convert_track(result, envelope_path):
     if len({len(values) for values in env.values()}) != 1 or not len(env["drums"]):
         raise ValueError(f"{envelope_path}: empty or misaligned envelope channels")
     kick, bass, music = bar_content(env, hop, bpm, n_bars, lead)
-    return {
+    track = {
         "bpm": bpm, "n_bars": n_bars, "lead_in_bars": lead,
         "sections": [[s["start_bar"], s["label"].upper()] for s in sections],
         "fills": [[fill.start_bar, fill.end_bar] for fill in fills],
         "content": {"has_kick": kick, "has_bass": bass, "has_music": music},
     }
+    vocals = vocal_bars(result, len(kick))
+    if vocals is not None:
+        track["content"]["has_vocal"] = vocals
+    return track
+
+
+def vocal_bars(result, n):
+    """Per-bar 0/1 vocal flags from the detector's signals["vocal_regions"] ([start_sec, end_sec, start_bar,
+    end_bar], bars in the track's own bar numbers, the clock of the section starts and of has_kick). None when
+    the detector recorded no such signal: the planner then ignores vocals for the track."""
+    regions = (result.get("signals") or {}).get("vocal_regions")
+    if regions is None:
+        return None
+    flags = [0] * n
+    for region in regions:
+        if len(region) < 4 or not all(math.isfinite(v) for v in region[2:4]):
+            continue
+        for bar in range(max(math.ceil(region[2]), 0), min(math.ceil(region[3]), n)):
+            flags[bar] = 1
+    return flags
+
+
+def read_camelot(wav_path):
+    """The track's key as a Camelot code from the sources the pipeline already reads (the file's own
+    MIK/ID3 tags, then the Mixed In Key database, as propose_arrangement does), or None when neither has it."""
+    try:
+        from automated_dj_mixes.mik_reader import read_mik_db_track, read_mik_from_tags
+        from automated_dj_mixes.sequencer import key_to_camelot
+        key = None
+        if wav_path.is_file():
+            key = read_mik_from_tags(wav_path).key
+            if not key:
+                found = read_mik_db_track(wav_path)
+                key = found.key if found else None
+        return key_to_camelot(key) if key else None
+    except Exception:
+        return None
+
+
+def clash_line(plan):
+    """One report line per blend: vocal overlap and key clash, or why there is no number."""
+    vocals = ("vocals unknown" if plan.vocal_clash_bars is None
+              else f"vocals overlap {plan.vocal_clash_bars:g} bars")
+    if plan.key_pair is None:
+        key = "key unknown"
+    elif plan.key_steps <= 1:
+        key = f"key {plan.key_pair[0]} to {plan.key_pair[1]} compatible"
+    else:
+        key = (f"key {plan.key_pair[0]} to {plan.key_pair[1]} clash ({plan.key_steps} steps) "
+               f"over {plan.key_tonal_bars:g} tonal bars")
+    return f"{vocals}; {key}"
 
 
 def order_input(project, sections_path):
@@ -252,6 +303,8 @@ def print_plan(plan, label):
           f"trim {plan.in_intro_cut_bars:g}, repeat {plan.in_intro_looped_bars:g} "
           f"at {plan.in_loop_phrase_end:g}; outgoing extension {plan.out_looped_bars:g} "
           f"from {plan.out_loop_source_bars}, cut {plan.out_cut_bars + plan.out_trim_bars:g}")
+    if plan.vocal_clash_bars is not None or plan.key_pair is not None:
+        print(f"    {clash_line(plan)}")
     for reason in plan.why:
         print(f"    {reason}")
 
@@ -340,6 +393,8 @@ def main(argv=None):
             reject_aliased_output(args.content, [*inputs, args.out])
         tracks = [convert_track(read_json(sections), envelope)
                   for sections, envelope in stem_inputs]
+        for name, track in zip(names, tracks):
+            track["key"] = read_camelot(args.project / "Audio" / f"{name}.wav")
         write_decisions(args.out, names, tracks, allow_partial=args.allow_partial)
         if args.content is not None:
             write_json_atomically(args.content, {"tracks": dict(zip(names, tracks))})

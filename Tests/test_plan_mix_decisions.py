@@ -720,3 +720,115 @@ def test_the_arranger_reads_a_decisions_file_with_the_substitution_record(blend_
     marked = propose_arrangement(als, sections, output.with_name("marked.als"), decisions_path=decisions)
     assert [ov.decision_exit for ov in marked.overlaps] == [ov.decision_exit for ov in plain.overlaps]
     assert [ov.decision_exit for ov in marked.overlaps][0] is not None
+
+
+# ---- vocal flags and keys for the planner's clash terms ----------------------------------------
+def lead_two_result():
+    return {
+        "bpm": 120, "n_bars": 20, "lead_in_bars": 2,
+        "analysis": {"section_detector": "groove-1", "sections_schema": 2},
+        "sections": [{"start_bar": 0, "start_sec": 4, "label": "intro"},
+                     {"start_bar": 16, "start_sec": 36, "label": "drop"}],
+        "signals": {"fill_sections": [], "vocal_regions": [[20.0, 36.0, 8, 16], [60.0, 62.0, 28, 29]]},
+    }
+
+
+def test_converter_marks_vocal_bars_on_the_same_bar_clock_as_the_other_content(tmp_path):
+    cache = tmp_path / "track__stemenv.npz"
+    np.savez(cache, hop_t=0.25, bass=np.ones(176), drums=np.ones(176), tiera_band_low=np.ones(176),
+             vocals=np.zeros(176), other=np.ones(176))
+    track = tool.convert_track(lead_two_result(), cache)
+    flags = track["content"]["has_vocal"]
+    assert track["lead_in_bars"] == 2
+    assert len(flags) == len(track["content"]["has_kick"]) == 20
+    assert [bar for bar, flag in enumerate(flags) if flag] == list(range(8, 16))   # the region at bars 8-16, exactly
+    assert track["content"]["has_music"] == [1] * 20
+
+
+def test_converter_leaves_has_vocal_out_when_the_detector_recorded_no_vocal_signal(tmp_path):
+    result = lead_two_result()
+    del result["signals"]["vocal_regions"]
+    cache = tmp_path / "track__stemenv.npz"
+    np.savez(cache, hop_t=0.25, bass=np.ones(176), drums=np.ones(176), tiera_band_low=np.ones(176),
+             vocals=np.zeros(176), other=np.ones(176))
+    assert "has_vocal" not in tool.convert_track(result, cache)["content"]
+    result["signals"]["vocal_regions"] = []
+    assert tool.convert_track(result, cache)["content"]["has_vocal"] == [0] * 20
+
+
+def test_vocal_regions_past_the_track_or_malformed_are_clipped_or_skipped():
+    result = {"signals": {"vocal_regions": [[0, 0, 17, 40], [0, 0], [0, 0, float("nan"), 3], [0, 0, -3, 2]]}}
+    assert tool.vocal_bars(result, 20) == [1, 1] + [0] * 15 + [1] * 3
+    assert tool.vocal_bars({}, 20) is None
+
+
+def test_read_camelot_uses_the_file_tags_then_the_mik_database(tmp_path, monkeypatch):
+    import automated_dj_mixes.mik_reader as mik
+    wav = tmp_path / "track.wav"
+    wav.write_bytes(b"")
+    tags = SimpleNamespace(key="Am")
+    monkeypatch.setattr(mik, "read_mik_from_tags", lambda path: tags)
+    monkeypatch.setattr(mik, "read_mik_db_track", lambda path: SimpleNamespace(key="12A"))
+    assert tool.read_camelot(wav) == "8A"
+    tags.key = None
+    assert tool.read_camelot(wav) == "12A"
+    monkeypatch.setattr(mik, "read_mik_db_track", lambda path: None)
+    assert tool.read_camelot(wav) is None
+    monkeypatch.setattr(mik, "read_mik_db_track", lambda path: SimpleNamespace(key="not a key"))
+    assert tool.read_camelot(wav) is None
+    assert tool.read_camelot(tmp_path / "missing.wav") is None
+
+
+def test_read_camelot_gives_none_when_the_mik_reader_fails(tmp_path, monkeypatch):
+    import automated_dj_mixes.mik_reader as mik
+    wav = tmp_path / "track.wav"
+    wav.write_bytes(b"")
+
+    def broken(path):
+        raise OSError("database is locked")
+
+    monkeypatch.setattr(mik, "read_mik_from_tags", broken)
+    assert tool.read_camelot(wav) is None
+
+
+def test_the_blend_line_says_vocal_overlap_and_key_or_that_it_is_unknown():
+    unknown = BlendPlan(1, 2, 3, 0, 0)
+    assert tool.clash_line(unknown) == "vocals unknown; key unknown"
+    clash = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=6, key_clash=48.0, key_steps=6, key_tonal_bars=12,
+                      key_pair=("8A", "3B"))
+    assert tool.clash_line(clash) == "vocals overlap 6 bars; key 8A to 3B clash (6 steps) over 12 tonal bars"
+    fine = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=0, key_clash=0.0, key_steps=1, key_pair=("8A", "9A"))
+    assert tool.clash_line(fine) == "vocals overlap 0 bars; key 8A to 9A compatible"
+
+
+def test_the_report_prints_the_line_for_the_top_plan_and_every_alternative(capsys):
+    top = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=4, key_steps=3, key_pair=("8A", "11B"), key_tonal_bars=5)
+    tool.print_plan(top, "Top")
+    assert "vocals overlap 4 bars; key 8A to 11B clash (3 steps) over 5 tonal bars" in capsys.readouterr().out
+    vocals_only = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=0)
+    tool.print_plan(vocals_only, "Alternative 1")
+    assert "vocals overlap 0 bars; key unknown" in capsys.readouterr().out
+
+
+def test_a_plan_made_without_vocal_or_key_data_prints_no_clash_line(capsys):
+    tool.print_plan(BlendPlan(1, 2, 3, 0, 0), "Top")
+    assert "vocals" not in capsys.readouterr().out
+
+
+def test_cli_hands_the_planner_the_vocal_flags_and_the_key(planner_inputs, monkeypatch, tmp_path):
+    args, output = planner_inputs
+    result = groove_result()
+    result["signals"]["vocal_regions"] = [[0, 2, 0, 1]]
+    for name in "ABC":
+        (tmp_path / "_Stem Analysis" / f"SECTIONS_STEM_{name}.json").write_text(json.dumps(result), encoding="ascii")
+    seen = []
+    keys = {"A.wav": "8A", "B.wav": None, "C.wav": "3B"}
+    monkeypatch.setattr(tool, "read_camelot", lambda path: keys[path.name])
+    monkeypatch.setattr(tool, "plan_blend",
+                        lambda out, inc, **_: seen.append((out, inc)) or BlendPlan(1, 2, 3, 0, 0, swap_incoming_bar=1))
+    content = tmp_path / "planner_content.json"
+    assert tool.main([*args, "--content", str(content)]) == 0
+    tracks = tool.read_json(content)["tracks"]
+    assert [tracks[n]["key"] for n in "ABC"] == ["8A", None, "3B"]
+    assert tracks["A"]["content"]["has_vocal"] == [1, 0, 0]
+    assert seen[0][0]["key"] == "8A" and seen[0][1]["key"] is None
