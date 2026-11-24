@@ -1129,6 +1129,10 @@ def test_the_minority_count_is_against_each_estimators_own_per_beat_figure():
     assert kac._minority(dict(big=7, median=0.0), 30, kac.CLICK_BEAT_FLAM_MS)
     assert not kac._minority(dict(big=7, median=8.0), 30, kac.CLICK_BEAT_FLAM_MS)   # the median is at the figure: not a minority
     assert kac._minority(dict(big=7, median=8.0), 30, kac.MAIN_FAIL_MS)
+    # the guard is the per-beat figure too: a click median of 6 ms (a median FAIL) with a fifth of the beats at 8 ms still
+    # names the minority; at a median of 8 ms it no longer does
+    assert kac.judge(30, stat(median=6.0, big=12), stat(median=0.0)) == ("FAIL", ["MINORITY_FLAM"])
+    assert kac.judge(30, stat(median=8.0, big=12), stat(median=0.0)) == ("FAIL", [])
 
 
 def test_a_click_beat_between_the_median_fail_figure_and_the_beat_figure_is_not_a_minority_flam():
