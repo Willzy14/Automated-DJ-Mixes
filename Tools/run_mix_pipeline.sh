@@ -163,13 +163,19 @@ fi
 case "${GRID_PHASE_MODE:-suggest}" in [oO][fF][fF]) grid_mode=off ;; apply) grid_mode=apply ;; *) grid_mode=suggest ;; esac
 phased="$P/Output/Sections V$B Phased.als"
 grid_record="$P/Output/Grid Phase/grid_phase.json"
+grid_report="$P/Output/Grid Phase/grid_phase_report.json"
+recon="$P/Output/MIX_PLAN_RECONCILIATION.json"
+recon_original="$P/Output/MIX_PLAN_RECONCILIATION_ORIGINAL.json"
 phased_recon="$P/Output/MIX_PLAN_RECONCILIATION_PHASED.json"
+phased_failed="$P/Output/MIX_PLAN_RECONCILIATION_PHASED.FAILED.json"
 apply_blocker=""
+# Nothing of an earlier build may pass for this build's result, in every mode (off included): the phased file, its REFUSED
+# copy, any .partial, its record, its reconciliations and the saved reconciliation of an earlier adopted original.
+rm -f -- "$P/Output/Sections V$B Phased"* "$phased_recon" "$phased_failed" "$recon_original" "$grid_record"
 if [ "$grid_mode" = off ]; then
     say "grid phase fix: off (GRID_PHASE_MODE=off), step skipped"
 else
     say "grid phase fix ($grid_mode): report in $P/Output/Grid Phase"
-    rm -f -- "$P/Output/Sections V$B Phased"* "$phased_recon" "$grid_record"   # the phased file, its REFUSED copy, any .partial, its record and its reconciliation of an earlier build
     { python Tools/fix_grid_phase.py "$P/Output/Sections V$B.als" --audio "$P/Audio" --out "$phased" --report "$P/Output/Grid Phase"; } 2>> "$LOG" | tee -a "$LOG"
     grid_status=${PIPESTATUS[0]}
     if [ "$grid_status" -ne 0 ]; then
@@ -188,7 +194,7 @@ else
         apply_blocker="nothing to change (the phased file is a copy of Sections V$B.als)"
         rm -f -- "$grid_record"
         say "grid phase: nothing to change (the phased file is a copy of Sections V$B.als)"
-    elif ! python Source/validate_als.py "$phased" >> "$LOG" 2>&1; then
+    elif ! python Source/validate_als.py "$phased" --expected-tracks $N --require-devices --arrangement-report "$P/Output/ARRANGEMENT_REPORT.json" >> "$LOG" 2>&1; then
         apply_blocker="the phased file failed validate_als.py"
         rm -f -- "$phased" "$grid_record"
         say "GRID PHASE FILE FAILED VALIDATION and was deleted (details in runmix.log); the final is Sections V$B.als"
@@ -204,22 +210,59 @@ fi
 [ -z "$kick_fail" ] || fail "$kick_fail"
 python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$P/Output/Sections V$B.als" --output "$P/Output/MIX_PLAN_RECONCILIATION.json" >> "$LOG" 2>&1 || fail "reconciliation"
 # Apply mode: the original above still had to reconcile. The phased file is the final only if the tool wrote it (PHASED, which
-# the tool only says when no judged blend got worse), validate_als.py passed it (above) and the reconciliation of it against
-# the record passes now. The first thing that fails keeps the original as the final, loudly, and never fails the build.
+# the tool only says when no judged blend's worst click lag got worse; its edge or main hit may), validate_als.py passed it with the same flags as the original (above), the
+# reconciliation of it passes against the record AND the original ALS, and the tool's report can be read (a blend it could not
+# fix, or whose edge or main hit got worse, is named in the final line, never hidden). The first thing that fails keeps the original as the final, loudly, and never
+# fails the build. When the phased file is adopted the saved reconciliation of the original becomes MIX_PLAN_RECONCILIATION_
+# ORIGINAL.json and the phased one becomes the canonical MIX_PLAN_RECONCILIATION.json, so the canonical file describes the
+# final ALS; when it is not adopted nothing is renamed, and a failed phased reconciliation is kept as ...PHASED.FAILED.json.
 final_text="Sections V$B.als"
+final_file="$P/Output/Sections V$B.als"
 if [ "$grid_mode" = apply ]; then
+    caveats=""
     if [ -z "$apply_blocker" ]; then
-        if ! python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$phased" --grid-phase "$grid_record" --output "$phased_recon" >> "$LOG" 2>&1; then
-            apply_blocker="the MixPlan reconciliation of the phased file failed (details in runmix.log)"
+        if ! python Source/validate_mix_plan_als.py "$P/Output/MIX_PLAN.json" "$P/Output/ARRANGEMENT_REPORT.json" "$phased" --grid-phase "$grid_record" --grid-phase-original "$P/Output/Sections V$B.als" --output "$phased_recon" >> "$LOG" 2>&1; then
+            apply_blocker="the MixPlan reconciliation of the phased file failed (details in runmix.log, kept as MIX_PLAN_RECONCILIATION_PHASED.FAILED.json)"
         elif ! grep -q '"grid_phase"' "$phased_recon" 2>/dev/null; then
             apply_blocker="the phased reconciliation passed without a grid_phase section (not trusted)"
         fi
     fi
     if [ -z "$apply_blocker" ]; then
-        final_text="Sections V$B Phased.als (grid phase applied)"
-    else
-        rm -f -- "$phased_recon"
+        caveats=$(python -c '
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="ascii"))
+parts = []
+flamming = sorted({"T%02d" % item["index"] for item in data["still_flamming"]})
+if flamming:
+    parts.append("still flamming: " + ",".join(flamming))
+worse = sorted({item["label"].split()[0] + " " + item["estimator"] for item in data["edge_main_worse"]})
+if worse:
+    parts.append("edge or main hit worse: " + ", ".join(worse))
+print("; ".join(parts))
+' "$grid_report" 2>> "$LOG") || apply_blocker="Output/Grid Phase/grid_phase_report.json is missing or unreadable (cannot tell which blends are still flamming or worse at the edge)"
+    fi
+    if [ -z "$apply_blocker" ]; then
+        if mv -f -- "$recon" "$recon_original" && mv -f -- "$phased_recon" "$recon"; then
+            final_file="$phased"
+            final_text="Sections V$B Phased.als (grid phase applied${caveats:+; $caveats})"
+        else
+            mv -f -- "$recon_original" "$recon" 2>/dev/null
+            apply_blocker="could not save the reconciliations (MIX_PLAN_RECONCILIATION_ORIGINAL.json)"
+        fi
+    fi
+    if [ -n "$apply_blocker" ]; then
+        [ ! -f "$phased_recon" ] || mv -f -- "$phased_recon" "$phased_failed"
         final_text="Sections V$B.als (grid phase NOT applied: $apply_blocker)"
     fi
+    final_info=$(python -c '
+import hashlib
+import os
+import sys
+
+path = os.path.abspath(sys.argv[1])
+print(path + " sha256 " + hashlib.sha256(open(path, "rb").read()).hexdigest())
+' "$final_file" 2>> "$LOG") && say "final ALS: $final_info" || say "final ALS: could not read $final_file to hash it"
 fi
 say "DONE: final = $final_text"
