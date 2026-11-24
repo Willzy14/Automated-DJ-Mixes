@@ -117,6 +117,8 @@ def sets(tmp_path_factory):
         "late60": make_set(root, "late60", in_delay_ms=60.0),
         "every4": make_set(root, "every4", in_delay_ms=lambda b: 15.0 if b % 4 == 0 else 0.0),
         "every5": make_set(root, "every5", in_delay_ms=lambda b: 15.0 if b % 5 == 0 else 0.0),
+        "every4_12": make_set(root, "every4_12", in_delay_ms=lambda b: 12.0 if b % 4 == 0 else 0.0),
+        "every4_6": make_set(root, "every4_6", in_delay_ms=lambda b: 6.0 if b % 4 == 0 else 0.0),
     }
 
 
@@ -165,24 +167,48 @@ def test_judge_thresholds(shared, expect):
 
 
 @pytest.mark.parametrize("click, main, expect", [
-    (3.9, 0.0, "PASS"), (4.0, 0.0, "WARN"), (0.0, -7.9, "WARN"), (-8.0, 0.0, "FAIL"), (1.0, 6.0, "WARN"),
+    (2.4, 0.0, "PASS"), (2.6, 0.0, "WARN"), (4.9, 0.0, "WARN"), (5.1, 0.0, "FAIL"), (-2.6, 0.0, "WARN"), (-5.1, 0.0, "FAIL"),
+    (0.0, 7.9, "PASS"), (0.0, 8.1, "WARN"), (0.0, 13.9, "WARN"), (0.0, 14.1, "FAIL"), (0.0, -8.1, "WARN"), (0.0, -14.1, "FAIL"),
+    (1.0, 6.0, "PASS"), (2.6, 8.1, "WARN"), (-2.0, 14.1, "FAIL"),
 ])
-def test_judge_uses_the_worse_of_the_two_in_absolute_value(click, main, expect):
+def test_each_estimator_is_judged_by_its_own_figures(click, main, expect):
     verdict, flags = kac.judge(40, dict(n=40, median=click, iqr=1.0), dict(n=40, median=main, iqr=1.0))
-    assert verdict == expect
+    assert verdict == expect, (verdict, flags)
 
 
-def test_judge_flags_a_slow_attack_and_never_passes_it():
-    verdict, flags = kac.judge(40, dict(n=40, median=0.0, iqr=1.0), dict(n=40, median=3.9, iqr=1.0))
-    assert flags == [] and verdict == "PASS"
-    verdict, flags = kac.judge(40, dict(n=40, median=-2.0, iqr=1.0), dict(n=40, median=2.5, iqr=1.0))
-    assert flags == ["SLOW_ATTACK"] and verdict == "WARN"
+def test_the_decision_figures_are_the_ones_sam_set_and_the_single_pair_is_gone():
+    assert (kac.CLICK_WARN_MS, kac.CLICK_FAIL_MS, kac.MAIN_WARN_MS, kac.MAIN_FAIL_MS) == (2.5, 5.0, 8.0, 14.0)
+    assert kac.SLOW_ATTACK_MS == 8.0 and kac.EDGE_DISAGREE_MS == 8.0
+    assert kac.CLICK_BEAT_FLAM_MS == 8.0 and kac.CLICK_BEAT_FLAM_MS > kac.CLICK_FAIL_MS     # single beats are noisier than medians
+    assert kac.MIN_SHARED_KICKS == 16 and kac.MINORITY_FRACTION == 0.20
+    assert not hasattr(kac, "WARN_MS") and not hasattr(kac, "FAIL_MS")
+
+
+def test_judge_flags_a_slow_attack_at_8_ms_not_4_and_never_passes_it():
+    quiet = lambda m: dict(n=40, median=m, iqr=1.0)
+    assert kac.judge(40, quiet(0.0), quiet(7.9)) == ("PASS", [])
+    assert kac.judge(40, quiet(0.0), quiet(5.0)) == ("PASS", [])           # 5 ms apart was a SLOW_ATTACK at 4
+    assert kac.judge(40, quiet(-2.4), quiet(5.5)) == ("PASS", [])          # exactly 7.9 apart
+    assert kac.judge(40, quiet(-2.0), quiet(6.5)) == ("WARN", ["SLOW_ATTACK"])      # 8.5 apart raises the PASS
+    assert kac.judge(40, quiet(2.0), quiet(-6.5)) == ("WARN", ["SLOW_ATTACK"])
 
 
 def test_a_scattered_estimator_cannot_fail_or_pass_alone():
     scattered = dict(n=40, median=-9.0, iqr=22.0)
     verdict, flags = kac.judge(40, dict(n=40, median=0.5, iqr=1.0), scattered)
     assert verdict == "WARN" and "SCATTER_MAIN" in flags
+    # a scattered click with clean medians cannot pass (the main hit alone is the one with an exemption)
+    assert kac.judge(40, dict(n=40, median=0.5, iqr=22.0), dict(n=40, median=0.5, iqr=1.0)) == ("WARN", ["SCATTER_CLICK"])
+
+
+@pytest.mark.parametrize("iqr, scattered", [(5.0, False), (6.4, False), (7.9, False), (8.0, False), (8.1, True), (9.0, True)])
+def test_the_scatter_boundary_is_8_ms_of_interquartile_range_for_both_estimators(iqr, scattered):
+    # SCATTER_MS has no figure of its own to hide behind: nothing between the click fail figure (5.0) and 8.0 scatters
+    quiet = stat(median=0.5)
+    click = kac.judge(40, stat(median=0.5, iqr=iqr), quiet)
+    main = kac.judge(40, quiet, stat(median=0.5, iqr=iqr))
+    assert click == (("WARN", ["SCATTER_CLICK"]) if scattered else ("PASS", []))
+    assert main == (("PASS", ["SCATTER_MAIN"]) if scattered else ("PASS", []))
 
 
 def test_few_kicks_with_a_huge_lag_say_so():
@@ -380,26 +406,26 @@ def fake_result(shared, click, main):
 
 def test_a_flam_on_a_minority_of_beats_is_not_hidden_by_the_median():
     values = [0.0] * 23 + [12.0] * 7
-    st = kac._stats(values, list(range(30)), 15)
+    st = kac._stats(values, list(range(30)), 15, kac.CLICK_BEAT_FLAM_MS)
     assert st["median"] == 0.0 and st["iqr"] == 0.0 and st["big"] == 7
-    verdict, flags = kac.judge(30, st, dict(st))
+    verdict, flags = kac.judge(30, st, stat(median=0.0))
     assert verdict == "WARN" and "MINORITY_FLAM" in flags
-    line = kac.summary_line(fake_result(30, st, dict(st)))
+    line = kac.summary_line(fake_result(30, st, stat(median=0.0)))
     assert "7 of 30 shared beats are 8 ms or more apart on click" in line
 
 
 def test_a_few_stray_beats_below_the_share_do_not_flag():
-    st = kac._stats([0.0] * 25 + [12.0] * 5, list(range(30)), 15)       # 5 of 30 is under 20 percent
-    assert kac.judge(30, st, dict(st)) == ("PASS", [])
+    st = kac._stats([0.0] * 25 + [12.0] * 5, list(range(30)), 15, kac.CLICK_BEAT_FLAM_MS)       # 5 of 30 is under 20 percent
+    assert kac.judge(30, st, stat(median=0.0)) == ("PASS", [])
 
 
 # ---- finding 4: a scattered estimator with a large median is named, drift is shown
 
 def test_a_scattered_estimator_with_a_large_median_is_flagged_large_scattered():
-    verdict, flags = kac.judge(40, stat(median=0.5), stat(median=-9.0, iqr=22.0))
+    verdict, flags = kac.judge(40, stat(median=0.5), stat(median=-15.0, iqr=22.0))
     assert verdict == "WARN" and flags == ["SCATTER_MAIN", "LARGE_SCATTERED"]
-    line = kac.summary_line(fake_result(40, stat(median=0.5), stat(median=-9.0, iqr=22.0)))
-    assert "main hit median -9.0 ms but the beats spread 22.0 ms" in line
+    line = kac.summary_line(fake_result(40, stat(median=0.5), stat(median=-15.0, iqr=22.0)))
+    assert "main hit median -15.0 ms but the beats spread 22.0 ms" in line
 
 
 def test_both_scattered_is_a_warn_and_never_a_pass():
@@ -444,12 +470,23 @@ def test_a_transition_with_no_click_lag_at_all_still_fails_on_the_main_hit(sets,
 
 # ---- finding 14 and 5: few kicks, said plainly
 
-def test_a_lag_of_4_to_8_ms_on_too_few_kicks_is_flagged():
-    verdict, flags = kac.judge(12, stat(n=12, median=7.9), stat(n=12, median=7.9))
-    assert (verdict, flags) == ("CANNOT_JUDGE", ["LARGE_LAG_FEW_KICKS"])
-    assert kac.judge(12, stat(n=12, median=3.9), stat(n=12, median=3.9)) == ("CANNOT_JUDGE", [])
+def test_a_lag_past_its_own_fail_figure_on_too_few_kicks_is_flagged():
+    # exact boundaries: the click at 4.9 is silent and at 5.0 flagged, the main hit at 13.9 silent and at 14.0 flagged
+    # (a lag under the fail figure on too few kicks is noise, not worth a line)
+    flagged = ("CANNOT_JUDGE", ["LARGE_LAG_FEW_KICKS"])
+    assert kac.judge(12, stat(n=12, median=7.9), stat(n=12, median=7.9)) == flagged
+    assert kac.judge(12, stat(n=12, median=4.9), stat(n=12, median=7.9)) == ("CANNOT_JUDGE", [])
+    assert kac.judge(12, stat(n=12, median=-4.9), stat(n=12, median=-13.9)) == ("CANNOT_JUDGE", [])
+    assert kac.judge(12, stat(n=12, median=5.0), stat(n=12, median=0.0)) == flagged
+    assert kac.judge(12, stat(n=12, median=-5.0), stat(n=12, median=0.0)) == flagged
+    assert kac.judge(12, stat(n=12, median=0.0), stat(n=12, median=14.0)) == flagged
+    assert kac.judge(12, stat(n=12, median=0.0), stat(n=12, median=-14.0)) == flagged
+    assert kac.judge(12, stat(n=12, median=2.7), stat(n=12, median=0.0)) == ("CANNOT_JUDGE", [])     # Planned T06 noise
     assert "a lag of 7.9 ms was seen but on too few kicks" in kac.summary_line(
         fake_result(12, stat(n=12, median=7.9), stat(n=12, median=7.9)))
+    assert "a lag of 5.1 ms was seen but on too few kicks" in kac.summary_line(
+        fake_result(12, stat(n=12, median=5.1), stat(n=12, median=0.0)))
+    assert "was seen" not in kac.summary_line(fake_result(12, stat(n=12, median=2.7), stat(n=12, median=0.0)))
 
 
 def test_cannot_judge_says_why_when_there_are_few_or_no_shared_kicks(measured):
@@ -730,8 +767,8 @@ def test_cli_without_out_writes_a_kick_alignment_folder_beside_the_als(tmp_path)
 
 # ================================================================ round 3: fixes from the Opus review
 
-def stats_for(values):
-    return kac._stats(list(values), list(range(len(values))), len(values) / 2)
+def stats_for(values, fail=None):
+    return kac._stats(list(values), list(range(len(values))), len(values) / 2, fail or kac.CLICK_BEAT_FLAM_MS)
 
 
 def readers_for(res, rows):
@@ -761,12 +798,171 @@ def test_a_15_ms_flam_on_the_last_45_percent_of_the_beats_is_a_drift_flam():
 
 
 def test_a_scattered_worst_estimator_needs_the_other_to_corroborate_it():
-    scattered = stat(median=-9.0, iqr=22.0)
+    scattered = stat(median=-15.0, iqr=22.0)
     assert kac.judge(40, stat(median=0.5), scattered) == ("WARN", ["SCATTER_MAIN", "LARGE_SCATTERED"])
-    assert kac.judge(40, stat(median=3.9), scattered)[0] == "WARN"
-    assert kac.judge(40, stat(median=5.0), scattered)[0] == "FAIL"           # click at WARN_MS or more corroborates
-    both = stat(median=12.0, iqr=20.0)
-    assert kac.judge(40, both, dict(both))[0] == "FAIL"                       # both scattered, both over FAIL_MS
+    assert kac.judge(40, stat(median=2.4), scattered)[0] == "WARN"
+    assert kac.judge(40, stat(median=2.6), scattered)[0] == "FAIL"           # click at its own warn figure or more corroborates
+    both = stat(median=15.0, iqr=20.0)
+    assert kac.judge(40, both, dict(both))[0] == "FAIL"                       # both scattered, both over their fail figures
+
+
+def test_corroboration_uses_the_other_estimators_own_warn_figure_both_ways():
+    scattered_main = stat(median=-15.0, iqr=22.0)             # over the main fail figure
+    assert kac.judge(40, stat(median=2.4), scattered_main)[0] == "WARN"
+    assert kac.judge(40, stat(median=-2.6), scattered_main)[0] == "FAIL"
+    scattered_click = stat(median=-6.0, iqr=22.0)             # over the click fail figure
+    verdict, flags = kac.judge(40, scattered_click, stat(median=7.9))
+    assert verdict == "WARN" and flags == ["SCATTER_CLICK", "LARGE_SCATTERED"]
+    assert kac.judge(40, scattered_click, stat(median=8.1))[0] == "FAIL"
+    assert kac.judge(40, scattered_click, stat(median=-8.1))[0] == "FAIL"
+
+
+def test_a_scattered_main_hit_beside_a_clean_trusted_click_does_not_force_a_warn():
+    # the main hit is the secondary number (a slow-attack kick scatters it); Sam's approved blend 2 reads click -1.3, main -4.2
+    scattered_main = stat(median=-4.2, iqr=22.7)
+    assert kac.judge(34, stat(median=-1.3), scattered_main) == ("PASS", ["SCATTER_MAIN"])
+    assert kac.judge(34, stat(median=2.4), stat(median=7.9, iqr=22.0)) == ("PASS", ["SCATTER_MAIN"])
+    assert kac.judge(34, stat(median=-2.4), stat(median=-7.9, iqr=22.0)) == ("PASS", ["SCATTER_MAIN"])
+    line = kac.summary_line(fake_result(34, stat(median=-1.3), scattered_main))
+    assert "T01" in line and "PASS" in line and "SCATTER_MAIN" in line
+
+
+def test_a_scattered_main_hit_still_forces_a_warn_when_the_click_or_the_main_median_is_not_clean():
+    scattered_main = stat(median=-4.2, iqr=22.7)
+    verdict, flags = kac.judge(34, stat(median=2.6), scattered_main)                    # click median at its warn figure
+    assert verdict == "WARN" and flags == ["SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, stat(median=-2.5), scattered_main)
+    assert verdict == "WARN" and flags == ["SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, stat(median=0.5), stat(median=8.1, iqr=22.0))         # main median past its warn figure
+    assert verdict == "WARN" and flags == ["SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, stat(median=0.5), stat(median=-8.0, iqr=22.0))
+    assert verdict == "WARN" and flags == ["SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, NO_STAT, stat(median=1.0, iqr=22.0))                  # no click to trust
+    assert verdict == "WARN" and flags == ["NO_CLICK", "SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, stat(median=0.5, iqr=20.0), stat(median=1.0, iqr=22.0))   # both scattered
+    assert verdict == "WARN" and flags == ["SCATTER_CLICK", "SCATTER_MAIN"]
+
+
+def test_a_scattered_click_always_forces_a_warn_whatever_the_main_hit_says():
+    verdict, flags = kac.judge(34, stat(median=0.5, iqr=20.0), stat(median=0.5))
+    assert verdict == "WARN" and flags == ["SCATTER_CLICK"]
+    verdict, flags = kac.judge(34, stat(median=-1.3, iqr=9.0), stat(median=-4.2))
+    assert verdict == "WARN" and flags == ["SCATTER_CLICK"]
+    verdict, flags = kac.judge(34, stat(median=0.5, iqr=20.0), NO_STAT)
+    assert verdict == "WARN" and flags == ["NO_MAIN", "SCATTER_CLICK"]
+
+
+def test_the_scattered_main_exemption_leaves_the_corroboration_and_the_cap_alone():
+    assert kac.judge(40, stat(median=0.5), stat(median=-15.0, iqr=22.0)) == ("WARN", ["SCATTER_MAIN", "LARGE_SCATTERED"])
+    assert kac.judge(40, stat(median=2.6), stat(median=-15.0, iqr=22.0))[0] == "FAIL"
+    assert kac.judge(40, stat(median=0.5), stat(median=-14.0, iqr=22.0))[0] == "WARN"
+
+
+def test_a_scattered_main_hit_is_corroborated_by_a_click_at_its_own_weak_warn_figure():
+    # documented intent: the corroborator needs only its OWN warn figure, so a click at 2.5 ms is a weak witness
+    main = lambda m: stat(median=m, iqr=22.0)
+    assert kac.judge(40, stat(median=2.4), main(14.0)) == ("WARN", ["SCATTER_MAIN", "LARGE_SCATTERED"])
+    assert kac.judge(40, stat(median=2.5), main(14.0)) == ("FAIL", ["SCATTER_MAIN"])
+    assert kac.judge(40, stat(median=2.6), main(-14.0))[0] == "FAIL"
+    assert kac.judge(40, stat(median=2.6), main(13.9)) == ("WARN", ["SCATTER_MAIN"])        # under the main fail figure: no FAIL
+    assert kac.judge(40, stat(median=2.4), main(13.9)) == ("WARN", ["SCATTER_MAIN"])
+
+
+def test_a_scattered_estimator_under_its_own_fail_figure_is_not_capped_but_is_still_a_warn():
+    assert kac.judge(40, stat(median=0.5), stat(median=-13.0, iqr=22.0)) == ("WARN", ["SCATTER_MAIN"])
+    assert kac.judge(40, stat(median=-4.9, iqr=22.0), stat(median=0.5)) == ("WARN", ["SCATTER_CLICK"])
+
+
+def test_a_half_is_checked_against_its_own_estimators_fail_figure():
+    quiet = stat(median=0.0)
+    verdict, flags = kac.judge(40, stat(median=1.0, first=8.0, second=0.0), quiet)
+    assert verdict == "FAIL" and "DRIFT_FLAM" in flags                       # a click half at its per-beat figure, 8
+    verdict, flags = kac.judge(40, quiet, stat(median=1.0, first=8.0, second=0.0))
+    assert "DRIFT_FLAM" not in flags and verdict == "PASS"                   # a main half of 8 ms: under 14
+    assert kac.judge(40, quiet, stat(median=1.0, first=0.0, second=-14.1))[0] == "FAIL"
+    assert "DRIFT_FLAM" not in kac.judge(40, quiet, stat(median=1.0, first=0.0, second=-13.9))[1]
+    assert kac.judge(40, stat(median=1.0, first=0.0, second=-8.1), quiet)[0] == "FAIL"
+    assert "DRIFT_FLAM" not in kac.judge(40, stat(median=1.0, first=7.9, second=0.0), quiet)[1]
+
+
+def test_a_click_half_between_the_median_fail_figure_and_the_beat_figure_is_a_warn_not_a_drift_flam():
+    # a half is a median of 8 to 40 beats, so it is not as noisy as one beat: at 5 to 7.9 ms it raises the verdict to WARN
+    # (HALF_OFF) but does not fail the blend (DRIFT_FLAM, at 8.0); Sam's approved result has halves of +3.5 and +4.3 ms
+    quiet = stat(median=0.0)
+    for half in (5.0, 6.0, 7.9, -5.0, -7.9):
+        assert kac.judge(40, stat(median=1.0, first=half, second=0.0), quiet) == ("WARN", ["HALF_OFF"]), half
+        assert kac.judge(40, stat(median=1.0, first=0.0, second=half), quiet) == ("WARN", ["HALF_OFF"]), half
+    for half in (4.9, -4.9, 4.3, 3.5):
+        assert kac.judge(40, stat(median=1.0, first=half, second=0.0), quiet) == ("PASS", []), half
+    assert kac.judge(40, stat(median=5.0), quiet)[0] == "FAIL"                # the median keeps its approved figure
+    assert kac.judge(40, stat(median=4.9, first=7.9, second=0.0), quiet) == ("WARN", ["HALF_OFF"])
+    assert kac.judge(40, stat(median=-5.0, first=-7.9), quiet)[0] == "FAIL"
+    assert kac.judge(40, stat(median=1.0, first=8.0, second=0.0), quiet) == ("FAIL", ["DRIFT_FLAM"])     # no HALF_OFF beside it
+
+
+def test_half_off_is_for_a_trusted_click_only_and_needs_enough_beats_in_the_half():
+    quiet = stat(median=0.0)
+    assert kac.judge(40, quiet, stat(median=1.0, first=7.9, second=0.0)) == ("PASS", [])         # a main half is judged at 14
+    assert kac.judge(40, quiet, stat(median=1.0, first=13.9, second=0.0)) == ("PASS", [])
+    assert kac.judge(40, stat(median=0.5, iqr=20.0, first=6.0, second=0.0), quiet) == ("WARN", ["SCATTER_CLICK"])
+    # K7: a half of fewer than MIN_ESTIMATOR_BEATS beats is not a measure (no HALF_OFF, no DRIFT_FLAM)
+    few = dict(stat(median=1.0, first=6.0, second=0.0), n_first_half=kac.MIN_ESTIMATOR_BEATS - 1, n_second_half=30)
+    enough = dict(few, n_first_half=kac.MIN_ESTIMATOR_BEATS)
+    assert kac.judge(40, few, quiet) == ("PASS", [])
+    assert kac.judge(40, enough, quiet) == ("WARN", ["HALF_OFF"])
+    few_big = dict(stat(median=1.0, first=15.0, second=0.0), n_first_half=kac.MIN_ESTIMATOR_BEATS - 1, n_second_half=30)
+    assert kac.judge(40, few_big, quiet) == ("PASS", [])
+    assert kac.judge(40, dict(few_big, n_first_half=kac.MIN_ESTIMATOR_BEATS), quiet) == ("FAIL", ["DRIFT_FLAM"])
+    assert kac.judge(40, quiet, dict(few_big, n_first_half=kac.MIN_ESTIMATOR_BEATS - 1)) == ("PASS", [])
+    assert kac.judge(40, quiet, dict(few_big, n_first_half=kac.MIN_ESTIMATOR_BEATS)) == ("FAIL", ["DRIFT_FLAM"])
+
+
+def test_the_half_off_message_survives_a_half_that_was_not_measured():
+    # found on a real mix: one half with too few beats has no median, and the line must still print
+    res = fake_result(40, dict(stat(median=1.0, first=6.0, second=None), n_second_half=1), stat(median=0.0))
+    assert res.verdict == "WARN" and res.flags == ["HALF_OFF"]
+    assert "(+6.0 ms then n/a)" in kac.summary_line(res)
+    res = fake_result(40, dict(stat(median=1.0, first=None, second=-6.0), n_first_half=0), stat(median=0.0))
+    assert "(n/a then -6.0 ms)" in kac.summary_line(res) and kac.results_json([res])[0]["flags"] == ["HALF_OFF"]
+
+
+def test_the_half_off_message_names_both_halves():
+    line = kac.summary_line(fake_result(40, stat(median=1.0, first=5.8, second=0.4), stat(median=0.0)))
+    assert "HALF_OFF" in line and "a click half of the blend is 5 ms or more off (+5.8 ms then +0.4 ms)" in line
+
+
+def test_a_scattered_half_needs_the_other_estimators_half_at_its_own_warn_figure():
+    scattered_main = stat(median=0.0, iqr=20.0, first=15.0, second=0.0)
+    verdict, flags = kac.judge(40, stat(median=0.0, first=2.6, second=0.0), scattered_main)
+    assert verdict == "FAIL" and "DRIFT_FLAM" in flags
+    verdict, flags = kac.judge(40, stat(median=0.0, first=2.4, second=0.0), scattered_main)
+    assert verdict == "PASS" and "DRIFT_FLAM" not in flags and "SCATTER_MAIN" in flags      # a scattered main beside a clean click
+    scattered_click = stat(median=0.0, iqr=20.0, first=8.0, second=0.0)
+    assert "DRIFT_FLAM" in kac.judge(40, scattered_click, stat(median=0.0, first=8.1, second=0.0))[1]
+    assert "DRIFT_FLAM" not in kac.judge(40, scattered_click, stat(median=0.0, first=7.9, second=0.0))[1]
+    assert "DRIFT_FLAM" not in kac.judge(40, stat(median=0.0, iqr=20.0, first=7.9, second=0.0), stat(median=0.0, first=8.1))[1]
+
+
+def test_the_messages_print_the_figure_of_the_estimator_concerned():
+    line = kac.summary_line(fake_result(40, stat(median=1.0, first=9.0, second=0.0), stat(median=0.0)))
+    assert "one half of the blend is 8 ms or more off on click" in line and "on main hit" not in line
+    line = kac.summary_line(fake_result(40, stat(median=0.0), stat(median=1.0, first=0.0, second=15.0)))
+    assert "one half of the blend is 14 ms or more off on main hit" in line and "on click" not in line
+    big = stat(median=0.0, big=8)
+    assert "8 of 40 shared beats are 14 ms or more apart on main hit" in kac.summary_line(fake_result(40, stat(median=0.0), big))
+    assert "8 of 40 shared beats are 8 ms or more apart on click" in kac.summary_line(fake_result(40, big, stat(median=0.0)))
+    # the drift text fires when the halves differ by more than the estimator's FAIL figure, never for a scattered estimator
+    both = lambda gap, iqr=1.0: (stat(median=0.5, iqr=iqr, first=0.0, second=gap), stat(median=0.5, iqr=iqr, first=0.0, second=gap))
+    assert "click drifts +0.0 ms to +5.1 ms" in kac.summary_line(fake_result(40, *both(5.1)))
+    assert "drifts" not in kac.summary_line(fake_result(40, *both(2.6)))
+    assert "click drifts" not in kac.summary_line(fake_result(40, *both(5.0)))
+    assert "main hit drifts +0.0 ms to +14.1 ms" in kac.summary_line(fake_result(40, *both(14.1)))
+    assert "main hit drifts" not in kac.summary_line(fake_result(40, *both(13.9)))
+    assert "drifts" not in kac.summary_line(fake_result(40, *both(20.0, iqr=9.0)))
+    scattered_main = (stat(median=0.5, first=3.5, second=-1.8), stat(median=-4.2, iqr=22.7, first=3.4, second=-4.9))
+    line = kac.summary_line(fake_result(40, *scattered_main))                                # Sam's approved blend 2
+    assert "main hit drifts" not in line                      # the scattered main hit never prints one
+    assert "click drifts +3.5 ms to -1.8 ms" in line          # the click's halves differ by 5.3 ms, more than its 5.0 figure
 
 
 def test_scatter_ms_is_its_own_figure_not_derived_from_fail_ms():
@@ -788,13 +984,124 @@ def test_the_summary_the_json_and_the_titles_carry_edge_click_and_main(measured)
 
 def test_edge_disagreeing_with_the_click_raises_a_pass_to_warn_and_never_changes_a_fail():
     quiet = stat(median=0.5)
-    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=6.0)) == ("WARN", ["EDGE_DISAGREES"])
-    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=4.0)) == ("PASS", [])
+    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=9.0)) == ("WARN", ["EDGE_DISAGREES"])
+    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=6.0)) == ("PASS", [])     # 5.5 apart was flagged at 4
+    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=8.4)) == ("PASS", [])     # 7.9 apart
+    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=8.6)) == ("WARN", ["EDGE_DISAGREES"])    # 8.1 apart
+    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=-7.9)) == ("WARN", ["EDGE_DISAGREES"])   # 8.4 apart
     big = stat(median=10.0)
     verdict, flags = kac.judge(40, big, dict(big), edge=stat(median=0.0))
     assert verdict == "FAIL" and "EDGE_DISAGREES" in flags
-    assert "leading edge +6.0 ms but click +0.5 ms" in kac.summary_line(
-        fake_result_with_edge(40, quiet, dict(quiet), stat(median=6.0)))
+    assert "leading edge +9.0 ms but click +0.5 ms" in kac.summary_line(
+        fake_result_with_edge(40, quiet, dict(quiet), stat(median=9.0)))
+
+
+def test_the_edge_never_decides_a_verdict():
+    quiet = stat(median=0.5)
+    for edge in (stat(median=40.0), stat(median=-40.0, iqr=30.0), stat(median=14.1)):
+        verdict, flags = kac.judge(40, quiet, dict(quiet), edge=edge)
+        assert (verdict, flags) == ("WARN", ["EDGE_DISAGREES"]), (edge, verdict, flags)     # raised from PASS, never to FAIL
+    for edge_median in (4.0, 5.0, 5.1, 8.0, 8.4):                                                   # edge off the click, but not by 8 ms
+        assert kac.judge(40, quiet, dict(quiet), edge=stat(median=edge_median))[0] == "PASS"
+    # a wide edge scatter changes nothing either (judge never reads the edge's iqr or its count of big beats:
+    # measure_transition builds the edge summary with no fail figure, so its count is always 0)
+    assert kac.judge(40, quiet, dict(quiet), edge=stat(median=0.5, iqr=50.0)) == ("PASS", [])
+
+
+def test_the_edge_is_summarised_without_a_fail_count(measured):
+    assert measured["every4_12"][0].edge["big"] == 0
+    assert measured["later"][0].edge["big"] == 0
+
+
+def test_sams_approved_blends_do_not_warn_from_the_edge_or_the_slow_attack():
+    # the automatic tool output, click / main / edge: blend 1 +0.5 / +7.3 / -2.1, blend 2 -1.3 / -4.2 / +4.7
+    for click, main, edge in ((0.5, 7.3, -2.1), (-1.3, -4.2, 4.7), (-0.3, 6.7, -2.9), (-0.9, -3.4, 5.5)):
+        assert kac.judge(40, stat(median=click), stat(median=main), edge=stat(median=edge)) == ("PASS", [])
+    # the copy rated best of three: blend 2 +4.3 / +0.6 / +9.0 is a WARN on the click, not on the edge
+    verdict, flags = kac.judge(40, stat(median=4.3), stat(median=0.6), edge=stat(median=9.0))
+    assert verdict == "WARN" and "EDGE_DISAGREES" not in flags
+
+
+@pytest.mark.parametrize("click, main, verdict_expected", [
+    (10.1, 16.5, "FAIL"), (-5.7, -8.5, "FAIL"),             # planned: flam heard on both
+    (4.1, 10.2, "WARN"), (0.6, -2.1, "PASS"),               # slid +6.4: blend 1 WARN, blend 2 PASS
+    (2.0, 8.1, "WARN"), (4.3, 0.6, "WARN"),                 # +8.5
+    (-1.5, 4.6, "PASS"), (6.5, 3.6, "FAIL"),                # +12
+    (-0.3, 6.7, "PASS"), (-0.9, -3.4, "PASS"),              # Get Right drift fixed, NP +5
+    (0.5, 7.3, "PASS"), (-1.3, -4.2, "PASS"),               # the automatic tool output
+])
+def test_the_listening_table_from_the_medians_alone(click, main, verdict_expected):
+    assert kac.judge(40, stat(median=click), stat(median=main))[0] == verdict_expected
+
+
+# the same twelve blends with the statistics the check really measured (median, spread, halves, beats at the per-beat
+# figure), judged as measure_transition judges them: name, blend, shared kicks, click, main, edge, expected verdict, kicks
+REAL_TABLE = [
+    ("planned", 1, 63, dict(n=61, median=10.058, iqr=6.42, big=36, first_half=11.54, second_half=8.325, n_first_half=44, n_second_half=17),
+     dict(n=63, median=16.542, iqr=3.8, big=46, first_half=16.56, second_half=14.519, n_first_half=44, n_second_half=19),
+     dict(n=57, median=7.46, iqr=1.124, big=0, first_half=7.704, second_half=7.434, n_first_half=38, n_second_half=19),
+     "FAIL", (80, 87, 79)),
+    ("planned", 2, 33, dict(n=32, median=-5.693, iqr=5.51, big=0, first_half=-2.017, second_half=-5.964, n_first_half=15, n_second_half=17),
+     dict(n=31, median=-8.455, iqr=22.842, big=6, first_half=-5.153, second_half=-8.773, n_first_half=14, n_second_half=17),
+     dict(n=32, median=0.531, iqr=1.452, big=0, first_half=0.73, second_half=-0.26, n_first_half=15, n_second_half=17),
+     "FAIL", (36, 124, 94)),
+    ("auto phased", 1, 59, dict(n=57, median=0.518, iqr=6.261, big=0, first_half=2.683, second_half=-1.742, n_first_half=40, n_second_half=17),
+     dict(n=59, median=7.293, iqr=4.083, big=5, first_half=7.333, second_half=4.482, n_first_half=40, n_second_half=19),
+     dict(n=53, median=-2.075, iqr=1.165, big=0, first_half=-1.866, second_half=-2.78, n_first_half=34, n_second_half=19),
+     "PASS", (81, 79, 79)),
+    ("auto phased", 2, 34, dict(n=33, median=-1.325, iqr=5.597, big=0, first_half=3.514, second_half=-1.801, n_first_half=15, n_second_half=18),
+     dict(n=32, median=-4.233, iqr=22.665, big=8, first_half=3.363, second_half=-4.934, n_first_half=14, n_second_half=18),
+     dict(n=33, median=4.732, iqr=1.448, big=0, first_half=4.927, second_half=3.908, n_first_half=15, n_second_half=18),
+     "PASS", (37, 124, 94)),
+    ("NP 5 ms", 1, 59, dict(n=57, median=-0.298, iqr=6.414, big=0, first_half=1.931, second_half=-2.594, n_first_half=40, n_second_half=17),
+     dict(n=59, median=6.66, iqr=3.993, big=5, first_half=6.66, second_half=3.645, n_first_half=40, n_second_half=19),
+     dict(n=53, median=-2.892, iqr=1.282, big=0, first_half=-2.649, second_half=-3.596, n_first_half=34, n_second_half=19),
+     "PASS", (81, 79, 79)),
+    ("NP 5 ms", 2, 34, dict(n=33, median=-0.86, iqr=5.458, big=0, first_half=4.32, second_half=-0.995, n_first_half=15, n_second_half=18),
+     dict(n=32, median=-3.426, iqr=22.665, big=12, first_half=4.17, second_half=-4.127, n_first_half=14, n_second_half=18),
+     dict(n=33, median=5.539, iqr=1.448, big=0, first_half=5.734, second_half=4.715, n_first_half=15, n_second_half=18),
+     "PASS", (37, 124, 94)),
+    ("slide +6.4", 1, 59, dict(n=57, median=4.055, iqr=6.467, big=10, first_half=5.655, second_half=1.925, n_first_half=40, n_second_half=17),
+     dict(n=59, median=10.177, iqr=3.816, big=13, first_half=10.245, second_half=8.119, n_first_half=40, n_second_half=19),
+     dict(n=53, median=1.07, iqr=1.021, big=0, first_half=1.332, second_half=1.034, n_first_half=34, n_second_half=19),
+     "WARN", (80, 79, 79)),
+    ("slide +6.4", 2, 33, dict(n=32, median=0.606, iqr=5.301, big=2, first_half=5.789, second_half=0.405, n_first_half=14, n_second_half=18),
+     dict(n=31, median=-2.055, iqr=22.72, big=11, first_half=1.318, second_half=-2.727, n_first_half=13, n_second_half=18),
+     dict(n=32, median=6.931, iqr=1.674, big=0, first_half=7.132, second_half=6.115, n_first_half=14, n_second_half=18),
+     "WARN", (36, 124, 94)),
+    ("slide +8.5", 1, 59, dict(n=57, median=1.955, iqr=6.463, big=0, first_half=3.555, second_half=-0.175, n_first_half=40, n_second_half=17),
+     dict(n=59, median=8.077, iqr=3.816, big=5, first_half=8.145, second_half=6.019, n_first_half=40, n_second_half=19),
+     dict(n=53, median=-1.03, iqr=1.021, big=0, first_half=-0.768, second_half=-1.066, n_first_half=34, n_second_half=19),
+     "WARN", (80, 77, 79)),
+    ("slide +8.5", 2, 28, dict(n=28, median=4.268, iqr=6.491, big=8, first_half=8.252, second_half=2.506, n_first_half=12, n_second_half=16),
+     dict(n=28, median=0.636, iqr=21.356, big=11, first_half=10.539, second_half=-0.116, n_first_half=12, n_second_half=16),
+     dict(n=27, median=9.039, iqr=1.974, big=0, first_half=9.256, second_half=8.24, n_first_half=12, n_second_half=15),
+     "FAIL", (31, 124, 94)),
+    ("slide +12", 1, 59, dict(n=57, median=-1.545, iqr=6.467, big=0, first_half=0.055, second_half=-3.675, n_first_half=40, n_second_half=17),
+     dict(n=59, median=4.577, iqr=3.816, big=5, first_half=4.645, second_half=2.519, n_first_half=40, n_second_half=19),
+     dict(n=53, median=-4.53, iqr=1.021, big=0, first_half=-4.268, second_half=-4.566, n_first_half=34, n_second_half=19),
+     "PASS", (80, 77, 79)),
+    ("slide +12", 2, 30, dict(n=30, median=6.53, iqr=7.525, big=14, first_half=12.648, second_half=5.995, n_first_half=12, n_second_half=18),
+     dict(n=30, median=3.574, iqr=22.194, big=11, first_half=14.039, second_half=3.237, n_first_half=12, n_second_half=18),
+     dict(n=29, median=12.522, iqr=2.351, big=0, first_half=12.756, second_half=11.74, n_first_half=12, n_second_half=17),
+     "FAIL", (34, 124, 94)),
+]
+
+
+@pytest.mark.parametrize("name, blend, shared, click, main, edge, expected, kicks", REAL_TABLE,
+                         ids=[f"{r[0]} T0{r[1]}" for r in REAL_TABLE])
+def test_the_listening_table_with_the_measured_statistics(name, blend, shared, click, main, edge, expected, kicks):
+    # Sam's words: planned (flam heard on both), +6.4 "tighter but can be better", +8.5 "tightest" of three (its blend 2
+    # click half is +8.3, so the check calls it FAIL), +12 not picked, drift fixed + NP 5 "tighter", the automatic output
+    # "as tight as I would get it manually" (PASS, PASS)
+    assert kac.judge(shared, click, main, edge, kicks)[0] == expected
+
+
+def test_sams_approved_blends_have_no_click_half_at_the_half_off_figure():
+    for name, blend, shared, click, main, edge, expected, kicks in REAL_TABLE:
+        if name in ("auto phased", "NP 5 ms"):
+            assert max(abs(click["first_half"]), abs(click["second_half"])) < kac.CLICK_FAIL_MS, (name, blend)
+            assert kac.judge(shared, click, main, edge, kicks)[0] == "PASS"
 
 
 def fake_result_with_edge(shared, click, main, edge):
@@ -864,7 +1171,8 @@ def test_the_picture_shows_at_least_two_flammed_beats_and_marks_them(measured, n
     res = measured[name][0]
     rows = kac.pick_beats(res.beats)
     assert len(rows) == 4
-    assert sum(kac._score(r) >= kac.FAIL_MS for r in rows) >= 2, [(r.beat, kac._score(r)) for r in rows]
+    assert sum(abs(r.click_lag) >= kac.CLICK_FAIL_MS or abs(r.main_lag) >= kac.MAIN_FAIL_MS for r in rows) >= 2, \
+        [(r.beat, kac._score(r)) for r in rows]
     readers = readers_for(res, rows)
     try:
         fig = kac.build_figure(res, readers)
@@ -873,6 +1181,53 @@ def test_the_picture_shows_at_least_two_flammed_beats_and_marks_them(measured, n
     finally:
         for reader in readers.values():
             reader.close()
+
+
+def _beat(beat, click=math.nan, main=math.nan, edge=math.nan):
+    return kac.BeatMeasure(beat, "o.wav", 0.0, "i.wav", 0.0, True, click_lag=click, main_lag=main, edge_lag=edge)
+
+
+def test_a_beat_is_scored_by_its_lag_relative_to_its_own_estimators_warn_figure():
+    assert kac._score(_beat(1, click=5.0, main=0.0)) == pytest.approx(5.0 / kac.CLICK_WARN_MS)
+    assert kac._score(_beat(1, click=0.0, main=12.0)) == pytest.approx(12.0 / kac.MAIN_WARN_MS)
+    assert kac._score(_beat(1, click=-5.0, main=-12.0)) == pytest.approx(2.0)       # the worse ratio, absolute value
+    assert kac._score(_beat(1, click=math.nan, main=-4.0)) == pytest.approx(0.5)
+    assert kac._score(_beat(1)) == -1.0                                              # nothing measured
+    assert kac._score(_beat(1, click=1.0, main=1.0, edge=60.0)) == pytest.approx(0.4)  # the edge is not scored
+
+
+def test_the_worst_beats_are_chosen_by_ratio_so_the_main_hit_is_not_always_the_worst():
+    a = _beat(10, click=5.0, main=5.0)       # 2.0 and 0.625: the worst of the four
+    b = _beat(11, click=0.0, main=12.0)      # 1.5
+    c = _beat(12, click=0.0, main=9.0)       # 1.125 (the biggest raw number after b)
+    d = _beat(13, click=2.4, main=0.0)       # 0.96
+    assert [r.beat for r in kac.worst_beats([c, d, b, a])] == [10, 11]
+    assert [r.beat for r in kac.worst_beats([c, d, b, a], k=3)] == [10, 11, 12]
+    assert [r.beat for r in kac.worst_beats([_beat(1, click=1.0), _beat(2, main=6.0)])] == [2, 1]   # 0.75 beats 0.4
+    unshared = _beat(14, click=9.0)
+    unshared.shared = False
+    assert [r.beat for r in kac.worst_beats([unshared, d])] == [13]
+
+
+def test_the_picture_marks_a_beat_worst_only_from_its_own_warn_figure(measured):
+    res = measured["every4_12"][0]
+    rows = kac.pick_beats(res.beats)
+    readers = readers_for(res, rows)
+    try:
+        titles = [kac.build_figure(res, readers).axes[c].get_title() for c in range(len(rows))]
+    finally:
+        for reader in readers.values():
+            reader.close()
+    assert sum(t.startswith("WORST ") for t in titles) >= 2, titles
+    aligned = measured["aligned"][0]
+    rows = kac.pick_beats(aligned.beats)
+    readers = readers_for(aligned, rows)
+    try:
+        titles = [kac.build_figure(aligned, readers).axes[c].get_title() for c in range(len(rows))]
+    finally:
+        for reader in readers.values():
+            reader.close()
+    assert not any(t.startswith("WORST ") for t in titles), titles
 
 
 # ---- 5: old pictures are cleared
@@ -941,8 +1296,51 @@ def test_source_position_follows_uneven_markers_not_a_straight_line(tmp_path):
 def test_the_minority_rule_is_exactly_one_fifth_of_the_shared_beats(zeros, flams, flagged):
     st = stats_for([0.0] * zeros + [12.0] * flams)
     assert st["iqr"] == 0.0 and st["big"] == flams
-    verdict, flags = kac.judge(zeros + flams, st, dict(st))
+    verdict, flags = kac.judge(zeros + flams, st, stat(median=0.0))
     assert ("MINORITY_FLAM" in flags) is flagged and verdict == ("WARN" if flagged else "PASS")
+
+
+def test_the_minority_count_is_against_each_estimators_own_per_beat_figure():
+    values = [0.0] * 23 + [10.0] * 7                                 # 7 of 30 beats 10 ms apart
+    click = kac._stats(values, list(range(30)), 15, kac.CLICK_BEAT_FLAM_MS)
+    main = kac._stats(values, list(range(30)), 15, kac.MAIN_FAIL_MS)
+    assert click["big"] == 7 and main["big"] == 0
+    assert kac.judge(30, click, stat(median=0.0)) == ("WARN", ["MINORITY_FLAM"])
+    assert kac.judge(30, stat(median=0.0), main) == ("PASS", [])
+    over = kac._stats([0.0] * 23 + [14.0] * 7, list(range(30)), 15, kac.MAIN_FAIL_MS)
+    assert over["big"] == 7 and kac.judge(30, stat(median=0.0), over) == ("WARN", ["MINORITY_FLAM"])
+    assert kac._minority(dict(big=7, median=0.0), 30, kac.CLICK_BEAT_FLAM_MS)
+    assert not kac._minority(dict(big=7, median=8.0), 30, kac.CLICK_BEAT_FLAM_MS)   # the median is at the figure: not a minority
+    assert kac._minority(dict(big=7, median=8.0), 30, kac.MAIN_FAIL_MS)
+    # the guard is the per-beat figure too: a click median of 6 ms (a median FAIL) with a fifth of the beats at 8 ms still
+    # names the minority; at a median of 8 ms it no longer does
+    assert kac.judge(30, stat(median=6.0, big=12), stat(median=0.0)) == ("FAIL", ["MINORITY_FLAM"])
+    assert kac.judge(30, stat(median=8.0, big=12), stat(median=0.0)) == ("FAIL", [])
+
+
+def test_a_click_beat_between_the_median_fail_figure_and_the_beat_figure_is_not_a_minority_flam():
+    values = [0.0] * 23 + [6.0] * 7                                  # 7 of 30 beats 6 ms apart: noise for the click
+    click = kac._stats(values, list(range(30)), 15, kac.CLICK_BEAT_FLAM_MS)
+    assert click["big"] == 0
+    assert kac.judge(30, click, stat(median=0.0)) == ("PASS", [])
+    assert "MINORITY_FLAM" not in kac.summary_line(fake_result(30, click, stat(median=0.0)))
+    assert kac._stats(values, list(range(30)), 15, kac.CLICK_FAIL_MS)["big"] == 7      # at the median fail figure it would count
+
+
+def test_measuring_leaves_the_click_beats_between_5_and_8_ms_uncounted(measured):
+    res = measured["every4_6"][0]                                     # 6 ms on every 4th beat
+    assert res.shared_kicks >= kac.MIN_SHARED_KICKS
+    assert res.click["big"] == 0 and res.main["big"] == 0, (res.click, res.main)
+    assert res.verdict == "PASS" and "MINORITY_FLAM" not in res.flags, (res.verdict, res.flags)
+
+
+def test_measuring_counts_each_estimators_big_beats_against_its_own_per_beat_figure(measured):
+    res = measured["every4_12"][0]                                     # 12 ms on every 4th beat: over the click's 8, under the main's 14
+    assert res.shared_kicks >= kac.MIN_SHARED_KICKS
+    assert res.click["big"] >= 0.2 * res.shared_kicks and res.main["big"] == 0, (res.click, res.main)
+    assert res.verdict == "WARN" and "MINORITY_FLAM" in res.flags, (res.verdict, res.flags)
+    assert "shared beats are 8 ms or more apart on click" in kac.summary_line(res)
+    assert "on main hit" not in kac.summary_line(res)
 
 
 def test_building_a_picture_never_imports_pyplot(sets, tmp_path):

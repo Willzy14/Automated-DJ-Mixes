@@ -136,10 +136,11 @@ def sets(tmp_path_factory):
         # B drifts from 0 to 10.6 ms over its source beats: no constant slide can fix both of its blends
         "drift": make_mix(root, "drift", {"A": 0.0, "B": lambda b: 0.18 * b, "C": 0.0}, doc_order="CAB"),
         "good": make_mix(root, "good", {"A": 0.0, "B": 2.0, "C": 0.0}),
+        "three": make_mix(root, "three", {"A": 0.0, "B": 3.3}),               # over the check's warn figure, under this tool's floor
         "plain": make_mix(root, "plain", {"A": 0.0, "B": 8.0}, saved_marker=True),
         # a drifting track in the MIDDLE: its fix alone pushes the earlier, good blend out (the reviewer's probe)
         "mid": make_mix(root, "mid", {"A": 3.3, "B": lambda b: 2.5 + 5.0 * b / 60.0, "C": 0.5}),
-        "five": make_mix(root, "five", {"A": 0.0, "B": 5.0}),                 # a lag between WARN_MS and a looser gate
+        "five": make_mix(root, "five", {"A": 0.0, "B": 5.0}),                 # a lag between NEEDS_FIX_MS and a looser gate
         # B also sits in a blend with C that the check cannot judge (C has 5 kicks), and kicks 8 ms early
         "frozen": make_mix(root, "frozen", {"A": 0.0, "B": -8.0, "C": 0.0}, kick_beats={"C": range(0, 5)}),
         # B has two warp markers (a hand re-warp) and is 8 ms late
@@ -215,7 +216,7 @@ def test_a_wobble_inside_the_noise_is_not_drift(tmp_path):
     wobble = [(b, 1.8 * math.sin(b / 40.0)) for b in range(0, 400)]
     fit = gpf.fit_drift(wobble)
     assert fit.status == gpf.NO_DRIFT and "noise, not drift" in fit.note
-    assert gpf.DRIFT_MIN_MS == gpf.WARN_MS
+    assert gpf.DRIFT_MIN_MS == 4.0 and gpf.DRIFT_MIN_MS > kac.CLICK_WARN_MS      # its own figure, not the click warn figure
 
 
 def test_a_real_drift_like_get_rights_is_fitted():
@@ -333,7 +334,7 @@ def test_a_tie_between_equal_total_slides_goes_to_one_track_the_earlier_one():
     assert s == pytest.approx([-8.5, 0.0], abs=0.01)
 
 
-@pytest.mark.parametrize("lags", [[3.9, -3.9], [2.0, -1.5, 0.3], [0.0]])
+@pytest.mark.parametrize("lags", [[3.9, -3.9], [2.6, -3.0], [2.0, -1.5, 0.3], [0.0]])
 def test_a_worst_lag_under_warn_changes_nothing(lags):
     pairs = [(i, i + 1) for i in range(len(lags))]
     s, left = gpf.solve_slides(np.array(lags), pairs, len(lags) + 1)
@@ -341,8 +342,8 @@ def test_a_worst_lag_under_warn_changes_nothing(lags):
 
 
 def test_a_worst_lag_of_exactly_warn_is_fixed():
-    s, left = gpf.solve_slides(np.array([gpf.WARN_MS]), [(0, 1)], 2)
-    assert s.any() and abs(gpf.WARN_MS + s[0] - s[1]) <= gpf.EPS_MS + 1e-6
+    s, left = gpf.solve_slides(np.array([gpf.NEEDS_FIX_MS]), [(0, 1)], 2)
+    assert s.any() and abs(gpf.NEEDS_FIX_MS + s[0] - s[1]) <= gpf.EPS_MS + 1e-6
 
 
 def test_only_movable_tracks_slide():
@@ -564,7 +565,11 @@ def test_a_result_that_makes_a_blend_worse_is_refused_and_not_kept(sets, tmp_pat
     (("WARN", 3.0), ("WARN", 3.0 + gpf.REFUSE_TOL_MS - 0.1), False),    # by less: the re-measure differs by that much
     (("WARN", 3.0), ("WARN", 3.0), False),
     (("FAIL", 9.0), ("WARN", 2.0), False),
-    (("WARN", 3.0), ("FAIL", 2.0), True),                 # became FAIL
+    (("WARN", 3.0), ("FAIL", 2.0), False),                # FAIL by the verdict, but the click lag got better: not worse
+    (("WARN", 4.9), ("FAIL", 5.2), False),                # a FAIL figure (5.0) crossed by 0.3 ms of measurement drift
+    (("WARN", 4.9), ("FAIL", 4.9 + gpf.REFUSE_TOL_MS), False),
+    (("WARN", 4.9), ("FAIL", 4.9 + gpf.REFUSE_TOL_MS + 0.1), True),   # became FAIL and got worse by more than the tolerance
+    (("WARN", 3.0), ("FAIL", 9.0), True),
     (("FAIL", 9.0), ("FAIL", 8.5), False),                # was FAIL already
 ])
 def test_the_refusal_rule(before, after, expect):
@@ -572,6 +577,19 @@ def test_the_refusal_rule(before, after, expect):
         return SimpleNamespace(index=1, verdict=verdict, flags=[], label="T01 A to B", shared_kicks=30,
                                click=dict(median=lag, n=30, first_half=lag, second_half=lag, n_first_half=15, n_second_half=15))
     assert bool(gpf.refusals([blend(*before)], [blend(*after)])) is expect
+
+
+def test_a_newly_fail_blend_with_no_click_lag_to_compare_is_still_refused():
+    before = SimpleNamespace(index=1, verdict="WARN", flags=[], label="T01 A to B", shared_kicks=30,
+                             click=dict(median=3.0, n=30, first_half=3.0, second_half=3.0, n_first_half=15, n_second_half=15))
+    off_grid = SimpleNamespace(index=1, verdict="FAIL", flags=["OFF_GRID"], label="T01 A to B", shared_kicks=4,
+                               click=dict(median=None, n=0))
+    unjudged = SimpleNamespace(index=1, verdict="CANNOT_JUDGE", flags=[], label="T01 A to B", shared_kicks=3, click=dict(median=None, n=0))
+    failed = SimpleNamespace(index=1, verdict="FAIL", flags=[], label="T01 A to B", shared_kicks=30,
+                             click=dict(median=3.0, n=30, first_half=3.0, second_half=3.0, n_first_half=15, n_second_half=15))
+    assert any("FAIL after" in r for r in gpf.refusals([before], [off_grid]))
+    assert any("FAIL after" in r for r in gpf.refusals([unjudged], [failed]))       # nothing to compare with before
+    assert not gpf.refusals([before], [failed])                                      # same lag, FAIL by the verdict: not refused
 
 
 def test_a_blend_that_can_no_longer_be_judged_is_refused():
@@ -729,7 +747,7 @@ def _measure(track, wav):
 # ---- the solve: a blend a drift correction pushed out is repaired; good blends are held; headroom; noise
 
 def test_a_good_blend_a_drift_correction_pushed_out_is_repaired_by_a_slide():
-    # blend 1 was 10 and the drift fit brought it to 0.5; blend 2 was 0.5 and the fit pushed it to 3.0 (under WARN_MS)
+    # blend 1 was 10 and the drift fit brought it to 0.5; blend 2 was 0.5 and the fit pushed it to 3.0 (under NEEDS_FIX_MS)
     s, left = gpf.solve_slides(np.array([0.5, 3.0]), [(0, 1), (1, 2)], 3, None, [10.0, 0.5])
     assert s.any()
     assert abs(3.0 + s[1] - s[2]) <= 0.5 + gpf.REFUSE_TOL_MS + 1e-6          # back to what it was, within the tolerance
@@ -1022,7 +1040,56 @@ def test_a_blend_is_flagged_for_a_drift_flam_by_a_half_alone():
     assert gpf.needs_fixing(dict(median=1.0, first_half=9.0, second_half=-9.0))
     assert gpf.needs_fixing(dict(median=1.0, first_half=1.0, second_half=-8.0))
     assert not gpf.needs_fixing(dict(median=3.9, first_half=7.9, second_half=-7.9))
+    assert gpf.needs_fixing(dict(median=gpf.NEEDS_FIX_MS, first_half=None, second_half=None))
+
+
+def test_the_grid_tool_keeps_its_own_noise_floor_and_takes_the_halves_from_the_kick_check():
+    # the tool's noise floor is 4 ms (the check resolves only 1 to 3 ms): the kick check's 2.5 ms click warn figure
+    # does not make it chase a 2.6 or 3.9 ms median, as it did not on main
+    assert gpf.NEEDS_FIX_MS == 4.0 and not hasattr(gpf, "WARN_MS") and gpf.NEEDS_FIX_MS > kac.CLICK_WARN_MS
+    assert not gpf.needs_fixing(dict(median=2.6, first_half=None, second_half=None))
+    assert not gpf.needs_fixing(dict(median=3.9, first_half=0.0, second_half=4.9))
     assert gpf.needs_fixing(dict(median=4.0, first_half=None, second_half=None))
+    assert gpf.needs_fixing(dict(median=-4.0, first_half=None, second_half=None))
+    assert gpf.needs_fixing(dict(median=2.4, first_half=0.0, second_half=kac.CLICK_BEAT_FLAM_MS))     # a half at the click per-beat figure
+    assert gpf.needs_fixing(dict(median=0.0, first_half=-kac.CLICK_BEAT_FLAM_MS, second_half=None))
+    assert not gpf.needs_fixing(dict(median=0.0, first_half=-7.9, second_half=None))
+    assert not gpf.needs_fixing(dict(median=2.4, first_half=5.0, second_half=-kac.CLICK_FAIL_MS))    # the median fail figure is not the half figure
+    assert kac.CLICK_BEAT_FLAM_MS == 8.0
+    assert not hasattr(kac, "FAIL_MS") and not hasattr(kac, "WARN_MS")
+
+
+def test_a_mix_with_every_judged_blend_under_the_noise_floor_is_left_alone_and_says_4_ms(sets, tmp_path, monkeypatch):
+    # a click median of 2.6 to 3.9 ms is over the kick check's warn figure and under this tool's 4 ms: nothing is fixed
+    als, audio = sets["three"]
+    seen = []
+    real = gpf.needs_fixing
+    monkeypatch.setattr(gpf, "needs_fixing", lambda summary: seen.append(summary["median"]) or real(summary))
+    out = gpf.run(als, audio, tmp_path / "Phased.als", tmp_path / "report")
+    assert out.status == gpf.NOTHING and "already under 4 ms" in out.reason
+    assert seen and kac.CLICK_WARN_MS < max(abs(m) for m in seen) < gpf.NEEDS_FIX_MS
+
+
+def _flaming_blend(first, second):
+    beats = np.arange(20, dtype=float)
+    lags = np.array([first] * 10 + [second] * 10, dtype=float)
+    return gpf.Blend(1, 0, 1, 10.0, beats, lags, beats.copy(), beats.copy())
+
+
+def test_still_flamming_uses_the_click_per_beat_figure_for_a_half():
+    fits = [gpf.DriftFit(gpf.NOT_MEASURED), gpf.DriftFit(gpf.NOT_MEASURED)]
+    found = gpf.still_flamming([_flaming_blend(8.0, 0.0)], fits, [0.0, 0.0])
+    assert [(f["index"], f["half"]) for f in found] == [(1, "first_half")] and found[0]["predicted"] == pytest.approx(8.0)
+    assert not gpf.still_flamming([_flaming_blend(7.9, -7.9)], fits, [0.0, 0.0])
+    assert not gpf.still_flamming([_flaming_blend(5.0, -6.0)], fits, [0.0, 0.0])           # over the median fail figure, under the half one
+    assert [f["half"] for f in gpf.still_flamming([_flaming_blend(0.0, -9.0)], fits, [0.0, 0.0])] == ["second_half"]
+
+
+def test_the_still_flamming_line_names_the_click_per_beat_figure(outcomes, sets):
+    import copy
+    out = copy.copy(outcomes["halves"])
+    out.still_flamming = [dict(index=1, half="first_half", predicted=6.0)]
+    assert "(half figure 8 ms)" in gpf.report_text(out, sets["halves"][0])
 
 
 def test_the_edge_or_main_hit_getting_worse_is_reported_never_refused(outcomes, sets):
@@ -1041,6 +1108,12 @@ def test_the_edge_or_main_hit_getting_worse_is_reported_never_refused(outcomes, 
     assert "T01 A to B: edge +0.5 -> +4.9 ms: aligned by click, as chosen by ear for this mix: check the picture" in text
     assert gpf.report_json(out)["edge_main_worse"] == found
     assert not gpf.refusals([blend(1, 0.5, 1.0)], [blend(1, 4.9, 9.0)])
+    # a worsening of 3 ms is under this tool's own 4 ms figure (it does not follow the click warn figure of 2.5)
+    assert gpf.EDGE_MAIN_WORSE_MS == 4.0
+    assert not gpf.edge_main_worse([blend(1, 0.5, 1.0)], [blend(1, 3.5, 4.0)])
+    assert [f["estimator"] for f in gpf.edge_main_worse([blend(1, 0.5, 1.0)], [blend(1, 4.6, 4.0)])] == ["edge"]
+    out.edge_main_worse = found
+    assert "got worse by more than 4 ms" in gpf.report_text(out, sets["late"][0])
 
 
 def test_the_report_and_the_json_agree_about_every_track(outcomes, sets):

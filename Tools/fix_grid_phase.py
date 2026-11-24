@@ -5,7 +5,7 @@ Usage:  python Tools/fix_grid_phase.py <ALS> --audio <dir> [--out <new ALS>] [--
 Writes a NEW ALS (default: "<name> Phased.als" beside the input; the input is never touched) and, in the report folder
 (default: "Grid Phase" beside the ALS), a plain-text before/after report, a json copy of it and the kick check
 pictures of the new file. The report lists every transition before and after (edge, click, main hit, verdict) and, per
-track, the drift correction range and the slide. A mix whose judged blends are all under the kick check's WARN figure is
+track, the drift correction range and the slide. A mix whose judged blends are all under 4 ms (the tool's own noise floor) is
 left alone (the new file is then a byte copy of the input).
 When it writes a phased file it also writes "grid_phase.json" in the report folder: the record of exactly which tracks it
 moved (their original markers and the largest shift), which "validate_mix_plan_als.py --grid-phase" checks the phased file
