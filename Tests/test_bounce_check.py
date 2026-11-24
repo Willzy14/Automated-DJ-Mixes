@@ -398,6 +398,29 @@ def test_the_cli_prints_the_start_warning_loudly(tmp):
     assert data["mapping"]["start"]["warnings"], data["mapping"]
 
 
+def _bar8_case(tmp, name, bass_db, hiss_db):
+    n, fade = int(2 * SR), int(0.4 * SR)
+    a = int(14 * SR)
+    env = np.ones(int(30 * SR))
+    env[a - fade:a] = np.linspace(1.0, 0.0, fade)
+    env[a:a + n] = 0.0
+    env[a + n:a + n + fade] = np.linspace(0.0, 1.0, fade)
+    left, right = _bass(30, bass_db) * env, _bass(30, bass_db) * env
+    left[a:a + n] = white(2.0, hiss_db, 41)
+    right[a:a + n] = white(2.0, hiss_db, 42)
+    return measure(build(tmp / name, (_bass(40, bass_db), None), (left, right), (_bass(30, bass_db), None)))["low_end"]
+
+
+def test_the_lowest_correlation_gate_works_on_each_of_its_two_rules(tmp):
+    # a bar 40 dB under the loudest but well above silence: only the 30 dB rule can skip it
+    low = _bar8_case(tmp, "gate_30.wav", -6, -22)
+    assert low["worst_bar"]["bar"] == 8 and low["lowest_corr_bar"]["bar"] != 8, (low["worst_bar"], low["lowest_corr_bar"])
+    # a silent bar (at the floor) only 25 dB under a quiet loudest bar: only the silence rule can skip it
+    low = _bar8_case(tmp, "gate_silent.wav", -32, -110)
+    assert low["worst_bar"]["bar"] == 8 and low["worst_bar"]["level_db"] <= bc.LEVEL_FLOOR_DB + 1e-9, low["worst_bar"]
+    assert low["lowest_corr_bar"]["bar"] != 8, low["lowest_corr_bar"]
+
+
 # ---------------------------------------------------------------- windows and notes
 
 def test_a_side_window_stops_at_the_neighbouring_join(tmp):
@@ -566,6 +589,15 @@ def test_a_fit_that_fires_on_the_control_beats_is_not_trusted_even_when_it_finds
     assert r["state"] == "not_measurable", r
     assert any("control beats" in n for n in r["notes"]), r["notes"]
     assert bc.scalars({"flam": r}) == {}, "0.0 from a fit that cannot tell a blend from a single track must not enter the ranges"
+
+
+def test_the_fraction_is_over_the_beats_the_fit_placed_not_all_the_kick_beats(tmp):
+    # the incoming kick is missing on every other beat of the blend: half the kick beats cannot be fitted, the other half all flam
+    in_beats = [b for b in range(140, 400) if not (140 <= b < 220 and b % 2)]
+    r = bc.measure_flam(kick_bounce(tmp / "half_fit.wav", 8.0, in_beats=in_beats), TEMPO, kick_join())
+    assert r["state"] == "flam_seen", r
+    assert r["n_fit_both"] <= 0.6 * r["n_kick_beats"], r
+    assert r["fraction_of_fit_beats"] > 0.9 and bc.scalars({"flam": r})["flam_fraction_of_fitted_beats"] > 0.9, r
 
 
 def test_control_beats_that_flam_too_stop_the_blend_being_called_a_flam(flam_runs):
