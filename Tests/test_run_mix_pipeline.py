@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -70,6 +71,25 @@ elif args[0] == "Tools/check_kick_alignment.py":
     if os.environ.get("PIPELINE_TEST_KICK_STDERR"):
         print(os.environ["PIPELINE_TEST_KICK_STDERR"], file=sys.stderr)
     sys.exit(int(os.environ.get("PIPELINE_TEST_KICK_RC", "0")))
+elif args[0] == "Tools/check_bounce.py" and os.environ.get("PIPELINE_TEST_REAL_BOUNCE"):
+    import subprocess
+    root = os.environ["PIPELINE_TEST_ROOT"]
+    sys.exit(subprocess.run([sys.executable, root + "/Tools/check_bounce.py", *args[1:]]).returncode)
+elif args[0] == "Tools/check_bounce.py":
+    rc = int(os.environ.get("PIPELINE_TEST_BOUNCE_RC", "0"))
+    out = Path(args[args.index("--out") + 1])
+    print("J01 A > B  0:10.0-0:50.0 | loud step +0.1 LU | a long per-join line")
+    if rc in (0, 3):
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "ATTENTION.md").write_text("NEEDS A LOOK: join 1 A > B\n", encoding="ascii")
+        print("NEEDS A LOOK: join 1 A > B")
+        print("BOUNCE CHECK: 1 of 2 joins need a look (J01): see " + out.as_posix() + "/ATTENTION.md")
+    if rc == 2:                       # the real tool writes this itself when it could not run
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "ATTENTION.md").write_text("bounce check did not run (stub): no measurements\n", encoding="ascii")
+    if os.environ.get("PIPELINE_TEST_BOUNCE_STDERR"):
+        print(os.environ["PIPELINE_TEST_BOUNCE_STDERR"], file=sys.stderr)
+    sys.exit(rc)
 elif args[0] == "Tools/fix_grid_phase.py" and os.environ.get("PIPELINE_TEST_REAL_TOOL"):
     import subprocess
     root = os.environ["PIPELINE_TEST_ROOT"]
@@ -84,6 +104,11 @@ elif args[0] == "Tools/fix_grid_phase.py":
         phased_from = os.environ.get("PIPELINE_TEST_PHASED_FROM")
         out.write_bytes(Path(args[1]).read_bytes() if os.environ.get("PIPELINE_TEST_GRID_SAME")
                         else Path(phased_from).read_bytes() if phased_from else b"phased als")
+        if os.environ.get("PIPELINE_TEST_PHASED_BOUNCE"):
+            wav = out.with_suffix(".wav")
+            wav.write_bytes(b"a bounce of the phased file")
+            import time
+            os.utime(wav, (time.time() + 3600,) * 2)
         report = Path(args[args.index("--report") + 1])
         same = os.environ.get("PIPELINE_TEST_GRID_SAME")
         if rc == 0:
@@ -869,3 +894,251 @@ def test_a_project_path_with_an_ampersand_and_a_space(pipeline):
          "--grid-phase", f"{base}/Grid Phase/grid_phase.json", "--grid-phase-original", f"{base}/Sections V9.als",
          "--output", f"{base}/MIX_PLAN_RECONCILIATION_PHASED.json"]]
     assert (repo / "Test Project" / name / "Output" / "MIX_PLAN_RECONCILIATION_ORIGINAL.json").is_file()
+
+
+# the bounce check hook: report only, found by the same-basename rule beside the final ALS, never stops the build
+
+BOUNCE = "Tools/check_bounce.py"
+BOUNCE_DIR = f"{OUTPUT}/Bounce Check"
+BOUNCE_ATTENTION = f"{BOUNCE_DIR}/ATTENTION.md"
+BOUNCE_SUMMARY = f"BOUNCE CHECK: 1 of 2 joins need a look (J01): see {BOUNCE_ATTENTION}"
+BOUNCE_COMMAND = f'python Tools/check_bounce.py --project "{PROJECT}"'
+NO_FRESH = "bounce check: no fresh bounce beside the final yet (render the final ALS to a WAV of the same name, then run):"
+STALE_BOUNCE = "bounce check: the bounce beside the final is older than the ALS (stale), ignored: render the new final, then run Tools/check_bounce.py:"
+
+
+def touch(path, age=3600):
+    """Set the mtime `age` seconds from now: a positive age is newer than the ALS the build is about to write, a negative one older."""
+    stamp = time.time() + age
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def render(repo, name="Sections V9.wav", age=3600):
+    path = repo / OUTPUT / name
+    path.write_bytes(b"bounce")
+    return touch(path, age)
+
+
+def test_a_bounce_beside_the_final_is_checked_once_after_the_grid_step_and_its_summary_reaches_the_log(pipeline):
+    repo, run = pipeline
+    render(repo)
+    result, calls = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    bounce_calls = [call for call in calls if call[0] == BOUNCE]
+    assert bounce_calls == [[BOUNCE, f"{OUTPUT}/Sections V9.wav", "--als", FINAL, "--out", BOUNCE_DIR]]
+    assert calls.index([call for call in calls if call[0] == GRID][0]) < calls.index(bounce_calls[0])
+    assert calls.index([call for call in calls if call[0] == KICK][0]) < calls.index(bounce_calls[0])
+    log = (repo / OUTPUT / "runmix.log").read_text()
+    assert BOUNCE_SUMMARY in result.stdout and BOUNCE_SUMMARY in log
+    assert "NEEDS A LOOK: join 1 A > B" in log and "a long per-join line" in log and "a long per-join line" not in result.stdout
+    assert (repo / BOUNCE_ATTENTION).is_file()
+    assert result.stdout.index(BOUNCE_SUMMARY) < result.stdout.index("DONE: final = Sections V9.als")
+
+
+def test_the_bounce_is_taken_beside_the_phased_final_when_the_grid_phase_is_applied(pipeline):
+    repo, run = pipeline
+    (repo / OUTPUT / "Sections V9.wav").write_bytes(b"the unphased bounce")
+    result, calls = run(GRID_PHASE_MODE="apply", PIPELINE_TEST_PHASED_BOUNCE="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert APPLIED in result.stdout
+    assert [call for call in calls if call[0] == BOUNCE] == [[BOUNCE, f"{OUTPUT}/Sections V9 Phased.wav", "--als", PHASED, "--out", BOUNCE_DIR]]
+
+
+@pytest.mark.parametrize("mode", ["suggest", "apply", "off"])
+def test_a_rendered_bounce_survives_a_rebuild_but_the_phased_leftovers_do_not(pipeline, mode):
+    repo, run = pipeline
+    planted = {name: name.encode("ascii") for name in ("Sections V9 Phased.wav", "Sections V9.wav", "Sections V9 Phased.aif", "Sections V9 Phased.flac",
+                                                          "Sections V9 Phased Mix.wav", "Sections V9 Phased.mp3")}
+    for name, body in planted.items():
+        (repo / OUTPUT / name).write_bytes(body)
+        touch(repo / OUTPUT / name, -3600)
+    for name in ("Sections V9 Phased REFUSED.als", "Sections V9 Phased.als.partial", "Sections V9 Phased.als"):
+        (repo / OUTPUT / name).write_bytes(b"old build")
+    result, calls = run(GRID_PHASE_MODE=mode)
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name, body in planted.items():
+        assert (repo / OUTPUT / name).read_bytes() == body, name                    # the audio is Sam's, a rebuild never touches it
+    assert not (repo / OUTPUT / "Sections V9 Phased REFUSED.als").exists() and not (repo / OUTPUT / "Sections V9 Phased.als.partial").exists()
+    assert not any(call[0] == BOUNCE for call in calls)                             # and it was rendered before the new ALS: stale
+
+
+def test_a_bounce_of_another_name_is_not_taken_for_the_final(pipeline):
+    repo, run = pipeline
+    for name in ("Sections V9 Phased.wav", "Sections V8.wav", "Test Mix Mix V9.wav"):
+        (repo / OUTPUT / name).write_bytes(b"not the final's bounce")
+    result, calls = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any(call[0] == BOUNCE for call in calls)
+    assert NO_FRESH in result.stdout
+
+
+def test_without_a_bounce_the_hook_says_so_and_the_build_is_untouched(pipeline):
+    repo, run = pipeline
+    result, calls = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert NO_FRESH in result.stdout
+    assert not any(call[0] == BOUNCE for call in calls) and not (repo / BOUNCE_ATTENTION).exists()
+    lines = [l.split("] ", 1)[1] for l in result.stdout.splitlines() if l.startswith("[")]
+    assert lines[-3:] == [NO_FRESH, "  " + BOUNCE_COMMAND, "DONE: final = Sections V9.als"], lines[-4:]      # the command is the last hint line
+
+
+@pytest.mark.parametrize("value", ["off", "OFF", "Off", "oFF"])
+def test_bounce_check_mode_off_skips_the_step_even_with_a_bounce_there(pipeline, value):
+    repo, run = pipeline
+    render(repo)
+    result, calls = run(BOUNCE_CHECK_MODE=value)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any(call[0] == BOUNCE for call in calls)
+    assert "bounce check: off (BOUNCE_CHECK_MODE=off), step skipped" in result.stdout and "BOUNCE CHECK:" not in result.stdout
+    assert "DONE: final = Sections V9.als" in result.stdout
+
+
+@pytest.mark.parametrize("value", ["on", "banana", "offf", ""])
+def test_any_bounce_check_mode_but_off_runs_the_step(pipeline, value):
+    repo, run = pipeline
+    render(repo)
+    result, calls = run(BOUNCE_CHECK_MODE=value)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sum(call[0] == BOUNCE for call in calls) == 1 and BOUNCE_SUMMARY in result.stdout
+
+
+@pytest.mark.parametrize("status", [1, 2, 127])
+def test_a_bounce_check_that_crashes_never_stops_the_build_and_leaves_a_file_saying_it_did_not_run(pipeline, status):
+    repo, run = pipeline
+    render(repo)
+    result, calls = run(PIPELINE_TEST_BOUNCE_RC=str(status), PIPELINE_TEST_BOUNCE_STDERR="Traceback: boom")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"bounce check did not finish (status {status}): no measurements, {BOUNCE_ATTENTION} says so; the build goes on" in result.stdout
+    assert "DONE: final = Sections V9.als" in result.stdout and "BOUNCE CHECK:" not in result.stdout
+    assert "Traceback: boom" in (repo / OUTPUT / "runmix.log").read_text()
+    text = (repo / BOUNCE_ATTENTION).read_text()
+    assert text.startswith("bounce check did not run (") and "no measurements" in text and "NEEDS A LOOK" not in text, text
+
+
+def test_a_bounce_that_does_not_fit_the_final_is_named_and_the_build_goes_on(pipeline):
+    repo, run = pipeline
+    render(repo)
+    result, _ = run(PIPELINE_TEST_BOUNCE_RC="3")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert BOUNCE_SUMMARY in result.stdout and "the bounce does not fit the final ALS (status 3)" in result.stdout
+    assert "did not finish" not in result.stdout and "DONE: final = Sections V9.als" in result.stdout
+
+
+@pytest.mark.parametrize("options, bounce", [
+    pytest.param({}, False, id="no-bounce"),
+    pytest.param({}, True, id="bounce"),
+    pytest.param({"BOUNCE_CHECK_MODE": "off"}, True, id="off"),
+    pytest.param({"PIPELINE_TEST_BOUNCE_RC": "2"}, True, id="crash"),
+])
+def test_an_attention_file_of_an_earlier_build_never_survives_a_new_one(pipeline, options, bounce):
+    repo, run = pipeline
+    (repo / BOUNCE_DIR).mkdir()
+    (repo / BOUNCE_ATTENTION).write_text("no join needs a look (8 joins checked)\n")
+    if bounce:
+        render(repo)
+    result, _ = run(**options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (repo / BOUNCE_ATTENTION).exists() or "no join needs a look (8 joins" not in (repo / BOUNCE_ATTENTION).read_text()
+    assert (repo / BOUNCE_ATTENTION).exists() == (bounce and not options.get("BOUNCE_CHECK_MODE"))     # the tool ran (or crashed and said so)
+
+
+def test_an_attention_file_of_an_earlier_build_is_removed_even_when_the_build_fails_early(pipeline):
+    repo, run = pipeline
+    (repo / BOUNCE_DIR).mkdir()
+    (repo / BOUNCE_ATTENTION).write_text("no join needs a look (8 joins checked)\n")
+    result, _ = run(PIPELINE_TEST_RELAY_FAIL="1")
+    assert result.returncode == 1 and "FAILED at: relay" in result.stdout
+    assert not (repo / BOUNCE_ATTENTION).exists()
+
+
+# the REAL Tools/check_bounce.py behind the hook, on a tiny synthetic bounce and ALS: the hook, ATTENTION.md and the summary line end to end
+
+@pytest.fixture
+def real_bounce(pipeline, tmp_path):
+    import test_bounce_check as tb
+    repo, run = pipeline
+    als = tmp_path / "Real.als"
+    tb._write_als(als, [("Alpha - One", (0.0, 160.0)), ("Beta - Two", (100.0, 220.0))])        # one join, 50 s to 80 s at 120 bpm
+    options = dict(PIPELINE_TEST_REAL_BOUNCE="1", PIPELINE_TEST_FINAL_FROM=als.as_posix())
+    return repo, run, tb, options
+
+
+def test_the_real_check_runs_through_the_hook_and_flags_a_loud_blend(real_bounce):
+    repo, run, tb, options = real_bounce
+    touch(tb.build(repo / OUTPUT / "Sections V9.wav", (tb.sine(1000, 40, -20), None), (tb.sine(1000, 30, -10), None), (tb.sine(1000, 30, -20), None)))
+    result, calls = run(**options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [call for call in calls if call[0] == BOUNCE] == [[BOUNCE, f"{OUTPUT}/Sections V9.wav", "--als", FINAL, "--out", BOUNCE_DIR]]
+    summary = [l.split("] ", 1)[1] for l in result.stdout.splitlines() if "BOUNCE CHECK:" in l]
+    assert len(summary) == 1 and summary[0].startswith("BOUNCE CHECK: 1 of 1 joins need a look (J01)") and "ATTENTION.md" in summary[0], summary
+    text = (repo / BOUNCE_ATTENTION).read_text()
+    assert "NEEDS A LOOK: join 1 One > Two (0:50.0-1:20.0): blend peak vs sides +10.0 LU, outside Sam's accepted range" in text, text
+    assert "picture: " in text and (repo / BOUNCE_DIR / "join_01.png").is_file() and (repo / BOUNCE_DIR / "bounce_check.json").is_file()
+    log = (repo / OUTPUT / "runmix.log").read_text()
+    assert summary[0] in log and "J01 One > Two" in log and "DONE: final = Sections V9.als" in result.stdout
+
+
+def test_the_real_check_that_cannot_read_the_bounce_says_so_in_the_file_and_never_stops_the_build(real_bounce):
+    repo, run, tb, options = real_bounce
+    (repo / OUTPUT / "Sections V9.wav").write_bytes(b"this is not a wav file")
+    touch(repo / OUTPUT / "Sections V9.wav")
+    (repo / BOUNCE_DIR).mkdir()
+    (repo / BOUNCE_ATTENTION).write_text("no join needs a look (8 joins checked)\n")
+    result, _ = run(**options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = (repo / BOUNCE_ATTENTION).read_text()
+    assert text.startswith("bounce check did not run (") and text.rstrip().endswith("): no measurements") and "8 joins" not in text, text
+    assert f"bounce check did not finish (status 2): no measurements, {BOUNCE_ATTENTION} says so; the build goes on" in result.stdout
+    assert "BOUNCE CHECK: did not run: no measurements: see " in result.stdout and "DONE: final = Sections V9.als" in result.stdout
+
+
+def test_the_real_check_on_a_bounce_that_does_not_fit_the_final_says_so_in_the_file(pipeline, tmp_path):
+    import test_bounce_check as tb
+    repo, run = pipeline
+    als = tmp_path / "Long.als"
+    tb._write_als(als, [("Alpha - One", (0.0, 160.0)), ("Beta - Two", (100.0, 400.0))])        # arrangement is 200 s, the bounce 110 s
+    touch(tb.build(repo / OUTPUT / "Sections V9.wav", (tb.sine(1000, 40, -20), None), (tb.sine(1000, 30, -20), None), (tb.sine(1000, 30, -20), None)))
+    result, _ = run(PIPELINE_TEST_REAL_BOUNCE="1", PIPELINE_TEST_FINAL_FROM=als.as_posix())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "bounce does not fit the arrangement" in (repo / BOUNCE_ATTENTION).read_text()
+    assert "the bounce does not fit the final ALS (status 3)" in result.stdout and "WARNINGS (MAP" in result.stdout
+
+
+def test_a_bounce_older_than_the_final_is_ignored_and_the_command_to_run_is_the_last_hint(pipeline):
+    repo, run = pipeline
+    wav = render(repo, age=-3600)
+    result, calls = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any(call[0] == BOUNCE for call in calls) and wav.read_bytes() == b"bounce"
+    lines = [l.split("] ", 1)[1] for l in result.stdout.splitlines() if l.startswith("[")]
+    assert lines[-3:] == [STALE_BOUNCE, "  " + BOUNCE_COMMAND, "DONE: final = Sections V9.als"], lines[-4:]
+    assert "BOUNCE CHECK:" not in result.stdout and not (repo / BOUNCE_ATTENTION).exists()
+
+
+def test_a_bounce_newer_than_the_final_is_checked_and_prints_no_render_hint(pipeline):
+    repo, run = pipeline
+    render(repo, age=3600)
+    result, calls = run()
+    assert sum(call[0] == BOUNCE for call in calls) == 1 and BOUNCE_SUMMARY in result.stdout
+    assert NO_FRESH not in result.stdout and STALE_BOUNCE not in result.stdout and BOUNCE_COMMAND not in result.stdout
+
+
+def test_off_prints_no_render_hint(pipeline):
+    result, _ = pipeline[1](BOUNCE_CHECK_MODE="off")
+    assert BOUNCE_COMMAND not in result.stdout and NO_FRESH not in result.stdout and STALE_BOUNCE not in result.stdout
+
+
+def test_a_resumed_build_that_rewrites_the_final_ignores_the_bounce_of_the_old_arrangement(pipeline):
+    repo, run = pipeline
+    result, _ = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    final = repo / FINAL
+    wav = render(repo, age=0)
+    stamp = final.stat().st_mtime - 1                      # rendered from the first arrangement, before this rewrite
+    os.utime(wav, (stamp, stamp))
+    result, calls = run(RESUME="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert final.stat().st_mtime > wav.stat().st_mtime
+    assert not any(call[0] == BOUNCE for call in calls) and STALE_BOUNCE in result.stdout
+    assert "BOUNCE CHECK:" not in result.stdout

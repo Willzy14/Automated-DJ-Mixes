@@ -926,3 +926,532 @@ def test_a_ranges_file_without_the_asked_group_is_a_clear_error(tmp):
     (d / "ARRANGEMENT_REPORT.json").write_text(json.dumps(report))
     proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "ranges.json")
     assert proc.returncode == 2 and "accepted" in proc.stderr and "KeyError" not in proc.stderr, (proc.returncode, proc.stderr)
+
+
+# ---------------------------------------------------------------- the attention rule and the attention file
+
+def _rng(lo, hi):
+    return {"n": 10, "min": lo, "median": (lo + hi) / 2, "max": hi, "thin": False}
+
+
+# every measure the rule reads, plus the ones that must never flag alone; accepted range -1 to +1 (the corr drop 0 to 0.1)
+ATT_RANGES = {**{n: _rng(-1.0, 1.0) for n in ("loud_step_lu", "loud_peak_vs_sides_lu", "low_level_vs_sides_db", "width_step_db",
+                                              "tonal_worst_abs_db", "tonal_step_sub_db", "tonal_step_low_db", "tonal_step_mid_db",
+                                              "low_worst_bar_level_vs_sides_db", "loud_mean_vs_sides_lu")},
+              "low_corr_drop": _rng(0.0, 0.1), "low_corr_overlap": _rng(0.9, 1.0), "flam_fraction_of_fitted_beats": _rng(0.0, 0.1)}
+
+
+def att_res(index=1, step=0.0, peak=0.0, low=0.0, drop=0.05, width=0.0, tonal=0.0, bar=0.0, flam=None, picture="join_01.png"):
+    flam = {"state": "no_flam_seen", "fraction_of_fit_beats": 0.0, "n_kick_beats": 20, "n_fit_both": 18} if flam is None else flam
+    return {"join": {"index": index, "out": "Out - Song A SW V2", "in": "In - Song B SW V3", "start_s": 1527.3, "end_s": 1585.8},
+            "windows": {n: {"measured_s": 20.0} for n in ("before", "during", "after")}, "silent_windows": [], "notes": [],
+            "loudness": {"step_lu": step, "peak_vs_sides_lu": peak},
+            "tonal": {"step_db": {"sub": tonal, "low": 0.0, "mid": 0.0}, "worst_band": "sub", "worst_step_db": tonal},
+            "low_end": {"level_vs_sides_db": low, "corr": {"during": 1.0}, "corr_drop": drop, "worst_bar": {"level_vs_sides_db": bar}},
+            "width": {"step_db": width}, "flam": flam, "picture": picture}
+
+
+def att_report(*joins, problems=(), warnings=()):
+    return {"joins": list(joins), "mapping": {"ok": not problems, "problems": list(problems), "start": {"warnings": list(warnings)}}}
+
+
+def flagged_of(res):
+    return [f["join"] for f in bc.attention(att_report(res), ATT_RANGES)["flagged"]]
+
+
+@pytest.mark.parametrize("measure, edge, under", [("step", 1.0, 0.99), ("peak", 1.0, 0.99), ("low", 3.0, 2.9), ("width", 3.0, 2.9)])
+@pytest.mark.parametrize("sign", [1, -1])
+def test_each_attention_measure_flags_at_its_margin_and_not_under_it(measure, edge, under, sign):
+    # the accepted range is -1 to +1, so a value of sign * (1 + margin) is outside by exactly the margin
+    assert flagged_of(att_res(**{measure: sign * (1.0 + edge)})) == [1]
+    assert flagged_of(att_res(**{measure: sign * (1.0 + under)})) == []
+    assert flagged_of(att_res(**{measure: sign * 1.0})) == []
+
+
+def test_the_low_end_correlation_fall_flags_at_0_05_below_the_range_and_a_rise_never_does():
+    assert flagged_of(att_res(drop=-0.05)) == [1]              # range min 0.0: outside by 0.05
+    assert flagged_of(att_res(drop=-0.049)) == []
+    assert flagged_of(att_res(drop=0.9)) == []                 # a rise is not the concerning end
+
+
+def test_a_join_outside_the_range_by_less_than_the_margin_in_every_measure_does_not_flag():
+    assert flagged_of(att_res(step=1.9, peak=-1.9, low=3.9, width=3.9, drop=-0.04)) == []
+
+
+def test_tonal_steps_and_worst_bar_never_flag_alone():
+    res = att_res(tonal=40.0, bar=-40.0)
+    judged = bc.judge(res, ATT_RANGES)
+    assert judged["tonal_worst_abs_db"]["verdict"] == "outside" and judged["low_worst_bar_level_vs_sides_db"]["verdict"] == "outside"
+    assert flagged_of(res) == []                               # outside the range by far, and still not an attention measure
+    res["tonal"]["step_db"].update({"low": -30.0, "mid": 30.0})
+    assert flagged_of(res) == []
+
+
+@pytest.mark.parametrize("state", ["too_few_beats", "not_measurable", "no_flam_seen", "not_run"])
+def test_a_flam_that_was_not_seen_does_not_flag(state):
+    flam = {"state": state, "fraction_of_fit_beats": 0.5, "n_kick_beats": 20, "n_fit_both": 18, "n_flam": 9}
+    assert flagged_of(att_res(flam=flam)) == []
+
+
+def test_a_flam_seen_flags_with_or_without_ranges():
+    flam = {"state": "flam_seen", "fraction_of_fit_beats": 0.5, "n_kick_beats": 20, "n_fit_both": 18, "n_flam": 9, "median_spacing_ms": 7.2}
+    assert flagged_of(att_res(flam=flam)) == [1]
+    att = bc.attention(att_report(att_res(flam=flam)), None)
+    assert [f["join"] for f in att["flagged"]] == [1] and "kick flam SEEN on 9/18 fitted beats, median 7.2 ms" in att["text"]
+
+
+def test_the_attention_line_names_the_join_the_measure_the_range_and_the_picture():
+    res = att_res(index=6, step=5.4)
+    res["join"].update({"out": "POP - Pop 24 Bit MASTER", "in": "Lift Off 16 Bit MASTER"})
+    ranges = {**ATT_RANGES, "loud_step_lu": _rng(-1.0, 3.4)}
+    att = bc.attention(att_report(res), ranges, "pics")
+    assert att["text"].splitlines()[-1] == ("NEEDS A LOOK: join 6 Pop > Lift Off (25:27.3-26:25.8): loud step +5.4 LU, outside Sam's accepted "
+                                            f"range (max +3.4) by 2.0; picture: {Path('pics') / 'join_01.png'}"), att["text"]
+    below = bc.attention(att_report(att_res(step=-5.0)), ranges, None)
+    assert "outside Sam's accepted range (min -1.0) by 4.0" in below["text"] and "picture" not in below["text"]
+
+
+def test_one_block_per_flagged_join_and_the_clean_ones_are_not_named():
+    att = bc.attention(att_report(att_res(index=1, step=5.0), att_res(index=2), att_res(index=3, width=-9.0)), ATT_RANGES)
+    assert [l.split(":")[0] for l in att["text"].splitlines() if l.startswith("NEEDS A LOOK")] == ["NEEDS A LOOK"] * 2
+    assert [f["join"] for f in att["flagged"]] == [1, 3] and "join 2" not in att["text"]
+    assert bc.attention_summary(att, "ATTENTION.md") == "BOUNCE CHECK: 2 of 3 joins need a look (J01, J03): see ATTENTION.md"
+
+
+def test_nothing_flagged_is_one_line_with_the_join_count():
+    att = bc.attention(att_report(att_res(index=1), att_res(index=2)), ATT_RANGES)
+    assert att["text"] == "no join needs a look (2 joins checked)\n" and att["flagged"] == [] and att["caveats"] == []
+    assert bc.attention_summary(att, "x/ATTENTION.md") == "BOUNCE CHECK: no join needs a look"
+
+
+def test_a_join_that_was_not_measured_is_written_and_cannot_pass_as_clean():
+    silent = att_res(index=2)
+    silent["silent_windows"], silent["windows"]["before"]["measured_s"] = ["before"], 0.0
+    silent["notes"] = ["before window silent: not measured"]
+    none = {"join": {"index": 3, "out": "A - x", "in": "B - y", "start_s": 10.0, "end_s": 70.0}, "notes": ["no audio for this join in the bounce"]}
+    att = bc.attention(att_report(att_res(index=1), silent, none), ATT_RANGES)
+    assert att["flagged"] == [] and [c["kind"] for c in att["caveats"]] == ["NOT MEASURED", "NOT MEASURED"]
+    assert "NOT MEASURED: join 2 Song A > Song B" in att["text"] and "before window silent: not measured" in att["text"]
+    assert "NOT MEASURED: join 3 x > y" in att["text"] and "no audio for this join" in att["text"]
+    assert att["text"].splitlines()[-1].startswith("no join needs a look (3 joins checked), but see the warnings above")
+    assert bc.attention_summary(att, "p").endswith("; WARNINGS (NOT MEASURED): see p")
+
+
+def test_a_start_warning_and_a_map_that_does_not_fit_are_written():
+    att = bc.attention(att_report(att_res(), problems=["bounce is 40.0 s SHORTER than the arrangement"],
+                                  warnings=["the bounce starts with 4.0 s of silence"]), ATT_RANGES)
+    assert "bounce does not fit the arrangement: bounce is 40.0 s SHORTER than the arrangement" in att["text"]
+    assert "START WARNING: the bounce starts with 4.0 s of silence" in att["text"]
+    assert bc.attention_summary(att, "p") == "BOUNCE CHECK: no join needs a look; WARNINGS (MAP, START WARNING): see p"
+
+
+def test_no_ranges_and_no_flam_run_are_written_as_not_judged_and_not_run():
+    att = bc.attention(att_report(att_res(flam={"state": "not_run", "notes": []})), None)
+    assert [c["kind"] for c in att["caveats"]] == ["NOT JUDGED", "NOT RUN"]
+    assert att["flagged"] == [] and att["text"].startswith("NOT JUDGED: no accepted ranges were loaded")
+
+
+def test_the_attention_file_is_ascii_even_for_a_track_name_with_a_dash_or_an_accent(tmp):
+    res = att_res(step=9.0)
+    res["join"]["out"] = "Beyonc\u00e9 \u2014 Break My Soul SW V1"
+    path = tmp / "ascii_probe.md"
+    bc.write_attention(bc.attention(att_report(res), ATT_RANGES), path)
+    data = path.read_bytes()
+    assert data.isascii() and b"Beyonce - Break My Soul" in data
+
+
+# ---------------------------------------------------------------- the CLI writes the attention file and ends on one summary line
+
+def _cli_case(tmp, name, mid_db, ranges=True, plan_end=220.0):
+    d = tmp / name
+    d.mkdir()
+    plan = _plan([[0.0, 120.0], [200.0, 120.0]], [(100.0, 160.0)], [("Alpha - One", 160.0), ("Beta - Two", plan_end)])
+    report = _report([(100.0, 160.0)], [(0.0, 160.0), (100.0, plan_end)], ["Alpha - One", "Beta - Two"])
+    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
+    (d / "ARRANGEMENT_REPORT.json").write_text(json.dumps(report))
+    build(d / "Mix.wav", (sine(1000, 40, -20), None), (sine(1000, 30, mid_db), None), (sine(1000, 30, -20), None))
+    if ranges:
+        (d / "ranges.json").write_text(json.dumps({"groups": {"accepted": {"measurements": {
+            n: _rng(-1.0, 1.0) for n in ("loud_step_lu", "loud_peak_vs_sides_lu", "low_level_vs_sides_db", "width_step_db")}}}}))
+    return d
+
+
+def test_cli_exits_0_on_a_flagged_join_and_writes_the_attention_file_and_the_last_line(tmp):
+    d = _cli_case(tmp, "cli_att_flag", -10.0)          # blend 10 dB over both sides: the blend peak is outside by far
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "ranges.json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    text = (d / "out" / "ATTENTION.md").read_text()
+    assert "NEEDS A LOOK: join 1 One > Two (" in text and "blend peak vs sides +10.0 LU" in text and "picture: " in text, text
+    assert (d / "out" / "join_01.png").name in text
+    last = proc.stdout.strip().splitlines()[-1]
+    assert last.startswith("BOUNCE CHECK: 1 of 1 joins need a look (J01)") and last.endswith(str(d / "out" / "ATTENTION.md")), last
+    data = json.loads((d / "out" / "bounce_check.json").read_text())
+    assert [f["join"] for f in data["attention"]["flagged"]] == [1] and data["attention"]["text"] == text
+    assert "\u2014" not in proc.stdout and "\u2014" not in text
+
+
+def test_cli_writes_the_attention_file_when_nothing_flags_too(tmp):
+    d = _cli_case(tmp, "cli_att_clean", -20.0)
+    proc = _cli(d / "Mix.wav", "--out", d / "out", "--ranges", d / "ranges.json", "--no-flam")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    text = (d / "out" / "ATTENTION.md").read_text()
+    assert text.splitlines()[-1].startswith("no join needs a look (1 joins checked), but see the warnings above")
+    assert "NOT RUN: kick flam was skipped" in text
+    last = proc.stdout.strip().splitlines()[-1]
+    assert last.startswith("BOUNCE CHECK: no join needs a look; WARNINGS (") and "NOT RUN" in last and last.endswith("ATTENTION.md"), last
+
+
+def test_cli_writes_the_attention_file_for_a_start_warning(tmp):
+    d = tmp / "cli_att_start"
+    d.mkdir()
+    (d / "Mix.wav").write_bytes(_shifted_kick_bounce(tmp, "cli_att_start_src", 4.0).read_bytes())
+    plan = _plan([[0.0, 120.0], [400.0, 120.0]], [(140.0, 220.0)], [("Out - A", 220.0), ("In - B", 400.0)])
+    report = _report([(140.0, 220.0)], [(0.0, 220.0), (140.0, 400.0)], ["Out - A", "In - B"])
+    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
+    (d / "ARRANGEMENT_REPORT.json").write_text(json.dumps(report))
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "none.json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert "START WARNING: the bounce starts with" in (d / "out" / "ATTENTION.md").read_text()
+    assert "WARNINGS (" in proc.stdout.strip().splitlines()[-1] and "START WARNING" in proc.stdout.strip().splitlines()[-1]
+
+
+def test_cli_writes_the_attention_file_when_the_map_does_not_fit_and_still_exits_3(tmp):
+    d = _cli_case(tmp, "cli_att_badmap", -20.0, plan_end=400.0)
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "ranges.json")
+    assert proc.returncode == 3, (proc.stdout, proc.stderr)
+    assert "bounce does not fit the arrangement" in (d / "out" / "ATTENTION.md").read_text()
+    assert proc.stdout.strip().splitlines()[-1].startswith("BOUNCE CHECK: ") and "MAP" in proc.stdout.strip().splitlines()[-1]
+
+
+def test_cli_replaces_an_old_attention_file_so_a_check_that_could_not_run_says_so(tmp):
+    d = tmp / "cli_att_stale"
+    d.mkdir()
+    (d / "out").mkdir()
+    (d / "out" / "ATTENTION.md").write_text("no join needs a look (9 joins checked)\n")
+    build(d / "Mix.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None))
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out")           # no plan beside the bounce: could not run
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    text = (d / "out" / "ATTENTION.md").read_text()
+    assert text.startswith("bounce check did not run (") and "no measurements" in text and "9 joins" not in text, text
+
+
+# ---------------------------------------------------------------- fix round 1: a join whose numbers cannot be trusted never reads as clean
+
+ACUTE_E, O_STROKE = "\N{LATIN SMALL LETTER E WITH ACUTE}", "\N{LATIN SMALL LETTER O WITH STROKE}"
+EM_DASH = chr(0x2014)
+
+
+def real_report(res, flam=None):
+    """The report a real measure_join result would sit in: join facts, a flam result and a mapping."""
+    res["join"] = {"index": 1, "out": "A - x", "in": "B - y", "start_s": S, "end_s": E}
+    res["flam"] = flam or {"state": "no_flam_seen", "fraction_of_fit_beats": 0.0, "n_kick_beats": 20, "n_fit_both": 18}
+    return att_report(res)
+
+
+def test_a_mono_bounce_has_no_width_step_and_the_attention_file_says_so_instead_of_reading_clean(tmp):
+    res = measure(build(tmp / "att_mono.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None)))
+    assert "width_step_db" not in bc.scalars(res)
+    att = bc.attention(real_report(res), ATT_RANGES)
+    assert att["flagged"] == []
+    line = next(c["text"] for c in att["caveats"] if c["kind"] == "NOT MEASURED")
+    assert "join 1 x > y" in line and "width step (width step not measured: the before and after window is mono" in line, line
+    assert att["text"].splitlines()[-1].startswith("no join needs a look (1 joins checked), but see the warnings above")
+
+
+def test_a_low_band_with_no_energy_in_one_channel_is_named_not_measured_never_clean(tmp):
+    path = build(tmp / "att_left_only.wav", (_bass(40, -20), np.zeros(int(40 * SR))), (_bass(30, -20), np.zeros(int(30 * SR))),
+                 (_bass(30, -20), np.zeros(int(30 * SR))))
+    res = measure(path)
+    assert res["low_end"]["corr"]["during"] is None and "low_corr_drop" not in bc.scalars(res)
+    att = bc.attention(real_report(res), ATT_RANGES)
+    text = " ".join(c["text"] for c in att["caveats"])
+    assert "low-end L/R correlation change vs sides (negative = fell) (no 40-150 Hz energy in one channel of the before, during, after windows)" in text, text
+    assert att["flagged"] == [] and "but see the warnings above" in att["text"].splitlines()[-1]
+
+
+@pytest.mark.parametrize("measure, drop", [
+    ("loud step", lambda r: r["loudness"].pop("step_lu")), ("blend peak vs sides", lambda r: r["loudness"].pop("peak_vs_sides_lu")),
+    ("low end (40-150 Hz) vs sides", lambda r: r["low_end"].pop("level_vs_sides_db")),
+    ("low-end L/R correlation change", lambda r: r["low_end"].pop("corr_drop")), ("width step", lambda r: r["width"].pop("step_db"))])
+def test_each_attention_measure_that_is_absent_from_a_measured_join_is_named(measure, drop):
+    res = att_res()
+    drop(res)
+    att = bc.attention(att_report(res), ATT_RANGES)
+    assert [c["kind"] for c in att["caveats"]] == ["NOT MEASURED"] and measure in att["caveats"][0]["text"], att["text"]
+    assert "NOT MEASURED: join 1 Song A > Song B" in att["text"] and "but see the warnings above" in att["text"].splitlines()[-1]
+    assert bc.attention_summary(att, "p") == "BOUNCE CHECK: no join needs a look; WARNINGS (NOT MEASURED): see p"
+
+
+def test_a_range_missing_for_an_attention_measure_is_not_judged_and_says_so():
+    ranges = {k: v for k, v in ATT_RANGES.items() if k != "width_step_db"}
+    att = bc.attention(att_report(att_res(width=50.0)), ranges)
+    assert att["flagged"] == [] and "NOT JUDGED: the accepted ranges have no entry for width step" in att["text"]
+
+
+def test_a_per_join_note_that_says_the_numbers_may_be_off_is_a_warning():
+    res = att_res()
+    res["notes"] = ["kick grid offset +55 / +50 ms: the beat to seconds map may be off"]
+    att = bc.attention(att_report(res), ATT_RANGES)
+    assert [c["kind"] for c in att["caveats"]] == ["WARNING"], att["text"]
+    assert att["caveats"][0]["text"] == ("WARNING: join 1 Song A > Song B (25:27.3-26:25.8): kick grid offset +55 / +50 ms: "
+                                         "the beat to seconds map may be off")
+    assert att["text"].splitlines()[-1].startswith("no join needs a look (1 joins checked), but see the warnings above")
+
+
+def test_a_flam_that_was_not_measurable_on_any_join_is_said_once():
+    nm = {"state": "not_measurable", "notes": ["no clean kick templates"]}
+    att = bc.attention(att_report(att_res(index=1, flam=nm), att_res(index=2, flam=nm), att_res(index=3, flam={**nm, "state": "too_few_beats"})), ATT_RANGES)
+    kinds = [c["kind"] for c in att["caveats"]]
+    assert kinds == ["FLAM NOT MEASURABLE"], att["text"]
+    assert "the kick flam could not be judged on any join (information, not a flag)" in att["text"] and att["flagged"] == []
+    assert att["text"].count("FLAM NOT MEASURABLE") == 1
+
+
+def test_one_judgeable_flam_anywhere_means_no_flam_caveat_and_a_per_join_not_measurable_stays_information():
+    nm = {"state": "not_measurable", "notes": ["no clean kick templates"]}
+    att = bc.attention(att_report(att_res(index=1, flam=nm), att_res(index=2)), ATT_RANGES)
+    assert att["caveats"] == [] and att["flagged"] == [] and att["text"] == "no join needs a look (2 joins checked)\n"
+
+
+def test_a_thin_range_for_an_attention_measure_is_warned_about_and_a_thin_flam_range_is_not():
+    thin = {**ATT_RANGES, "loud_step_lu": {**ATT_RANGES["loud_step_lu"], "n": 3, "thin": True}}
+    att = bc.attention(att_report(att_res()), thin)
+    assert [c["kind"] for c in att["caveats"]] == ["THIN"] and "loud step (3 joins)" in att["text"], att["text"]
+    assert bc.attention_summary(att, "p") == "BOUNCE CHECK: no join needs a look; WARNINGS (THIN): see p"
+    flam_thin = {**ATT_RANGES, "flam_fraction_of_fitted_beats": {**ATT_RANGES["flam_fraction_of_fitted_beats"], "n": 2, "thin": True}}
+    assert bc.attention(att_report(att_res()), flam_thin)["caveats"] == []
+    only_n = {**ATT_RANGES, "width_step_db": {k: v for k, v in ATT_RANGES["width_step_db"].items() if k != "thin"} | {"n": 4}}
+    assert [c["kind"] for c in bc.attention(att_report(att_res()), only_n)["caveats"]] == ["THIN"]
+
+
+def test_the_text_is_the_same_ascii_in_the_file_the_json_and_the_screen(tmp):
+    d = _cli_case(tmp, "cli_att_accents", -10.0)
+    name = f"Sm{O_STROKE}rrebr{O_STROKE}d Caf{ACUTE_E} {EM_DASH} Mix"
+    plan = json.loads((d / "MIX_PLAN.json").read_text())
+    plan["tracks"][1]["display_name"] = "Beta - " + name
+    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "ranges.json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    md = (d / "out" / "ATTENTION.md").read_text(encoding="ascii")
+    data = json.loads((d / "out" / "bounce_check.json").read_text())
+    assert "Smorrebrod Cafe - Mix" in md and md.isascii() and "?" not in md.split("picture")[0], md
+    assert data["attention"]["text"] == md
+    assert all(f["text"] in md for f in data["attention"]["flagged"])
+    lines = proc.stdout.splitlines()
+    first = next(i for i, l in enumerate(lines) if l.startswith("LOOK AT THESE PICTURES")) + 1
+    assert lines[first:first + len(md.splitlines())] == md.splitlines(), (lines[first:], md)
+
+
+def test_ascii_text_keeps_the_letter_of_an_accent_and_of_the_letters_unicode_does_not_decompose():
+    assert bc.ascii_text(f"Sm{O_STROKE}rrebr{O_STROKE}d") == "Smorrebrod"
+    assert bc.ascii_text(f"Beyonc{ACUTE_E} {EM_DASH} \N{LATIN SMALL LETTER SHARP S}\N{LATIN SMALL LETTER AE}") == "Beyonce - ssae"
+    assert bc.ascii_text("\N{CJK UNIFIED IDEOGRAPH-4E2D}") == "?" and bc.ascii_text("plain text") == "plain text"
+
+
+def test_cli_with_a_bad_range_group_still_leaves_an_attention_file_that_says_it_did_not_run(tmp):
+    d = _cli_case(tmp, "cli_att_badgroup", -20.0)
+    (d / "out").mkdir()
+    (d / "out" / "ATTENTION.md").write_text("no join needs a look (9 joins checked)\n")
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "ranges.json", "--range-group", "nonesuch")
+    assert proc.returncode == 2 and "could not run" in proc.stderr, (proc.stdout, proc.stderr)
+    text = (d / "out" / "ATTENTION.md").read_text()
+    assert text.startswith("bounce check did not run (ValueError: ") and text.rstrip().endswith("): no measurements"), text
+    assert "9 joins" not in text and "nonesuch" in text
+    assert proc.stdout.strip().splitlines()[-1].startswith("BOUNCE CHECK: did not run: no measurements: see ")
+
+
+def test_cli_with_no_warnings_writes_the_single_clean_line_and_ends_on_it(tmp):
+    d = tmp / "cli_att_one_line_stereo"
+    d.mkdir()
+    x, sr = sf.read(str(kick_bounce(d / "src.wav", 0.0)), dtype="float32")
+    right = x + 0.05 * np.random.default_rng(5).standard_normal(len(x)).astype("float32")       # a little independent noise: not mono
+    sf.write(str(d / "Mix.wav"), np.stack([x, right], axis=1), sr, subtype="FLOAT")
+    plan = _plan([[0.0, 120.0], [400.0, 120.0]], [(140.0, 220.0)], [("Out - A", 220.0), ("In - B", 400.0)])
+    report = _report([(140.0, 220.0)], [(0.0, 220.0), (140.0, 400.0)], ["Out - A", "In - B"])
+    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
+    (d / "ARRANGEMENT_REPORT.json").write_text(json.dumps(report))
+    (d / "ranges.json").write_text(json.dumps({"groups": {"accepted": {"measurements": {n: _rng(-30.0, 30.0) for n in bc.ATTENTION_MARGINS}}}}))
+    proc = _cli(d / "Mix.wav", "--out", d / "out", "--ranges", d / "ranges.json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert (d / "out" / "ATTENTION.md").read_text() == "no join needs a look (1 joins checked)\n", (d / "out" / "ATTENTION.md").read_text()
+    assert proc.stdout.strip().splitlines()[-1] == "BOUNCE CHECK: no join needs a look"
+
+
+# ---------------------------------------------------------------- fix round 2: fresh bounces, --project, NaN, no-audio joins
+
+import importlib.util  # noqa: E402
+import os  # noqa: E402
+import time  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("check_bounce_cli", CLI)
+cb = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cb)
+
+
+def _stamp(path, age):
+    stamp = time.time() + age
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def _output(tmp, name, files):
+    """A project's Output folder with files at mtimes `age` seconds from now (files: name -> age)."""
+    out = tmp / name / "Output"
+    out.mkdir(parents=True)
+    for fname, age in files.items():
+        (out / fname).write_bytes(b"x")
+        _stamp(out / fname, age)
+    return out
+
+
+def test_the_newest_version_is_the_one_checked_never_an_older_one_with_a_bounce(tmp):
+    out = _output(tmp, "fb_newest", {"Sections V7.als": -100, "Sections V8.als": -100, "Sections V8.wav": -50, "Sections V9.als": -100})
+    with pytest.raises(cb.NoFreshBounce) as err:
+        cb.find_fresh_bounce(out)
+    assert "Sections V9.wav is not there" in str(err.value) and "V8" not in str(err.value)
+
+
+def test_the_version_is_compared_as_a_number_not_as_text(tmp):
+    out = _output(tmp, "fb_numeric", {"Sections V9.als": -100, "Sections V9.wav": -50, "Sections V10.als": -100, "Sections V10.wav": -50})
+    assert cb.find_fresh_bounce(out) == (out / "Sections V10.wav", out / "Sections V10.als")
+
+
+def test_the_phased_file_is_preferred_only_when_its_own_bounce_is_not_older_than_it(tmp):
+    base = {"Sections V9.als": -100, "Sections V9 Phased.als": -100, "Sections V9.wav": -50}
+    both = _output(tmp, "fb_both", {**base, "Sections V9 Phased.wav": -50})
+    assert cb.find_fresh_bounce(both) == (both / "Sections V9 Phased.wav", both / "Sections V9 Phased.als")
+    stale_phased = _output(tmp, "fb_stale_phased", {**base, "Sections V9 Phased.wav": -200})
+    assert cb.find_fresh_bounce(stale_phased) == (stale_phased / "Sections V9.wav", stale_phased / "Sections V9.als")
+    no_phased_wav = _output(tmp, "fb_no_phased_wav", base)
+    assert cb.find_fresh_bounce(no_phased_wav) == (no_phased_wav / "Sections V9.wav", no_phased_wav / "Sections V9.als")
+    only_phased = _output(tmp, "fb_only_phased", {"Sections V9 Phased.als": -100, "Sections V9 Phased.wav": -50})
+    assert cb.find_fresh_bounce(only_phased)[1].name == "Sections V9 Phased.als"
+
+
+def test_a_bounce_older_than_its_als_is_never_taken_and_the_refusal_names_why(tmp):
+    out = _output(tmp, "fb_stale", {"Sections V9.als": -100, "Sections V9.wav": -200})
+    with pytest.raises(cb.NoFreshBounce) as err:
+        cb.find_fresh_bounce(out)
+    assert "Sections V9.wav is older than Sections V9.als (stale)" in str(err.value) and "Render the final ALS" in str(err.value)
+    both = _output(tmp, "fb_both_stale", {"Sections V9.als": -100, "Sections V9 Phased.als": -100, "Sections V9.wav": -200})
+    with pytest.raises(cb.NoFreshBounce) as err:
+        cb.find_fresh_bounce(both)
+    assert "Sections V9 Phased.wav is not there" in str(err.value) and "Sections V9.wav is older" in str(err.value)
+
+
+def test_a_bounce_with_the_same_mtime_as_its_als_is_not_older(tmp):
+    out = _output(tmp, "fb_equal", {"Sections V9.als": -100, "Sections V9.wav": -100})
+    stamp = (out / "Sections V9.als").stat().st_mtime
+    os.utime(out / "Sections V9.wav", (stamp, stamp))
+    assert cb.find_fresh_bounce(out)[0].name == "Sections V9.wav"
+
+
+def test_other_als_names_in_output_are_not_the_final_and_no_als_is_a_refusal(tmp):
+    out = _output(tmp, "fb_names", {"Sections V9 Sams Tweaks.als": -100, "Sections V9 Sams Tweaks.wav": -50, "Mix V3.als": -100, "Sections V4.als.partial": -100})
+    with pytest.raises(cb.NoFreshBounce, match="no Sections V<N>.als"):
+        cb.find_fresh_bounce(out)
+
+
+def _project(tmp, name, mid_db=-10.0, phased=False):
+    d = tmp / name
+    out = d / "Output"
+    out.mkdir(parents=True)
+    names = ["Sections V9.als"] + (["Sections V9 Phased.als"] if phased else [])
+    for als_name in names:
+        _write_als(out / als_name, [("Alpha - One", (0.0, 160.0)), ("Beta - Two", (100.0, 220.0))])
+        _stamp(out / als_name, -100)
+        build(out / als_name.replace(".als", ".wav"), (sine(1000, 40, -20), None), (sine(1000, 30, mid_db), None), (sine(1000, 30, -20), None))
+        _stamp(out / als_name.replace(".als", ".wav"), -50)
+    return d
+
+
+def test_cli_project_checks_the_fresh_bounce_of_the_final_into_output_bounce_check(tmp):
+    d = _project(tmp, "proj_ok")
+    proc = _cli("--project", d, "--no-flam")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    folder = d / "Output" / "Bounce Check"
+    text = (folder / "ATTENTION.md").read_text()
+    assert "NEEDS A LOOK: join 1 One > Two (0:50.0-1:20.0): blend peak vs sides +10.0 LU" in text, text
+    assert json.loads((folder / "bounce_check.json").read_text())["bounce"].endswith("Sections V9.wav") and (folder / "join_01.png").is_file()
+    last = proc.stdout.strip().splitlines()[-1]
+    assert last.startswith("BOUNCE CHECK: 1 of 1 joins need a look (J01)") and last.endswith("ATTENTION.md"), last
+
+
+def test_cli_project_takes_the_phased_file_when_its_bounce_is_fresh(tmp):
+    d = _project(tmp, "proj_phased", phased=True)
+    proc = _cli("--project", d, "--no-flam")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads((d / "Output" / "Bounce Check" / "bounce_check.json").read_text())
+    assert data["bounce"].endswith("Sections V9 Phased.wav") and "Sections V9 Phased.als" in data["join_source"], (data["bounce"], data["join_source"])
+    _stamp(d / "Output" / "Sections V9 Phased.wav", -200)                            # its bounce goes stale: the plain final is checked
+    proc = _cli("--project", d, "--no-flam")
+    assert json.loads((d / "Output" / "Bounce Check" / "bounce_check.json").read_text())["bounce"].endswith("Sections V9.wav")
+
+
+def test_cli_project_with_a_stale_bounce_refuses_and_says_so_in_the_file(tmp):
+    d = _project(tmp, "proj_stale")
+    _stamp(d / "Output" / "Sections V9.wav", -200)
+    folder = d / "Output" / "Bounce Check"
+    folder.mkdir()
+    (folder / "ATTENTION.md").write_text("no join needs a look (9 joins checked)\n")
+    proc = _cli("--project", d, "--no-flam")
+    assert proc.returncode == 2 and "could not run: NoFreshBounce" in proc.stderr and "stale" in proc.stderr, (proc.stdout, proc.stderr)
+    text = (folder / "ATTENTION.md").read_text()
+    assert text.startswith("bounce check did not run (NoFreshBounce: ") and "(stale)" in text and text.rstrip().endswith("no measurements"), text
+    assert not (folder / "bounce_check.json").exists() or "9 joins" not in text
+    assert proc.stdout.strip().splitlines()[-1].startswith("BOUNCE CHECK: did not run: no measurements: see ")
+
+
+def test_cli_project_without_an_output_folder_refuses_and_creates_nothing(tmp):
+    d = tmp / "proj_none"
+    d.mkdir()
+    proc = _cli("--project", d, "--no-flam")
+    assert proc.returncode == 2 and "could not run" in proc.stderr and "Output" in proc.stderr, (proc.stdout, proc.stderr)
+    assert not (d / "Output").exists()
+
+
+def test_cli_project_does_not_mix_with_a_bounce_or_als(tmp):
+    d = _project(tmp, "proj_mix")
+    proc = _cli("--project", d, d / "Output" / "Sections V9.wav")
+    assert proc.returncode == 2 and "finds the bounce and the ALS itself" in proc.stderr, (proc.stdout, proc.stderr)
+
+
+@pytest.mark.parametrize("name, remove", [
+    ("loud_step_lu", lambda r: r["loudness"].__setitem__("step_lu", float("nan"))),
+    ("loud_peak_vs_sides_lu", lambda r: r["loudness"].__setitem__("peak_vs_sides_lu", float("nan"))),
+    ("low_level_vs_sides_db", lambda r: r["low_end"].__setitem__("level_vs_sides_db", float("nan"))),
+    ("low_corr_drop", lambda r: r["low_end"].__setitem__("corr_drop", float("nan"))),
+    ("width_step_db", lambda r: r["width"].__setitem__("step_db", float("nan")))])
+def test_a_nan_measure_is_not_inside_the_range_it_is_not_measured(name, remove):
+    res = att_res()
+    remove(res)
+    assert name not in bc.scalars(res) and name not in bc.judge(res, ATT_RANGES)
+    att = bc.attention(att_report(res), ATT_RANGES)
+    assert [c["kind"] for c in att["caveats"]] == ["NOT MEASURED"] and "(not a number)" in att["text"], att["text"]
+    assert att["text"].splitlines()[-1].startswith("no join needs a look (1 joins checked), but see the warnings above")
+
+
+def test_an_infinite_or_nan_value_never_enters_a_range():
+    res = att_res(tonal=float("nan"))
+    assert "tonal_worst_abs_db" not in bc.scalars(res) and not any(k.startswith("tonal_step_sub") for k in bc.scalars({**res, "tonal": {"step_db": {"sub": float("inf")}}}))
+    assert bc.build_ranges([res, att_res(step=2.0)])["loud_step_lu"]["n"] == 2
+
+
+def test_joins_with_no_audio_are_not_a_skipped_flam():
+    none = {"join": {"index": 1, "out": "A - x", "in": "B - y", "start_s": 10.0, "end_s": 70.0}, "notes": ["no audio for this join in the bounce"]}
+    two = {**none, "join": {**none["join"], "index": 2}}
+    att = bc.attention(att_report(none, two), ATT_RANGES)
+    assert [c["kind"] for c in att["caveats"]] == ["NOT MEASURED", "NOT MEASURED"], att["text"]
+    mixed = bc.attention(att_report(none, att_res(index=2, flam={"state": "not_run", "notes": []})), ATT_RANGES)
+    assert "NOT RUN" in [c["kind"] for c in mixed["caveats"]]
+
+
+def test_the_kick_grid_offset_note_check_bounce_adds_reaches_the_attention_file(tmp, monkeypatch):
+    far = {"state": "not_measurable", "notes": [], "grid_offset_ms": {"out": 55.0, "in": 50.0}}
+    monkeypatch.setattr(bc, "measure_flam", lambda *a, **k: far)
+    path = build(tmp / "grid_note.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None))
+    report = bc.check_bounce(path, TEMPO, [join()], 220.0, flam=True)
+    assert report["joins"][0]["notes"] == ["kick grid offset +55 / +50 ms: the beat to seconds map may be off"] or \
+        "kick grid offset +55 / +50 ms: the beat to seconds map may be off" in report["joins"][0]["notes"]
+    att = bc.attention(report, ATT_RANGES)
+    assert any(c["kind"] == "WARNING" and "kick grid offset +55 / +50 ms: the beat to seconds map may be off" in c["text"] for c in att["caveats"]), att["text"]
