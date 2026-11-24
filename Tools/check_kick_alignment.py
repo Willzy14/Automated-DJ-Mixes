@@ -5,7 +5,9 @@ Usage:  python Tools/check_kick_alignment.py <ALS> [--audio <dir>] [--out <dir>]
 One line per transition, a count line, then the folder with the pictures. Look at the pictures: the
 numbers are a summary, the picture is the check. Each line gives three lags in ms (positive = the
 incoming kick is later): edge (leading edge of the click), click (cross-correlation of the >150 Hz
-envelopes) and main (steepest rise of the >40 Hz envelope).
+envelopes) and main (steepest rise of the >40 Hz envelope). Each is judged by its own figures: click WARN 2.5 ms,
+FAIL 5.0 ms; main hit WARN 8.0 ms, FAIL 14.0 ms; the edge is shown but never decides a verdict (starting figures Sam set
+on 2026-11-24 from five listening comparisons).
 Exit codes:
   0  done. In warn mode this is the exit code whatever the verdicts or the loud line.
   1  fail mode only: at least one transition is FAIL (or OFF_GRID).

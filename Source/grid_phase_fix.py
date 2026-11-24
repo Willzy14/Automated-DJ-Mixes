@@ -49,7 +49,7 @@ from scipy import optimize
 import kick_alignment_check as kac
 
 # Decision figures: starting figures, Sam sets the real ones (2026-11-23).
-WARN_MS = kac.WARN_MS            # a mix whose worst judged lag is under this is left alone
+WARN_MS = kac.CLICK_WARN_MS      # a mix whose worst judged lag is under this is left alone
 # MAX_DRIFT_MS and OUTLIER_MS are separate cuts: a kick beat whose offset is OUTLIER_MS or more from its grid is dropped
 # from the fit (it is another sound, not a drifting kick); a fitted correction beyond MAX_DRIFT_MS is refused for the
 # track (a grid that far out is more likely a wrong grid or a wrong kick than a drift to repair). OUTLIER_MS is the
@@ -64,13 +64,14 @@ EPS_MS = 1.5
 # DRIFT_MIN_MS: a fitted correction smaller than this, in size AND in swing, is noise, not drift: the kick check cannot
 # see a few ms (see EPS_MS), and applying such a wobble only adds noise (on the real mix Taste's fit stayed within 1.9 ms,
 # swung 3.7 ms, and applying it pushed a good blend 1.2 ms out). The size is max(|largest correction|, high minus low),
-# so a track swinging -3.9 to +2.6 (6.5 ms) is drift although neither end reaches 4 ms. The kick check's own warn figure;
+# so a track swinging -3.9 to +2.6 (6.5 ms) is drift although neither end reaches 4 ms. Its own 4 ms, not the click warn figure (2.5);
 # Get Right, which really drifts, reaches 6.1 ms. A constant offset this large is corrected (the markers are late or early).
-DRIFT_MIN_MS = WARN_MS
+DRIFT_MIN_MS = 4.0   # its own figure, not the click warn figure: a noise rule, not a verdict
 # MAX_SWING_MS: a fit whose high minus low exceeds this is refused: a mid-track excursion that large is a change of kick
 # sound (a different kick, a layered hit), not a grid drifting. Killa (-9.2 to +3.0, a swing of 12.2) passes. A starting
 # figure, like the others.
 MAX_SWING_MS = 14.0
+EDGE_MAIN_WORSE_MS = 4.0         # an edge or main hit lag that got worse by more than this is reported (its own figure)
 # REFUSE_TOL_MS: a judged blend counts as worse only when its worst click lag grew by more than this. The kick check's
 # re-measure of a shifted blend differs from the additive prediction by 0.2 to 1.1 ms on the real mixes (shifted windows
 # hold slightly different content), so a smaller change is not a worse blend.
@@ -251,9 +252,9 @@ def build_blends(results, transitions, tracks):
 
 def needs_fixing(summary):
     """A blend needs fixing when its median click lag is WARN_MS or more, or either half of it is at the kick check's
-    FAIL_MS or more (a drift flam). A blend under both is left alone however far it is from zero."""
+    CLICK_FAIL_MS or more (a drift flam). A blend under both is left alone however far it is from zero."""
     halves = (summary.get("first_half"), summary.get("second_half"))
-    return abs(summary["median"]) >= WARN_MS or any(h is not None and abs(h) >= kac.FAIL_MS for h in halves)
+    return abs(summary["median"]) >= WARN_MS or any(h is not None and abs(h) >= kac.CLICK_FAIL_MS for h in halves)
 
 
 # ------------------------------------------------------------------ the slide solve
@@ -504,7 +505,7 @@ def prediction_refusals(blends, predicted, after):
 
 
 def edge_main_worse(before, after):
-    """Judged blends whose edge or main hit lag got worse by more than WARN_MS. Reported, never a reason to refuse: the
+    """Judged blends whose edge or main hit lag got worse by more than EDGE_MAIN_WORSE_MS. Reported, never a reason to refuse: the
     solve aligns the click (as the ear chose for the Tech House mix), and the other two are allowed to differ."""
     found = []
     for b, a in zip(before, after):
@@ -512,7 +513,7 @@ def edge_main_worse(before, after):
             continue
         for kind in ("edge", "main"):
             was, now = getattr(b, kind).get("median"), getattr(a, kind).get("median")
-            if was is not None and now is not None and abs(now) - abs(was) > WARN_MS:
+            if was is not None and now is not None and abs(now) - abs(was) > EDGE_MAIN_WORSE_MS:
                 found.append(dict(label=b.label, estimator=kind, before=was, after=now))
     return found
 
@@ -524,7 +525,7 @@ def still_flamming(blends, fits, slides):
     for b in blends:
         s = b.summary(fits[b.out].at, fits[b.inc].at, slides[b.out], slides[b.inc])
         for half in ("first_half", "second_half"):
-            if s[half] is not None and abs(s[half]) >= kac.FAIL_MS:
+            if s[half] is not None and abs(s[half]) >= kac.CLICK_FAIL_MS:
                 found.append(dict(index=b.index, half=half, predicted=s[half]))
     return found
 
@@ -690,9 +691,9 @@ def report_text(outcome, als_path):
         lines.append(f"markers changed on {names.get(doc_index, doc_index)}: {count}")
     for f in outcome.still_flamming:
         lines += ["", f"STILL FLAMMING (half): the fix does not reach it: T{f['index']:02d} {f['half'].replace('_', ' ')} "
-                      f"is predicted at {_num(f['predicted'])} ms (FAIL figure {kac.FAIL_MS:g} ms)"]
+                      f"is predicted at {_num(f['predicted'])} ms (FAIL figure {kac.CLICK_FAIL_MS:g} ms)"]
     if outcome.edge_main_worse:
-        lines += ["", f"Edge or main hit lag got worse by more than {WARN_MS:g} ms ({EDGE_MAIN_NOTE}):"]
+        lines += ["", f"Edge or main hit lag got worse by more than {EDGE_MAIN_WORSE_MS:g} ms ({EDGE_MAIN_NOTE}):"]
         for w in outcome.edge_main_worse:
             lines.append(f"   {w['label']}: {w['estimator']} {_num(w['before'])} -> {_num(w['after'])} ms: {EDGE_MAIN_NOTE}")
     if outcome.refused_path:

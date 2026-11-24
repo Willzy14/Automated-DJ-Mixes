@@ -16,8 +16,11 @@ Two estimators, reported side by side, because a kick can line up by one and not
              Chosen over "first reaches 50 percent of peak" because the 50 percent time depends on
              how long each kick's body takes to peak, which differs kick to kick and is not the
              attack; the steepest rise is where the energy arrives.
-The verdict uses the worse of the two median lags. A soft-attack kick (clean click, late main hit)
-has a click lag near 0 and a main-hit lag well away from it: that is flagged SLOW_ATTACK.
+The verdict judges each estimator by its own figures (starting figures Sam set on 2026-11-24 from five listening
+comparisons) and takes the worse: click WARN 2.5 ms, FAIL 5.0 ms; main hit WARN 8.0 ms, FAIL 14.0 ms. The leading
+edge is reported only and never decides a verdict. A soft-attack kick (clean click, late main hit) has a click lag near
+0 and a main-hit lag well away from it: more than 8 ms apart is flagged SLOW_ATTACK; an edge more than 8 ms from the
+click is flagged EDGE_DISAGREES (each only raises a PASS to WARN).
 
 Limits (not measured away): lags are in source milliseconds, not stretched milliseconds (the
 difference is the warp ratio times the lag, under about 3 percent). Fader, EQ and filter automation
@@ -46,14 +49,19 @@ import numpy as np
 import soundfile as sf
 from scipy import fft, signal
 
-# Decision figures: starting figures only, Sam will set the real ones (2026-11-23).
-WARN_MS = 4.0
-FAIL_MS = 8.0
+# Decision figures: starting figures Sam set on 2026-11-24 from five listening comparisons.
+CLICK_WARN_MS = 2.5
+CLICK_FAIL_MS = 5.0
+MAIN_WARN_MS = 8.0
+MAIN_FAIL_MS = 14.0
 MIN_SHARED_KICKS = 16
-SLOW_ATTACK_MS = 4.0          # click and main-hit medians further apart than this
+SLOW_ATTACK_MS = 8.0          # click and main-hit medians further apart than this
+EDGE_DISAGREE_MS = 8.0        # leading-edge and click medians further apart than this (the edge never decides a verdict)
 SCATTER_MS = 8.0              # an estimator whose beats spread (interquartile range) wider than this is not trusted
-MINORITY_FRACTION = 0.20      # this share of the shared beats at FAIL_MS or more apart is a flam even if the median is fine
+MINORITY_FRACTION = 0.20      # this share of the shared beats at an estimator's fail figure or more apart is a flam even if the median is fine
 MIN_ESTIMATOR_BEATS = 3       # an estimator with fewer measured beats than this counts as missing
+_WARN = {"CLICK": CLICK_WARN_MS, "MAIN": MAIN_WARN_MS}     # each estimator is judged by its own figures
+_FAIL = {"CLICK": CLICK_FAIL_MS, "MAIN": MAIN_FAIL_MS}
 
 KICK_RATIO_MIN = 3.0          # 40-120 Hz peak vs the window median (also the >150 Hz click window)
 BODY_FRACTION = 0.3           # a kick's 40-120 Hz peak must be this much of the typical kick in the same overlap
@@ -436,7 +444,8 @@ class TransitionResult:
         return not ({"MISSING_AUDIO", "UNSUPPORTED_CLIP"} & set(self.flags))
 
 
-def _stats(values, beats, middle):
+def _stats(values, beats, middle, fail):
+    """Summary of one estimator's lags; `big` counts the beats at that estimator's own fail figure or more."""
     a = np.array(values, dtype=float)
     ok = ~np.isnan(a)
     out = dict(n=int(ok.sum()), median=None, iqr=None, first_half=None, second_half=None, big=0,
@@ -446,7 +455,7 @@ def _stats(values, beats, middle):
     q25, q75 = np.percentile(a[ok], [25, 75])
     out["median"] = round(float(np.median(a[ok])), 3)
     out["iqr"] = round(float(q75 - q25), 3)
-    out["big"] = int((np.abs(a[ok]) >= FAIL_MS).sum())
+    out["big"] = int((np.abs(a[ok]) >= fail).sum())
     b = np.array(beats)
     for key, sel in (("first_half", ok & (b < middle)), ("second_half", ok & (b >= middle))):
         out["n_" + key] = int(sel.sum())
@@ -459,19 +468,28 @@ def _present(stat):
     return stat is not None and stat.get("median") is not None and stat.get("n", 0) >= MIN_ESTIMATOR_BEATS
 
 
-def _minority(stat, shared):
-    """A fifth of the shared beats or more at the fail figure while the median stays under it."""
-    return stat.get("big", 0) >= round(MINORITY_FRACTION * shared, 9) and abs(stat["median"]) < FAIL_MS
+def _minority(stat, shared, fail):
+    """A fifth of the shared beats or more at the estimator's fail figure while its median stays under it."""
+    return stat.get("big", 0) >= round(MINORITY_FRACTION * shared, 9) and abs(stat["median"]) < fail
+
+
+def _lag_seen(click, main):
+    """The |median| of the estimator furthest past its own warn figure, or None when neither reaches it."""
+    seen = [(abs(st["median"]) / _WARN[name], abs(st["median"]))
+            for name, st in (("CLICK", click), ("MAIN", main)) if st.get("median") is not None]
+    reached = [s for s in seen if s[0] >= 1.0]
+    return max(reached)[1] if reached else None
 
 
 def judge(shared, click, main, edge=None, kicks=None):
     """Verdict and flags from the shared-kick count, the lag summaries and each track's own kick count.
 
-    The worse |median| of the two estimators decides. A scattered estimator (its beats spread wider than
-    SCATTER_MS) may fail the transition only when the other estimator corroborates it with a median of at
-    least WARN_MS; alone it is capped at WARN (LARGE_SCATTERED). A half of the blend whose median is at the
-    fail figure on a trusted or corroborated estimator is DRIFT_FLAM and fails. The leading edge only raises
-    a PASS to WARN (EDGE_DISAGREES)."""
+    Each estimator is judged by its own figures (CLICK_* and MAIN_*): the transition is as bad as its worst
+    estimator. A scattered estimator (its beats spread wider than SCATTER_MS) may fail the transition only when
+    the other estimator corroborates it with a median of at least ITS OWN warn figure; alone it is capped at WARN
+    (LARGE_SCATTERED). A half of the blend whose median is at its estimator's fail figure on a trusted or
+    corroborated estimator is DRIFT_FLAM and fails. The leading edge never decides a verdict: it only raises a
+    PASS to WARN when it sits more than EDGE_DISAGREE_MS from the click (EDGE_DISAGREES)."""
     flags = []
     out_kicks, in_kicks, span = (tuple(kicks) + (None,))[:3] if kicks else (None, None, None)
     have = {"CLICK": _present(click), "MAIN": _present(main)}
@@ -481,8 +499,7 @@ def judge(shared, click, main, edge=None, kicks=None):
         # where one track's kicks stop before the other's start, has no such stretch and stays CANNOT_JUDGE
         return "FAIL", ["OFF_GRID"]
     if shared < MIN_SHARED_KICKS or not any(have.values()):
-        seen = [abs(st["median"]) for st in (click, main) if st.get("median") is not None]
-        if seen and max(seen) >= WARN_MS:
+        if _lag_seen(click, main) is not None:
             flags.append("LARGE_LAG_FEW_KICKS")
         if shared >= MIN_SHARED_KICKS:
             flags += ["NO_CLICK", "NO_MAIN"]
@@ -494,8 +511,8 @@ def judge(shared, click, main, edge=None, kicks=None):
     meds = {name: abs(st["median"]) for name, st in present.items()}
     fail = capped = False
     for name, value in meds.items():
-        if value >= FAIL_MS:
-            if name not in scattered or any(meds[o] >= WARN_MS for o in meds if o != name):
+        if value >= _FAIL[name]:
+            if name not in scattered or any(meds[o] >= _WARN[o] for o in meds if o != name):
                 fail = True
             else:
                 capped = True
@@ -505,23 +522,24 @@ def judge(shared, click, main, edge=None, kicks=None):
     for half in ("first_half", "second_half"):
         halves = {name: abs(st[half]) for name, st in present.items()
                   if st.get(half) is not None and st.get("n_" + half, st["n"]) >= MIN_ESTIMATOR_BEATS}
-        if any(v >= FAIL_MS and (name not in scattered or any(halves.get(o, -1.0) >= WARN_MS for o in present if o != name))
+        if any(v >= _FAIL[name]
+               and (name not in scattered or any(halves.get(o, -1.0) >= _WARN[o] for o in present if o != name))
                for name, v in halves.items()):
             if "DRIFT_FLAM" not in flags:
                 flags.append("DRIFT_FLAM")
             fail = True
-    verdict = "FAIL" if fail else "WARN" if (max(meds.values()) >= WARN_MS or scattered) else "PASS"
+    verdict = "FAIL" if fail else "WARN" if (any(v >= _WARN[name] for name, v in meds.items()) or scattered) else "PASS"
     if len(present) == 2 and not scattered and abs(click["median"] - main["median"]) > SLOW_ATTACK_MS:
         flags.append("SLOW_ATTACK")
         if verdict == "PASS":
             verdict = "WARN"
     # a flam on a minority of the beats does not move the median: count the beats (only from an estimator
-    # that is not scattered, and only while its median is under the fail figure, so nothing is hidden)
-    if any(_minority(st, shared) for name, st in present.items() if name not in scattered):
+    # that is not scattered, and only while its median is under its own fail figure, so nothing is hidden)
+    if any(_minority(st, shared, _FAIL[name]) for name, st in present.items() if name not in scattered):
         flags.append("MINORITY_FLAM")
         if verdict == "PASS":
             verdict = "WARN"
-    if _present(edge) and have["CLICK"] and abs(edge["median"] - click["median"]) > WARN_MS:
+    if _present(edge) and have["CLICK"] and abs(edge["median"] - click["median"]) > EDGE_DISAGREE_MS:
         flags.append("EDGE_DISAGREES")
         if verdict == "PASS":
             verdict = "WARN"
@@ -557,36 +575,37 @@ def explain(res):
             and res.kick_span < MIN_SHARED_KICKS:
         out.append("the two tracks' kicks hardly play at the same time here (a hand-over)")
     if "LARGE_LAG_FEW_KICKS" in flags and not few_tracks:
-        seen = max((abs(v) for v in (cm, mm) if v is not None), default=0.0)
         if res.click_range_edge:
             out.append("lag outside the measurable range")
         else:
-            out.append(f"a lag of {seen:.1f} ms was seen but on too few kicks to judge")
+            out.append(f"a lag of {_lag_seen(res.click, res.main):.1f} ms was seen but on too few kicks to judge")
     if "NO_CLICK" in flags and res.verdict != "CANNOT_JUDGE":
         out.append("no usable click lag; judged on the main hit alone")
     if "NO_MAIN" in flags and res.verdict != "CANNOT_JUDGE":
         out.append("no usable main hit lag; judged on the click alone")
     if "SLOW_ATTACK" in flags:
-        if abs(cm) < WARN_MS <= abs(mm):
+        if abs(cm) < CLICK_WARN_MS and abs(mm) >= MAIN_WARN_MS:
             out.append("click lined up, main hit late: look at the picture")
-        elif abs(mm) < WARN_MS <= abs(cm):
+        elif abs(mm) < MAIN_WARN_MS and abs(cm) >= CLICK_WARN_MS:
             out.append("main hit lined up, click late: look at the picture")
         else:
             out.append(f"click and main hit disagree by {abs(cm - mm):.1f} ms: look at the picture")
     if "EDGE_DISAGREES" in flags:
         out.append(f"leading edge {res.edge['median']:+.1f} ms but click {cm:+.1f} ms: the two clicks disagree, "
                    f"look at the picture")
-    if "DRIFT_FLAM" in flags:
-        out.append(f"one half of the blend is {FAIL_MS:g} ms or more off")
-    for name, st in (("click", res.click), ("main hit", res.main)):
+    for name, key, st in (("click", "CLICK", res.click), ("main hit", "MAIN", res.main)):
         if st.get("median") is None:
             continue
-        if "LARGE_SCATTERED" in flags and st["iqr"] > SCATTER_MS and abs(st["median"]) >= FAIL_MS:
+        if "DRIFT_FLAM" in flags and any(
+                st.get(h) is not None and st.get("n_" + h, st.get("n", 0)) >= MIN_ESTIMATOR_BEATS
+                and abs(st[h]) >= _FAIL[key] for h in ("first_half", "second_half")):
+            out.append(f"one half of the blend is {_FAIL[key]:g} ms or more off on {name}")
+        if "LARGE_SCATTERED" in flags and st["iqr"] > SCATTER_MS and abs(st["median"]) >= _FAIL[key]:
             out.append(f"{name} median {st['median']:+.1f} ms but the beats spread {st['iqr']:.1f} ms: not a clean number")
-        if "MINORITY_FLAM" in flags and st["iqr"] <= SCATTER_MS and _minority(st, res.shared_kicks):
-            out.append(f"{st['big']} of {res.shared_kicks} shared beats are {FAIL_MS:g} ms or more apart on {name}")
+        if "MINORITY_FLAM" in flags and st["iqr"] <= SCATTER_MS and _minority(st, res.shared_kicks, _FAIL[key]):
+            out.append(f"{st['big']} of {res.shared_kicks} shared beats are {_FAIL[key]:g} ms or more apart on {name}")
         fh, sh = st.get("first_half"), st.get("second_half")
-        if fh is not None and sh is not None and abs(sh - fh) > WARN_MS:
+        if fh is not None and sh is not None and abs(sh - fh) > _WARN[key]:
             out.append(f"{name} drifts {fh:+.1f} ms to {sh:+.1f} ms")
     if res.click_range_edge:
         out.append(f"{res.click_range_edge} click lags sat on the +-{XCORR_MAX_LAG_MS:g} ms edge and are not counted")
@@ -659,9 +678,9 @@ def measure_transition(tr, readers):
     result.shared_kicks = len(shared)
     nums = [r.beat for r in shared]
     middle = (tr.start + tr.end) / 2.0
-    result.click = _stats([r.click_lag for r in shared], nums, middle)
-    result.main = _stats([r.main_lag for r in shared], nums, middle)
-    result.edge = _stats([r.edge_lag for r in shared], nums, middle)
+    result.click = _stats([r.click_lag for r in shared], nums, middle, CLICK_FAIL_MS)
+    result.main = _stats([r.main_lag for r in shared], nums, middle, MAIN_FAIL_MS)
+    result.edge = _stats([r.edge_lag for r in shared], nums, middle, math.inf)      # the edge never decides: no fail figure
     result.verdict, flags = judge(result.shared_kicks, result.click, result.main, result.edge,
                                   (result.kicks_out, result.kicks_in, result.kick_span))
     result.flags.extend(flags)
@@ -671,8 +690,9 @@ def measure_transition(tr, readers):
 # ------------------------------------------------------------------ the picture
 
 def _score(row):
-    """How far apart the two kicks are on this beat, by the worse of click and main hit; -1 when not measured."""
-    vals = [abs(v) for v in (row.click_lag, row.main_lag) if not math.isnan(v)]
+    """How far apart the two kicks are on this beat, as a multiple of each estimator's own warn figure (the worse of
+    click and main hit; the edge is not scored), so the main hit's bigger numbers do not always win; -1 when not measured."""
+    vals = [abs(v) / _WARN[name] for name, v in (("CLICK", row.click_lag), ("MAIN", row.main_lag)) if not math.isnan(v)]
     return max(vals) if vals else -1.0
 
 
@@ -713,7 +733,7 @@ def build_figure(result, readers):
     from matplotlib.figure import Figure
 
     rows = pick_beats(result.beats)
-    worst = {r.beat for r in worst_beats(result.beats) if _score(r) >= WARN_MS}
+    worst = {r.beat for r in worst_beats(result.beats) if _score(r) >= 1.0}
     fig = Figure(figsize=PIC_SIZE_IN, dpi=100)
     FigureCanvasAgg(fig)
     title = (f"{result.label}   {result.verdict}   edge {_fmt(result.edge.get('median'))}   "
