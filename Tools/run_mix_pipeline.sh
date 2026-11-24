@@ -176,7 +176,7 @@ phased_failed="$P/Output/MIX_PLAN_RECONCILIATION_PHASED.FAILED.json"
 apply_blocker=""
 # Nothing of an earlier build may pass for this build's result, in every mode (off included): the phased file, its REFUSED
 # copy, any .partial, its record, its reconciliations and the saved reconciliation of an earlier adopted original.
-rm -f -- "$P/Output/Sections V$B Phased"* "$phased_recon" "$phased_failed" "$recon_original" "$grid_record"
+rm -f -- "$phased" "$P/Output/Sections V$B Phased REFUSED.als" "$P/Output/Sections V$B Phased"*.partial "$phased_recon" "$phased_failed" "$recon_original" "$grid_record"
 if [ "$grid_mode" = off ]; then
     say "grid phase fix: off (GRID_PHASE_MODE=off), step skipped"
 else
@@ -271,16 +271,22 @@ print(path + " sha256 " + hashlib.sha256(open(path, "rb").read()).hexdigest())
 ' "$final_file" 2>> "$LOG") && say "final ALS: $final_info" || say "final ALS: could not read $final_file to hash it"
 fi
 # Bounce check: measure every join on the RENDERED bounce, report only (the build never stops here). The bounce is found by the
-# same-basename rule only: <final basename>.wav beside the final ALS in Output (e.g. Sections V9 Phased.wav beside Sections V9 Phased.als);
-# when it is not there yet, render it from the final ALS and run Tools/check_bounce.py by hand. BOUNCE_CHECK_MODE=off (any case) skips the
-# step. The tool writes Output/Bounce Check/ATTENTION.md (NEEDS A LOOK lines, or "no join needs a look"); whoever builds the mix opens the
-# pictures it names.
+# same-basename rule only: <final basename>.wav beside the final ALS in Output (e.g. Sections V9 Phased.wav beside Sections V9 Phased.als),
+# and only when it is not older than that ALS: a WAV rendered before the ALS was last written belongs to an earlier arrangement and is
+# ignored. A build writes a brand new final ALS, so normally nothing has been rendered from it yet: render it, then run the command printed
+# below (it finds the final ALS and its fresh bounce itself). BOUNCE_CHECK_MODE=off (any case) skips the step. The tool writes
+# Output/Bounce Check/ATTENTION.md (NEEDS A LOOK lines, or "no join needs a look"); whoever builds the mix opens the pictures it names.
 bounce_wav="${final_file%.als}.wav"
 bounce_dir="$P/Output/Bounce Check"
+bounce_cmd="python Tools/check_bounce.py --project \"$P\""
 if [[ "${BOUNCE_CHECK_MODE:-}" == [oO][fF][fF] ]]; then
     say "bounce check: off (BOUNCE_CHECK_MODE=off), step skipped"
 elif [ ! -f "$bounce_wav" ]; then
-    say "bounce check: no bounce beside the final yet (render it, then run Tools/check_bounce.py)"
+    say "bounce check: no fresh bounce beside the final yet (render the final ALS to a WAV of the same name, then run):"
+    say "  $bounce_cmd"
+elif [ "$bounce_wav" -ot "$final_file" ]; then
+    say "bounce check: the bounce beside the final is older than the ALS (stale), ignored: render the new final, then run Tools/check_bounce.py:"
+    say "  $bounce_cmd"
 else
     say "bounce check: $bounce_wav (report only: read $bounce_dir/ATTENTION.md and open the pictures it names)"
     bounce_out=$(python Tools/check_bounce.py "$bounce_wav" --als "$final_file" --out "$bounce_dir" 2>> "$LOG")

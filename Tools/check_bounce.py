@@ -1,6 +1,7 @@
 """Measure what the listener hears at every join of a bounced mix, on the bounce itself, and draw each join.
 
-Usage:  python Tools/check_bounce.py <bounce.wav> [--report ARRANGEMENT_REPORT.json --plan MIX_PLAN.json | --als <ALS>]
+Usage:  python Tools/check_bounce.py --project <project folder>     (the usual way: finds the final ALS and its fresh bounce in Output)
+        python Tools/check_bounce.py <bounce.wav> [--report ARRANGEMENT_REPORT.json --plan MIX_PLAN.json | --als <ALS>]
                                      [--out <dir>] [--ranges <ranges.json>] [--no-flam]
         python Tools/check_bounce.py --calibrate <manifest.json> --corpus-root <dir> --out <dir> [--only label,label]
 
@@ -24,6 +25,7 @@ Exit codes: 0 done (whatever was found); 2 the check could not run (message to s
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -77,6 +79,41 @@ def print_report(bc, result, ranges):
         say(bc.summary_line(res, ranges))
     if result.get("peak_memory_mb"):
         say(f"peak memory {result['peak_memory_mb']:.0f} MB")
+
+
+class NoFreshBounce(LookupError):
+    pass
+
+
+FINAL_ALS = re.compile(r"^Sections V(\d+)( Phased)?\.als$")
+
+
+def find_fresh_bounce(output):
+    """(bounce WAV, final ALS) for a project's Output folder: the highest Sections V<N>, the Phased file when its same-basename WAV is not
+    older than it, else the plain one when its WAV is not older than it. A bounce older than its ALS was rendered from an earlier
+    arrangement and is never taken."""
+    output = Path(output)
+    versions = {}
+    for f in output.iterdir():
+        m = FINAL_ALS.match(f.name)
+        if m:
+            versions.setdefault(int(m.group(1)), {})[bool(m.group(2))] = f
+    if not versions:
+        raise NoFreshBounce(f"no Sections V<N>.als in {output}: nothing to check a bounce against")
+    group = versions[max(versions)]
+    seen = []
+    for phased in (True, False):
+        als = group.get(phased)
+        if als is None:
+            continue
+        wav = als.with_suffix(".wav")
+        if not wav.is_file():
+            seen.append(f"{wav.name} is not there")
+        elif wav.stat().st_mtime < als.stat().st_mtime:
+            seen.append(f"{wav.name} is older than {als.name} (stale)")
+        else:
+            return wav, als
+    raise NoFreshBounce("no fresh bounce beside the final: " + "; ".join(seen) + ". Render the final ALS to a WAV of the same name in Output, then run again")
 
 
 def did_not_run(folder, reason):
@@ -166,6 +203,8 @@ def main(argv=None):
     ap.add_argument("--report", help="ARRANGEMENT_REPORT.json (default: beside the bounce)")
     ap.add_argument("--plan", help="MIX_PLAN.json (default: beside the bounce)")
     ap.add_argument("--als", help="read the joins from this ALS instead of the plan and report")
+    ap.add_argument("--project", help="a project folder: checks the fresh bounce of its final ALS in Output (see find_fresh_bounce), pictures into "
+                    "Output/Bounce Check, and writes an ATTENTION.md saying so when there is no fresh bounce")
     ap.add_argument("--out", help="folder for the pictures and the json (default: 'Bounce Check' beside the bounce)")
     ap.add_argument("--ranges", help="ranges json (default: Config/bounce_check_ranges.json if it exists)")
     ap.add_argument("--range-group", default="accepted")
@@ -182,12 +221,22 @@ def main(argv=None):
             if not (args.corpus_root and args.out):
                 ap.error("--calibrate needs --corpus-root and --out")
             return calibrate(bc, args)
-        if not args.bounce:
-            ap.error("give a bounce, or --calibrate")
-        out = (Path(args.out) if args.out else Path(args.bounce).resolve().parent / "Bounce Check").resolve()
+        if args.project:
+            if args.bounce or args.als or args.plan or args.report:
+                ap.error("--project finds the bounce and the ALS itself: give no bounce, --als, --plan or --report with it")
+            output = Path(args.project) / "Output"
+            if not output.is_dir():
+                raise FileNotFoundError(f"{output} not found")
+            out = (Path(args.out) if args.out else output / "Bounce Check").resolve()
+        elif not args.bounce:
+            ap.error("give a bounce, --project, or --calibrate")
+        else:
+            out = (Path(args.out) if args.out else Path(args.bounce).resolve().parent / "Bounce Check").resolve()
         attention_path = out / "ATTENTION.md"
         attention_folder = out
         attention_path.unlink(missing_ok=True)          # an old report must not stand for this run: no file means the check did not run
+        if args.project:
+            args.bounce, args.als = find_fresh_bounce(output)
         ranges = load_ranges(args.ranges or DEFAULT_RANGES, args.range_group)
         result = run_one(bc, args.bounce, out, ranges=ranges, flam=not args.no_flam, report=args.report, plan=args.plan, als=args.als)
         att = result["attention"] = bc.attention(result, ranges, out)

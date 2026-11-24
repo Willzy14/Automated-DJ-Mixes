@@ -1275,3 +1275,183 @@ def test_cli_with_no_warnings_writes_the_single_clean_line_and_ends_on_it(tmp):
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     assert (d / "out" / "ATTENTION.md").read_text() == "no join needs a look (1 joins checked)\n", (d / "out" / "ATTENTION.md").read_text()
     assert proc.stdout.strip().splitlines()[-1] == "BOUNCE CHECK: no join needs a look"
+
+
+# ---------------------------------------------------------------- fix round 2: fresh bounces, --project, NaN, no-audio joins
+
+import importlib.util  # noqa: E402
+import os  # noqa: E402
+import time  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("check_bounce_cli", CLI)
+cb = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cb)
+
+
+def _stamp(path, age):
+    stamp = time.time() + age
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def _output(tmp, name, files):
+    """A project's Output folder with files at mtimes `age` seconds from now (files: name -> age)."""
+    out = tmp / name / "Output"
+    out.mkdir(parents=True)
+    for fname, age in files.items():
+        (out / fname).write_bytes(b"x")
+        _stamp(out / fname, age)
+    return out
+
+
+def test_the_newest_version_is_the_one_checked_never_an_older_one_with_a_bounce(tmp):
+    out = _output(tmp, "fb_newest", {"Sections V7.als": -100, "Sections V8.als": -100, "Sections V8.wav": -50, "Sections V9.als": -100})
+    with pytest.raises(cb.NoFreshBounce) as err:
+        cb.find_fresh_bounce(out)
+    assert "Sections V9.wav is not there" in str(err.value) and "V8" not in str(err.value)
+
+
+def test_the_version_is_compared_as_a_number_not_as_text(tmp):
+    out = _output(tmp, "fb_numeric", {"Sections V9.als": -100, "Sections V9.wav": -50, "Sections V10.als": -100, "Sections V10.wav": -50})
+    assert cb.find_fresh_bounce(out) == (out / "Sections V10.wav", out / "Sections V10.als")
+
+
+def test_the_phased_file_is_preferred_only_when_its_own_bounce_is_not_older_than_it(tmp):
+    base = {"Sections V9.als": -100, "Sections V9 Phased.als": -100, "Sections V9.wav": -50}
+    both = _output(tmp, "fb_both", {**base, "Sections V9 Phased.wav": -50})
+    assert cb.find_fresh_bounce(both) == (both / "Sections V9 Phased.wav", both / "Sections V9 Phased.als")
+    stale_phased = _output(tmp, "fb_stale_phased", {**base, "Sections V9 Phased.wav": -200})
+    assert cb.find_fresh_bounce(stale_phased) == (stale_phased / "Sections V9.wav", stale_phased / "Sections V9.als")
+    no_phased_wav = _output(tmp, "fb_no_phased_wav", base)
+    assert cb.find_fresh_bounce(no_phased_wav) == (no_phased_wav / "Sections V9.wav", no_phased_wav / "Sections V9.als")
+    only_phased = _output(tmp, "fb_only_phased", {"Sections V9 Phased.als": -100, "Sections V9 Phased.wav": -50})
+    assert cb.find_fresh_bounce(only_phased)[1].name == "Sections V9 Phased.als"
+
+
+def test_a_bounce_older_than_its_als_is_never_taken_and_the_refusal_names_why(tmp):
+    out = _output(tmp, "fb_stale", {"Sections V9.als": -100, "Sections V9.wav": -200})
+    with pytest.raises(cb.NoFreshBounce) as err:
+        cb.find_fresh_bounce(out)
+    assert "Sections V9.wav is older than Sections V9.als (stale)" in str(err.value) and "Render the final ALS" in str(err.value)
+    both = _output(tmp, "fb_both_stale", {"Sections V9.als": -100, "Sections V9 Phased.als": -100, "Sections V9.wav": -200})
+    with pytest.raises(cb.NoFreshBounce) as err:
+        cb.find_fresh_bounce(both)
+    assert "Sections V9 Phased.wav is not there" in str(err.value) and "Sections V9.wav is older" in str(err.value)
+
+
+def test_a_bounce_with_the_same_mtime_as_its_als_is_not_older(tmp):
+    out = _output(tmp, "fb_equal", {"Sections V9.als": -100, "Sections V9.wav": -100})
+    stamp = (out / "Sections V9.als").stat().st_mtime
+    os.utime(out / "Sections V9.wav", (stamp, stamp))
+    assert cb.find_fresh_bounce(out)[0].name == "Sections V9.wav"
+
+
+def test_other_als_names_in_output_are_not_the_final_and_no_als_is_a_refusal(tmp):
+    out = _output(tmp, "fb_names", {"Sections V9 Sams Tweaks.als": -100, "Sections V9 Sams Tweaks.wav": -50, "Mix V3.als": -100, "Sections V4.als.partial": -100})
+    with pytest.raises(cb.NoFreshBounce, match="no Sections V<N>.als"):
+        cb.find_fresh_bounce(out)
+
+
+def _project(tmp, name, mid_db=-10.0, phased=False):
+    d = tmp / name
+    out = d / "Output"
+    out.mkdir(parents=True)
+    names = ["Sections V9.als"] + (["Sections V9 Phased.als"] if phased else [])
+    for als_name in names:
+        _write_als(out / als_name, [("Alpha - One", (0.0, 160.0)), ("Beta - Two", (100.0, 220.0))])
+        _stamp(out / als_name, -100)
+        build(out / als_name.replace(".als", ".wav"), (sine(1000, 40, -20), None), (sine(1000, 30, mid_db), None), (sine(1000, 30, -20), None))
+        _stamp(out / als_name.replace(".als", ".wav"), -50)
+    return d
+
+
+def test_cli_project_checks_the_fresh_bounce_of_the_final_into_output_bounce_check(tmp):
+    d = _project(tmp, "proj_ok")
+    proc = _cli("--project", d, "--no-flam")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    folder = d / "Output" / "Bounce Check"
+    text = (folder / "ATTENTION.md").read_text()
+    assert "NEEDS A LOOK: join 1 One > Two (0:50.0-1:20.0): blend peak vs sides +10.0 LU" in text, text
+    assert json.loads((folder / "bounce_check.json").read_text())["bounce"].endswith("Sections V9.wav") and (folder / "join_01.png").is_file()
+    last = proc.stdout.strip().splitlines()[-1]
+    assert last.startswith("BOUNCE CHECK: 1 of 1 joins need a look (J01)") and last.endswith("ATTENTION.md"), last
+
+
+def test_cli_project_takes_the_phased_file_when_its_bounce_is_fresh(tmp):
+    d = _project(tmp, "proj_phased", phased=True)
+    proc = _cli("--project", d, "--no-flam")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads((d / "Output" / "Bounce Check" / "bounce_check.json").read_text())
+    assert data["bounce"].endswith("Sections V9 Phased.wav") and "Sections V9 Phased.als" in data["join_source"], (data["bounce"], data["join_source"])
+    _stamp(d / "Output" / "Sections V9 Phased.wav", -200)                            # its bounce goes stale: the plain final is checked
+    proc = _cli("--project", d, "--no-flam")
+    assert json.loads((d / "Output" / "Bounce Check" / "bounce_check.json").read_text())["bounce"].endswith("Sections V9.wav")
+
+
+def test_cli_project_with_a_stale_bounce_refuses_and_says_so_in_the_file(tmp):
+    d = _project(tmp, "proj_stale")
+    _stamp(d / "Output" / "Sections V9.wav", -200)
+    folder = d / "Output" / "Bounce Check"
+    folder.mkdir()
+    (folder / "ATTENTION.md").write_text("no join needs a look (9 joins checked)\n")
+    proc = _cli("--project", d, "--no-flam")
+    assert proc.returncode == 2 and "could not run: NoFreshBounce" in proc.stderr and "stale" in proc.stderr, (proc.stdout, proc.stderr)
+    text = (folder / "ATTENTION.md").read_text()
+    assert text.startswith("bounce check did not run (NoFreshBounce: ") and "(stale)" in text and text.rstrip().endswith("no measurements"), text
+    assert not (folder / "bounce_check.json").exists() or "9 joins" not in text
+    assert proc.stdout.strip().splitlines()[-1].startswith("BOUNCE CHECK: did not run: no measurements: see ")
+
+
+def test_cli_project_without_an_output_folder_refuses_and_creates_nothing(tmp):
+    d = tmp / "proj_none"
+    d.mkdir()
+    proc = _cli("--project", d, "--no-flam")
+    assert proc.returncode == 2 and "could not run" in proc.stderr and "Output" in proc.stderr, (proc.stdout, proc.stderr)
+    assert not (d / "Output").exists()
+
+
+def test_cli_project_does_not_mix_with_a_bounce_or_als(tmp):
+    d = _project(tmp, "proj_mix")
+    proc = _cli("--project", d, d / "Output" / "Sections V9.wav")
+    assert proc.returncode == 2 and "finds the bounce and the ALS itself" in proc.stderr, (proc.stdout, proc.stderr)
+
+
+@pytest.mark.parametrize("name, remove", [
+    ("loud_step_lu", lambda r: r["loudness"].__setitem__("step_lu", float("nan"))),
+    ("loud_peak_vs_sides_lu", lambda r: r["loudness"].__setitem__("peak_vs_sides_lu", float("nan"))),
+    ("low_level_vs_sides_db", lambda r: r["low_end"].__setitem__("level_vs_sides_db", float("nan"))),
+    ("low_corr_drop", lambda r: r["low_end"].__setitem__("corr_drop", float("nan"))),
+    ("width_step_db", lambda r: r["width"].__setitem__("step_db", float("nan")))])
+def test_a_nan_measure_is_not_inside_the_range_it_is_not_measured(name, remove):
+    res = att_res()
+    remove(res)
+    assert name not in bc.scalars(res) and name not in bc.judge(res, ATT_RANGES)
+    att = bc.attention(att_report(res), ATT_RANGES)
+    assert [c["kind"] for c in att["caveats"]] == ["NOT MEASURED"] and "(not a number)" in att["text"], att["text"]
+    assert att["text"].splitlines()[-1].startswith("no join needs a look (1 joins checked), but see the warnings above")
+
+
+def test_an_infinite_or_nan_value_never_enters_a_range():
+    res = att_res(tonal=float("nan"))
+    assert "tonal_worst_abs_db" not in bc.scalars(res) and not any(k.startswith("tonal_step_sub") for k in bc.scalars({**res, "tonal": {"step_db": {"sub": float("inf")}}}))
+    assert bc.build_ranges([res, att_res(step=2.0)])["loud_step_lu"]["n"] == 2
+
+
+def test_joins_with_no_audio_are_not_a_skipped_flam():
+    none = {"join": {"index": 1, "out": "A - x", "in": "B - y", "start_s": 10.0, "end_s": 70.0}, "notes": ["no audio for this join in the bounce"]}
+    two = {**none, "join": {**none["join"], "index": 2}}
+    att = bc.attention(att_report(none, two), ATT_RANGES)
+    assert [c["kind"] for c in att["caveats"]] == ["NOT MEASURED", "NOT MEASURED"], att["text"]
+    mixed = bc.attention(att_report(none, att_res(index=2, flam={"state": "not_run", "notes": []})), ATT_RANGES)
+    assert "NOT RUN" in [c["kind"] for c in mixed["caveats"]]
+
+
+def test_the_kick_grid_offset_note_check_bounce_adds_reaches_the_attention_file(tmp, monkeypatch):
+    far = {"state": "not_measurable", "notes": [], "grid_offset_ms": {"out": 55.0, "in": 50.0}}
+    monkeypatch.setattr(bc, "measure_flam", lambda *a, **k: far)
+    path = build(tmp / "grid_note.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None))
+    report = bc.check_bounce(path, TEMPO, [join()], 220.0, flam=True)
+    assert report["joins"][0]["notes"] == ["kick grid offset +55 / +50 ms: the beat to seconds map may be off"] or \
+        "kick grid offset +55 / +50 ms: the beat to seconds map may be off" in report["joins"][0]["notes"]
+    att = bc.attention(report, ATT_RANGES)
+    assert any(c["kind"] == "WARNING" and "kick grid offset +55 / +50 ms: the beat to seconds map may be off" in c["text"] for c in att["caveats"]), att["text"]

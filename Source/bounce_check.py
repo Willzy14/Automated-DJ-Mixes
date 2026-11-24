@@ -452,7 +452,7 @@ def scalars(result):
     flam = result.get("flam", {})
     if flam.get("state") in ("flam_seen", "no_flam_seen"):
         out["flam_fraction_of_fitted_beats"] = float(flam["fraction_of_fit_beats"])
-    return out
+    return {k: v for k, v in out.items() if math.isfinite(v)}      # NaN fails every comparison and would read as inside any range
 
 
 # ------------------------------------------------------------------ kick flam on the bounce
@@ -934,6 +934,10 @@ ATTENTION_WORDS = {"loud_step_lu": ("loud step", " LU", 1), "loud_peak_vs_sides_
                    "low_level_vs_sides_db": ("low end (40-150 Hz) vs sides", " dB", 1),
                    "low_corr_drop": ("low-end L/R correlation change vs sides (negative = fell)", "", 2),
                    "width_step_db": ("width step", " dB", 1)}
+# measure -> where the raw figure sits in a join result
+ATTENTION_SOURCE = {"loud_step_lu": ("loudness", "step_lu"), "loud_peak_vs_sides_lu": ("loudness", "peak_vs_sides_lu"),
+                    "low_level_vs_sides_db": ("low_end", "level_vs_sides_db"), "low_corr_drop": ("low_end", "corr_drop"),
+                    "width_step_db": ("width", "step_db")}
 MARGIN_EPS = 1e-9               # a margin met to float rounding counts
 
 
@@ -975,6 +979,10 @@ def _missing_why(res, name):
     if "loudness" not in res:
         return "; ".join(res.get("notes", ["not measured"]))
     notes = res.get("notes", [])
+    section, key = ATTENTION_SOURCE[name]
+    raw = res.get(section, {}).get(key)
+    if raw is not None and not math.isfinite(raw):
+        return "not a number"
     if name == "width_step_db":
         width = [n for n in notes if n.startswith("width step not measured")]
         if width:
@@ -1022,10 +1030,10 @@ def attention(report, ranges=None, out_dir=None):
             caveat("THIN", f"THIN: the accepted range is built from under {THIN_JOINS} joins for " +
                    ", ".join(f"{ATTENTION_WORDS[m][0]} ({ranges[m].get('n', '?')} joins)" for m in thin) +
                    ", so a flag or a clean read on it is weak")
-    states = [r.get("flam", {}).get("state", "not_run") for r in joins]
-    if joins and all(s == "not_run" for s in states):
+    states = [r["flam"].get("state", "not_run") for r in joins if "flam" in r]
+    if states and all(s == "not_run" for s in states):
         caveat("NOT RUN", "NOT RUN: kick flam was skipped, so a flam cannot be flagged")
-    elif joins and not any(s in ("flam_seen", "no_flam_seen") for s in states):
+    elif states and not any(s in ("flam_seen", "no_flam_seen") for s in states):
         caveat("FLAM NOT MEASURABLE", "FLAM NOT MEASURABLE: the kick flam could not be judged on any join (information, not a flag): "
                                       "no flam flagged here does not mean none is there")
     for res in joins:
