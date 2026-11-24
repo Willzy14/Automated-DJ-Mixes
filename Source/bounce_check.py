@@ -35,6 +35,12 @@ from a limit nobody has set (a flam fraction, the size of a tonal step and a low
 end only: ONE_SIDED). Fader, EQ and filter automation are heard in the bounce, which is the point; what cannot be told is WHICH
 track caused a change, only that the join sounds different. The calibration on Sam's accepted mixes showed the
 flam fit also firing on control beats (one track playing) in most joins where it ran, so a flam fraction is a report, not a verdict.
+
+Attention (never a build failure): attention() picks the joins the building AI must open the picture of. A join needs a look only for
+a measure with a direct audible meaning (loudness step, blend peak, low-end level, low-end correlation fall, width step) outside the
+accepted range by a material margin, or a kick flam SEEN; the margins are starting figures (ATTENTION_MARGINS). Tonal steps and
+worst-bar levels stay information. Situations that mean the numbers cannot be trusted (start warning, map that does not fit, a join
+not measured, no ranges, no flam run) are listed beside them.
 """
 from __future__ import annotations
 
@@ -42,6 +48,7 @@ import html
 import json
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -906,6 +913,116 @@ def verdict_text(judged, ranges):
     if thin:
         base += f"; THIN, built from under {THIN_JOINS} joins: " + ", ".join(thin)
     return f"inside the observed range ({base})" if not out else "outside: " + "; ".join(out) + f" ({base})"
+
+
+# ------------------------------------------------------------------ the attention rule
+
+# STARTING FIGURES that Sam will set (like the kick check's constants above). A join "needs a look" only for a measure with a direct
+# audible meaning, and only when it is outside the range of the joins Sam accepted by at least the margin. Per-band tonal steps (sub
+# included) and worst-bar levels are NOT here: two different tracks differ in tone at every join, so they stay in the report as
+# information, and a kick flam that was not measurable, not discriminating or too few beats is not a flag either. The margins were
+# not fitted to any bounce.
+LOUD_ATTENTION_LU = 1.0         # loudness step and blend peak against the sides
+LOW_LEVEL_ATTENTION_DB = 3.0    # 40-150 Hz in the blend against the louder side: a phase hole or a double bass pile-up
+LOW_CORR_ATTENTION = 0.05       # fall of the low-end L/R correlation (the concerning end only, ONE_SIDED)
+WIDTH_ATTENTION_DB = 3.0
+ATTENTION_MARGINS = {"loud_step_lu": LOUD_ATTENTION_LU, "loud_peak_vs_sides_lu": LOUD_ATTENTION_LU,
+                     "low_level_vs_sides_db": LOW_LEVEL_ATTENTION_DB, "low_corr_drop": LOW_CORR_ATTENTION,
+                     "width_step_db": WIDTH_ATTENTION_DB}
+# measure -> (words, unit, decimals)
+ATTENTION_WORDS = {"loud_step_lu": ("loud step", " LU", 1), "loud_peak_vs_sides_lu": ("blend peak vs sides", " LU", 1),
+                   "low_level_vs_sides_db": ("low end (40-150 Hz) vs sides", " dB", 1),
+                   "low_corr_drop": ("low-end L/R correlation change vs sides (negative = fell)", "", 2),
+                   "width_step_db": ("width step", " dB", 1)}
+MARGIN_EPS = 1e-9               # a margin met to float rounding counts
+
+
+def _ascii(text):
+    text = text.replace("\u2014", "-").replace("\u2013", "-")
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
+def look_reasons(res, ranges=None):
+    """Why one join needs a look, in words: each attention measure outside the accepted range by its margin, and a kick flam SEEN."""
+    out = []
+    judged = judge(res, ranges) if ranges else {}
+    for name, margin in ATTENTION_MARGINS.items():
+        j = judged.get(name)
+        if j and j["verdict"] == "outside" and j["by"] >= margin - MARGIN_EPS:
+            words, unit, nd = ATTENTION_WORDS[name]
+            end = "min" if j["below"] else "max"
+            out.append(f"{words} {j['value']:+.{nd}f}{unit}, outside Sam's accepted range ({end} {j[end]:+.{nd}f}) by {j['by']:.{nd}f}")
+    flam = res.get("flam", {})
+    if flam.get("state") == "flam_seen":
+        out.append(f"kick flam SEEN on {flam['n_flam']}/{flam['n_fit_both']} fitted beats, median {flam['median_spacing_ms']:.1f} ms")
+    return out
+
+
+def _unmeasured(res):
+    """Why a join could not be measured in full (a window silent or too short, or no audio), else []."""
+    if "loudness" not in res:
+        return list(res.get("notes", ["not measured"]))
+    short = any(w["measured_s"] < MIN_WINDOW_S for w in res.get("windows", {}).values())
+    if not (short or res.get("silent_windows")):
+        return []
+    return [n for n in res.get("notes", []) if "window" in n and "not measured" in n and not n.startswith("width step")]
+
+
+def attention(report, ranges=None, out_dir=None):
+    """What the building AI must look at: {flagged joins with their reasons, caveats, text}. The check never fails a build; this says
+    which joins to open the picture of, and which situations (a start warning, a map that does not fit, a join not measured, no ranges,
+    no flam run) mean the numbers cannot be taken at face value."""
+    joins = report.get("joins", [])
+    flagged, caveats = [], []
+
+    def name_of(res):
+        j = res["join"]
+        return (f"join {j['index']} {short_name(j['out'])} > {short_name(j['in'])} "
+                f"({_fmt_time(j['start_s'])}-{_fmt_time(j['end_s'])})")
+
+    mapping = report.get("mapping", {})
+    for problem in mapping.get("problems", []):
+        caveats.append({"kind": "MAP", "text": f"bounce does not fit the arrangement: {problem}"})
+    for warning in mapping.get("start", {}).get("warnings", []):
+        caveats.append({"kind": "START WARNING", "text": f"START WARNING: {warning}"})
+    if not joins:
+        caveats.append({"kind": "NOT MEASURED", "text": "NOT MEASURED: the arrangement has no joins"})
+    if not ranges:
+        caveats.append({"kind": "NOT JUDGED", "text": "NOT JUDGED: no accepted ranges were loaded, so loudness, low end and width were not "
+                                                      "checked against Sam's mixes; only a kick flam can flag"})
+    if joins and all(r.get("flam", {}).get("state", "not_run") == "not_run" for r in joins):
+        caveats.append({"kind": "NOT RUN", "text": "NOT RUN: kick flam was skipped, so a flam cannot be flagged"})
+    for res in joins:
+        why = _unmeasured(res)
+        if why:
+            caveats.append({"kind": "NOT MEASURED", "text": f"NOT MEASURED: {name_of(res)}: " + "; ".join(why)})
+        reasons = look_reasons(res, ranges) if "loudness" in res else []
+        if reasons:
+            pic = str(Path(out_dir) / res["picture"]) if out_dir and res.get("picture") else None
+            text = f"NEEDS A LOOK: {name_of(res)}: " + "; ".join(reasons) + (f"; picture: {pic}" if pic else "")
+            flagged.append({"join": res["join"]["index"], "reasons": reasons, "picture": pic, "text": text})
+    lines = [c["text"] for c in caveats] + [f["text"] for f in flagged]
+    if not flagged:
+        lines.append(f"no join needs a look ({len(joins)} joins checked)" +
+                     (", but see the warnings above: the check is incomplete or its numbers cannot be trusted" if caveats else ""))
+    return {"flagged": flagged, "caveats": caveats, "n_joins": len(joins), "margins": dict(ATTENTION_MARGINS),
+            "text": "\n".join(lines) + "\n"}
+
+
+def attention_summary(att, path=None):
+    """The one line that ends the CLI output (and the pipeline log)."""
+    n, flagged = att["n_joins"], att["flagged"]
+    if flagged:
+        line = f"BOUNCE CHECK: {len(flagged)} of {n} joins need a look ({', '.join('J%02d' % f['join'] for f in flagged)})"
+    else:
+        line = "BOUNCE CHECK: no join needs a look"
+    if att["caveats"]:
+        line += f"; WARNINGS ({', '.join(dict.fromkeys(c['kind'] for c in att['caveats']))})"
+    return line + (f": see {path}" if path and (flagged or att["caveats"]) else "")
+
+
+def write_attention(att, path):
+    Path(path).write_text(_ascii(att["text"]), encoding="ascii")
 
 
 # ------------------------------------------------------------------ picture and the whole run

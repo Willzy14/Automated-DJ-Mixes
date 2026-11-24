@@ -13,7 +13,13 @@ With --ranges (default: Config/bounce_check_ranges.json when it exists) each joi
 range" or "outside by X" against the joins Sam accepted. The tool never decides pass or fail from a limit nobody has set.
 --calibrate runs every bounce of a manifest, writes one json per bounce and the ranges file (the min, median and max of each
 measurement across the joins of each group, and how many joins that is); a bounce whose json is already there is not redone.
-Exit codes: 0 done; 2 the check could not run (message to stderr); 3 the beat to seconds map does not fit the bounce.
+Report only, never a verdict on the build: every run that completes writes ATTENTION.md beside the pictures (and the same text in the
+json under "attention"): one NEEDS A LOOK line per join with a measure of direct audible meaning outside the accepted range by a
+margin (bounce_check.ATTENTION_MARGINS) or a kick flam SEEN, warnings when the numbers cannot be trusted (START WARNING, map does not
+fit, join not measured, no ranges, no flam), or "no join needs a look". The last stdout line is "BOUNCE CHECK: ...". No ATTENTION.md
+means the check did not run.
+Exit codes: 0 done (whatever was found); 2 the check could not run (message to stderr); 3 the beat to seconds map does not fit the bounce
+(the report and ATTENTION.md are still written).
 """
 import argparse
 import json
@@ -158,12 +164,19 @@ def main(argv=None):
             return calibrate(bc, args)
         if not args.bounce:
             ap.error("give a bounce, or --calibrate")
-        out = Path(args.out) if args.out else Path(args.bounce).resolve().parent / "Bounce Check"
+        out = (Path(args.out) if args.out else Path(args.bounce).resolve().parent / "Bounce Check").resolve()
+        attention_path = out / "ATTENTION.md"
+        attention_path.unlink(missing_ok=True)          # an old report must not stand for this run: no file means the check did not run
         ranges = load_ranges(args.ranges or DEFAULT_RANGES, args.range_group)
         result = run_one(bc, args.bounce, out, ranges=ranges, flam=not args.no_flam, report=args.report, plan=args.plan, als=args.als)
+        att = result["attention"] = bc.attention(result, ranges, out)
         bc.write_json(result, out / "bounce_check.json")
+        bc.write_attention(att, attention_path)
         print_report(bc, result, ranges)
         say(f"LOOK AT THESE PICTURES: {out}")
+        for line in att["text"].splitlines():
+            say(line)
+        say(bc.attention_summary(att, attention_path))
         return EXIT_OK if result["mapping"]["ok"] else EXIT_BAD_MAP
     except SystemExit:
         raise
