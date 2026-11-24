@@ -56,9 +56,10 @@ elif args[0] == "Source/extract_sections_als.py":
 elif args[0] == "Tools/plan_mix_decisions.py":
     if os.environ.get("PIPELINE_TEST_PLANNER_FAIL"):
         sys.exit(1)
-    Path(args[args.index("--out") + 1]).write_text(
-        '{"transitions": [{"pair_index": 1}], "fallback_pairs": [{"pair_index": 2}]}',
-        encoding="ascii")
+    planned = {"transitions": [{"pair_index": 1}], "fallback_pairs": [{"pair_index": 2}]}
+    if os.environ.get("PIPELINE_TEST_WHOLE_BAR"):
+        planned["whole_bar_alternatives"] = json.loads(os.environ["PIPELINE_TEST_WHOLE_BAR"])
+    Path(args[args.index("--out") + 1]).write_text(json.dumps(planned), encoding="ascii")
 elif args[0] in {"Source/propose_arrangement.py", "Source/apply_automation.py"}:
     Path(args[3]).write_bytes(b"later phase")
 elif args[0] == "Tools/check_kick_alignment.py":
@@ -168,6 +169,19 @@ def test_arranger_selection(pipeline, options, arranger, decision_args):
     else:
         assert not planner_calls
     assert (repo / OUTPUT / "Sections V9.als").is_file()
+
+
+@pytest.mark.parametrize("rows, tail", [
+    ('[{"pair_index": 3, "cost_difference": 0.5563}]', ", whole-bar alternative: T3 (+0.56)"),
+    ('[{"pair_index": 1, "cost_difference": 0.5}, {"pair_index": 4, "cost_difference": -3}]',
+     ", whole-bar alternative: T1 (+0.50),T4 (-3.00)"),
+    ("[]", ""),
+])
+def test_summary_names_a_pair_that_used_a_whole_bar_alternative(pipeline, rows, tail):
+    repo, run = pipeline
+    result, calls = run(PIPELINE_TEST_WHOLE_BAR=rows)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"arranger: planner (1 of 2 pairs planned, fallback: T2{tail})" in result.stdout
 
 
 def test_absolute_project_path_outside_test_project(pipeline, tmp_path):

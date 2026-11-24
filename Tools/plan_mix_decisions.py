@@ -11,9 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Source"))
 from align_engine import _decision_bar
 from apply_loops import staged_file
 from measure_section_content import bar_content, read_envelope
-from phrase_blend import plan_blend
+from phrase_blend import ALT_MARGIN, _rank_key, candidates, plan_blend
 from propose_arrangement import ordered_tracks, reject_aliased_output, reject_empty_layout_tracks
 from section_format import groove_fills
+
+
+FRACTIONAL_BAR = "is not a whole bar"      # the words align_engine._decision_bar refuses a bar with
+MAX_OPTIONS_TRIED = 200                    # plans tried per pair before the search gives up
+SKIPPED_SHOWN = 5                          # skipped or refused plans listed per pair; the rest are counted
 
 
 def read_json(path):
@@ -127,6 +132,118 @@ def decision_for_plan(index, out_name, in_name, outgoing, incoming, plan):
     return decision
 
 
+def ranked_options(top, outgoing, incoming):
+    """Every other plan the planner offers for this pair, in the planner's own order (its rank
+    key: sane pairings first, then cheapest): the listed alternatives and the ranked options."""
+    pool, notes = [], []
+    for rank, alternative in enumerate(top.alternatives, 1):
+        pool.append((f"alternative {rank}", alternative.plan))
+    seen = {top.full_key(), *(plan.full_key() for _, plan in pool)}
+    try:
+        ranked = candidates(outgoing, incoming)
+    except Exception as exc:
+        ranked = []
+        notes.append(f"  the ranked options could not be listed: {exc}")
+    for rank, plan in enumerate(ranked, 1):
+        if plan.full_key() not in seen:
+            pool.append((f"ranked option {rank}", plan))
+    keyed = []
+    for label, plan in pool:
+        try:
+            key = _rank_key(plan)
+            if not all(isinstance(value, (int, float)) for value in key):
+                raise TypeError("the plan's rank fields are not all numbers")
+            keyed.append((key, label, plan))
+        except Exception as exc:
+            notes.append(f"  {label} skipped: {exc}")
+    keyed.sort(key=lambda item: item[0])
+    return [(label, plan) for _, label, plan in keyed], notes
+
+
+def refusal(top, plan):
+    """Why a plan that is otherwise valid may not replace the top plan (empty: it may)."""
+    why = []
+    if plan.out_cut_bars:
+        why.append("cuts the outgoing's outro")
+    if plan.terms.get("flat", 0.0):
+        why.append("has a flat stretch")
+    if plan.cost - top.cost > ALT_MARGIN:
+        why.append("over the limit")
+    if top.sane and not plan.sane:
+        why.append("one-sided" if not plan.paired else "not a sane pairing")
+    return why
+
+
+def whole_bar_decision(index, out_name, in_name, outgoing, incoming, top, error):
+    """The first plan in the planner's own order that its decision checks accept and that is no
+    worse than the best in kind (no outro cut, no flat stretch, within ALT_MARGIN of the best
+    cost, sane if the best is sane); None if there is none. A fractional bar is never rounded:
+    the planner scored that alignment, so a different plan replaces it. The replacement is
+    validated on its own, so a second defect in the discarded top plan does not matter."""
+    options, notes = ranked_options(top, outgoing, incoming)
+    for note in notes:
+        print(note)
+    shown = {"skipped": 0, "refused": 0}
+    hidden = {"skipped": 0, "refused": 0}
+
+    def report(kind, line):
+        if shown[kind] < SKIPPED_SHOWN:
+            shown[kind] += 1
+            print(line)
+        else:
+            hidden[kind] += 1
+
+    refused, tried, found = [], 0, None
+    for label, plan in options:
+        if tried == MAX_OPTIONS_TRIED:
+            print(f"  stopped after {MAX_OPTIONS_TRIED} ranked options for T{index}; "
+                  f"{len(options) - tried} not tried")
+            break
+        tried += 1
+        try:
+            decision = decision_for_plan(index, out_name, in_name, outgoing, incoming, plan)
+            why = refusal(top, plan)
+            extra = plan.cost - top.cost
+        except Exception as exc:
+            report("skipped", f"  {label} skipped: {exc}")
+            continue
+        if why:
+            refused.append((extra, ", ".join(why)))
+            report("refused", f"  {label} refused: {extra:+.1f} over the best, {', '.join(why)}")
+            continue
+        found = label, plan, decision, extra
+        break
+    if hidden["skipped"]:
+        print(f"  and {hidden['skipped']} more not whole-bar")
+    if hidden["refused"]:
+        print(f"  and {hidden['refused']} more whole-bar plans refused")
+    if found is None:
+        if refused:
+            nearest, why = min(refused, key=lambda item: abs(item[0]))
+            print(f"T{index}: no whole-bar plan qualified (limit +{ALT_MARGIN:.1f} over the best "
+                  f"{top.cost:.2f}, sane if the best is sane, no outro cut, no flat stretch); "
+                  f"nearest was {nearest:+.1f}, {why}")
+        else:
+            print(f"T{index}: no whole-bar plan among {tried} ranked options")
+        return None
+    label, plan, decision, extra = found
+    gap = (f"{extra:+.2f}" if extra >= 0
+           else f"{extra:+.2f}, ranked lower by the planner's own order")
+    said = (f"T{index}: top plan (entry {top.in_starts_at_out_bar:g}, cost {top.cost:.2f}) has a "
+            f"fractional bar ({error}); used {label} (entry {plan.in_starts_at_out_bar:g}, "
+            f"swap {plan.bass_switch_out_bar:g}, end {plan.out_end_bar:g}, cost {plan.cost:.2f} "
+            f"vs the planner's best {top.cost:.2f} ({gap}))")
+    print(said)
+    decision["reason"] = said + " | " + decision["reason"]
+    return decision, {
+        "pair_index": index, "out_track": out_name, "in_track": in_name, "used": label,
+        "top_entry_out_bar": top.in_starts_at_out_bar, "top_cost": round(top.cost, 4),
+        "top_error": error, "entry_out_bar": decision["entry_out_bar"],
+        "swap_out_bar": plan.bass_switch_out_bar, "out_end_bar": decision["out_end_bar"],
+        "cost": round(plan.cost, 4), "cost_difference": round(extra, 4),
+    }
+
+
 def print_plan(plan, label):
     print(f"  {label}: entry {plan.in_starts_at_out_bar:g}, swap {plan.bass_switch_out_bar:g}, "
           f"end {plan.out_end_bar:g}, cost {plan.cost:.2f}"
@@ -142,7 +259,7 @@ def print_plan(plan, label):
 def write_decisions(path, names, tracks, *, allow_partial=False):
     if len(names) != len(tracks) or len(names) < 2 or len(set(names)) != len(names):
         raise ValueError("The mix order must contain at least two distinct, analysed tracks")
-    decisions, errors, fallback_pairs = [], [], []
+    decisions, errors, fallback_pairs, whole_bar_used = [], [], [], []
     for index, (outgoing, incoming) in enumerate(zip(tracks, tracks[1:]), 1):
         out_name, in_name = names[index - 1:index + 1]
         print(f"T{index}: {out_name} -> {in_name}")
@@ -160,6 +277,12 @@ def write_decisions(path, names, tracks, *, allow_partial=False):
                 decision = decision_for_plan(index, out_name, in_name, outgoing, incoming, plan)
             except (ValueError, OverflowError) as exc:
                 reason = str(exc)
+                used = (whole_bar_decision(index, out_name, in_name, outgoing, incoming, plan, reason)
+                        if FRACTIONAL_BAR in reason else None)
+                if used is not None:
+                    decisions.append(used[0])
+                    whole_bar_used.append(used[1])
+                    continue
             else:
                 decisions.append(decision)
                 continue
@@ -170,6 +293,11 @@ def write_decisions(path, names, tracks, *, allow_partial=False):
         else:
             errors.append(f"T{index}: {reason}")
             print(f"  ERROR: {errors[-1]}")
+    if whole_bar_used:
+        print(f"{len(whole_bar_used)} {'pair' if len(whole_bar_used) == 1 else 'pairs'} "
+              "used a whole-bar alternative: "
+              + ", ".join(f"T{row['pair_index']} ({row['cost_difference']:+.2f})"
+                          for row in whole_bar_used))
     if errors:
         raise ValueError("Decisions file was not written; no substitutions were made. "
                          + " | ".join(errors))
@@ -178,6 +306,9 @@ def write_decisions(path, names, tracks, *, allow_partial=False):
     payload = {"transitions": decisions}
     if allow_partial:
         payload["fallback_pairs"] = fallback_pairs
+    if whole_bar_used:
+        payload["whole_bar_alternative_count"] = len(whole_bar_used)
+        payload["whole_bar_alternatives"] = whole_bar_used
     write_json_atomically(path, payload, indent=2)
     return decisions
 
