@@ -1021,7 +1021,7 @@ def test_a_different_number_of_transitions_is_refused():
 def test_a_blend_is_flagged_for_a_drift_flam_by_a_half_alone():
     assert gpf.needs_fixing(dict(median=1.0, first_half=9.0, second_half=-9.0))
     assert gpf.needs_fixing(dict(median=1.0, first_half=1.0, second_half=-8.0))
-    assert not gpf.needs_fixing(dict(median=2.4, first_half=4.9, second_half=-4.9))
+    assert not gpf.needs_fixing(dict(median=2.4, first_half=7.9, second_half=-7.9))
     assert gpf.needs_fixing(dict(median=gpf.WARN_MS, first_half=None, second_half=None))
 
 
@@ -1029,9 +1029,11 @@ def test_the_grid_tool_judges_a_blend_by_the_click_figures_of_the_kick_check():
     assert gpf.WARN_MS == kac.CLICK_WARN_MS == 2.5
     assert not gpf.needs_fixing(dict(median=2.4, first_half=0.0, second_half=4.9))
     assert gpf.needs_fixing(dict(median=2.5, first_half=None, second_half=None))
-    assert gpf.needs_fixing(dict(median=2.4, first_half=0.0, second_half=kac.CLICK_FAIL_MS))          # a half at the click fail figure
-    assert gpf.needs_fixing(dict(median=0.0, first_half=-kac.CLICK_FAIL_MS, second_half=None))
-    assert not gpf.needs_fixing(dict(median=0.0, first_half=-4.9, second_half=None))
+    assert gpf.needs_fixing(dict(median=2.4, first_half=0.0, second_half=kac.CLICK_BEAT_FLAM_MS))     # a half at the click per-beat figure
+    assert gpf.needs_fixing(dict(median=0.0, first_half=-kac.CLICK_BEAT_FLAM_MS, second_half=None))
+    assert not gpf.needs_fixing(dict(median=0.0, first_half=-7.9, second_half=None))
+    assert not gpf.needs_fixing(dict(median=2.4, first_half=5.0, second_half=-kac.CLICK_FAIL_MS))    # the median fail figure is not the half figure
+    assert kac.CLICK_BEAT_FLAM_MS == 8.0
     assert not hasattr(kac, "FAIL_MS") and not hasattr(kac, "WARN_MS")
 
 
@@ -1041,19 +1043,20 @@ def _flaming_blend(first, second):
     return gpf.Blend(1, 0, 1, 10.0, beats, lags, beats.copy(), beats.copy())
 
 
-def test_still_flamming_uses_the_click_fail_figure_for_a_half():
+def test_still_flamming_uses_the_click_per_beat_figure_for_a_half():
     fits = [gpf.DriftFit(gpf.NOT_MEASURED), gpf.DriftFit(gpf.NOT_MEASURED)]
-    found = gpf.still_flamming([_flaming_blend(5.0, 0.0)], fits, [0.0, 0.0])
-    assert [(f["index"], f["half"]) for f in found] == [(1, "first_half")] and found[0]["predicted"] == pytest.approx(5.0)
-    assert not gpf.still_flamming([_flaming_blend(4.9, -4.9)], fits, [0.0, 0.0])
-    assert [f["half"] for f in gpf.still_flamming([_flaming_blend(0.0, -6.0)], fits, [0.0, 0.0])] == ["second_half"]
+    found = gpf.still_flamming([_flaming_blend(8.0, 0.0)], fits, [0.0, 0.0])
+    assert [(f["index"], f["half"]) for f in found] == [(1, "first_half")] and found[0]["predicted"] == pytest.approx(8.0)
+    assert not gpf.still_flamming([_flaming_blend(7.9, -7.9)], fits, [0.0, 0.0])
+    assert not gpf.still_flamming([_flaming_blend(5.0, -6.0)], fits, [0.0, 0.0])           # over the median fail figure, under the half one
+    assert [f["half"] for f in gpf.still_flamming([_flaming_blend(0.0, -9.0)], fits, [0.0, 0.0])] == ["second_half"]
 
 
-def test_the_still_flamming_line_names_the_click_fail_figure(outcomes, sets):
+def test_the_still_flamming_line_names_the_click_per_beat_figure(outcomes, sets):
     import copy
     out = copy.copy(outcomes["halves"])
     out.still_flamming = [dict(index=1, half="first_half", predicted=6.0)]
-    assert "(FAIL figure 5 ms)" in gpf.report_text(out, sets["halves"][0])
+    assert "(FAIL figure 8 ms)" in gpf.report_text(out, sets["halves"][0])
 
 
 def test_the_edge_or_main_hit_getting_worse_is_reported_never_refused(outcomes, sets):

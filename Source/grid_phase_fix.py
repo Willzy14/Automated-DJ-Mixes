@@ -252,9 +252,9 @@ def build_blends(results, transitions, tracks):
 
 def needs_fixing(summary):
     """A blend needs fixing when its median click lag is WARN_MS or more, or either half of it is at the kick check's
-    CLICK_FAIL_MS or more (a drift flam). A blend under both is left alone however far it is from zero."""
+    CLICK_BEAT_FLAM_MS or more (a drift flam). A blend under both is left alone however far it is from zero."""
     halves = (summary.get("first_half"), summary.get("second_half"))
-    return abs(summary["median"]) >= WARN_MS or any(h is not None and abs(h) >= kac.CLICK_FAIL_MS for h in halves)
+    return abs(summary["median"]) >= WARN_MS or any(h is not None and abs(h) >= kac.CLICK_BEAT_FLAM_MS for h in halves)
 
 
 # ------------------------------------------------------------------ the slide solve
@@ -525,7 +525,7 @@ def still_flamming(blends, fits, slides):
     for b in blends:
         s = b.summary(fits[b.out].at, fits[b.inc].at, slides[b.out], slides[b.inc])
         for half in ("first_half", "second_half"):
-            if s[half] is not None and abs(s[half]) >= kac.CLICK_FAIL_MS:
+            if s[half] is not None and abs(s[half]) >= kac.CLICK_BEAT_FLAM_MS:
                 found.append(dict(index=b.index, half=half, predicted=s[half]))
     return found
 
@@ -691,7 +691,7 @@ def report_text(outcome, als_path):
         lines.append(f"markers changed on {names.get(doc_index, doc_index)}: {count}")
     for f in outcome.still_flamming:
         lines += ["", f"STILL FLAMMING (half): the fix does not reach it: T{f['index']:02d} {f['half'].replace('_', ' ')} "
-                      f"is predicted at {_num(f['predicted'])} ms (FAIL figure {kac.CLICK_FAIL_MS:g} ms)"]
+                      f"is predicted at {_num(f['predicted'])} ms (FAIL figure {kac.CLICK_BEAT_FLAM_MS:g} ms)"]
     if outcome.edge_main_worse:
         lines += ["", f"Edge or main hit lag got worse by more than {EDGE_MAIN_WORSE_MS:g} ms ({EDGE_MAIN_NOTE}):"]
         for w in outcome.edge_main_worse:
