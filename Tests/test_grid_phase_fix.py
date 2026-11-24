@@ -1191,4 +1191,4 @@ def test_the_validator_accepts_the_record_the_tool_wrote_on_a_real_run(outcomes,
         pin = summarize_track_warp_grids(before[entry["doc_index"]])        # what the plan pinned for the original
         contract = dict(warp_marker_count=pin.marker_count, warp_grid_sha256=pin.grid_sha256, source_grid_bpm=pin.source_grid_bpm)
         errors, worst = vmp._check_phased_track(entry["name"], contract, entry, after[entry["doc_index"]])
-        assert errors == [] and 0.0 < worst <= vmp.MAX_PHASE_SHIFT_MS
+        assert errors == [] and 0.0 < worst <= vmp.MAX_ABS_SHIFT_MS

@@ -352,7 +352,7 @@ def test_kick_alignment_runs_once_after_the_final_validate_and_prints_into_the_l
     kick_calls = [call for call in calls if call[0] == KICK]
     assert kick_calls == [[KICK, f"{OUTPUT}/Sections V9.als", "--audio", f"{PROJECT}/Audio",
                            "--out", f"{OUTPUT}/Kick Alignment", "--mode", "warn"]]
-    finals = [i for i, call in enumerate(calls) if call[0] == "Source/validate_als.py" and "--require-devices" in call]
+    finals = [i for i, call in enumerate(calls) if call[0] == "Source/validate_als.py" and call[1] == FINAL and "--require-devices" in call]
     assert finals and finals[-1] < calls.index(kick_calls[0])
     log = (repo / OUTPUT / "runmix.log").read_text()
     assert "T01 A to B: WARN click +7.3 ms main +15.7 ms shared kicks 38 SLOW_ATTACK" in log
