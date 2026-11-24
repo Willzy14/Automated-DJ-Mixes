@@ -87,16 +87,43 @@ def prepare(track, name, mode, content):
 
 
 def _add_vocal_key(track, name):
-    """Optional per-bar vocal flags and a Camelot key for a measured track (Tools/measure_vocal_key.py);
-    the file is absent or silent on a track, and then the track is exactly what it was."""
+    """Optional per-bar vocal flags and a Camelot key for a measured track (Tools/measure_vocal_key.py).
+    A missing file or a track with no entry changes nothing.  A file or entry that cannot be used (bad JSON,
+    not an object, flags that are not a list, a key that is not text) is left out and a note goes on
+    track["input_notes"], which score() prints: it never crashes.  Text that is a key or a flag list but not
+    a usable one reaches the planner, which reports "key unknown" or an unusable list on the plan."""
+    notes = track.setdefault("input_notes", [])
     try:
-        data = json.loads(VOCAL_KEY.read_text(encoding="utf-8")).get("tracks", {}).get(name) or {}
+        tracks = json.loads(VOCAL_KEY.read_text(encoding="utf-8")).get("tracks")
     except FileNotFoundError:
+        del track["input_notes"]
         return
-    if data.get("has_vocal"):
-        track["content"]["has_vocal"] = list(data["has_vocal"])
-    if data.get("key"):
-        track["key"] = data["key"]
+    except (OSError, ValueError, AttributeError) as exc:
+        notes.append("vocal and key file %s is unusable (%s): no vocal or key data" % (VOCAL_KEY.name, exc))
+        return
+    if not isinstance(tracks, dict):
+        notes.append("vocal and key file %s has no tracks object: no vocal or key data" % VOCAL_KEY.name)
+        return
+    data = tracks.get(name)
+    if data is None:
+        del track["input_notes"]
+        return
+    if not isinstance(data, dict):
+        notes.append("vocal and key entry for %s is not an object: ignored" % name)
+        return
+    flags, key = data.get("has_vocal"), data.get("key")
+    if flags:
+        if isinstance(flags, list):
+            track["content"]["has_vocal"] = flags
+        else:
+            notes.append("vocal flags for %s are not a list: ignored" % name)
+    if key is not None:
+        if isinstance(key, str):
+            track["key"] = key
+        else:
+            notes.append("key for %s is not text (%r): ignored" % (name, key))
+    if not notes:
+        del track["input_notes"]
 
 
 def sam_numbers(blend, out_t):
@@ -198,6 +225,8 @@ def score(mode, top=0, detail=False, out=print):
                      "primary": which == "primary", "swap_only": swap_only,
                      "sam": sam, "plan": plan, "sam_plan": sp})
         out("%d. %s -> %s" % (i, b["out"][:30], b["in"][:30]))
+        for note in o.get("input_notes", []) + n.get("input_notes", []):
+            out("   input note: %s" % note)
         if plan is None:
             out("   planner: NO PLAN" + (" - " + ". ".join(why) if why else ""))
             continue

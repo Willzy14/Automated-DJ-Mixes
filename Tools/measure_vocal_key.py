@@ -37,9 +37,18 @@ def _stem_file(env_dir, word):
     return hits[0]
 
 
+def answer_key_vocal_flags(regions, lead, spb, n_bars):
+    """Per-bar vocal flags on the answer key's bar clock, from the regions of at least MIN_CLASH_VOCAL_BARS
+    bars only (short stabs never count, the same rule as plan_mix_decisions.vocal_bars)."""
+    import plan_mix_decisions as pmd
+    regions = [r for r in regions if len(r) >= 4 and r[3] - r[2] >= pmd.MIN_CLASH_VOCAL_BARS]
+    return [int(any(r[0] <= (b + 0.5 + lead) * spb < r[1] for r in regions))
+            for b in range(int(math.ceil(n_bars)))]
+
+
 def build_dftd(env_dir=ENV_DIR, out=OUT):
     """has_vocal on the answer key's bar clock: bar b spans seconds [(b + lead) * bar, (b + 1 + lead) * bar)
-    exactly as has_kick does, and counts as vocal when its midpoint is inside a detected vocal region."""
+    exactly as has_kick does, and counts as vocal when its midpoint is inside a sustained vocal region."""
     import plan_mix_decisions as pmd
     key = json.loads(sb.KEY.read_text(encoding="utf-8"))
     result = {"what": "Per-bar vocal flags (detector signals vocal_regions, on the answer key's bar clock) and "
@@ -51,11 +60,7 @@ def build_dftd(env_dir=ENV_DIR, out=OUT):
         detector = json.loads(Path(_stem_file(env_dir, MATCH[name])).read_text(encoding="utf-8"))
         lead = float(t.get("lead_in_bars", 0.0))
         spb = 240.0 / t["bpm"]
-        regions = [r for r in detector["signals"]["vocal_regions"] if len(r) >= 4]
-        flags = []
-        for b in range(int(math.ceil(t["n_bars"]))):
-            mid = (b + 0.5 + lead) * spb
-            flags.append(int(any(r[0] <= mid < r[1] for r in regions)))
+        flags = answer_key_vocal_flags(detector["signals"]["vocal_regions"], lead, spb, t["n_bars"])
         wavs = glob.glob(str(Path(env_dir).parent / "Audio" / ("*%s*.wav" % MATCH[name])))
         camelot = pmd.read_camelot(Path(wavs[0])) if len(wavs) == 1 else None
         result["tracks"][name] = {"has_vocal": flags, "key": camelot}

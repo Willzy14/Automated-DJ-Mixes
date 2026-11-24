@@ -17,6 +17,12 @@ from section_format import groove_fills
 
 
 FRACTIONAL_BAR = "is not a whole bar"      # the words align_engine._decision_bar refuses a bar with
+# Only SUSTAINED vocals count towards the planner's vocal clash. Sam, 2026-11-24: "if the vocals are short
+# stabs, that will probably be fine." The detector's vocal_regions already hold many 2 bar regions (its
+# MIN_VOCAL_BARS), which are those stabs: Get Right [2, 2, 2, 2, 5], VLAD Interlude [2, 8, 2, 2, 10, 2, 2],
+# VLAD POP [20, 2, 18, 2, 9, 2, 4, 3]. Sustained vocals are 4 bars and up. A region shorter than this sets
+# no bar of has_vocal.
+MIN_CLASH_VOCAL_BARS = 4
 MAX_OPTIONS_TRIED = 200                    # plans tried per pair before the search gives up
 SKIPPED_SHOWN = 5                          # skipped or refused plans listed per pair; the rest are counted
 
@@ -62,18 +68,27 @@ def convert_track(result, envelope_path):
 
 def vocal_bars(result, n):
     """Per-bar 0/1 vocal flags from the detector's signals["vocal_regions"] ([start_sec, end_sec, start_bar,
-    end_bar], bars in the track's own bar numbers, the clock of the section starts and of has_kick). None when
-    the detector recorded no such signal: the planner then ignores vocals for the track."""
+    end_bar], bars in the track's own bar numbers, the clock of the section starts and of has_kick), for the
+    regions of at least MIN_CLASH_VOCAL_BARS bars: short stabs set nothing. None when the detector recorded
+    no such signal, or only unusable regions: the planner then ignores vocals for the track. An empty
+    list from a detector that ran is a known zero."""
     regions = (result.get("signals") or {}).get("vocal_regions")
-    if regions is None:
+    if not isinstance(regions, (list, tuple)):
         return None
-    flags = [0] * n
+    flags, usable = [0] * n, not regions
     for region in regions:
-        if len(region) < 4 or not all(math.isfinite(v) for v in region[2:4]):
+        try:
+            start, end = float(region[2]), float(region[3])
+        except (TypeError, ValueError, IndexError, KeyError):
             continue
-        for bar in range(max(math.ceil(region[2]), 0), min(math.ceil(region[3]), n)):
+        if not (math.isfinite(start) and math.isfinite(end)):
+            continue
+        usable = True
+        if end - start < MIN_CLASH_VOCAL_BARS:
+            continue
+        for bar in range(max(math.ceil(start), 0), min(math.ceil(end), n)):
             flags[bar] = 1
-    return flags
+    return flags if usable else None
 
 
 def read_camelot(wav_path):
@@ -99,8 +114,8 @@ def clash_line(plan):
               else f"vocals overlap {plan.vocal_clash_bars:g} bars")
     if plan.key_pair is None:
         key = "key unknown"
-    elif plan.key_steps <= 1:
-        key = f"key {plan.key_pair[0]} to {plan.key_pair[1]} compatible"
+    elif plan.key_type != "clash":
+        key = f"key {plan.key_pair[0]} to {plan.key_pair[1]} compatible ({plan.key_type})"
     else:
         key = (f"key {plan.key_pair[0]} to {plan.key_pair[1]} clash ({plan.key_steps} steps) "
                f"over {plan.key_tonal_bars:g} tonal bars")

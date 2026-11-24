@@ -795,14 +795,16 @@ def test_the_blend_line_says_vocal_overlap_and_key_or_that_it_is_unknown():
     unknown = BlendPlan(1, 2, 3, 0, 0)
     assert tool.clash_line(unknown) == "vocals unknown; key unknown"
     clash = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=6, key_clash=48.0, key_steps=6, key_tonal_bars=12,
-                      key_pair=("8A", "3B"))
+                      key_pair=("8A", "3B"), key_type="clash")
     assert tool.clash_line(clash) == "vocals overlap 6 bars; key 8A to 3B clash (6 steps) over 12 tonal bars"
-    fine = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=0, key_clash=0.0, key_steps=1, key_pair=("8A", "9A"))
-    assert tool.clash_line(fine) == "vocals overlap 0 bars; key 8A to 9A compatible"
+    fine = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=0, key_clash=0.0, key_steps=2, key_pair=("8A", "10A"),
+                     key_type="power_mix")
+    assert tool.clash_line(fine) == "vocals overlap 0 bars; key 8A to 10A compatible (power_mix)"
 
 
 def test_the_report_prints_the_line_for_the_top_plan_and_every_alternative(capsys):
-    top = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=4, key_steps=3, key_pair=("8A", "11B"), key_tonal_bars=5)
+    top = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=4, key_steps=3, key_pair=("8A", "11B"), key_tonal_bars=5,
+                    key_type="clash")
     tool.print_plan(top, "Top")
     assert "vocals overlap 4 bars; key 8A to 11B clash (3 steps) over 5 tonal bars" in capsys.readouterr().out
     vocals_only = BlendPlan(1, 2, 3, 0, 0, vocal_clash_bars=0)
@@ -818,7 +820,7 @@ def test_a_plan_made_without_vocal_or_key_data_prints_no_clash_line(capsys):
 def test_cli_hands_the_planner_the_vocal_flags_and_the_key(planner_inputs, monkeypatch, tmp_path):
     args, output = planner_inputs
     result = groove_result()
-    result["signals"]["vocal_regions"] = [[0, 2, 0, 1]]
+    result["signals"]["vocal_regions"] = [[0, 8, 0, 4]]
     for name in "ABC":
         (tmp_path / "_Stem Analysis" / f"SECTIONS_STEM_{name}.json").write_text(json.dumps(result), encoding="ascii")
     seen = []
@@ -830,5 +832,63 @@ def test_cli_hands_the_planner_the_vocal_flags_and_the_key(planner_inputs, monke
     assert tool.main([*args, "--content", str(content)]) == 0
     tracks = tool.read_json(content)["tracks"]
     assert [tracks[n]["key"] for n in "ABC"] == ["8A", None, "3B"]
-    assert tracks["A"]["content"]["has_vocal"] == [1, 0, 0]
+    assert tracks["A"]["content"]["has_vocal"] == [1, 1, 1]
     assert seen[0][0]["key"] == "8A" and seen[0][1]["key"] is None
+
+
+# ---- short vocal stabs never count (Sam: "if the vocals are short stabs, that will probably be fine") ----
+def stab_flags(regions, n=60):
+    return tool.vocal_bars({"signals": {"vocal_regions": [[0, 0, a, b] for a, b in regions]}}, n)
+
+
+def clash_between(out_regions, in_regions):
+    from phrase_blend import _score, phrase_points
+    from test_phrase_blend import IN, OUT, with_content
+    o = with_content(OUT, [1] * 200, [1] * 200, [1] * 200)
+    n = with_content(IN, [1] * 160, [1] * 160, [1] * 160)
+    o["content"]["has_vocal"] = stab_flags(out_regions, 200)
+    n["content"]["has_vocal"] = stab_flags(in_regions, 160)
+    return _score(o, n, 168, 184, 200, 0.0, 0.0, phrase_points(o), phrase_points(n), "be")
+
+
+def test_the_stab_length_is_four_bars():
+    assert tool.MIN_CLASH_VOCAL_BARS == 4
+
+
+def test_a_two_bar_vocal_region_sets_nothing_and_costs_nothing():
+    assert stab_flags([(8, 10)]) == [0] * 60
+    plan = clash_between([(170, 172)], [(2, 4)])        # the stabs line up bar for bar
+    assert plan.vocal_clash_bars == 0 and "vocal_clash" not in plan.terms
+
+
+def test_two_four_bar_regions_overlapping_are_a_clash():
+    plan = clash_between([(170, 174)], [(2, 6)])
+    assert plan.vocal_clash_bars == 4 and plan.terms["vocal_clash"] > 0
+
+
+def test_a_three_bar_region_is_ignored_and_the_boundary_is_exactly_four_bars():
+    assert stab_flags([(8, 11)]) == [0] * 60
+    assert [i for i, f in enumerate(stab_flags([(8, 12)])) if f] == [8, 9, 10, 11]
+    assert [i for i, f in enumerate(stab_flags([(8, 11.99)])) if f] == []
+    assert clash_between([(170, 173)], [(2, 5)]).vocal_clash_bars == 0
+    assert clash_between([(170, 174)], [(2, 6)]).vocal_clash_bars == 4
+
+
+def test_a_stab_inside_a_sustained_vocal_does_not_add_to_it():
+    regions = [(8, 10), (20, 28), (40, 42), (50, 53), (55, 59)]
+    assert [i for i, f in enumerate(stab_flags(regions)) if f] == list(range(20, 28)) + list(range(55, 59))
+
+
+def test_the_dftd_data_uses_the_same_stab_rule():
+    import measure_vocal_key as mvk
+    regions = [[0.0, 4.0, 0, 2], [8.0, 20.0, 4, 10], [30.0, 36.0, 15, 18], [40.0, 56.0, 20, 28]]
+    flags = mvk.answer_key_vocal_flags(regions, 0.0, 2.0, 30)
+    assert [i for i, f in enumerate(flags) if f] == list(range(4, 10)) + list(range(20, 28))
+
+
+def test_unusable_vocal_regions_are_unknown_not_a_known_zero():
+    for regions in ([[0, 0], [1, 2, 3]], [[0, 0, "a", "b"]], [[0, 0, float("nan"), 3]], "text", 5, [None]):
+        assert tool.vocal_bars({"signals": {"vocal_regions": regions}}, 20) is None, regions
+    assert tool.vocal_bars({"signals": {"vocal_regions": []}}, 20) == [0] * 20          # a detector that ran: known zero
+    assert tool.vocal_bars({"signals": {"vocal_regions": [[0, 0, 3, 5]]}}, 20) == [0] * 20   # only a stab: known zero
+    assert tool.vocal_bars({"signals": {"vocal_regions": [[0, 0], [0, 0, 4, 9]]}}, 20)[4:9] == [1] * 5

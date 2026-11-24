@@ -87,11 +87,24 @@ def test_dftd_answer_key_blends_without_vocal_or_key_give_exactly_the_old_candid
     assert digest(_dftd(b["out"]), _dftd(b["in"])) == GOLDENS["dftd_%d" % i]
 
 
-def test_unknown_data_leaves_fields_unknown_and_says_nothing():
+OLD_TERMS = {"flat", "in_point", "out_point", "length", "switch_time", "entry", "minute_mark", "trim", "cut",
+             "out_loop", "short_blend", "entry_early", "late_bass_in_swap", "swap_kick_only", "switch_phrase"}
+
+
+def test_unknown_data_leaves_fields_unknown():
     plan = score(full(OUT), full(IN), 168, 184, 200)
-    assert (plan.vocal_clash_bars, plan.key_clash, plan.key_steps, plan.key_pair) == (None, None, None, None)
-    assert "vocal_clash" not in plan.terms and "key_clash" not in plan.terms
-    assert not any("vocal" in w or "key" in w for w in plan.why)
+    assert (plan.vocal_clash_bars, plan.key_clash, plan.key_steps, plan.key_type, plan.key_pair) == (
+        None, None, None, None, None)
+    assert plan.key_tonal_bars == 0.0
+    assert set(plan.terms) <= OLD_TERMS
+    # the plan is exactly what the same placement scores on an untouched copy of the inputs
+    bare = score(json.loads(json.dumps(full(OUT))), json.loads(json.dumps(full(IN))), 168, 184, 200)
+    assert (plan.cost, plan.terms, plan.why) == (bare.cost, bare.terms, bare.why)
+
+
+def test_a_known_zero_is_not_unknown():
+    plan = score(with_key(with_vocal(full(OUT), []), "8A"), with_key(with_vocal(full(IN), []), "9A"), 168, 184, 200)
+    assert plan.vocal_clash_bars == 0 and plan.key_clash == 0 and plan.key_type == "smooth"
 
 
 # ---- vocal clash ------------------------------------------------------------------------------
@@ -159,7 +172,9 @@ def test_vocals_are_read_from_each_track_on_its_own_clock():
     assert plan.vocal_clash_bars == 8
     # the incoming vocal at ITS bars 8-15 plays at out bars 176-183, clear of the outgoing vocal: no clash.  A planner
     # that read the outgoing's list for both tracks would call this 8 bars.
-    clear = score(with_vocal(full(OUT), [(168, 176)]), with_vocal(full(IN), [(8, 16)]), 168, 184, 200)
+    # The outgoing also has a vocal at ITS bars 0-7.  A planner that read the outgoing's list for both tracks
+    # would see the incoming bars 0-7 (out bars 168-175) as vocal and call this 8 bars.
+    clear = score(with_vocal(full(OUT), [(0, 8), (168, 176)]), with_vocal(full(IN), [(8, 16)]), 168, 184, 200)
     assert clear.vocal_clash_bars == 0
     # a looped outgoing tail reads its loop source, an intro loop reads the incoming loop bars
     looped = pb.candidates(with_vocal(full(OUT), [(0, 200)]), with_vocal(full(IN), [(0, 160)]))
@@ -198,19 +213,19 @@ def test_camelot_steps_refuses_anything_that_is_not_a_camelot_code(bad):
 
 
 def test_compatible_keys_cost_nothing():
-    for k in ("8A", "9A", "8B"):
+    for k in ("8A", "9A", "7A", "8B", "9B", "7B", "10A", "6A"):      # same, neighbour, relative, diagonal, power mix
         plan = score(*keyed("8A", k), 168, 184, 200)
         assert plan.key_clash == 0 and "key_clash" not in plan.terms
-        assert plan.key_steps <= 1 and plan.key_pair == ("8A", k)
+        assert plan.key_pair == ("8A", k) and plan.key_type != "clash" and plan.key_tonal_bars > 0
 
 
 def test_a_far_pair_over_tonal_bars_costs_per_step_and_bar():
-    plan = score(*keyed("8A", "2A"), 168, 184, 200)           # 6 steps: 5 beyond compatible, counted as KEY_STEP_CAP
+    plan = score(*keyed("8A", "2A"), 168, 184, 200)           # 6 numbers apart on one letter: 4 beyond the sequencer's power mix, KEY_STEP_CAP
     bars = plan.out_end_bar - plan.in_starts_at_out_bar
-    assert plan.key_steps == 6 and plan.key_tonal_bars == bars == 32
+    assert plan.key_steps == 6 and plan.key_type == "clash" and plan.key_tonal_bars == bars == 32
     assert plan.key_clash == pb.KEY_STEP_CAP * bars
     assert plan.terms["key_clash"] == pytest.approx(min(pb.W_KEY_CLASH * pb.KEY_STEP_CAP * bars, pb.MAX_CLASH_COST))
-    near = score(*keyed("8A", "10A"), 168, 184, 200)           # 2 steps: 1 beyond compatible
+    near = score(*keyed("8A", "11A"), 168, 184, 200)           # 3 numbers on one letter: 1 beyond what the sequencer accepts
     assert near.key_clash == bars and 0 < near.terms["key_clash"] < plan.terms["key_clash"]
     assert plan.cost > near.cost > score(*keyed("8A", "8A"), 168, 184, 200).cost
 
@@ -255,22 +270,45 @@ def test_key_clash_moves_the_pick_to_an_option_with_less_tonal_overlap():
 
 
 # ---- the terms never veto ---------------------------------------------------------------------
-def test_clash_terms_are_capped_below_the_forbidden_cut_cost():
+def test_the_two_terms_together_are_capped_below_the_forbidden_cut_cost():
     o = with_key(with_vocal(full(OUT), [(0, 200)]), "8A")
     n = with_key(with_vocal(full(IN), [(0, 160)]), "2A")
     plan = score(o, n, 120, 184, 200)                          # an 80 bar overlap that is vocal and tonal throughout
     assert plan.vocal_clash_bars == plan.key_tonal_bars == 80
-    assert plan.terms["vocal_clash"] == plan.terms["key_clash"] == pb.MAX_CLASH_COST
-    assert pb.MAX_CLASH_COST < pb.W_CUT
+    assert plan.key_clash == pb.KEY_STEP_CAP * 80              # the raw numbers are reported, not the capped ones
+    raw_vocal, raw_key = pb.W_VOCAL_CLASH * 80, pb.W_KEY_CLASH * pb.KEY_STEP_CAP * 80
+    assert raw_vocal > pb.MAX_CLASH_COST and raw_key > pb.MAX_CLASH_COST      # each alone would reach the cap
+    total = plan.terms["vocal_clash"] + plan.terms["key_clash"]
+    assert total == pytest.approx(pb.MAX_CLASH_COST)
+    assert total < pb.W_CUT
+    assert plan.terms["vocal_clash"] / plan.terms["key_clash"] == pytest.approx(raw_vocal / raw_key)
+    assert any("capped" in w for w in plan.why)
+    # below the cap the terms are the raw products
+    small = score(with_key(with_vocal(full(OUT), [(190, 200)]), "8A"), with_key(with_vocal(full(IN), [(22, 32)]), "11A"),
+                  168, 184, 200)
+    assert small.terms["vocal_clash"] == pytest.approx(pb.W_VOCAL_CLASH * 10)
+    assert small.terms["key_clash"] == pytest.approx(pb.W_KEY_CLASH * 1 * 32)
+    # per-bar rates alone stay below the forbidden cut too
+    assert pb.W_VOCAL_CLASH < pb.W_CUT and pb.W_KEY_CLASH * pb.KEY_STEP_CAP < pb.W_CUT
 
 
-def test_weights_stay_inside_sams_own_blends():
-    # a phrase (8 bars) of vocal clash costs no more than moving the swap by a phrase (8 x 0.25 = 2.0)
-    assert pb.W_VOCAL_CLASH * 8 <= 8 * pb.W_SWITCH_TIME + 1e-9
-    # his worst key clash (DFTD blend 7: 3 tonal bars, 6 steps = 12 step-bars) costs less than the 0.94 by which
-    # his placement beats the best clash-free plan
-    assert pb.W_KEY_CLASH * pb.KEY_STEP_CAP * 3 < 0.94
-    assert 0 < pb.W_VOCAL_CLASH and 0 < pb.W_KEY_CLASH and pb.MAX_CLASH_COST < pb.W_CUT
+def test_sams_own_dftd_blend_seven_survives_the_key_weight():
+    # Call 911 into Back In The Dance, 8A to 2A: 4 steps past what the sequencer accepts, over 3 tonal bars.  His placement must stay
+    # the planner's top pick, with the key cost on it, ahead of the best plan that has no key clash.
+    key = json.loads(sb.KEY.read_text(encoding="utf-8"))
+    content = json.loads(sb.CONTENT.read_text(encoding="utf-8"))
+    b = key["blends"][6]
+    o = sb.prepare(key["tracks"][b["out"]], b["out"], "BOTTOM END", content)
+    n = sb.prepare(key["tracks"][b["in"]], b["in"], "BOTTOM END", content)
+    top = pb.plan_blend(o, n)
+    assert sb.matches(top, b, sb.sam_numbers(b, o)) == "primary"
+    assert top.key_pair == ("8A", "2A") and top.key_tonal_bars == 3 and top.key_clash == pb.KEY_STEP_CAP * 3
+    assert top.terms["key_clash"] == pytest.approx(pb.W_KEY_CLASH * 12)
+    assert top.terms["key_clash"] > 0
+    clear = [c for c in pb.candidates(o, n) if not c.key_clash]
+    best_clear = min(c.cost for c in clear)
+    assert best_clear > top.cost                                    # still ahead with the key cost on it
+    assert top.terms["key_clash"] < best_clear - (top.cost - top.terms["key_clash"])   # it fits inside his margin
 
 
 def test_dftd_answer_key_still_scores_seven_of_seven_with_vocals_and_keys_in():
@@ -302,3 +340,112 @@ def test_measure_tool_tabulates_sams_dftd_blends_against_the_planner(monkeypatch
     monkeypatch.setattr(pb, "W_KEY_CLASH", 0.0)
     old = [plan.key() for _, plan in mvk.dftd_table(out=lambda *_: None)]
     assert old == [plan.key() for _, plan in rows]
+
+
+# ---- unusable data is missing data ------------------------------------------------------------
+def labels_only(track, flags):
+    t = json.loads(json.dumps(track))
+    t["content"] = {"has_vocal": flags}
+    return t
+
+
+def test_a_short_vocal_list_on_a_labels_only_track_is_not_read_past_its_end():
+    o = labels_only(OUT, [0] * 10 + [1])
+    i = labels_only(IN, [1] * int(IN["n_bars"]))
+    plan = score(o, i, 168, 184, 200)
+    assert plan.vocal_clash_bars is None and "vocal_clash" not in plan.terms
+    assert any("outgoing has_vocal has 11 bars for a 200 bar track" in w and "no vocal cost" in w for w in plan.why)
+    # the right length on a labels-only track is read
+    assert score(labels_only(OUT, [1] * 200), i, 168, 184, 200).vocal_clash_bars == 32
+
+
+def test_the_vocal_length_is_checked_against_every_list_the_track_carries():
+    for name in ("has_kick", "has_bass", "has_music"):
+        o = with_vocal(full(OUT), [(0, 200)])
+        o["content"][name] = o["content"][name][:150]
+        plan = score(o, with_vocal(full(IN), [(0, 160)]), 168, 184, 200)
+        assert plan.vocal_clash_bars is None, name
+    long = with_vocal(full(OUT), [(0, 200)])
+    long["content"]["has_vocal"] = long["content"]["has_vocal"] + [1]
+    assert score(long, with_vocal(full(IN), [(0, 160)]), 168, 184, 200).vocal_clash_bars is None
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), None, "1", [1]])
+def test_a_flag_that_is_not_a_finite_number_is_missing_data_not_a_vocal(bad):
+    o = with_vocal(full(OUT), [(0, 200)])
+    o["content"]["has_vocal"][180] = bad
+    plan = score(o, with_vocal(full(IN), [(0, 160)]), 168, 184, 200)
+    assert plan.vocal_clash_bars is None and "vocal_clash" not in plan.terms
+    assert any("not finite 0/1 flags" in w for w in plan.why)
+    nan_music = with_key(full(OUT), "8A")
+    nan_music["content"]["has_music"][180] = bad
+    plan = score(nan_music, with_key(full(IN), "2A"), 168, 184, 200)
+    assert plan.key_clash is None and "key_clash" not in plan.terms
+
+
+@pytest.mark.parametrize("bad", ["²A", "٣A", "1²A", "8٠A", "⑧A"])
+def test_camelot_steps_refuses_non_ascii_digits_without_raising(bad):
+    assert pb.camelot_steps(bad, "8A") is None and pb.camelot_steps("8A", bad) is None
+    plan = score(with_key(full(OUT), bad), with_key(full(IN), "8A"), 168, 184, 200)
+    assert plan.key_clash is None and any("key unknown for the outgoing" in w for w in plan.why)
+
+
+# ---- the key rule is the sequencer's ----------------------------------------------------------
+ALL_KEYS = ["%d%s" % (n, l) for n in range(1, 13) for l in "AB"]
+
+
+def test_the_planner_and_the_playlist_sequencer_agree_on_every_pair_of_keys():
+    from automated_dj_mixes.sequencer import compatibility_score, is_compatible
+    for a in ALL_KEYS:
+        for b in ALL_KEYS:
+            ok, kind = is_compatible(a, b)
+            assert (pb.key_excess(a, b) == 0) == ok, (a, b)
+            assert pb.key_type(a, b) == kind == compatibility_score(a, b)[1], (a, b)
+            assert pb.key_excess(a, b) == pb.key_excess(b, a)
+            if not ok:
+                assert 1 <= pb.key_excess(a, b) <= pb.KEY_STEP_CAP
+
+
+@pytest.mark.parametrize("a,b,excess", [
+    ("8A", "9B", 0), ("8A", "10A", 0), ("8A", "6A", 0), ("8A", "7B", 0), ("8A", "8B", 0),   # diagonal, power mix
+    ("8A", "11A", 1), ("8A", "10B", 1), ("8A", "12A", 2), ("8A", "2A", 4), ("8A", "2B", 4), ("8A", "3B", 4),
+])
+def test_key_excess_counts_steps_past_what_the_sequencer_accepts(a, b, excess):
+    assert pb.key_excess(a, b) == excess
+
+
+def test_a_diagonal_and_a_power_mix_cost_nothing_in_the_planner():
+    for k, kind in (("9B", "diagonal"), ("10A", "power_mix")):
+        plan = score(*keyed("8A", k), 168, 184, 200)
+        assert plan.key_type == kind and plan.key_clash == 0 and "key_clash" not in plan.terms
+        assert plan.cost == score(*keyed("8A", "8A"), 168, 184, 200).cost
+
+
+def test_overlap_walk_passes_the_rule_to_the_loop_source(monkeypatch):
+    seen = []
+    real = pb.loop_source
+    monkeypatch.setattr(pb, "loop_source", lambda t, r6=pb.R6_BE: seen.append(r6) or real(t, r6))
+    list(pb.overlap_walk(full(OUT), full(IN), 190, 215, r6=pb.R6_V1))
+    assert seen == [pb.R6_V1]
+
+
+# ---- score_blends reports a bad vocal and key file instead of crashing -------------------------
+def test_score_blends_notes_a_bad_vocal_key_file(tmp_path, monkeypatch):
+    names = list(json.loads(sb.VOCAL_KEY.read_text(encoding="utf-8"))["tracks"])
+    path = tmp_path / "vk.json"
+    path.write_text(json.dumps({"tracks": {
+        names[0]: {"has_vocal": "abc", "key": 7}, names[1]: ["not", "a", "dict"],
+        names[2]: {"has_vocal": 5, "key": ["8A"]}, names[3]: {"has_vocal": [1], "key": "\u00b2A"}}}), encoding="ascii")
+    monkeypatch.setattr(sb, "VOCAL_KEY", path)
+    lines = []
+    exact, rows = sb.score("BOTTOM END", out=lines.append)
+    assert exact == 7 and all(r["plan"] is not None for r in rows)
+    notes = [l for l in lines if "input note" in l]
+    assert any("not a list" in l for l in notes) and any("not an object" in l for l in notes)
+    assert any("not text" in l for l in notes)
+    for text, needle in (("{not json", "unusable"), ('["a list"]', "unusable"),
+                         (json.dumps({"tracks": 5}), "no tracks object")):
+        path.write_text(text, encoding="ascii")
+        lines.clear()
+        assert sb.score("BOTTOM END", out=lines.append)[0] == 7
+        assert any("input note" in l and needle in l for l in lines), text
