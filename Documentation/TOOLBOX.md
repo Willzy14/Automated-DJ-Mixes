@@ -17,6 +17,8 @@ The planner publishes decisions with a same-directory atomic rename. Phase 2 ver
 Reads a project's groove section JSONs and cached stem envelopes, then writes one top-ranked phrase-blend decision per adjacent pair. Pass `--sections` to use the same layout JSON as Phase 2, `--out` for the decisions, and optionally `--content` for the measured per-bar kick, bass, and music flags. The decisions add `out_end_bar` and optional `intro_loop` to name an exact outgoing stop and an incoming phrase repeat for `propose_arrangement.py --decisions`. The normal loop and ALS validators check the resulting geometry.
 
 The standalone command requires a decision for every pair by default. `--allow-partial` lists unplanned pairs in `fallback_pairs` and leaves those pairs to the rule-based arranger. At least one pair must plan, and invalid inputs stop the command.
+
+Whole bars only (2026-11-24, Claude Sonnet 5.5): when a pair's top plan has a fractional bar (for example a swap lined up on a fill end half a bar in), the planner never rounds it. It uses the cheapest of the planner's alternatives, then of its ranked candidates, whose decision passes the normal checks, and only then leaves the pair to the rule-based arranger. The log line, the decision's `reason`, an `n pairs used a whole-bar alternative` summary line, and the `whole_bar_alternative_count` and `whole_bar_alternatives` keys in the decisions JSON all show the pair and its cost difference to the top pick. Whole-bar mixes write byte-identical files.
 ### Phrase blend planner (2026-11-20, Codex)
 
 - `Source/phrase_blend.py` ranks cue-based blends and accepts a fractional audio endpoint in `end_bar`. Pass `why=reasons` to `plan_blend` to collect input warnings and the reason for a `None` result.
