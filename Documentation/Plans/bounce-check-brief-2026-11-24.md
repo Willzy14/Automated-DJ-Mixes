@@ -1,0 +1,33 @@
+# Build brief: a bounce-based check of every join (what the listener hears, not what the files say)
+
+Written 2026-11-24 by Claude (Sonnet 5.5) for Sam. Builder: a Sonnet subagent. Reviewers: MiniMax plus an independent Opus subagent, then the lead's executing check. No em dashes anywhere (code, comments, output, docs, commit text). Python output ASCII only.
+
+## Why
+
+Sam's reply to the "what have we missed" review: "number 4 should be added in". Number 4 was: levelling and tone matching do not replace measuring the bounce. The kick check (`Source/kick_alignment_check.py`) reads the SOURCE audio through the warp markers, not what Ableton renders, so it cannot see a bass swap with a phase hole, a join where one track's low end is much heavier than the other's, a stereo width jump, or a loudness step. On Sam's real bounce of the Tech House mix, blend 1's flam was confirmed (+7.2 ms) but blend 2's was not visible in the click band (`D:\Claude Workspace\Automated DJ Mixes\bounce-flam\`, script `bounce_flam.py`, results `bounce_flam_results.json`, pictures T01 to T03: read them first, they are the one existing attempt and contain the lessons).
+
+## What to build
+
+`Source/bounce_check.py` (library), `Tools/check_bounce.py` (CLI), `Tests/test_bounce_check.py`. Input: a bounce WAV and the project's `Output/ARRANGEMENT_REPORT.json` plus `MIX_PLAN.json` (transition positions: find in them how to get, per transition, the overlap start and end in arrangement beats and seconds; the bounce starts at arrangement beat 0; state in the report how you map beats to seconds, and check it against the bounce length). Output: one line per join, a JSON file, and for each join a picture (spectrogram or band-level strip over the overlap with the join marked). Per join, measure:
+
+1. **Loudness step.** Short-term loudness (3 s, ITU BS.1770 via pyloudnorm, already a dependency) over the 20 s before the overlap, during the overlap, and the 20 s after; report the step in LU between before and after, and the peak inside the overlap against the larger of the two sides (a blend that is 3 LU louder than either track alone is a pile-up).
+2. **Tonal step.** Band levels (sub 20 to 60 Hz, low 60 to 150, low-mid 150 to 500, mid 500 to 2k, high-mid 2k to 6k, high 6k+) in the same three windows; report the per-band step in dB and the single worst band.
+3. **Low-end summing.** In the overlap, the 40 to 150 Hz band: the level against the larger of the two sides, and the inter-channel correlation of that band (a phase hole when two basses are out of polarity or detuned shows as low band level DROPPING during the overlap, and as correlation well below the sides). Report both, and the time of the worst bar.
+4. **Stereo width step.** Mid/side energy ratio before and after (side over mid, above 150 Hz), step in dB.
+5. **Kick double hits (flam) on the bounce.** Reuse what is learnable from `bounce_flam.py`; detect, per kick beat inside the overlap, a second onset within 3 to 25 ms of the first in the drum band (and in the band where the earlier attempt found blend 1), and report the fraction of beats with a double and the median spacing. If a blend's flam cannot be seen on the bounce (as with blend 2), say so, do not invent.
+6. **Calibration against Sam's own work, not a guess.** Run the same measurements on every bounce of a mix Sam has accepted or built by hand that exists on this machine (find them: `Listening Sets/*.wav` including `Tech House 2026 Planned.wav` and `Fresh Mix Planned.wav`, Sam's saved tweak projects' bounces if present, `Test Project/06.10.26 DFTD Tech House/Output/Sections V4 MIX.wav`, and any other mix WAV you can find under `D:\Claude Workspace\Automated DJ Mixes\`; the Teaching Mixes in the repo are ALS files only with no audio, so do not count them unless you find audio). Report, per measurement, the distribution (min, median, max) across the joins of those mixes, and for the Tech House mix the numbers for blends 1 and 2 against what Sam heard (flam on both in the original; tight in his hand result and the tool's output; those bounces are in his listening project folders). The tool PROPOSES target ranges as these distributions; it never decides pass or fail from invented limits. Give each join a verdict only as "inside the observed range of Sam's accepted joins" or "outside by X". Say how many joins the ranges are based on.
+
+## Rules of evidence (the lead will check)
+
+- The bounce is read in streaming blocks or with soundfile in chunks; no whole 30-minute stereo float array times several copies (this machine has 64 GB but the pipeline runs with other jobs; keep peak memory under 4 GB and report it).
+- Every measurement is validated by a synthetic test whose answer is known (build WAVs with numpy: two sine basses at a known phase offset, a known loudness step in LU, a known width step, kicks with an injected 8 ms double). Tests that fail on a broken implementation, with a mutant for each measurement (wrong window, wrong channel, sign flipped) killed and proven.
+- Report honestly what the bounce cannot show (for example if two kicks 5 ms apart look like one in the band you use).
+
+## Rules
+
+- Work ONLY in the git worktree `D:\Worktrees\dj-bounce-check` (branch `work/bounce-check`, already created, locked, based on current main). Nothing written in the main checkout; nothing on C: except tiny temp. Scratch: `D:\Claude Workspace\Automated DJ Mixes\bounce-check-build\`.
+- Do NOT edit `Tools/run_mix_pipeline.sh` (the lead decides the hook once the numbers are known). Do NOT touch `kick_alignment_check.py` or `grid_phase_fix.py`.
+- Match existing style. No docstring bloat, no backwards-compat hacks, no new dependencies beyond what is already installed (numpy, scipy, soundfile, pyloudnorm, matplotlib).
+- Tests: yours, then the full suite with `PYTHONPATH=Source` and `--basetemp` under your scratch (D: is exFAT; name exFAT-only failures and show they also fail on main). Known unrelated failure: `Tests/test_kick_model_integration.py::test_adapter_defaults_and_smoothing_do_not_import_torch`.
+- Commits on the branch, conventional (`feat(bounce-check): ...`), body explains why, ending with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`. Do not merge, push, or use `git stash`.
+- Return: commit hashes, files changed, test counts, the per-join table for the Tech House original bounce and Sam's hand result, the distribution table across Sam's accepted mixes (with the number of joins), the beat to seconds mapping you used, peak memory, mutants killed, what the bounce cannot show, and one honest line on anything unverified.
