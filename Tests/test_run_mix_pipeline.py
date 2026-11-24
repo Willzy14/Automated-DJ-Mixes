@@ -70,6 +70,10 @@ elif args[0] == "Tools/check_kick_alignment.py":
     if os.environ.get("PIPELINE_TEST_KICK_STDERR"):
         print(os.environ["PIPELINE_TEST_KICK_STDERR"], file=sys.stderr)
     sys.exit(int(os.environ.get("PIPELINE_TEST_KICK_RC", "0")))
+elif args[0] == "Tools/check_bounce.py" and os.environ.get("PIPELINE_TEST_REAL_BOUNCE"):
+    import subprocess
+    root = os.environ["PIPELINE_TEST_ROOT"]
+    sys.exit(subprocess.run([sys.executable, root + "/Tools/check_bounce.py", *args[1:]]).returncode)
 elif args[0] == "Tools/check_bounce.py":
     rc = int(os.environ.get("PIPELINE_TEST_BOUNCE_RC", "0"))
     out = Path(args[args.index("--out") + 1])
@@ -79,6 +83,9 @@ elif args[0] == "Tools/check_bounce.py":
         (out / "ATTENTION.md").write_text("NEEDS A LOOK: join 1 A > B\n", encoding="ascii")
         print("NEEDS A LOOK: join 1 A > B")
         print("BOUNCE CHECK: 1 of 2 joins need a look (J01): see " + out.as_posix() + "/ATTENTION.md")
+    if rc == 2:                       # the real tool writes this itself when it could not run
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "ATTENTION.md").write_text("bounce check did not run (stub): no measurements\n", encoding="ascii")
     if os.environ.get("PIPELINE_TEST_BOUNCE_STDERR"):
         print(os.environ["PIPELINE_TEST_BOUNCE_STDERR"], file=sys.stderr)
     sys.exit(rc)
@@ -967,15 +974,16 @@ def test_any_bounce_check_mode_but_off_runs_the_step(pipeline, value):
 
 
 @pytest.mark.parametrize("status", [1, 2, 127])
-def test_a_bounce_check_that_crashes_never_stops_the_build(pipeline, status):
+def test_a_bounce_check_that_crashes_never_stops_the_build_and_leaves_a_file_saying_it_did_not_run(pipeline, status):
     repo, run = pipeline
     (repo / OUTPUT / "Sections V9.wav").write_bytes(b"bounce")
     result, calls = run(PIPELINE_TEST_BOUNCE_RC=str(status), PIPELINE_TEST_BOUNCE_STDERR="Traceback: boom")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"bounce check did not finish (status {status}); the build goes on" in result.stdout
+    assert f"bounce check did not finish (status {status}): no measurements, {BOUNCE_ATTENTION} says so; the build goes on" in result.stdout
     assert "DONE: final = Sections V9.als" in result.stdout and "BOUNCE CHECK:" not in result.stdout
     assert "Traceback: boom" in (repo / OUTPUT / "runmix.log").read_text()
-    assert not (repo / BOUNCE_ATTENTION).exists()
+    text = (repo / BOUNCE_ATTENTION).read_text()
+    assert text.startswith("bounce check did not run (") and "no measurements" in text and "NEEDS A LOOK" not in text, text
 
 
 def test_a_bounce_that_does_not_fit_the_final_is_named_and_the_build_goes_on(pipeline):
@@ -1002,6 +1010,7 @@ def test_an_attention_file_of_an_earlier_build_never_survives_a_new_one(pipeline
     result, _ = run(**options)
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (repo / BOUNCE_ATTENTION).exists() or "no join needs a look (8 joins" not in (repo / BOUNCE_ATTENTION).read_text()
+    assert (repo / BOUNCE_ATTENTION).exists() == (bounce and not options.get("BOUNCE_CHECK_MODE"))     # the tool ran (or crashed and said so)
 
 
 def test_an_attention_file_of_an_earlier_build_is_removed_even_when_the_build_fails_early(pipeline):
@@ -1011,3 +1020,55 @@ def test_an_attention_file_of_an_earlier_build_is_removed_even_when_the_build_fa
     result, _ = run(PIPELINE_TEST_RELAY_FAIL="1")
     assert result.returncode == 1 and "FAILED at: relay" in result.stdout
     assert not (repo / BOUNCE_ATTENTION).exists()
+
+
+# the REAL Tools/check_bounce.py behind the hook, on a tiny synthetic bounce and ALS: the hook, ATTENTION.md and the summary line end to end
+
+@pytest.fixture
+def real_bounce(pipeline, tmp_path):
+    import test_bounce_check as tb
+    repo, run = pipeline
+    als = tmp_path / "Real.als"
+    tb._write_als(als, [("Alpha - One", (0.0, 160.0)), ("Beta - Two", (100.0, 220.0))])        # one join, 50 s to 80 s at 120 bpm
+    options = dict(PIPELINE_TEST_REAL_BOUNCE="1", PIPELINE_TEST_FINAL_FROM=als.as_posix())
+    return repo, run, tb, options
+
+
+def test_the_real_check_runs_through_the_hook_and_flags_a_loud_blend(real_bounce):
+    repo, run, tb, options = real_bounce
+    tb.build(repo / OUTPUT / "Sections V9.wav", (tb.sine(1000, 40, -20), None), (tb.sine(1000, 30, -10), None), (tb.sine(1000, 30, -20), None))
+    result, calls = run(**options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [call for call in calls if call[0] == BOUNCE] == [[BOUNCE, f"{OUTPUT}/Sections V9.wav", "--als", FINAL, "--out", BOUNCE_DIR]]
+    summary = [l.split("] ", 1)[1] for l in result.stdout.splitlines() if "BOUNCE CHECK:" in l]
+    assert len(summary) == 1 and summary[0].startswith("BOUNCE CHECK: 1 of 1 joins need a look (J01)") and "ATTENTION.md" in summary[0], summary
+    text = (repo / BOUNCE_ATTENTION).read_text()
+    assert "NEEDS A LOOK: join 1 One > Two (0:50.0-1:20.0): blend peak vs sides +10.0 LU, outside Sam's accepted range" in text, text
+    assert "picture: " in text and (repo / BOUNCE_DIR / "join_01.png").is_file() and (repo / BOUNCE_DIR / "bounce_check.json").is_file()
+    log = (repo / OUTPUT / "runmix.log").read_text()
+    assert summary[0] in log and "J01 One > Two" in log and "DONE: final = Sections V9.als" in result.stdout
+
+
+def test_the_real_check_that_cannot_read_the_bounce_says_so_in_the_file_and_never_stops_the_build(real_bounce):
+    repo, run, tb, options = real_bounce
+    (repo / OUTPUT / "Sections V9.wav").write_bytes(b"this is not a wav file")
+    (repo / BOUNCE_DIR).mkdir()
+    (repo / BOUNCE_ATTENTION).write_text("no join needs a look (8 joins checked)\n")
+    result, _ = run(**options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = (repo / BOUNCE_ATTENTION).read_text()
+    assert text.startswith("bounce check did not run (") and text.rstrip().endswith("): no measurements") and "8 joins" not in text, text
+    assert f"bounce check did not finish (status 2): no measurements, {BOUNCE_ATTENTION} says so; the build goes on" in result.stdout
+    assert "BOUNCE CHECK: did not run: no measurements: see " in result.stdout and "DONE: final = Sections V9.als" in result.stdout
+
+
+def test_the_real_check_on_a_bounce_that_does_not_fit_the_final_says_so_in_the_file(pipeline, tmp_path):
+    import test_bounce_check as tb
+    repo, run = pipeline
+    als = tmp_path / "Long.als"
+    tb._write_als(als, [("Alpha - One", (0.0, 160.0)), ("Beta - Two", (100.0, 400.0))])        # arrangement is 200 s, the bounce 110 s
+    tb.build(repo / OUTPUT / "Sections V9.wav", (tb.sine(1000, 40, -20), None), (tb.sine(1000, 30, -20), None), (tb.sine(1000, 30, -20), None))
+    result, _ = run(PIPELINE_TEST_REAL_BOUNCE="1", PIPELINE_TEST_FINAL_FROM=als.as_posix())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "bounce does not fit the arrangement" in (repo / BOUNCE_ATTENTION).read_text()
+    assert "the bounce does not fit the final ALS (status 3)" in result.stdout and "WARNINGS (MAP" in result.stdout

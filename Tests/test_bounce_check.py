@@ -1101,21 +1101,6 @@ def test_cli_writes_the_attention_file_when_nothing_flags_too(tmp):
     assert last.startswith("BOUNCE CHECK: no join needs a look; WARNINGS (") and "NOT RUN" in last and last.endswith("ATTENTION.md"), last
 
 
-def test_cli_with_no_warnings_writes_the_single_clean_line_and_ends_on_it(tmp):
-    d = tmp / "cli_att_one_line"
-    d.mkdir()
-    kick_bounce(d / "Mix.wav", 0.0)
-    plan = _plan([[0.0, 120.0], [400.0, 120.0]], [(140.0, 220.0)], [("Out - A", 220.0), ("In - B", 400.0)])
-    report = _report([(140.0, 220.0)], [(0.0, 220.0), (140.0, 400.0)], ["Out - A", "In - B"])
-    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
-    (d / "ARRANGEMENT_REPORT.json").write_text(json.dumps(report))
-    (d / "ranges.json").write_text(json.dumps({"groups": {"accepted": {"measurements": {"loud_step_lu": _rng(-30.0, 30.0)}}}}))
-    proc = _cli(d / "Mix.wav", "--out", d / "out", "--ranges", d / "ranges.json")
-    assert proc.returncode == 0, (proc.stdout, proc.stderr)
-    assert (d / "out" / "ATTENTION.md").read_text() == "no join needs a look (1 joins checked)\n", (d / "out" / "ATTENTION.md").read_text()
-    assert proc.stdout.strip().splitlines()[-1] == "BOUNCE CHECK: no join needs a look"
-
-
 def test_cli_writes_the_attention_file_for_a_start_warning(tmp):
     d = tmp / "cli_att_start"
     d.mkdir()
@@ -1138,7 +1123,7 @@ def test_cli_writes_the_attention_file_when_the_map_does_not_fit_and_still_exits
     assert proc.stdout.strip().splitlines()[-1].startswith("BOUNCE CHECK: ") and "MAP" in proc.stdout.strip().splitlines()[-1]
 
 
-def test_cli_removes_an_old_attention_file_so_a_check_that_could_not_run_leaves_none(tmp):
+def test_cli_replaces_an_old_attention_file_so_a_check_that_could_not_run_says_so(tmp):
     d = tmp / "cli_att_stale"
     d.mkdir()
     (d / "out").mkdir()
@@ -1146,4 +1131,147 @@ def test_cli_removes_an_old_attention_file_so_a_check_that_could_not_run_leaves_
     build(d / "Mix.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None))
     proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out")           # no plan beside the bounce: could not run
     assert proc.returncode == 2, (proc.stdout, proc.stderr)
-    assert not (d / "out" / "ATTENTION.md").exists()
+    text = (d / "out" / "ATTENTION.md").read_text()
+    assert text.startswith("bounce check did not run (") and "no measurements" in text and "9 joins" not in text, text
+
+
+# ---------------------------------------------------------------- fix round 1: a join whose numbers cannot be trusted never reads as clean
+
+ACUTE_E, O_STROKE = "\N{LATIN SMALL LETTER E WITH ACUTE}", "\N{LATIN SMALL LETTER O WITH STROKE}"
+EM_DASH = chr(0x2014)
+
+
+def real_report(res, flam=None):
+    """The report a real measure_join result would sit in: join facts, a flam result and a mapping."""
+    res["join"] = {"index": 1, "out": "A - x", "in": "B - y", "start_s": S, "end_s": E}
+    res["flam"] = flam or {"state": "no_flam_seen", "fraction_of_fit_beats": 0.0, "n_kick_beats": 20, "n_fit_both": 18}
+    return att_report(res)
+
+
+def test_a_mono_bounce_has_no_width_step_and_the_attention_file_says_so_instead_of_reading_clean(tmp):
+    res = measure(build(tmp / "att_mono.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None)))
+    assert "width_step_db" not in bc.scalars(res)
+    att = bc.attention(real_report(res), ATT_RANGES)
+    assert att["flagged"] == []
+    line = next(c["text"] for c in att["caveats"] if c["kind"] == "NOT MEASURED")
+    assert "join 1 x > y" in line and "width step (width step not measured: the before and after window is mono" in line, line
+    assert att["text"].splitlines()[-1].startswith("no join needs a look (1 joins checked), but see the warnings above")
+
+
+def test_a_low_band_with_no_energy_in_one_channel_is_named_not_measured_never_clean(tmp):
+    path = build(tmp / "att_left_only.wav", (_bass(40, -20), np.zeros(int(40 * SR))), (_bass(30, -20), np.zeros(int(30 * SR))),
+                 (_bass(30, -20), np.zeros(int(30 * SR))))
+    res = measure(path)
+    assert res["low_end"]["corr"]["during"] is None and "low_corr_drop" not in bc.scalars(res)
+    att = bc.attention(real_report(res), ATT_RANGES)
+    text = " ".join(c["text"] for c in att["caveats"])
+    assert "low-end L/R correlation change vs sides (negative = fell) (no 40-150 Hz energy in one channel of the before, during, after windows)" in text, text
+    assert att["flagged"] == [] and "but see the warnings above" in att["text"].splitlines()[-1]
+
+
+@pytest.mark.parametrize("measure, drop", [
+    ("loud step", lambda r: r["loudness"].pop("step_lu")), ("blend peak vs sides", lambda r: r["loudness"].pop("peak_vs_sides_lu")),
+    ("low end (40-150 Hz) vs sides", lambda r: r["low_end"].pop("level_vs_sides_db")),
+    ("low-end L/R correlation change", lambda r: r["low_end"].pop("corr_drop")), ("width step", lambda r: r["width"].pop("step_db"))])
+def test_each_attention_measure_that_is_absent_from_a_measured_join_is_named(measure, drop):
+    res = att_res()
+    drop(res)
+    att = bc.attention(att_report(res), ATT_RANGES)
+    assert [c["kind"] for c in att["caveats"]] == ["NOT MEASURED"] and measure in att["caveats"][0]["text"], att["text"]
+    assert "NOT MEASURED: join 1 Song A > Song B" in att["text"] and "but see the warnings above" in att["text"].splitlines()[-1]
+    assert bc.attention_summary(att, "p") == "BOUNCE CHECK: no join needs a look; WARNINGS (NOT MEASURED): see p"
+
+
+def test_a_range_missing_for_an_attention_measure_is_not_judged_and_says_so():
+    ranges = {k: v for k, v in ATT_RANGES.items() if k != "width_step_db"}
+    att = bc.attention(att_report(att_res(width=50.0)), ranges)
+    assert att["flagged"] == [] and "NOT JUDGED: the accepted ranges have no entry for width step" in att["text"]
+
+
+def test_a_per_join_note_that_says_the_numbers_may_be_off_is_a_warning():
+    res = att_res()
+    res["notes"] = ["kick grid offset +55 / +50 ms: the beat to seconds map may be off"]
+    att = bc.attention(att_report(res), ATT_RANGES)
+    assert [c["kind"] for c in att["caveats"]] == ["WARNING"], att["text"]
+    assert att["caveats"][0]["text"] == ("WARNING: join 1 Song A > Song B (25:27.3-26:25.8): kick grid offset +55 / +50 ms: "
+                                         "the beat to seconds map may be off")
+    assert att["text"].splitlines()[-1].startswith("no join needs a look (1 joins checked), but see the warnings above")
+
+
+def test_a_flam_that_was_not_measurable_on_any_join_is_said_once():
+    nm = {"state": "not_measurable", "notes": ["no clean kick templates"]}
+    att = bc.attention(att_report(att_res(index=1, flam=nm), att_res(index=2, flam=nm), att_res(index=3, flam={**nm, "state": "too_few_beats"})), ATT_RANGES)
+    kinds = [c["kind"] for c in att["caveats"]]
+    assert kinds == ["FLAM NOT MEASURABLE"], att["text"]
+    assert "the kick flam could not be judged on any join (information, not a flag)" in att["text"] and att["flagged"] == []
+    assert att["text"].count("FLAM NOT MEASURABLE") == 1
+
+
+def test_one_judgeable_flam_anywhere_means_no_flam_caveat_and_a_per_join_not_measurable_stays_information():
+    nm = {"state": "not_measurable", "notes": ["no clean kick templates"]}
+    att = bc.attention(att_report(att_res(index=1, flam=nm), att_res(index=2)), ATT_RANGES)
+    assert att["caveats"] == [] and att["flagged"] == [] and att["text"] == "no join needs a look (2 joins checked)\n"
+
+
+def test_a_thin_range_for_an_attention_measure_is_warned_about_and_a_thin_flam_range_is_not():
+    thin = {**ATT_RANGES, "loud_step_lu": {**ATT_RANGES["loud_step_lu"], "n": 3, "thin": True}}
+    att = bc.attention(att_report(att_res()), thin)
+    assert [c["kind"] for c in att["caveats"]] == ["THIN"] and "loud step (3 joins)" in att["text"], att["text"]
+    assert bc.attention_summary(att, "p") == "BOUNCE CHECK: no join needs a look; WARNINGS (THIN): see p"
+    flam_thin = {**ATT_RANGES, "flam_fraction_of_fitted_beats": {**ATT_RANGES["flam_fraction_of_fitted_beats"], "n": 2, "thin": True}}
+    assert bc.attention(att_report(att_res()), flam_thin)["caveats"] == []
+    only_n = {**ATT_RANGES, "width_step_db": {k: v for k, v in ATT_RANGES["width_step_db"].items() if k != "thin"} | {"n": 4}}
+    assert [c["kind"] for c in bc.attention(att_report(att_res()), only_n)["caveats"]] == ["THIN"]
+
+
+def test_the_text_is_the_same_ascii_in_the_file_the_json_and_the_screen(tmp):
+    d = _cli_case(tmp, "cli_att_accents", -10.0)
+    name = f"Sm{O_STROKE}rrebr{O_STROKE}d Caf{ACUTE_E} {EM_DASH} Mix"
+    plan = json.loads((d / "MIX_PLAN.json").read_text())
+    plan["tracks"][1]["display_name"] = "Beta - " + name
+    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "ranges.json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    md = (d / "out" / "ATTENTION.md").read_text(encoding="ascii")
+    data = json.loads((d / "out" / "bounce_check.json").read_text())
+    assert "Smorrebrod Cafe - Mix" in md and md.isascii() and "?" not in md.split("picture")[0], md
+    assert data["attention"]["text"] == md
+    assert all(f["text"] in md for f in data["attention"]["flagged"])
+    lines = proc.stdout.splitlines()
+    first = next(i for i, l in enumerate(lines) if l.startswith("LOOK AT THESE PICTURES")) + 1
+    assert lines[first:first + len(md.splitlines())] == md.splitlines(), (lines[first:], md)
+
+
+def test_ascii_text_keeps_the_letter_of_an_accent_and_of_the_letters_unicode_does_not_decompose():
+    assert bc.ascii_text(f"Sm{O_STROKE}rrebr{O_STROKE}d") == "Smorrebrod"
+    assert bc.ascii_text(f"Beyonc{ACUTE_E} {EM_DASH} \N{LATIN SMALL LETTER SHARP S}\N{LATIN SMALL LETTER AE}") == "Beyonce - ssae"
+    assert bc.ascii_text("\N{CJK UNIFIED IDEOGRAPH-4E2D}") == "?" and bc.ascii_text("plain text") == "plain text"
+
+
+def test_cli_with_a_bad_range_group_still_leaves_an_attention_file_that_says_it_did_not_run(tmp):
+    d = _cli_case(tmp, "cli_att_badgroup", -20.0)
+    (d / "out").mkdir()
+    (d / "out" / "ATTENTION.md").write_text("no join needs a look (9 joins checked)\n")
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "ranges.json", "--range-group", "nonesuch")
+    assert proc.returncode == 2 and "could not run" in proc.stderr, (proc.stdout, proc.stderr)
+    text = (d / "out" / "ATTENTION.md").read_text()
+    assert text.startswith("bounce check did not run (ValueError: ") and text.rstrip().endswith("): no measurements"), text
+    assert "9 joins" not in text and "nonesuch" in text
+    assert proc.stdout.strip().splitlines()[-1].startswith("BOUNCE CHECK: did not run: no measurements: see ")
+
+
+def test_cli_with_no_warnings_writes_the_single_clean_line_and_ends_on_it(tmp):
+    d = tmp / "cli_att_one_line_stereo"
+    d.mkdir()
+    x, sr = sf.read(str(kick_bounce(d / "src.wav", 0.0)), dtype="float32")
+    right = x + 0.05 * np.random.default_rng(5).standard_normal(len(x)).astype("float32")       # a little independent noise: not mono
+    sf.write(str(d / "Mix.wav"), np.stack([x, right], axis=1), sr, subtype="FLOAT")
+    plan = _plan([[0.0, 120.0], [400.0, 120.0]], [(140.0, 220.0)], [("Out - A", 220.0), ("In - B", 400.0)])
+    report = _report([(140.0, 220.0)], [(0.0, 220.0), (140.0, 400.0)], ["Out - A", "In - B"])
+    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
+    (d / "ARRANGEMENT_REPORT.json").write_text(json.dumps(report))
+    (d / "ranges.json").write_text(json.dumps({"groups": {"accepted": {"measurements": {n: _rng(-30.0, 30.0) for n in bc.ATTENTION_MARGINS}}}}))
+    proc = _cli(d / "Mix.wav", "--out", d / "out", "--ranges", d / "ranges.json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert (d / "out" / "ATTENTION.md").read_text() == "no join needs a look (1 joins checked)\n", (d / "out" / "ATTENTION.md").read_text()
+    assert proc.stdout.strip().splitlines()[-1] == "BOUNCE CHECK: no join needs a look"

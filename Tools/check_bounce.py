@@ -16,8 +16,9 @@ measurement across the joins of each group, and how many joins that is); a bounc
 Report only, never a verdict on the build: every run that completes writes ATTENTION.md beside the pictures (and the same text in the
 json under "attention"): one NEEDS A LOOK line per join with a measure of direct audible meaning outside the accepted range by a
 margin (bounce_check.ATTENTION_MARGINS) or a kick flam SEEN, warnings when the numbers cannot be trusted (START WARNING, map does not
-fit, join not measured, no ranges, no flam), or "no join needs a look". The last stdout line is "BOUNCE CHECK: ...". No ATTENTION.md
-means the check did not run.
+fit, a measure that could not be computed for a join, other per-join notes, no or thin ranges, no flam run or judgeable), or "no join needs
+a look". The last stdout line is "BOUNCE CHECK: ...". Once the tool is past argument parsing ATTENTION.md always exists: a check that
+could not run writes "bounce check did not run (reason): no measurements".
 Exit codes: 0 done (whatever was found); 2 the check could not run (message to stderr); 3 the beat to seconds map does not fit the bounce
 (the report and ATTENTION.md are still written).
 """
@@ -76,6 +77,24 @@ def print_report(bc, result, ranges):
         say(bc.summary_line(res, ranges))
     if result.get("peak_memory_mb"):
         say(f"peak memory {result['peak_memory_mb']:.0f} MB")
+
+
+def did_not_run(folder, reason):
+    """ATTENTION.md for a check that could not run, so the file exists whenever the tool was invoked and says there are no measurements.
+    Returns the summary line for stdout."""
+    try:
+        from bounce_check import ascii_text
+    except Exception:
+        def ascii_text(text):
+            return text.encode("ascii", "replace").decode("ascii")
+    text = ascii_text(f"bounce check did not run ({reason}): no measurements")
+    path = Path(folder) / "ATTENTION.md"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text + "\n", encoding="ascii")
+    except OSError:
+        return f"BOUNCE CHECK: did not run, and {path} could not be written: no measurements"
+    return f"BOUNCE CHECK: did not run: no measurements: see {path}"
 
 
 def load_ranges(path, group="accepted"):
@@ -155,6 +174,7 @@ def main(argv=None):
     ap.add_argument("--corpus-root", help="folder the manifest paths are relative to")
     ap.add_argument("--only", help="with --calibrate: only these labels (comma separated), no ranges written")
     args = ap.parse_args(argv)
+    attention_folder = None
     try:
         sys.path.insert(0, str(REPO / "Source"))
         import bounce_check as bc
@@ -166,6 +186,7 @@ def main(argv=None):
             ap.error("give a bounce, or --calibrate")
         out = (Path(args.out) if args.out else Path(args.bounce).resolve().parent / "Bounce Check").resolve()
         attention_path = out / "ATTENTION.md"
+        attention_folder = out
         attention_path.unlink(missing_ok=True)          # an old report must not stand for this run: no file means the check did not run
         ranges = load_ranges(args.ranges or DEFAULT_RANGES, args.range_group)
         result = run_one(bc, args.bounce, out, ranges=ranges, flam=not args.no_flam, report=args.report, plan=args.plan, als=args.als)
@@ -181,7 +202,10 @@ def main(argv=None):
     except SystemExit:
         raise
     except Exception as exc:
-        say(f"bounce check could not run: {type(exc).__name__}: {exc}", sys.stderr)
+        reason = f"{type(exc).__name__}: {exc}"
+        say(f"bounce check could not run: {reason}", sys.stderr)
+        if attention_folder is not None:
+            say(did_not_run(attention_folder, reason))
         return EXIT_COULD_NOT_RUN
 
 

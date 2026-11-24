@@ -292,7 +292,12 @@ else
     if [ "$bounce_status" -eq 3 ]; then
         say "bounce check: the bounce does not fit the final ALS (status 3); its numbers cannot be trusted, details in $bounce_dir/ATTENTION.md"
     elif [ "$bounce_status" -ne 0 ]; then
-        say "bounce check did not finish (status $bounce_status); the build goes on"
+        # the tool writes its own "did not run" file on status 2; for any other status (a hard crash, command not found) the hook does,
+        # so the file exists after every invocation and no old or missing report can read as a clean one
+        if [ "$bounce_status" -ne 2 ] || [ ! -f "$bounce_dir/ATTENTION.md" ]; then
+            mkdir -p -- "$bounce_dir" && printf 'bounce check did not run (status %s): no measurements\n' "$bounce_status" > "$bounce_dir/ATTENTION.md"
+        fi
+        say "bounce check did not finish (status $bounce_status): no measurements, $bounce_dir/ATTENTION.md says so; the build goes on"
     fi
 fi
 say "DONE: final = $final_text"
