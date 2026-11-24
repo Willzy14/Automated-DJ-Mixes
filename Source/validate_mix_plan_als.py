@@ -8,7 +8,9 @@ import hashlib
 import html
 import json
 import math
+import re
 import sys
+import zlib
 
 from automated_dj_mixes.warping import (
     WARP_MODE_COMPLEX_PRO, WARP_MODE_REPITCH)
@@ -145,10 +147,20 @@ def _main_tempo_state(root: ET.Element) -> tuple[float | None, list[tuple[float,
 
 
 GRID_PHASE_SCHEMA = "grid-phase/1"
-# The most a recorded grid phase may move any warp marker. A hard cap of this
-# validator, never read from the record: the tool's own limits (12 ms drift plus
-# 15 ms slide) sit inside it, and a forged record cannot widen it.
-MAX_PHASE_SHIFT_MS = 30.0
+# The envelope of a grid phase the tool can have made. Hard-coded here and never read from the record: the record is
+# written by the thing it vouches for, so its `tool`, `tool_version` and `constants` fields are informational and ignored.
+MAX_ABS_SHIFT_MS = 27.0      # grid_phase_fix MAX_DRIFT_MS (12) plus MAX_SLIDE_MS (15)
+MAX_SWING_SHIFT_MS = 14.0    # grid_phase_fix MAX_SWING_MS: the drift part moves a track this much end to end, the slide is constant
+# The largest change of the shift between two consecutive markers. The tool's drift correction is a 31-beat moving average of
+# a profile that swings at most 14 ms, so it cannot move faster than 14/31 = 0.45 ms per beat (a grid with a marker every beat;
+# the real tracks have one per beat). Measured 2026-11-24 on the tool's own output: 0.022 ms on the real Tech House 2026 mix
+# (Get Right, 705 markers), 0 on the real DFTD mix (slides only), 0.182 ms on the tool's steepest synthetic fixture (a 0.18 ms
+# per beat drift). 0.5 ms is 2.7 times the fixture maximum and 23 times the real one, and a 1 percent local tempo change needs
+# several ms between two markers, so this refuses it. A grid with a marker only every 4 beats and an abrupt drift could in
+# theory step up to 4 times 0.45 ms and be refused: that fails closed (the phased file is simply not adopted).
+MAX_STEP_SHIFT_MS = 0.5
+MAX_BPM_CHANGE = 0.05        # the phased track's own source_grid_bpm may differ from the pinned one by less than this
+_SEC_VALUE = re.compile(r'SecTime="[^"]*"')
 _SHA256_HEX = frozenset("0123456789abcdef")
 
 
@@ -223,7 +235,10 @@ def _check_phased_track(
 
     The recorded ORIGINAL markers must hash to the plan's pinned grid (the pin is
     still honoured, against the original); the ALS markers must then be the
-    recorded ones with the SecTimes moved by at most MAX_PHASE_SHIFT_MS.
+    recorded ones with the SecTimes moved inside the envelope above: no marker by
+    more than MAX_ABS_SHIFT_MS, the whole shift profile by no more than
+    MAX_SWING_SHIFT_MS, no step between two markers over MAX_STEP_SHIFT_MS, and the
+    track's own tempo within MAX_BPM_CHANGE of the pinned one.
     """
     try:
         original = tuple((float(sec), float(beat))
@@ -254,13 +269,32 @@ def _check_phased_track(
     for axis, label in ((0, "SecTime"), (1, "BeatTime")):
         if any(b[axis] <= a[axis] for a, b in zip(actual, actual[1:])):
             errors.append(f"{name}: phased {label} is not strictly increasing")
-    shifts = [abs(a[0] - o[0]) * 1000.0 for a, o in zip(actual, original)]
+    signed = [(a[0] - o[0]) * 1000.0 for a, o in zip(actual, original)]
+    shifts = [abs(value) for value in signed]
     worst = max(shifts)
-    over = [i for i, shift in enumerate(shifts) if shift > MAX_PHASE_SHIFT_MS]
-    if over:
+    if worst > MAX_ABS_SHIFT_MS:
         errors.append(
             f"{name}: phased SecTime moved {worst:.3f} ms at marker {shifts.index(worst)}, "
-            f"more than {MAX_PHASE_SHIFT_MS:g} ms")
+            f"more than {MAX_ABS_SHIFT_MS:g} ms")
+    swing = max(signed) - min(signed)
+    if swing > MAX_SWING_SHIFT_MS:
+        errors.append(
+            f"{name}: the shift swings {swing:.3f} ms across the track, "
+            f"more than {MAX_SWING_SHIFT_MS:g} ms")
+    steps = [abs(b - a) for a, b in zip(signed, signed[1:])]
+    if steps and max(steps) > MAX_STEP_SHIFT_MS:
+        at = steps.index(max(steps))
+        errors.append(
+            f"{name}: the shift changes by {max(steps):.3f} ms between markers {at} and "
+            f"{at + 1}, more than {MAX_STEP_SHIFT_MS:g} ms")
+    sec_span = actual[-1][0] - actual[0][0]
+    if sec_span > 0:
+        phased_bpm = 60.0 * (actual[-1][1] - actual[0][1]) / sec_span
+        if abs(phased_bpm - expected[2]) >= MAX_BPM_CHANGE:
+            errors.append(
+                f"{name}: the phased grid's own tempo {phased_bpm:.4f} BPM differs from the "
+                f"pinned {expected[2]:.4f} BPM by {abs(phased_bpm - expected[2]):.4f}, "
+                f"not under {MAX_BPM_CHANGE:g}")
     if not math.isclose(worst, float(entry["max_abs_shift_ms"]), abs_tol=1e-6):
         errors.append(
             f"{name}: the record says the largest shift is "
@@ -268,9 +302,74 @@ def _check_phased_track(
     return errors, worst
 
 
+def _als_lines(path: Path) -> list[str]:
+    with gzip.open(path, "rb") as handle:
+        return handle.read().decode("utf-8").split("\n")
+
+
+def _check_original(
+    original_path: Path, als_path: Path, record: dict, allowed: set[int],
+) -> list[str]:
+    """The phased ALS must be the original ALS the record describes, with nothing
+    changed but the SecTime of the WarpMarker lines (inside <WarpMarkers>) of the
+    tracks the record lists (`allowed`, by position in the file): same sha256 as the
+    record's original_als_sha256, same number of lines, the same text on every
+    other line, the same text on those marker lines apart from the SecTime value.
+    """
+    errors: list[str] = []
+    try:
+        actual = _sha256(original_path)
+        if actual != record["original_als_sha256"]:
+            errors.append(
+                "grid phase original ALS is not the file the record describes: it describes "
+                f"{record['original_als_sha256']}, the file given is {actual}")
+        before = _als_lines(original_path)
+        after = _als_lines(als_path)
+        in_xml = len(list(ET.fromstring("\n".join(before)).iter("AudioTrack")))
+    except (OSError, EOFError, ValueError, zlib.error, ET.ParseError) as exc:
+        errors.append(f"grid phase original ALS {original_path.name} cannot be read: {exc}")
+        return errors
+    if len(before) != len(after):
+        errors.append(
+            f"the phased ALS has {len(after)} lines, the original has {len(before)}")
+        return errors
+    in_text = sum(1 for line in before if line.lstrip().startswith("<AudioTrack "))
+    if in_text != in_xml:
+        errors.append(
+            f"the original has {in_text} '<AudioTrack ' lines but {in_xml} AudioTrack elements "
+            "(is it laid out one element per line, as Live writes it?)")
+        return errors
+    track_no, in_markers, bad = -1, False, []
+    for number, (was, now) in enumerate(zip(before, after), start=1):
+        bare = was.lstrip()
+        if bare.startswith("<AudioTrack "):
+            track_no += 1
+        elif bare.startswith("</AudioTrack>"):
+            in_markers = False
+        elif bare.startswith("<WarpMarkers>"):
+            in_markers = True
+        elif bare.startswith("</WarpMarkers>"):
+            in_markers = False
+        if was == now:
+            continue
+        marker_line = (
+            track_no in allowed and in_markers
+            and bare.startswith("<WarpMarker ") and now.lstrip().startswith("<WarpMarker ")
+            and _SEC_VALUE.sub('SecTime=""', was) == _SEC_VALUE.sub('SecTime=""', now)
+        )
+        if not marker_line:
+            bad.append(number)
+    if bad:
+        errors.append(
+            f"the phased ALS differs from the original on {len(bad)} line(s) that are not the "
+            f"SecTime of a recorded track's warp marker, first at lines {bad[:5]}")
+    return errors
+
+
 def reconcile(
     plan_path: Path, report_path: Path, als_path: Path,
     grid_phase_path: Path | None = None,
+    original_als_path: Path | None = None,
 ) -> dict:
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -314,10 +413,15 @@ def reconcile(
                 for index, track in enumerate(root.iter("AudioTrack"))
             }
             actual_by_name = {name: track for name, track, _clips in active_tracks}
+            seen_names: set[str] = set()
             for entry in record["tracks"]:
                 name = entry["name"]
-                if name in phase_entries:
+                if name in seen_names:
                     errors.append(f"grid phase record lists {name} twice")
+                elif expected_names.count(name) > 1 or actual_names.count(name) > 1:
+                    errors.append(
+                        f"grid phase record names {name}, but more than one track of the "
+                        "mix has that display name, so the record cannot tell them apart")
                 elif name not in expected_names:
                     errors.append(f"grid phase record lists {name}, which is not in the MixPlan")
                 elif name not in actual_by_name:
@@ -328,6 +432,17 @@ def reconcile(
                         f"the ALS has it at {document_index[id(actual_by_name[name])]}")
                 else:
                     phase_entries[name] = entry
+                seen_names.add(name)
+            if original_als_path is None:
+                errors.append(
+                    "grid phase record needs the original ALS to compare the phased file "
+                    "with (--grid-phase-original)")
+            else:
+                errors.extend(_check_original(
+                    original_als_path, als_path, record,
+                    {entry["doc_index"] for entry in phase_entries.values()}))
+    elif original_als_path is not None:
+        errors.append("an original ALS was given without a grid phase record")
 
     overrides = {item["name"]: item["value"] for item in plan.get("human_overrides", [])}
     expected_bpm = float(plan.get("project_bpm") or overrides.get("project_bpm", "nan"))
@@ -595,7 +710,10 @@ def reconcile(
             "phased_als_sha256": record["phased_als_sha256"],
             "track_count": len(phase_shifts),
             "max_shift_ms": max(phase_shifts.values()),
-            "max_allowed_shift_ms": MAX_PHASE_SHIFT_MS,
+            "original_als_checked": True,
+            "max_allowed_shift_ms": MAX_ABS_SHIFT_MS,
+            "max_allowed_swing_ms": MAX_SWING_SHIFT_MS,
+            "max_allowed_step_ms": MAX_STEP_SHIFT_MS,
             "tracks": [
                 {"name": name, "doc_index": phase_entries[name]["doc_index"],
                  "max_shift_ms": shift}
@@ -617,15 +735,26 @@ def main() -> int:
         "--grid-phase", type=Path,
         help="grid_phase.json written with a phased ALS: the tracks it lists are "
              "checked against their recorded original grid instead of the pinned one")
+    parser.add_argument(
+        "--grid-phase-original", type=Path,
+        help="the ALS the phased file was made from; required with --grid-phase: the two "
+             "files must differ in nothing but the SecTime of the recorded tracks' warp markers")
     args = parser.parse_args()
+    if (args.grid_phase is None) != (args.grid_phase_original is None):
+        parser.error("--grid-phase and --grid-phase-original are used together")
     if args.grid_phase is None:
         result = reconcile(args.mix_plan, args.arrangement_report, args.als)
     else:
         try:
             result = reconcile(
-                args.mix_plan, args.arrangement_report, args.als, args.grid_phase)
+                args.mix_plan, args.arrangement_report, args.als, args.grid_phase,
+                args.grid_phase_original)
         except ValueError as exc:
             print(f"FAIL: {exc}", file=sys.stderr)
+            if args.output:       # the failure stays on disk as evidence; the hook keeps it as ...FAILED.json
+                args.output.write_text(
+                    json.dumps({"status": "FAIL", "error": str(exc)}, indent=2) + chr(10),
+                    encoding="utf-8")
             return 1
     if args.output:
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

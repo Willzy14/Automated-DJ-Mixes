@@ -33,6 +33,9 @@ The MixPlan reconciliation still pins the original grid (warp_grid_sha256, sourc
 original on its own; given the record (`validate_mix_plan_als.py --grid-phase`) it checks the pin against the recorded
 original markers and the phased file against the record, so the phased file can become the final (GRID_PHASE_MODE=apply
 in Tools/run_mix_pipeline.sh). A refused or nothing-to-do run writes no record and leaves none behind.
+The record binds the exact bytes of the phased file (its sha256) and the validator also wants the original, so saving the
+phased set again (in Live, or any re-gzip) invalidates the record by design: a re-saved file is no longer the file the
+tool wrote and the reconciliation must not take it on trust.
 """
 from __future__ import annotations
 
@@ -91,6 +94,7 @@ SMOOTH_BEATS = 31                # moving average over the median, flat at both 
 SLIDE_NOISE_MS = 0.05            # a slide smaller than this is a rounding residue of the solver, not a slide
 
 RECORD_NAME, RECORD_SCHEMA = "grid_phase.json", "grid-phase/1"
+TOOL_VERSION = "grid_phase_fix 2"     # informational: the validator hard-codes its own limits and ignores this and the constants
 
 FIT, CANNOT_FIT, REFUSED, NOT_MEASURED, NO_DRIFT, SPARSE_MARKERS = (
     "FIT", "CANNOT_FIT", "REFUSED", "NOT_MEASURED", "NO_DRIFT", "SPARSE_MARKERS")
@@ -478,7 +482,7 @@ def build_record(original, phased, changed):
     unreported = sorted({e["doc_index"] for e in entries} - set(changed))
     if unreported:
         raise ValueError(f"AudioTracks {unreported} differ but the patch did not report changing them")
-    return dict(schema=RECORD_SCHEMA, tool="Source/grid_phase_fix.py",
+    return dict(schema=RECORD_SCHEMA, tool="Source/grid_phase_fix.py", tool_version=TOOL_VERSION,
                 constants=dict(MAX_DRIFT_MS=MAX_DRIFT_MS, MAX_SLIDE_MS=MAX_SLIDE_MS),
                 original_als_sha256=_sha256(original), phased_als_sha256=_sha256(phased), tracks=entries)
 
