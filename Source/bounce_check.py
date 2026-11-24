@@ -64,10 +64,14 @@ SHORT_TERM_S = 3.0
 SIDE_S = 20.0
 MIN_WINDOW_S = 3.0
 WARM_S = 2.0                  # filter warm-up read before every span
-BLOCK_HOPS = 40               # 10 s per streaming block
+BLOCK_HOPS = 20               # 5 s per streaming block
 BAR_BEATS = 4
 FLOOR_DB = -120.0
 LEVEL_FLOOR_DB = -60.0        # a band under this is absent: steps into or out of it are measured from here, not from noise
+SILENT_LUFS = -70.0           # the BS.1770 absolute gate: a hop under this is silent; a window mostly silent is not measured
+MONO_DB = -40.0               # side more than this far under mid: the window is mono and has no width to step
+LOW_BAR_GATE_DB = 30.0        # a bar this far under the loudest bar (or silent) is not a candidate for the lowest correlation
+THIN_JOINS = 5                # a range built from fewer joins than this carries a warning
 
 PRE_MS, POST_MS = 40.0, 60.0  # window around a kick beat
 FLAM_MIN_MS, FLAM_MAX_MS = 3.0, 25.0
@@ -82,12 +86,16 @@ MIN_FLAM_FRACTION = 0.05
 MIN_FIT_BEATS = 8             # fewer beats with both kicks found than this: not measurable
 GRID_OFFSET_WARN_MS = 40.0
 TAIL_WARN_S = 30.0
+START_SILENCE_WARN_S = 2.0    # no sound for this long at the start: the bounce may not begin at beat 0
+START_LUFS = -60.0            # first hop louder than this is the first sound
+GRID_PHASE_WARN_MS = 60.0     # the kicks attack further than this from a beat line (real bounces: 1 to 22 ms): map and audio are out of step
+GRID_PHASE_SPAN_S = 60.0
 
 SCALAR_NAMES = ("loud_step_lu", "loud_peak_vs_sides_lu", "loud_mean_vs_sides_lu",
                 "tonal_step_sub_db", "tonal_step_low_db", "tonal_step_low_mid_db", "tonal_step_mid_db",
                 "tonal_step_high_mid_db", "tonal_step_high_db", "tonal_worst_abs_db",
                 "low_level_vs_sides_db", "low_corr_overlap", "low_corr_drop", "low_worst_bar_level_vs_sides_db",
-                "width_step_db", "flam_fraction_of_kick_beats")
+                "width_step_db", "flam_fraction_of_fitted_beats")
 
 
 def _db(power, floor=FLOOR_DB):
@@ -213,6 +221,14 @@ class Hops:
         return i0, max(i0, i1)
 
 
+def check_channels(f, name=""):
+    """Mono and stereo only: BS.1770 weights the surround channels differently and nothing here implements that, so more than
+    two channels are refused, never silently dropped."""
+    if f.channels > 2:
+        raise ValueError(f"{name or 'the bounce'} has {f.channels} channels: only mono and stereo bounces are supported "
+                         "(BS.1770 surround weights are not implemented)")
+
+
 def _stereo(x):
     return np.repeat(x, 2, axis=1) if x.shape[1] == 1 else x[:, :2]
 
@@ -220,6 +236,8 @@ def _stereo(x):
 def analyse_span(path, t0, t1, hop_s=HOP_S):
     """Hops of mean-square values over [t0, t1] of a WAV, read in blocks of 10 s with filter state carried across."""
     with sf.SoundFile(str(path)) as f:
+        check_channels(f, Path(path).name)
+        mono = f.channels == 1
         sr, frames = f.samplerate, f.frames
         hop = int(round(hop_s * sr))
         i0 = max(0, int(round(t0 * sr)))
@@ -243,7 +261,10 @@ def analyse_span(path, t0, t1, hop_s=HOP_S):
                 return a[:m * hop].reshape(m, hop, *a.shape[1:]).mean(axis=1)
 
             out["band"].append(np.stack([hopmean((y["b%d" % i] ** 2).mean(axis=1)) for i in range(len(BANDS))], axis=1))
-            out["k"].append(hopmean(y["k"] ** 2))
+            kp = hopmean(y["k"] ** 2)
+            if mono:                  # one channel, as pyloudnorm reads it: not the same signal counted twice
+                kp[:, 1] = 0.0
+            out["k"].append(kp)
             lo = y["low"]
             out["low"].append(np.stack([hopmean(lo[:, 0] ** 2), hopmean(lo[:, 1] ** 2), hopmean(lo[:, 0] * lo[:, 1])], axis=1))
             w = y["width"]
@@ -284,12 +305,14 @@ def short_term(h):
     return h.t0 + np.arange(len(mean)) * h.hop_s, lufs
 
 
-def _st_max(h, a_s, b_s):
-    times, lufs = short_term(h)
-    if not len(times):
+def _st_max_slice(h, sl):
+    """Loudest 3 s short-term value among the windows that lie wholly inside the hops sl, anchored at the window's own first hop."""
+    n = int(round(SHORT_TERM_S / h.hop_s))
+    p = (h.k_l + h.k_r)[sl[0]:sl[1]]
+    if len(p) < n:
         return None
-    ok = (times >= a_s - 1e-6) & (times + SHORT_TERM_S <= b_s + 1e-6)
-    return float(lufs[ok].max()) if ok.any() else None
+    mean = np.convolve(p, np.ones(n) / n, mode="valid")
+    return float(_lufs(float(mean.max())))
 
 
 # ------------------------------------------------------------------ the measurements of one join
@@ -323,12 +346,24 @@ def measure_join(h, join, tempo, duration):
         ok[name] = (sl[name][1] - sl[name][0]) * h.hop_s >= MIN_WINDOW_S
     res = {"windows": {n: {"start_s": a, "end_s": b, "measured_s": (sl[n][1] - sl[n][0]) * h.hop_s} for n, (a, b) in wins.items()},
            "notes": [f"{n} window is under {MIN_WINDOW_S:.0f} s: not measured" for n in wins if not ok[n]]}
-    both = ok["before"] and ok["after"]
     kpow = h.k_l + h.k_r
+    hop_lufs = -0.691 + 10.0 * np.log10(np.maximum(kpow, 1e-12))
+    gated, silent = {}, []
+    for n in wins:
+        if ok[n]:
+            keep = hop_lufs[sl[n][0]:sl[n][1]] >= SILENT_LUFS
+            if keep.mean() < 0.5:
+                ok[n] = False
+                silent.append(n)
+                res["notes"].append(f"{n} window silent: not measured")
+            else:
+                gated[n] = float(kpow[sl[n][0]:sl[n][1]][keep].mean())
+    res["silent_windows"] = silent
+    both = ok["before"] and ok["after"]
 
-    # loudness
-    lufs = {n: _lufs(_mean(kpow, sl[n])) for n in wins if ok[n]}
-    st = {n: _st_max(h, *wins[n]) for n in wins if ok[n]}
+    # loudness: the power mean of the hops above the BS.1770 absolute gate, so a silent gap does not pull a window down
+    lufs = {n: _lufs(gated[n]) for n in wins if ok[n]}
+    st = {n: _st_max_slice(h, sl[n]) for n in wins if ok[n]}
     loud = {"level_lufs": lufs, "peak_short_term_lufs": st}
     if both:
         loud["step_lu"] = lufs["after"] - lufs["before"]
@@ -365,20 +400,27 @@ def measure_join(h, join, tempo, duration):
             i0, i1 = h.span(a, b)
             if i1 - i0 >= 2:
                 level = _db((_mean(h.low_ll, (i0, i1)) + _mean(h.low_rr, (i0, i1))) / 2.0, LEVEL_FLOOR_DB)
-                bars.append({"bar": len(bars) + 1, "start_s": a, "level_vs_sides_db": level - sides, "corr": _corr(h, (i0, i1))})
+                bars.append({"bar": len(bars) + 1, "start_s": a, "level_db": level, "level_vs_sides_db": level - sides,
+                             "corr": _corr(h, (i0, i1))})
             beat += BAR_BEATS
         if bars:
             low["worst_bar"] = min(bars, key=lambda b: b["level_vs_sides_db"])
-            withc = [b for b in bars if b["corr"] is not None]
+            loudest = max(b["level_db"] for b in bars)
+            withc = [b for b in bars if b["corr"] is not None and b["level_db"] > LEVEL_FLOOR_DB + 1e-9
+                     and b["level_db"] >= loudest - LOW_BAR_GATE_DB]
             if withc:
                 low["lowest_corr_bar"] = min(withc, key=lambda b: b["corr"])
     res["low_end"] = low
 
     # width
-    ratio = {n: _db(_mean(h.side, sl[n]), LEVEL_FLOOR_DB) - _db(_mean(h.mid, sl[n]), LEVEL_FLOOR_DB) for n in wins if ok[n]}
-    width = {"side_over_mid_db": ratio}
-    if both:
+    ratio = {n: _db(_mean(h.side, sl[n])) - _db(_mean(h.mid, sl[n])) for n in wins if ok[n]}
+    mono = {n: bool(r < MONO_DB) for n, r in ratio.items()}
+    width = {"side_over_mid_db": ratio, "mono": mono}
+    if both and not (mono["before"] or mono["after"]):
         width["step_db"] = ratio["after"] - ratio["before"]
+    elif both:
+        res["notes"].append("width step not measured: the " + " and ".join(n for n in ("before", "after") if mono[n]) +
+                            f" window is mono (side more than {-MONO_DB:.0f} dB under mid)")
     res["width"] = width
     return res
 
@@ -386,6 +428,8 @@ def measure_join(h, join, tempo, duration):
 def scalars(result):
     """The flat numbers a range is built from (only those that exist for this join)."""
     out = {}
+    if result.get("silent_windows"):          # a join with a silent window says nothing about the mix: it feeds no range
+        return out
     loud, tonal, low = result.get("loudness", {}), result.get("tonal", {}), result.get("low_end", {})
     for name, v in (("loud_step_lu", loud.get("step_lu")), ("loud_peak_vs_sides_lu", loud.get("peak_vs_sides_lu")),
                     ("loud_mean_vs_sides_lu", loud.get("mean_vs_sides_lu")),
@@ -400,7 +444,7 @@ def scalars(result):
         out[f"tonal_step_{b}_db"] = float(v)
     flam = result.get("flam", {})
     if flam.get("state") in ("flam_seen", "no_flam_seen"):
-        out["flam_fraction_of_kick_beats"] = float(flam["fraction_of_kick_beats"])
+        out["flam_fraction_of_fitted_beats"] = float(flam["fraction_of_fit_beats"])
     return out
 
 
@@ -754,38 +798,45 @@ def measure_flam(path, tempo, join, n_control=N_CONTROL):
     counts = {}
     for r in rows:
         counts[r["class"]] = counts.get(r["class"], 0) + 1
+    fitted = ("flam", "weak_second", "too_close")
     flams = [r for r in rows if r["class"] == "flam"]
-    fit_both = [r for r in rows if r["class"] in ("flam", "weak_second", "too_close")]
+    fit_both = [r for r in rows if r["class"] in fitted]
+    ctrl_fit = [r for r in ctrl if r["class"] in fitted]
     ctrl_flams = [r for r in ctrl if r["class"] == "flam"]
     n = len(rows)
-    frac = len(flams) / n
-    ctrl_frac = len(ctrl_flams) / len(ctrl) if ctrl else 0.0
+    frac = len(flams) / len(fit_both) if fit_both else 0.0               # over the beats the fit could place, not all kick beats
+    ctrl_frac = len(ctrl_flams) / len(ctrl_fit) if ctrl_fit else 0.0
     onset_overlap = sum(r["onset_pair"] for r in rows) / n
     onset_ctrl = (sum(r["onset_pair"] for r in ctrl) / len(ctrl)) if ctrl else None
     res.update({
-        "n_fit_both": len(fit_both), "n_flam": len(flams), "fraction_of_kick_beats": frac,
-        "fraction_of_fit_beats": (len(flams) / len(fit_both)) if fit_both else None,
+        "n_fit_both": len(fit_both), "n_flam": len(flams), "fraction_of_fit_beats": frac if fit_both else None,
         "median_spacing_ms": _median([abs(r["lag_ms"]) for r in flams]),
         "median_lag_ms": _median([r["lag_ms"] for r in flams]),
         "incoming_later_fraction": (sum(r["lag_ms"] > 0 for r in flams) / len(flams)) if flams else None,
         "class_counts": counts,
-        "control": {"n_beats": len(ctrl), "n_flam": len(ctrl_flams), "fraction": ctrl_frac},
+        "control": {"n_beats": len(ctrl), "n_fit": len(ctrl_fit), "n_flam": len(ctrl_flams), "fraction_of_fit_beats": ctrl_frac},
         "onset_test": {"overlap_fraction": onset_overlap, "control_fraction": onset_ctrl,
                        "discriminates": bool(onset_ctrl is not None and onset_overlap - onset_ctrl >= 0.25)}})
+    ctrl_bad = bool(ctrl_flams) and ctrl_frac >= max(frac / 2, MIN_FLAM_FRACTION)
     if not independent:
         res["notes"].append("too few clean kicks outside the overlap to hold any back as a control: the templates were learnt from the "
                             "beats they are checked on, so the fit is not judged")
     elif len(fit_both) < MIN_FIT_BEATS:
         res["notes"].append(f"only {len(fit_both)} beats had both kicks found: the flam cannot be judged on this bounce")
+    elif ctrl_bad:
+        res["notes"].append(f"{len(ctrl_flams)} of {len(ctrl_fit)} fitted control beats (one track playing) fit as flams too "
+                            f"({ctrl_frac:.0%}), so the fit cannot tell this blend from a single track, or the incoming track is "
+                            "already playing there: not discriminating, not judged")
     elif len(flams) >= MIN_FLAM_BEATS and frac >= MIN_FLAM_FRACTION:
-        if ctrl_flams and ctrl_frac >= frac / 2:
-            res["notes"].append(f"{len(ctrl_flams)} of {len(ctrl)} control beats (one track playing) fit as flams too, so the fit cannot "
-                                "tell this blend from a single track, or the incoming track is already playing there: not judged")
-        else:
-            res["state"] = "flam_seen"
+        res["state"] = "flam_seen"
+    elif flams:
+        res["state"] = "too_few_beats"
+        res["notes"].append(f"{len(flams)} of {len(fit_both)} fitted beats ({frac:.0%}) fit as flams, under the minimum of "
+                            f"{MIN_FLAM_BEATS} beats and {MIN_FLAM_FRACTION:.0%} to call one: observed, not judged, and not counted "
+                            "as none seen")
     else:
         res["state"] = "no_flam_seen"
-        res["notes"].append(f"no flam seen in {len(fit_both)} fitted beats; a flam under {FLAM_MIN_MS:.0f} ms, or "
+        res["notes"].append(f"no flam seen in {len(fit_both)} fitted beats of {n} kick beats; a flam under {FLAM_MIN_MS:.0f} ms, or "
                             f"one the fit cannot separate, would look the same")
     return res
 
@@ -796,21 +847,33 @@ def distribution(values):
     values = sorted(float(v) for v in values)
     if not values:
         return None
-    return {"n": len(values), "min": values[0], "median": float(np.median(values)), "max": values[-1]}
+    return {"n": len(values), "min": values[0], "median": float(np.median(values)), "max": values[-1], "thin": len(values) < THIN_JOINS}
+
+
+def ranges_from_scalars(scalar_dicts):
+    """Per measurement, the min, median and max across joins (each a dict from scalars()) and the join count; under THIN_JOINS joins is
+    marked thin. The tool PROPOSES these."""
+    by = {}
+    for d in scalar_dicts:
+        for name, v in d.items():
+            by.setdefault(name, []).append(v)
+    return {name: distribution(v) for name, v in sorted(by.items())}
 
 
 def build_ranges(join_results):
-    """Per measurement, the min, median and max across the given joins and how many joins that is. The tool PROPOSES these."""
-    by = {}
-    for r in join_results:
-        for name, v in scalars(r).items():
-            by.setdefault(name, []).append(v)
-    return {name: distribution(v) for name, v in by.items()}
+    return ranges_from_scalars([scalars(r) for r in join_results])
 
 
 # Measures where only one end is a concern: a flam fraction or a tonal step that is smaller than any accepted join is not a
 # fault, and neither is a low-end correlation that is higher. They are judged against that one end only.
-ONE_SIDED = {"flam_fraction_of_kick_beats": "max", "tonal_worst_abs_db": "max", "low_corr_overlap": "min", "low_corr_drop": "min"}
+# low_corr_drop is the overlap's L/R correlation minus the lower of the two sides', so a FALL is NEGATIVE: opposite-polarity or detuned
+# basses across the channels read -1 or below, and that (below the range minimum) is the concerning end. A correlation that is higher
+# in the overlap than on the sides (positive) is not a fault. Verified both ways on synthetic bounces (test_the_corr_drop_names_...).
+ONE_SIDED = {"flam_fraction_of_fitted_beats": "max", "tonal_worst_abs_db": "max", "low_corr_overlap": "min", "low_corr_drop": "min"}
+
+
+def _range_figures(rng):
+    return {"min": rng["min"], "median": rng["median"], "max": rng["max"]}
 
 
 def judge(result, ranges):
@@ -822,19 +885,26 @@ def judge(result, ranges):
             continue
         if v < rng["min"] and ONE_SIDED.get(name) != "max":
             out[name] = {"value": v, "verdict": "outside", "by": rng["min"] - v, "below": True}
+            out[name].update(_range_figures(rng))
         elif v > rng["max"] and ONE_SIDED.get(name) != "min":
             out[name] = {"value": v, "verdict": "outside", "by": v - rng["max"], "below": False}
+            out[name].update(_range_figures(rng))
         else:
             out[name] = {"value": v, "verdict": "inside", "by": 0.0}
+            out[name].update(_range_figures(rng))
     return out
 
 
 def verdict_text(judged, ranges):
     if not judged:
         return "no range to judge against"
-    n = min(r["n"] for r in ranges.values()) if ranges else 0
-    out = [f"{k} {'below' if v['below'] else 'above'} by {v['by']:.2f}" for k, v in judged.items() if v["verdict"] == "outside"]
+    n = min(ranges[k]["n"] for k in judged)
+    thin = [f"{k} {ranges[k]['n']} joins" for k in judged if ranges[k].get("thin")]
+    out = [f"{k} {'below' if v['below'] else 'above'} by {v['by']:.2f} (accepted min {v['min']:.2f}, median {v['median']:.2f}, max {v['max']:.2f})"
+           for k, v in judged.items() if v["verdict"] == "outside"]
     base = f"{len(judged)} measurements against the range of the joins Sam accepted (n down to {n})"
+    if thin:
+        base += f"; THIN, built from under {THIN_JOINS} joins: " + ", ".join(thin)
     return f"inside the observed range ({base})" if not out else "outside: " + "; ".join(out) + f" ({base})"
 
 
@@ -886,11 +956,65 @@ def draw_join(result, hops, path):
         axes[2].axvline(bar["start_s"], color="tab:orange", lw=1.5)
         axes[2].text(bar["start_s"], axes[2].get_ylim()[1], " worst bar", fontsize=7, color="tab:orange", va="top")
     flam = result.get("flam", {})
-    flam_text = {"flam_seen": f"kick flam SEEN on {flam.get('n_flam')}/{flam.get('n_kick_beats')} beats, median {flam.get('median_spacing_ms') or 0:.1f} ms",
-                 "no_flam_seen": "no kick flam seen", "not_measurable": "kick flam not measurable on this bounce"}.get(flam.get("state"), "kick flam not run")
+    flam_text = {"flam_seen": f"kick flam SEEN on {flam.get('n_flam')}/{flam.get('n_fit_both')} fitted beats, median {flam.get('median_spacing_ms') or 0:.1f} ms",
+                 "no_flam_seen": "no kick flam seen",
+                 "too_few_beats": f"kick flam: {flam.get('n_flam')} of {flam.get('n_fit_both')} fitted beats, too few to call",
+                 "not_measurable": "kick flam not measurable on this bounce"}.get(flam.get("state"), "kick flam not run")
     fig.suptitle(f"Join {join['index']}: {join['out']}  ->  {join['in']}   (overlap {_fmt_time(s)} to {_fmt_time(e)}, shaded)" + "\n" + flam_text, fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig.savefig(str(path), dpi=100)
+
+
+def first_sound_s(wav, limit_s=GRID_PHASE_SPAN_S):
+    """Seconds until the first 0.25 s hop louder than START_LUFS in the first limit_s, or None when there is none."""
+    h = analyse_span(wav, 0.0, limit_s)
+    if h is None:
+        return None
+    loud = np.nonzero(-0.691 + 10.0 * np.log10(np.maximum(h.k_l + h.k_r, 1e-12)) > START_LUFS)[0]
+    return float(h.t0 + loud[0] * h.hop_s) if len(loud) else None
+
+
+def grid_phase_ms(wav, tempo, t0, t1):
+    """Where the attacks of the >150 Hz band fall against the beat lines of the map over [t0, t1], folded on the beat: milliseconds from a
+    beat line, wrapped to half a beat either way (the rise of a 1 ms envelope; the body of a kick peaks 40 to 150 ms late and is no guide).
+    None when the folded profile has no clear peak (no steady kick to read). Only an offset over GRID_PHASE_WARN_MS is told apart from the
+    few ms real bounces show, and a shift of whole beats is invisible to it."""
+    with sf.SoundFile(str(wav)) as f:
+        sr = f.samplerate
+        i0, i1 = max(0, int(round(t0 * sr))), min(f.frames, int(round(t1 * sr)))
+        if i1 - i0 < 8 * sr:
+            return None
+        sos = signal.butter(4, CLICK_HP_HZ, btype="highpass", fs=sr, output="sos")
+        f.seek(i0)
+        x = f.read(i1 - i0, dtype="float64", always_2d=True).mean(axis=1)
+    env = _box(np.abs(signal.sosfilt(sos, x)), 0.001 * sr)
+    env = np.maximum(np.diff(env, prepend=env[0]), 0.0)
+    beats = np.asarray(tempo.sec_to_beat(i0 / sr + np.arange(len(env)) / sr))
+    frac = (beats + 0.5) % 1.0 - 0.5
+    bins = 200
+    k = np.minimum(((frac + 0.5) * bins).astype(int), bins - 1)
+    prof = np.bincount(k, weights=env, minlength=bins) / np.maximum(np.bincount(k, minlength=bins), 1)
+    prof = np.convolve(np.concatenate([prof[-2:], prof, prof[:2]]), np.ones(5) / 5, mode="valid")
+    peak = int(np.argmax(prof))
+    if prof[peak] < 1.5 * np.median(prof):
+        return None
+    mid = (i0 + i1) / 2 / sr
+    return float(((peak + 0.5) / bins - 0.5) * 60000.0 / float(tempo.bpm_at(float(tempo.sec_to_beat(mid)))))
+
+
+def check_start(wav, tempo, joins):
+    """Is there any sign the bounce does not begin at arrangement beat 0? Leading silence, or kicks that sit off the beat lines."""
+    out = {"first_sound_s": first_sound_s(wav), "grid_phase_ms": None, "warnings": []}
+    if out["first_sound_s"] is None or out["first_sound_s"] >= START_SILENCE_WARN_S:
+        out["warnings"].append("the bounce starts with " + ("no sound in the first minute" if out["first_sound_s"] is None else
+                               f"{out['first_sound_s']:.1f} s of silence") + ": if it does not begin at arrangement beat 0 every join is misplaced")
+    if joins:
+        a = max(0.0, joins[0].start_s - GRID_PHASE_SPAN_S)
+        out["grid_phase_ms"] = grid_phase_ms(wav, tempo, a, joins[0].start_s)
+        if out["grid_phase_ms"] is not None and abs(out["grid_phase_ms"]) > GRID_PHASE_WARN_MS:
+            out["warnings"].append(f"the kick grid sits {out['grid_phase_ms']:+.0f} ms from the beat lines of the map before the first join: "
+                                   "the bounce may not start at beat 0")
+    return out
 
 
 def peak_memory_mb():
@@ -905,9 +1029,11 @@ def peak_memory_mb():
 def check_bounce(wav, tempo, joins, last_beat, out_dir=None, flam=True, ranges=None, progress=None):
     """Measure every join of a bounce. Returns the report dict (pictures written when out_dir is given)."""
     with sf.SoundFile(str(wav)) as f:
+        check_channels(f, Path(wav).name)
         sr, duration = f.samplerate, f.frames / f.samplerate
     report = {"bounce": str(wav), "duration_s": duration, "sample_rate": sr,
               "mapping": check_mapping(tempo, last_beat, duration, joins), "joins": []}
+    report["mapping"]["start"] = check_start(wav, tempo, joins)
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
     for join in joins:
@@ -951,17 +1077,22 @@ def summary_line(res, ranges=None):
     parts.append("tone " + (f"worst {tonal['worst_band']} {tonal['worst_step_db']:+.1f} dB" if "worst_band" in tonal else "n/a"))
     if "level_vs_sides_db" in low:
         bar = low.get("worst_bar")
-        parts.append(f"low {low['level_vs_sides_db']:+.1f} dB vs sides, corr {low['corr']['during']:.2f}" +
-                     (f" (drop {low['corr_drop']:+.2f})" if "corr_drop" in low else "") +
+        corr = low["corr"]["during"]
+        parts.append(f"low {low['level_vs_sides_db']:+.1f} dB vs sides, corr " + ("n/a" if corr is None else f"{corr:.2f}") +
+                     (f" (change vs sides {low['corr_drop']:+.2f}, negative = fell)" if "corr_drop" in low else "") +
                      (f", worst bar {_fmt_time(bar['start_s'])} {bar['level_vs_sides_db']:+.1f} dB" if bar else ""))
     else:
         parts.append("low n/a")
     parts.append("width " + (f"{width['step_db']:+.1f} dB" if "step_db" in width else "n/a"))
     state = flam.get("state", "not_run")
     if state == "flam_seen":
-        parts.append(f"flam SEEN on {flam['n_flam']}/{flam['n_kick_beats']} kick beats, median {flam['median_spacing_ms']:.1f} ms")
+        parts.append(f"flam SEEN on {flam['n_flam']}/{flam['n_fit_both']} fitted beats ({flam['n_kick_beats']} kick beats), "
+                     f"median {flam['median_spacing_ms']:.1f} ms")
     elif state == "no_flam_seen":
         parts.append(f"flam none seen ({flam['n_fit_both']}/{flam['n_kick_beats']} beats fitted)")
+    elif state == "too_few_beats":
+        parts.append(f"flam too few beats to call: {flam['n_flam']} of {flam['n_fit_both']} fitted beats ({flam['n_kick_beats']} kick beats) "
+                     f"fit as flams ({flam['fraction_of_fit_beats']:.0%}), observed not judged")
     else:
         parts.append(f"flam {state.replace('_', ' ')}")
     if ranges and "judged" in res:

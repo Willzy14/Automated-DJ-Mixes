@@ -218,7 +218,184 @@ def test_width_ignores_a_wide_bass_below_150_hz(tmp):
     path = build(tmp / "wide_bass.wav", (m, None), (m, None), (m + b, m - b))
     width = measure(path)["width"]
     assert width["side_over_mid_db"]["after"] < -25.0, width            # the 40 Hz side is some 46 dB down in the >150 Hz band
-    assert abs(width["side_over_mid_db"]["before"] - (bc.LEVEL_FLOOR_DB + 25.0)) < 0.1, width   # a mono signal has no side: the floor over the mid
+    assert width["mono"]["before"] is True and width["mono"]["after"] is False, width           # a mono signal has no width to step
+    assert "step_db" not in width, width
+
+
+# ---------------------------------------------------------------- silence, mono, channels, gating
+
+def test_a_silent_window_is_not_measured_and_makes_no_step(tmp):
+    path = build(tmp / "silent_after.wav", (sine(1000, 40, -14) + sine(50, 40, -20), None), (sine(1000, 30, -14) + sine(50, 30, -20), None),
+                 (np.zeros(int(30 * SR)), None))
+    res = measure(path)
+    assert res["silent_windows"] == ["after"], res["notes"]
+    assert any("after window silent: not measured" in n for n in res["notes"]), res["notes"]
+    assert "step_lu" not in res["loudness"] and "step_db" not in res["tonal"] and "step_db" not in res["width"], res
+    assert "level_vs_sides_db" not in res["low_end"]
+    assert bc.scalars(res) == {}, "a join with a silent window feeds no range"
+
+
+def test_dither_level_noise_counts_as_silent(tmp):
+    path = build(tmp / "dither_after.wav", (sine(1000, 40, -14), None), (sine(1000, 30, -14), None), (white(30, -90, 7), None))
+    res = measure(path)
+    assert res["silent_windows"] == ["after"] and "step_lu" not in res["loudness"], res
+
+
+def test_a_silent_gap_does_not_pull_the_window_level_down(tmp):
+    whole = measure(build(tmp / "no_gap.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None)))
+    # 4 s of digital silence inside the 20 s before window (36 s to 40 s): gated out, as BS.1770 gates it
+    gap = np.concatenate([sine(1000, 26, -20), np.zeros(int(4 * SR)), sine(1000, 10, -20)])
+    gapped = measure(build(tmp / "gap.wav", (gap, None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None)))
+    assert not gapped["silent_windows"], gapped["notes"]
+    # the two hops that straddle the gap edges are half full and stay in (as BS.1770 blocks would): about 0.07 LU; ungated it is -0.97 LU
+    assert abs(gapped["loudness"]["level_lufs"]["before"] - whole["loudness"]["level_lufs"]["before"]) < 0.15, gapped["loudness"]
+    # more than half silent: the window is silent
+    mostly = np.concatenate([sine(1000, 28, -20), np.zeros(int(12 * SR))])
+    res = measure(build(tmp / "mostly_gap.wav", (mostly, None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None)))
+    assert res["silent_windows"] == ["before"], res["notes"]
+
+
+def test_a_mono_file_reads_the_level_pyloudnorm_reads(tmp):
+    x = white(60, -23, 31)
+    path = tmp / "mono.wav"
+    sf.write(str(path), x.astype("float32"), SR, subtype="FLOAT")
+    h = bc.analyse_span(path, 0.0, 60.0)
+    mine = bc._lufs(float(np.mean(h.k_l + h.k_r)))
+    ref = pyln.Meter(SR).integrated_loudness(x.astype("float32").astype("float64"))
+    assert abs(mine - ref) < 0.05, (mine, ref)
+
+
+def test_more_than_two_channels_are_refused_with_a_clear_message(tmp):
+    path = tmp / "six.wav"
+    sf.write(str(path), np.zeros((SR * 2, 3), dtype="float32"), SR, subtype="FLOAT")
+    with pytest.raises(ValueError, match="3 channels: only mono and stereo"):
+        bc.analyse_span(path, 0.0, 2.0)
+    with pytest.raises(ValueError, match="3 channels: only mono and stereo"):
+        bc.check_bounce(path, TEMPO, [join(0.2, 1.0)], 10.0, flam=False)
+
+
+def test_a_mono_level_step_is_not_reported_as_a_width_step(tmp):
+    path = build(tmp / "mono_step.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -14), None))
+    res = measure(path)
+    assert abs(res["loudness"]["step_lu"] - 6.02) < 0.1
+    assert res["width"]["mono"] == {"before": True, "during": True, "after": True}, res["width"]
+    assert "step_db" not in res["width"] and "width_step_db" not in bc.scalars(res), res["width"]
+    assert any("width step not measured" in n and "mono" in n for n in res["notes"]), res["notes"]
+
+
+def test_the_lowest_correlation_bar_ignores_bars_with_no_low_end(tmp):
+    n, fade = int(2 * SR), int(0.4 * SR)
+    a = int(14 * SR)                                   # bar 8 of the overlap: no bass at all (faded out and in), uncorrelated hiss
+    env = np.ones(int(30 * SR))
+    env[a - fade:a] = np.linspace(1.0, 0.0, fade)
+    env[a:a + n] = 0.0
+    env[a + n:a + n + fade] = np.linspace(0.0, 1.0, fade)
+    left, right = _bass(30, -20) * env, _bass(30, -20) * env
+    left[a:a + n] = white(2.0, -70, 41)
+    right[a:a + n] = white(2.0, -70, 42)
+    low = measure(build(tmp / "bar_hiss.wav", (_bass(40, -20), None), (left, right), (_bass(30, -20), None)))["low_end"]
+    assert low["worst_bar"]["bar"] == 8, low["worst_bar"]               # the dip is still the dip
+    assert low["lowest_corr_bar"]["bar"] != 8, low["lowest_corr_bar"]   # but a bar with no low end has no correlation to speak of
+
+
+def test_a_low_band_with_no_energy_in_one_channel_prints_na_and_does_not_crash(tmp):
+    path = build(tmp / "left_only_bass.wav", (_bass(40, -20), np.zeros(int(40 * SR))), (_bass(30, -20), np.zeros(int(30 * SR))),
+                 (_bass(30, -20), np.zeros(int(30 * SR))))
+    res = measure(path)
+    assert res["low_end"]["corr"]["during"] is None and "level_vs_sides_db" in res["low_end"], res["low_end"]
+    res["join"] = {"index": 1, "out": "A - x", "in": "B - y", "start_s": S, "end_s": E}
+    res["flam"] = {"state": "not_run"}
+    line = bc.summary_line(res)
+    assert "corr n/a" in line, line
+    assert "low_corr_overlap" not in bc.scalars(res)
+
+
+def test_hops_of_a_window_lie_wholly_inside_it_off_the_hop_grid(tmp):
+    # the overlap starts at 50.1 s, between hops; the before window must hold none of the louder overlap, the during window none of the before
+    quiet, loud = sine(1000, 40.1, -30), sine(1000, 30, -10)
+    path = build(tmp / "off_grid.wav", (quiet[:int(round(40.1 * SR))], None), (loud, None), (sine(1000, 29.9, -30), None))
+    j = join(50.1, 80.1)
+    h = bc.analyse_span(path, 29.9, 100.0)
+    res = bc.measure_join(h, j, TEMPO, 110.0)
+    lv = res["loudness"]["level_lufs"]
+    assert abs((lv["during"] - lv["before"]) - 20.0) < 0.05, lv       # 0.25 s of the louder part in the before window would add 3 dB
+    assert abs((lv["after"] - lv["before"])) < 0.05, lv
+    for name in ("before", "during", "after"):
+        w = res["windows"][name]
+        i0, i1 = h.span(w["start_s"], w["end_s"])
+        assert h.t0 + i0 * h.hop_s >= w["start_s"] - 1e-9 and h.t0 + i1 * h.hop_s <= w["end_s"] + 1e-9, (name, w)
+
+
+def test_a_short_overlap_off_the_hop_grid_still_gets_its_blend_peak_or_a_note(tmp):
+    for off in (0.0, 0.05, 0.1, 0.15, 0.2, 0.24):
+        j = join(50.0 + off, 53.4 + off)
+        path = build(tmp / f"short_ov_{int(off * 100)}.wav", (sine(1000, 40 + off, -20), None), (sine(1000, 3.4, -11), None),
+                     (sine(1000, 56.6 - off, -14), None))
+        res = measure(path, j)
+        assert "peak_vs_sides_lu" in res["loudness"] or any("during window" in n for n in res["notes"]), (off, res["loudness"], res["notes"])
+
+
+def test_the_corr_drop_names_the_concerning_end_both_ways(tmp):
+    ranges = {"low_corr_drop": {"n": 8, "min": -0.01, "median": 0.0, "max": 0.07, "thin": False}}
+    # concerning: the sides are mono bass (corr 1) and the overlap has the bass opposite in the two channels (corr -1)
+    left = _bass(30, -20)
+    path = build(tmp / "opp.wav", (_bass(40, -20), None), (left, -left), (_bass(30, -20), None))
+    low = measure(path)["low_end"]
+    assert abs(low["corr_drop"] + 2.0) < 0.05, low
+    res_opp = {"loudness": {}, "tonal": {}, "low_end": low, "width": {}}
+    assert bc.judge(res_opp, ranges)["low_corr_drop"]["verdict"] == "outside"
+    # not a fault: the sides are a wide bass (corr 0.5) and the overlap is the same bass in both channels (corr 1)
+    wide_l, wide_r = _bass(40, -20), _bass(40, -20, math.pi / 3)
+    path = build(tmp / "same.wav", (wide_l, wide_r), (_bass(30, -20), None), (_bass(30, -20), _bass(30, -20, math.pi / 3)))
+    low = measure(path)["low_end"]
+    assert abs(low["corr_drop"] - 0.5) < 0.05, low
+    res_same = {"loudness": {}, "tonal": {}, "low_end": low, "width": {}}
+    assert bc.judge(res_same, ranges)["low_corr_drop"]["verdict"] == "inside"
+
+
+# ---------------------------------------------------------------- the start of the bounce
+
+def _shifted_kick_bounce(tmp, name, shift_s):
+    src = kick_bounce(tmp / (name + "_src.wav"), 0.0)
+    x, sr = sf.read(str(src), dtype="float32")
+    path = tmp / (name + ".wav")
+    sf.write(str(path), np.concatenate([np.zeros(int(round(shift_s * sr)), dtype="float32"), x]), sr, subtype="FLOAT")
+    return path
+
+
+def test_a_bounce_with_leading_silence_warns_that_it_may_not_start_at_beat_0(tmp):
+    j = [kick_join()]
+    ok = bc.check_bounce(_shifted_kick_bounce(tmp, "start_ok", 0.0), TEMPO, j, 400.0, flam=False)
+    assert ok["mapping"]["start"]["warnings"] == [] and ok["mapping"]["ok"], ok["mapping"]
+    late = bc.check_bounce(_shifted_kick_bounce(tmp, "start_4s", 4.0), TEMPO, j, 400.0, flam=False)
+    start = late["mapping"]["start"]
+    assert abs(start["first_sound_s"] - 4.0) < 0.5 and start["warnings"], start
+    assert any("silence" in w for w in start["warnings"]), start
+
+
+def test_a_bounce_started_a_fraction_of_a_beat_late_warns_from_the_kick_grid(tmp):
+    j = [kick_join()]
+    off = bc.check_bounce(_shifted_kick_bounce(tmp, "start_130ms", 0.13), TEMPO, j, 400.0, flam=False)
+    start = off["mapping"]["start"]
+    assert start["grid_phase_ms"] is not None and abs(start["grid_phase_ms"]) > bc.GRID_PHASE_WARN_MS, start
+    assert any("kick grid" in w for w in start["warnings"]), start
+    good = bc.check_bounce(_shifted_kick_bounce(tmp, "start_good", 0.0), TEMPO, j, 400.0, flam=False)
+    assert good["mapping"]["start"]["grid_phase_ms"] is not None and abs(good["mapping"]["start"]["grid_phase_ms"]) < bc.GRID_PHASE_WARN_MS
+
+
+def test_the_cli_prints_the_start_warning_loudly(tmp):
+    d = tmp / "cli_start"
+    d.mkdir()
+    sh = _shifted_kick_bounce(tmp, "cli_start_src", 4.0)
+    (d / "Mix.wav").write_bytes(sh.read_bytes())
+    plan = _plan([[0.0, 120.0], [400.0, 120.0]], [(140.0, 220.0)], [("Out - A", 220.0), ("In - B", 400.0)])
+    report = _report([(140.0, 220.0)], [(0.0, 220.0), (140.0, 400.0)], ["Out - A", "In - B"])
+    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
+    (d / "ARRANGEMENT_REPORT.json").write_text(json.dumps(report))
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "none.json")
+    assert "START WARNING" in proc.stdout, proc.stdout
+    data = json.loads((d / "out" / "bounce_check.json").read_text())
+    assert data["mapping"]["start"]["warnings"], data["mapping"]
 
 
 # ---------------------------------------------------------------- windows and notes
@@ -231,7 +408,7 @@ def test_a_side_window_stops_at_the_neighbouring_join(tmp):
     assert abs(res["windows"]["before"]["start_s"] - (S - 8.0)) < 1e-9
     assert abs(res["windows"]["after"]["end_s"] - (E + 4.0)) < 1e-9
     assert res["windows"]["before"]["measured_s"] <= 8.0 + 1e-9
-    assert not res["notes"]
+    assert not [n for n in res["notes"] if "width" not in n], res["notes"]       # (a mono sine has no width to step: that note is right)
 
 
 def test_a_side_window_under_three_seconds_is_not_measured_and_says_so(tmp):
@@ -245,17 +422,18 @@ def test_a_side_window_under_three_seconds_is_not_measured_and_says_so(tmp):
 
 
 def test_memory_stays_far_below_the_file_size(tmp):
-    n = 300 * SR
-    x = np.stack([white(300, -30, 5), white(300, -30, 6)], axis=1).astype("float32")
+    secs = 600
+    x = np.stack([white(secs, -30, 5), white(secs, -30, 6)], axis=1)
     path = tmp / "long.wav"
-    sf.write(str(path), x, SR, subtype="FLOAT")
-    whole_file_mb = n * 2 * 8 / 2 ** 20
+    sf.write(str(path), x, SR, subtype="PCM_16")
+    del x
+    whole_file_mb = secs * SR * 2 * 8 / 2 ** 20            # one float64 stereo copy of the file: about 400 MB
     tracemalloc.start()
-    h = bc.analyse_span(path, 0.0, 300.0)
+    h = bc.analyse_span(path, 0.0, float(secs))
     peak = tracemalloc.get_traced_memory()[1] / 2 ** 20
     tracemalloc.stop()
-    assert h.n == 1200
-    assert peak < whole_file_mb / 2, (peak, whole_file_mb)
+    assert h.n == secs * 4
+    assert peak < whole_file_mb / 5, (peak, whole_file_mb)   # a whole-file read (and every filter copy of it) would break this
 
 
 # ---------------------------------------------------------------- kick flam on the bounce
@@ -272,13 +450,15 @@ def _kick(kind):
     return 0.8 * click + 0.9 * np.sin(2 * np.pi * 7000 * t + 1.0) * np.exp(-t / 0.0012) + np.sin(2 * np.pi * 70 * t) * np.exp(-t / 0.1)
 
 
-def kick_bounce(path, in_offset_ms=8.0, out_beats=range(0, 220), in_beats=range(140, 400), seed=9):
-    n = 400 * int(BEAT * SR)
+def kick_bounce(path, in_offset_ms=8.0, out_beats=range(0, 220), in_beats=range(140, 400), seed=9, tempo=TEMPO):
+    """in_offset_ms: one figure, or a function of the beat. tempo: the map the kicks are laid on (a ramp moves them off b * 0.5 s)."""
+    n = int(round(float(tempo.beat_to_sec(400.0)) * SR))
     y = 0.002 * np.random.default_rng(seed).standard_normal(n)
-    for kind, beats, off in (("out", out_beats, 0.0), ("in", in_beats, in_offset_ms)):
+    for kind, beats in (("out", out_beats), ("in", in_beats)):
         k = _kick(kind)
         for b in beats:
-            i = int(round((b * BEAT + off / 1000.0) * SR))
+            off = (in_offset_ms(b) if callable(in_offset_ms) else in_offset_ms) if kind == "in" else 0.0
+            i = int(round((float(tempo.beat_to_sec(float(b))) + off / 1000.0) * SR))
             y[i:i + len(k)] += k[:n - i]
     sf.write(str(path), y.astype("float32"), SR, subtype="FLOAT")
     return path
@@ -353,6 +533,39 @@ def test_templates_learnt_from_the_control_beats_are_not_judged(flam_runs):
     assert r["state"] == "not_measurable", r
     assert any("same beats as the control" in n for n in r["notes"]) and any("not judged" in n for n in r["notes"]), r["notes"]
     assert r["n_flam"] >= bc.MIN_FLAM_BEATS, r          # the fit still ran and says what it found; it just is not trusted
+
+
+def test_a_few_doubles_in_a_short_overlap_are_too_few_beats_never_none_seen(tmp):
+    doubles = {145, 149, 153}                # 3 of the 16 kick beats of a 16-beat overlap carry an 8 ms double
+    path = kick_bounce(tmp / "few16.wav", lambda b: 8.0 if b in doubles else 0.0, out_beats=range(0, 156), in_beats=range(140, 400))
+    r = bc.measure_flam(path, TEMPO, bc.Join(1, "A", "B", 140.0, 156.0, 70.0, 78.0))
+    assert r["state"] == "too_few_beats", r
+    assert r["n_flam"] == 3 and r["n_kick_beats"] == 16 and abs(r["fraction_of_fit_beats"] - 3 / r["n_fit_both"]) < 1e-9, r
+    assert any("not counted as none seen" in n for n in r["notes"]), r["notes"]
+    assert bc.scalars({"flam": r}) == {}, "the observed fraction must not feed the calibration ranges"
+    line = bc.summary_line({"join": {"index": 1, "out": "A - x", "in": "B - y", "start_s": 70.0, "end_s": 78.0}, "loudness": {}, "tonal": {},
+                            "low_end": {}, "width": {}, "flam": r})
+    assert "too few beats to call: 3 of 16 fitted beats" in line and "none seen" not in line, line
+
+
+def test_flam_is_found_on_a_bounce_made_with_a_tempo_ramp(tmp):
+    ramp = TempoMap(np.array([0.0, 100.0, 300.0, 400.0]), np.array([120.0, 120.0, 130.0, 130.0]), 120.0)
+    path = kick_bounce(tmp / "ramp.wav", 8.0, tempo=ramp)
+    j = bc.Join(1, "A", "B", 140.0, 220.0, float(ramp.beat_to_sec(140.0)), float(ramp.beat_to_sec(220.0)))
+    r = bc.measure_flam(path, ramp, j)
+    assert r["state"] == "flam_seen" and abs(r["median_spacing_ms"] - 8.0) < 1.5, r
+    flat = bc.measure_flam(path, TEMPO, bc.Join(1, "A", "B", 140.0, 220.0, 70.0, 110.0))
+    assert flat["state"] != "flam_seen", flat   # read on the wrong (flat) map the kicks are not where the beats say
+
+
+def test_a_fit_that_fires_on_the_control_beats_is_not_trusted_even_when_it_finds_nothing_in_the_blend(tmp):
+    # the incoming kicks flam against the outgoing ones in the stretch used as the control, and sit on the beat in the blend itself
+    path = kick_bounce(tmp / "ctrl_only.wav", lambda b: 8.0 if b < 140 else 0.0, in_beats=range(60, 400))
+    r = bc.measure_flam(path, TEMPO, kick_join())
+    assert r["control"]["n_flam"] >= 10 and r["n_flam"] == 0, r
+    assert r["state"] == "not_measurable", r
+    assert any("control beats" in n for n in r["notes"]), r["notes"]
+    assert bc.scalars({"flam": r}) == {}, "0.0 from a fit that cannot tell a blend from a single track must not enter the ranges"
 
 
 def test_control_beats_that_flam_too_stop_the_blend_being_called_a_flam(flam_runs):
@@ -485,7 +698,7 @@ def _res(**values):
 def test_ranges_are_the_min_median_max_and_the_count():
     results = [_res(step=s) for s in (-1.0, 0.5, 2.0, 3.0)]
     ranges = bc.build_ranges(results)
-    assert ranges["loud_step_lu"] == {"n": 4, "min": -1.0, "median": 1.25, "max": 3.0}
+    assert ranges["loud_step_lu"] == {"n": 4, "min": -1.0, "median": 1.25, "max": 3.0, "thin": True}
 
 
 def test_judge_says_inside_or_outside_by_how_much():
@@ -503,7 +716,7 @@ def test_judge_says_inside_or_outside_by_how_much():
 
 
 def test_measures_with_one_concerning_end_are_judged_on_that_end_only():
-    ranges = {"flam_fraction_of_kick_beats": {"n": 5, "min": 0.01, "median": 0.03, "max": 0.35},
+    ranges = {"flam_fraction_of_fitted_beats": {"n": 5, "min": 0.01, "median": 0.03, "max": 0.35},
               "tonal_worst_abs_db": {"n": 5, "min": 1.0, "median": 5.0, "max": 16.0},
               "low_corr_overlap": {"n": 5, "min": 0.96, "median": 1.0, "max": 1.0},
               "low_corr_drop": {"n": 5, "min": -0.01, "median": 0.0, "max": 0.07}}
@@ -515,21 +728,59 @@ def test_measures_with_one_concerning_end_are_judged_on_that_end_only():
         if drop is not None:
             r["low_end"]["corr_drop"] = drop
         if flam is not None:
-            r["flam"] = {"state": "no_flam_seen", "fraction_of_kick_beats": flam}
+            r["flam"] = {"state": "no_flam_seen", "fraction_of_fit_beats": flam}
         return r
 
     inside = bc.judge(res(flam=0.0, worst=-0.5, corr=1.0, drop=0.2), ranges)
     assert {k: v["verdict"] for k, v in inside.items()} == {n: "inside" for n in ranges}, inside
     out = bc.judge(res(flam=0.4, worst=20.0, corr=0.9, drop=-0.1), ranges)
     assert {k: v["verdict"] for k, v in out.items()} == {n: "outside" for n in ranges}, out
-    assert abs(out["flam_fraction_of_kick_beats"]["by"] - 0.05) < 1e-12 and abs(out["tonal_worst_abs_db"]["by"] - 4.0) < 1e-12
+    assert abs(out["flam_fraction_of_fitted_beats"]["by"] - 0.05) < 1e-12 and abs(out["tonal_worst_abs_db"]["by"] - 4.0) < 1e-12
     assert abs(out["low_corr_overlap"]["by"] - 0.06) < 1e-12 and abs(out["low_corr_drop"]["by"] - 0.09) < 1e-12
 
 
+def test_the_flam_fraction_is_over_the_fitted_beats_and_carries_the_count():
+    r = {"loudness": {}, "tonal": {}, "low_end": {}, "width": {},
+         "flam": {"state": "flam_seen", "n_kick_beats": 40, "n_fit_both": 12, "n_flam": 4, "fraction_of_fit_beats": 4 / 12}}
+    assert bc.scalars(r) == {"flam_fraction_of_fitted_beats": 4 / 12}                 # not 4 / 40
+
+
+def test_a_real_flam_result_carries_the_fitted_count(flam_runs):
+    r = flam_runs["late8"]
+    assert r["n_fit_both"] >= bc.MIN_FIT_BEATS and abs(r["fraction_of_fit_beats"] - r["n_flam"] / r["n_fit_both"]) < 1e-12
+    assert "fraction_of_kick_beats" not in r
+    line = bc.summary_line({"join": {"index": 1, "out": "A - x", "in": "B - y", "start_s": 70.0, "end_s": 110.0}, "loudness": {}, "tonal": {},
+                            "low_end": {}, "width": {}, "flam": r})
+    assert f"fitted beats ({r['n_kick_beats']} kick beats)" in line, line
+
+
+def test_judged_output_shows_the_median_and_the_range():
+    ranges = {"loud_step_lu": {"n": 8, "min": -1.0, "median": 0.25, "max": 3.0, "thin": False}}
+    j = bc.judge(_res(step=4.5), ranges)["loud_step_lu"]
+    assert (j["min"], j["median"], j["max"]) == (-1.0, 0.25, 3.0)
+    text = bc.verdict_text({"loud_step_lu": j}, ranges)
+    assert "median 0.25" in text and "min -1.00" in text and "max 3.00" in text, text
+
+
+def test_the_n_in_the_summary_uses_only_the_measurements_judged():
+    ranges = {"loud_step_lu": {"n": 50, "min": -1.0, "median": 0.0, "max": 1.0, "thin": False},
+              "flam_fraction_of_fitted_beats": {"n": 2, "min": 0.0, "median": 0.0, "max": 0.0, "thin": True}}
+    text = bc.verdict_text({"loud_step_lu": {"value": 0.0, "verdict": "inside", "by": 0.0}}, ranges)
+    assert "n down to 50" in text and "THIN" not in text, text
+
+
+def test_a_range_from_under_five_joins_says_it_is_thin():
+    r3 = bc.build_ranges([_res(step=s) for s in (0.0, 1.0, 2.0)])
+    r5 = bc.build_ranges([_res(step=s) for s in range(5)])
+    assert r3["loud_step_lu"]["thin"] is True and r5["loud_step_lu"]["thin"] is False
+    text = bc.verdict_text(bc.judge(_res(step=1.0), r3), r3)
+    assert "THIN" in text and "loud_step_lu 3 joins" in text, text
+
+
 def test_flam_enters_the_ranges_only_when_it_could_be_judged():
-    seen = {"loudness": {}, "tonal": {}, "low_end": {}, "width": {}, "flam": {"state": "flam_seen", "fraction_of_kick_beats": 0.09}}
-    unknown = {"loudness": {}, "tonal": {}, "low_end": {}, "width": {}, "flam": {"state": "not_measurable", "fraction_of_kick_beats": 0.0}}
-    assert bc.scalars(seen) == {"flam_fraction_of_kick_beats": 0.09}
+    seen = {"loudness": {}, "tonal": {}, "low_end": {}, "width": {}, "flam": {"state": "flam_seen", "fraction_of_fit_beats": 0.09}}
+    unknown = {"loudness": {}, "tonal": {}, "low_end": {}, "width": {}, "flam": {"state": "not_measurable", "fraction_of_fit_beats": 0.0}}
+    assert bc.scalars(seen) == {"flam_fraction_of_fitted_beats": 0.09}
     assert bc.scalars(unknown) == {}
 
 
@@ -615,3 +866,31 @@ def test_the_calibrate_mode_writes_the_ranges_from_the_accepted_group(tmp):
     assert abs(allm["max"] - 3.0) < 0.2 and allm["n"] == 2
     again = _cli("--calibrate", d / "manifest.json", "--corpus-root", d, "--out", d / "out", "--no-flam")
     assert "already measured" in again.stdout
+
+
+def test_calibrate_without_an_accepted_group_is_a_clear_error(tmp):
+    d = tmp / "cal_none"
+    d.mkdir()
+    plan = _plan([[0.0, 120.0], [200.0, 120.0]], [(100.0, 160.0)], [("Alpha - One", 160.0), ("Beta - Two", 220.0)])
+    report = _report([(100.0, 160.0)], [(0.0, 160.0), (100.0, 220.0)], ["Alpha - One", "Beta - Two"])
+    (d / "plan.json").write_text(json.dumps(plan))
+    (d / "report.json").write_text(json.dumps(report))
+    build(d / "A.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None))
+    manifest = {"basis": "synthetic", "entries": [{"label": "A", "bounce": "A.wav", "plan": "plan.json", "report": "report.json", "group": "other"}]}
+    (d / "manifest.json").write_text(json.dumps(manifest))
+    proc = _cli("--calibrate", d / "manifest.json", "--corpus-root", d, "--out", d / "out", "--no-flam")
+    assert proc.returncode == 2 and "accepted" in proc.stderr and "KeyError" not in proc.stderr, (proc.returncode, proc.stderr)
+    assert not (d / "out" / "ranges.json").exists()
+
+
+def test_a_ranges_file_without_the_asked_group_is_a_clear_error(tmp):
+    d = tmp / "cli_group"
+    d.mkdir()
+    (d / "ranges.json").write_text(json.dumps({"groups": {"other": {"measurements": {}}}}))
+    build(d / "Mix.wav", (sine(1000, 40, -20), None), (sine(1000, 30, -20), None), (sine(1000, 30, -20), None))
+    plan = _plan([[0.0, 120.0], [200.0, 120.0]], [(100.0, 160.0)], [("Alpha - One", 160.0), ("Beta - Two", 220.0)])
+    report = _report([(100.0, 160.0)], [(0.0, 160.0), (100.0, 220.0)], ["Alpha - One", "Beta - Two"])
+    (d / "MIX_PLAN.json").write_text(json.dumps(plan))
+    (d / "ARRANGEMENT_REPORT.json").write_text(json.dumps(report))
+    proc = _cli(d / "Mix.wav", "--no-flam", "--out", d / "out", "--ranges", d / "ranges.json")
+    assert proc.returncode == 2 and "accepted" in proc.stderr and "KeyError" not in proc.stderr, (proc.returncode, proc.stderr)

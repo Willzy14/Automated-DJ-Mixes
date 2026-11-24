@@ -60,6 +60,12 @@ def print_report(bc, result, ranges):
         f"{m['tempo_points']} tempo points: " + ("fits" if m["ok"] else "DOES NOT FIT"))
     for problem in m["problems"]:
         say("MAP PROBLEM: " + problem)
+    start = m.get("start", {})
+    if start.get("first_sound_s") is not None or start.get("grid_phase_ms") is not None:
+        say("start: first sound at " + ("none" if start.get("first_sound_s") is None else f"{start['first_sound_s']:.1f} s") +
+            ", kick grid " + ("not clear" if start.get("grid_phase_ms") is None else f"{start['grid_phase_ms']:+.0f} ms") + " from the beat lines")
+    for warning in start.get("warnings", []):
+        say("START WARNING: " + warning)
     for res in result["joins"]:
         say(bc.summary_line(res, ranges))
     if result.get("peak_memory_mb"):
@@ -70,6 +76,9 @@ def load_ranges(path, group="accepted"):
     if not path or not Path(path).exists():
         return None
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if group not in data.get("groups", {}):
+        raise ValueError(f"{path} has no group '{group}' (it has: {', '.join(data.get('groups', {})) or 'none'}): "
+                         "rebuild it with --calibrate from a manifest that has an accepted group, or pass --range-group")
     return data["groups"][group]["measurements"]
 
 
@@ -107,19 +116,22 @@ def calibrate(bc, args):
             slot = groups.setdefault(g, {"bounces": [], "joins": []})
             slot["bounces"].append(entry["label"])
             slot["joins"].extend({"join": j.get("scalars", {}), "label": entry["label"]} for j in data["joins"])
+    if "accepted" not in groups:
+        raise ValueError("the manifest has no bounce in the group 'accepted' (or none of them was measured): there would be no range "
+                         "to judge a join against, so no ranges file was written")
     ranges = {"basis": manifest.get("basis", ""), "groups": {}}
     for g, slot in groups.items():
-        by = {}
-        for item in slot["joins"]:
-            for name, v in item["join"].items():
-                by.setdefault(name, []).append(v)
-        ranges["groups"][g] = {"bounces": slot["bounces"], "n_joins": len(slot["joins"]),
-                               "measurements": {n: bc.distribution(v) for n, v in sorted(by.items())}}
+        used = [item["join"] for item in slot["joins"] if item["join"]]
+        measurements = bc.ranges_from_scalars(used)
+        ranges["groups"][g] = {"bounces": slot["bounces"], "n_joins": len(slot["joins"]), "n_joins_used": len(used),
+                               "thin_measurements": sorted(n for n, d in measurements.items() if d["thin"]), "measurements": measurements}
     (out / "ranges.json").write_text(json.dumps(ranges, indent=1), encoding="ascii")
     for g, slot in ranges["groups"].items():
-        say(f"group {g}: {slot['n_joins']} joins from {len(slot['bounces'])} bounces")
+        say(f"group {g}: {slot['n_joins']} joins from {len(slot['bounces'])} bounces, {slot['n_joins_used']} usable "
+            "(a join with a silent window feeds no range)")
         for name, d in slot["measurements"].items():
-            say(f"  {name:34s} n={d['n']:3d}  min {d['min']:8.2f}  median {d['median']:8.2f}  max {d['max']:8.2f}")
+            say(f"  {name:34s} n={d['n']:3d}  min {d['min']:8.2f}  median {d['median']:8.2f}  max {d['max']:8.2f}" +
+                (f"   THIN: {d['n']} joins" if d["thin"] else ""))
     return EXIT_OK
 
 
