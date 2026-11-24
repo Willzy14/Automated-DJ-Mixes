@@ -1,0 +1,89 @@
+{
+ "basis": "Mix bounces found on STUDIO-2 on 2026-11-24. accepted = Sam's approved or hand-built mixes (Fresh Mix Planned: 'struggled to find much wrong with it', 2026-11-21; the two Sam's Tweaks bounces). flam_heard = Tech House 2026 Planned, where Sam heard a flam on blends 1 and 2. tool_output = generated mixes Sam has not rated. Paths are relative to the Automated DJ Mixes folder; joins are read from the ALS the bounce was made from.",
+ "entries": [
+  {
+   "label": "Fresh Mix Planned",
+   "bounce": "Listening Sets/Fresh Mix Planned.wav",
+   "als": "Listening Sets/Fresh Mix Planned.als",
+   "group": "accepted"
+  },
+  {
+   "label": "September Mix Sams Tweaks",
+   "bounce": "Test Project/05.10.26 September Mix/Output/Sections V4 Sams Tweaks.wav",
+   "als": "Test Project/05.10.26 September Mix/Output/Sections V4 Sams Tweaks Project/Sections V4 Sams Tweaks.als",
+   "group": "accepted"
+  },
+  {
+   "label": "Fresh Mix Car Mix Sams Tweaks",
+   "bounce": "Test Project/16.07.26 Fresh Mix/Output/16.07.26 Fresh Mix Final V2 Sam's Tweaks (mix for teh car).wav",
+   "als": "Test Project/16.07.26 Fresh Mix/Output/16.07.26 Fresh Mix Final V2 Sam's Tweaks Project/16.07.26 Fresh Mix Final V2 Sam's Tweaks.als",
+   "group": "accepted"
+  },
+  {
+   "label": "Tech House 2026 Planned",
+   "bounce": "Listening Sets/Tech House 2026 Planned.wav",
+   "als": "Listening Sets/Tech House 2026 Planned.als",
+   "group": "flam_heard"
+  },
+  {
+   "label": "House 10 V3",
+   "bounce": "Test Project/02.09.26 House 10/Output/02.09.26 House 10 Mix V3.wav",
+   "als": "Test Project/02.09.26 House 10/Output/Sections V3.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "Defected Selection V4",
+   "bounce": "Test Project/05.10.26 Defected Selection/Output/Sections V4 Mix.wav",
+   "als": "Test Project/05.10.26 Defected Selection/Output/Sections V4.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "DFTD Tech House V4",
+   "bounce": "Test Project/06.10.26 DFTD Tech House/Output/Sections V4 MIX.wav",
+   "als": "Test Project/06.10.26 DFTD Tech House/Output/Sections V4.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "Tech House Core Sample V3",
+   "bounce": "Test Project/22.09.26 Tech House Core Sample/Output/Sections V3.wav",
+   "als": "Test Project/22.09.26 Tech House Core Sample/Output/Sections V3.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "Tech House Core Sample V5",
+   "bounce": "Test Project/22.09.26 Tech House Core Sample/Output/Sections V5.wav",
+   "als": "Test Project/22.09.26 Tech House Core Sample/Output/Sections V5.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "Deep Soulful V1",
+   "bounce": "Test Project/12.08.26 Heldout Replay/Output/Deep Soulful Mix V1.wav",
+   "als": "Test Project/12.08.26 Deep Soulful 10/Output/Deep Soulful Mix V1.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "Mix 14.08.26 V10",
+   "bounce": "Test Project/14.08.26/Output/14.08.26 Mix V10.wav",
+   "als": "Test Project/14.08.26/Output/14.08.26 Mix V10.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "Tech House Heldout A",
+   "bounce": "Test Project/10.09.26 Tech House Heldout/Output/Tech House Heldout Mix A (14.09.26).wav",
+   "als": "Test Project/10.09.26 Tech House Heldout/Output/AB/A/Mix A.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "Tech House Heldout B",
+   "bounce": "Test Project/10.09.26 Tech House Heldout/Output/Tech House Heldout Mix B (14.09.26).wav",
+   "als": "Test Project/10.09.26 Tech House Heldout/Output/AB/B/Mix B.als",
+   "group": "tool_output"
+  },
+  {
+   "label": "Tech House Heldout C",
+   "bounce": "Test Project/10.09.26 Tech House Heldout/Output/Tech House Heldout Mix C (14.09.26).wav",
+   "als": "Test Project/10.09.26 Tech House Heldout/Output/AB/C/Mix C.als",
+   "group": "tool_output"
+  }
+ ]
+}
