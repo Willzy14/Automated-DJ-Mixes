@@ -23,6 +23,7 @@ Whole bars only (2026-11-24, Claude Sonnet 5.5): when a pair's top plan has a fr
 
 - `Source/phrase_blend.py` ranks cue-based blends and accepts a fractional audio endpoint in `end_bar`. Pass `why=reasons` to `plan_blend` to collect input warnings and the reason for a `None` result.
 - `Tools/score_blends.py` replays the seven owner placements and measures the effects of removing the bottom-end cost and the measured content.
+- `Tools/score_tweak.py` (library `Source/tweak_replay.py`) decodes the planner's own set and the owner's hand-tweaked copy into planner terms, refuses to score unless the decoder reproduces the planner's own plan to within one beat, then reports where each tweaked blend sits among the planner's candidates (top, alternative, rank N of M, or outside the vocabulary and why), term by term, beside a trivial 16-in-16-out baseline. Added by: Claude (Sonnet 5.5), 2026-11-24.
 - `Tools/blend_candidates.py` shows the ranked plans and reports why the planner found no admissible placement.
 
 ### `Tools/playlist_builder.py` (2026-10-06, Claude)
