@@ -29,7 +29,9 @@ difference is the warp ratio times the lag, under about 3 percent). Fader, EQ an
 is ignored: a beat still counts when both wavs have a kick there, even if the mix filters one side
 out. In a full mix the steepest rise can land on a bass note or a snare instead of the kick, so an
 estimator whose beats spread wider than SCATTER_MS (interquartile range) cannot fail a transition
-alone and cannot let it pass: the verdict is then at least WARN and the flag says which one.
+alone and cannot let it pass: the verdict is then at least WARN and the flag says which one. The one exception is a
+scattered main hit (the secondary number) beside a clean, trusted click: with the click median under 2.5 ms and the main
+median under 8 ms the verdict is not forced to WARN, and the SCATTER_MAIN flag is still printed.
 Not covered: a third track in a three-way overlap is not looked at (only neighbouring pairs are).
 The ALS is only read (the pipeline passes --out beside it, in Output; run by hand with no --out the CLI
 makes a "Kick Alignment" folder beside the ALS). A beat counts as a kick only when the 40-120 Hz peak is at least 3 times
@@ -494,7 +496,8 @@ def judge(shared, click, main, edge=None, kicks=None):
     Each estimator is judged by its own figures (CLICK_* and MAIN_*): the transition is as bad as its worst
     estimator. A scattered estimator (its beats spread wider than SCATTER_MS) may fail the transition only when
     the other estimator corroborates it with a median of at least ITS OWN warn figure; alone it is capped at WARN
-    (LARGE_SCATTERED). A half of the blend whose median is at its estimator's per-beat figure (CLICK_BEAT_FLAM_MS
+    (LARGE_SCATTERED). A scattered estimator also forces at least WARN, except a scattered main hit while the click is
+    trusted with a median under CLICK_WARN_MS and the main median is under MAIN_WARN_MS (flag still printed). A half of the blend whose median is at its estimator's per-beat figure (CLICK_BEAT_FLAM_MS
     for the click, MAIN_FAIL_MS for the main hit) on a trusted or corroborated estimator is DRIFT_FLAM and fails. The leading edge never decides a verdict: it only raises a
     PASS to WARN when it sits more than EDGE_DISAGREE_MS from the click (EDGE_DISAGREES)."""
     flags = []
@@ -535,7 +538,13 @@ def judge(shared, click, main, edge=None, kicks=None):
             if "DRIFT_FLAM" not in flags:
                 flags.append("DRIFT_FLAM")
             fail = True
-    verdict = "FAIL" if fail else "WARN" if (any(v >= _WARN[name] for name, v in meds.items()) or scattered) else "PASS"
+    # a scattered estimator cannot let a blend pass, with one exception: the main hit is the secondary number (a slow-attack
+    # kick scatters it), so a scattered main hit alone does not force a WARN while the click is trusted and clean and the
+    # main median is under its own warn figure. The SCATTER_MAIN flag is still printed. A scattered click always forces it.
+    main_only = (scattered == {"MAIN"} and "CLICK" in present and meds["CLICK"] < CLICK_WARN_MS
+                 and meds["MAIN"] < MAIN_WARN_MS)
+    forced = bool(scattered) and not main_only
+    verdict = "FAIL" if fail else "WARN" if (any(v >= _WARN[name] for name, v in meds.items()) or forced) else "PASS"
     if len(present) == 2 and not scattered and abs(click["median"] - main["median"]) > SLOW_ATTACK_MS:
         flags.append("SLOW_ATTACK")
         if verdict == "PASS":

@@ -798,6 +798,47 @@ def test_corroboration_uses_the_other_estimators_own_warn_figure_both_ways():
     assert kac.judge(40, scattered_click, stat(median=-8.1))[0] == "FAIL"
 
 
+def test_a_scattered_main_hit_beside_a_clean_trusted_click_does_not_force_a_warn():
+    # the main hit is the secondary number (a slow-attack kick scatters it); Sam's approved blend 2 reads click -1.3, main -4.2
+    scattered_main = stat(median=-4.2, iqr=22.7)
+    assert kac.judge(34, stat(median=-1.3), scattered_main) == ("PASS", ["SCATTER_MAIN"])
+    assert kac.judge(34, stat(median=2.4), stat(median=7.9, iqr=22.0)) == ("PASS", ["SCATTER_MAIN"])
+    assert kac.judge(34, stat(median=-2.4), stat(median=-7.9, iqr=22.0)) == ("PASS", ["SCATTER_MAIN"])
+    line = kac.summary_line(fake_result(34, stat(median=-1.3), scattered_main))
+    assert "T01" in line and "PASS" in line and "SCATTER_MAIN" in line
+
+
+def test_a_scattered_main_hit_still_forces_a_warn_when_the_click_or_the_main_median_is_not_clean():
+    scattered_main = stat(median=-4.2, iqr=22.7)
+    verdict, flags = kac.judge(34, stat(median=2.6), scattered_main)                    # click median at its warn figure
+    assert verdict == "WARN" and flags == ["SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, stat(median=-2.5), scattered_main)
+    assert verdict == "WARN" and flags == ["SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, stat(median=0.5), stat(median=8.1, iqr=22.0))         # main median past its warn figure
+    assert verdict == "WARN" and flags == ["SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, stat(median=0.5), stat(median=-8.0, iqr=22.0))
+    assert verdict == "WARN" and flags == ["SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, NO_STAT, stat(median=1.0, iqr=22.0))                  # no click to trust
+    assert verdict == "WARN" and flags == ["NO_CLICK", "SCATTER_MAIN"]
+    verdict, flags = kac.judge(34, stat(median=0.5, iqr=20.0), stat(median=1.0, iqr=22.0))   # both scattered
+    assert verdict == "WARN" and flags == ["SCATTER_CLICK", "SCATTER_MAIN"]
+
+
+def test_a_scattered_click_always_forces_a_warn_whatever_the_main_hit_says():
+    verdict, flags = kac.judge(34, stat(median=0.5, iqr=20.0), stat(median=0.5))
+    assert verdict == "WARN" and flags == ["SCATTER_CLICK"]
+    verdict, flags = kac.judge(34, stat(median=-1.3, iqr=9.0), stat(median=-4.2))
+    assert verdict == "WARN" and flags == ["SCATTER_CLICK"]
+    verdict, flags = kac.judge(34, stat(median=0.5, iqr=20.0), NO_STAT)
+    assert verdict == "WARN" and flags == ["NO_MAIN", "SCATTER_CLICK"]
+
+
+def test_the_scattered_main_exemption_leaves_the_corroboration_and_the_cap_alone():
+    assert kac.judge(40, stat(median=0.5), stat(median=-15.0, iqr=22.0)) == ("WARN", ["SCATTER_MAIN", "LARGE_SCATTERED"])
+    assert kac.judge(40, stat(median=2.6), stat(median=-15.0, iqr=22.0))[0] == "FAIL"
+    assert kac.judge(40, stat(median=0.5), stat(median=-14.0, iqr=22.0))[0] == "WARN"
+
+
 def test_a_scattered_estimator_under_its_own_fail_figure_is_not_capped_but_is_still_a_warn():
     assert kac.judge(40, stat(median=0.5), stat(median=-13.0, iqr=22.0)) == ("WARN", ["SCATTER_MAIN"])
     assert kac.judge(40, stat(median=-4.9, iqr=22.0), stat(median=0.5)) == ("WARN", ["SCATTER_CLICK"])
@@ -832,7 +873,7 @@ def test_a_scattered_half_needs_the_other_estimators_half_at_its_own_warn_figure
     verdict, flags = kac.judge(40, stat(median=0.0, first=2.6, second=0.0), scattered_main)
     assert verdict == "FAIL" and "DRIFT_FLAM" in flags
     verdict, flags = kac.judge(40, stat(median=0.0, first=2.4, second=0.0), scattered_main)
-    assert verdict == "WARN" and "DRIFT_FLAM" not in flags
+    assert verdict == "PASS" and "DRIFT_FLAM" not in flags and "SCATTER_MAIN" in flags      # a scattered main beside a clean click
     scattered_click = stat(median=0.0, iqr=20.0, first=8.0, second=0.0)
     assert "DRIFT_FLAM" in kac.judge(40, scattered_click, stat(median=0.0, first=8.1, second=0.0))[1]
     assert "DRIFT_FLAM" not in kac.judge(40, scattered_click, stat(median=0.0, first=7.9, second=0.0))[1]
