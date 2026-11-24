@@ -9,7 +9,8 @@ Usage:
 --content takes the planner tracks that tool saved (Output/planner_content.json).  --decisions uses the
 pipeline's decisions file as the round-trip reference instead of re-planning.  --pipeline-log reads
 "Tn: dropped intro_loop|tail_loop" lines (Output/phase2.log): loops the pipeline's own quality gate removed
-after planning, which the round trip must expect.
+after planning, which the round trip must expect (a weaker check, and the report says so).  --owner-name sets the
+name used for the tweaking owner (default "the owner").  A problem with the inputs prints one line and exits 2.
 
 For every transition: the owner's placement in the planner's terms, the planner's top pick, whether they
 are the same, where the owner's sits among the candidates (rank N of M, a listed alternative, or outside
@@ -73,27 +74,34 @@ def main(argv=None):
     src.add_argument("--content", type=Path, help="planner tracks JSON ({'tracks': {name: track}})")
     ap.add_argument("--decisions", type=Path, help="decisions JSON as the round-trip reference")
     ap.add_argument("--pipeline-log", type=Path, help="phase log naming loops the pipeline dropped after planning")
+    ap.add_argument("--owner-name", default="the owner", help="name used for the tweaking owner in the report")
     ap.add_argument("--out", required=True, type=Path, help="folder for the report and the JSON")
     args = ap.parse_args(argv)
-
-    names = [t["name"] for t in tr.read_als(args.baseline)]
-    if args.content:
-        tracks = json.loads(args.content.read_text(encoding="utf-8"))["tracks"]
-    else:
-        tracks = planner_tracks_from_project(args.project, names)
-    decisions = json.loads(args.decisions.read_text(encoding="utf-8")) if args.decisions else None
-    dropped = tr.parse_dropped_loops(args.pipeline_log.read_text(encoding="utf-8", errors="replace")) \
-        if args.pipeline_log else None
     inputs = [args.baseline, args.tweak, args.content, args.decisions, args.pipeline_log]
     try:
-        result = tr.replay(args.baseline, args.tweak, tracks, decisions=decisions, dropped=dropped)
+        names = [t["name"] for t in tr.read_als(args.baseline)]
+        if args.content:
+            tracks = json.loads(args.content.read_text(encoding="utf-8"))["tracks"]
+        else:
+            tracks = planner_tracks_from_project(args.project, names)
+        decisions = json.loads(args.decisions.read_text(encoding="utf-8")) if args.decisions else None
+        dropped = (tr.parse_dropped_loops(args.pipeline_log.read_text(encoding="utf-8", errors="replace"))
+                   if args.pipeline_log else None)
+        result = tr.replay(args.baseline, args.tweak, tracks, decisions=decisions, dropped=dropped,
+                           owner=args.owner_name)
+        text = tr.format_report(result)
+        write_outputs(args.out, text, result, inputs)
     except tr.RoundTripError as exc:
-        text = "ROUND TRIP FAILED, nothing scored.\n%s" % exc
-        write_outputs(args.out, text, {"round_trip": {"passed": False, "message": str(exc)}}, inputs)
+        text = tr.format_failed_round_trip(exc.rows, str(exc)) if exc.rows else "ROUND TRIP FAILED: %s" % exc
+        try:
+            write_outputs(args.out, text, {"round_trip": {"passed": False, "message": str(exc), "rows": exc.rows}}, inputs)
+        except (OSError, ValueError) as werr:
+            text += "\n(report not written: %s)" % werr
         print(_ascii(text))
         return 2
-    text = tr.format_report(result)
-    write_outputs(args.out, text, result, inputs)
+    except (ValueError, OSError, KeyError, IndexError) as exc:
+        print(_ascii("score_tweak: %s" % " ".join(str(exc).split())))
+        return 2
     print(_ascii(text))
     return 0
 
