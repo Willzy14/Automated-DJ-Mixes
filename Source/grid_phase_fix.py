@@ -27,14 +27,17 @@ A track that sits in any blend the kick check could not judge is neither slid no
 the move), and a track whose clips carry fewer than one warp marker per 4 source beats is slid but never drift-corrected
 (a correction would land on the few marker beats only).
 The input is only read. Windows of 2 s are read around each beat, never a whole wav.
-The phased file is a suggestion: the MixPlan reconciliation pins the original grid (warp_grid_sha256, source_grid_bpm), so
-it covers the unphased original only.
-OPEN: apply mode needs the MixPlan reconciliation to accept a recorded grid phase (hash of the original grid plus the
-applied corrections)
+Record: whenever a phased file is written, `grid_phase.json` is written beside the report (RECORD_NAME): the sha256 of
+the input and of the phased file, and for every track the patch changed its exact ORIGINAL markers and its largest shift.
+The MixPlan reconciliation still pins the original grid (warp_grid_sha256, source_grid_bpm), so it covers the unphased
+original on its own; given the record (`validate_mix_plan_als.py --grid-phase`) it checks the pin against the recorded
+original markers and the phased file against the record, so the phased file can become the final (GRID_PHASE_MODE=apply
+in Tools/run_mix_pipeline.sh). A refused or nothing-to-do run writes no record and leaves none behind.
 """
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import math
 import re
@@ -47,6 +50,7 @@ import numpy as np
 from scipy import optimize
 
 import kick_alignment_check as kac
+from automated_dj_mixes.warp_contract import track_marker_pairs, track_name
 
 # Decision figures: starting figures, Sam sets the real ones (2026-11-23).
 WARN_MS = kac.WARN_MS            # a mix whose worst judged lag is under this is left alone
@@ -85,6 +89,8 @@ MEDIAN_HALF_WINDOW = 48.0        # running median: this many beats each side ...
 MEDIAN_MIN_KICKS = 8             # ... widened (doubled) until at least this many kick beats are inside
 SMOOTH_BEATS = 31                # moving average over the median, flat at both ends
 SLIDE_NOISE_MS = 0.05            # a slide smaller than this is a rounding residue of the solver, not a slide
+
+RECORD_NAME, RECORD_SCHEMA = "grid_phase.json", "grid-phase/1"
 
 FIT, CANNOT_FIT, REFUSED, NOT_MEASURED, NO_DRIFT, SPARSE_MARKERS = (
     "FIT", "CANNOT_FIT", "REFUSED", "NOT_MEASURED", "NO_DRIFT", "SPARSE_MARKERS")
@@ -425,6 +431,58 @@ def patch_als(src, dst, shifts):
     return changed
 
 
+# ------------------------------------------------------------------ the record
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_record(original, phased, changed):
+    """What the patch did, read back from the two files: the record the MixPlan reconciliation checks the phased file by.
+
+    Lists, for every AudioTrack whose warp markers differ, its name and position in the file, its exact original
+    (SecTime, BeatTime) pairs and its largest SecTime shift in ms. Refuses (ValueError) a phased file that differs from the
+    original anywhere but the WarpMarker lines, in any BeatTime or in the number of tracks, clips or markers, or that moved
+    a track the patch did not report (`changed` is the patch's own count by position in the file)."""
+    texts = []
+    for path in (original, phased):
+        with gzip.open(path, "rb") as fh:
+            texts.append(fh.read().decode("utf-8"))
+    before, after = (_lines(text) for text in texts)
+    if len(before) != len(after) or any(a != b and not a.lstrip().startswith("<WarpMarker ")
+                                        for a, b in zip(before, after)):
+        raise ValueError("the phased file differs from the original outside the WarpMarker lines")
+    old_tracks = list(ET.fromstring(texts[0]).iter("AudioTrack"))
+    new_tracks = list(ET.fromstring(texts[1]).iter("AudioTrack"))
+    if len(old_tracks) != len(new_tracks):
+        raise ValueError("the phased file has a different number of AudioTracks")
+    entries = []
+    for index, (old, new) in enumerate(zip(old_tracks, new_tracks)):
+        old_clips, new_clips = list(old.iter("AudioClip")), list(new.iter("AudioClip"))
+        if len(old_clips) != len(new_clips):
+            raise ValueError(f"AudioTrack {index} has a different number of AudioClips")
+        raw = lambda clips: [[(m.get("SecTime"), m.get("BeatTime")) for m in clip.iter("WarpMarker")] for clip in clips]
+        if raw(old_clips) == raw(new_clips):
+            continue
+        was, now = track_marker_pairs(old), track_marker_pairs(new)
+        if len(was) != len(now) or any(a[1] != b[1] for a, b in zip(was, now)):
+            raise ValueError(f"AudioTrack {index} has a different number of markers or a moved BeatTime")
+        entries.append(dict(name=track_name(old), doc_index=index, original_markers=[list(pair) for pair in was],
+                            max_abs_shift_ms=max(abs(b[0] - a[0]) * 1000.0 for a, b in zip(was, now))))
+    if not entries:
+        raise ValueError("no warp marker differs between the phased file and the original")
+    unreported = sorted({e["doc_index"] for e in entries} - set(changed))
+    if unreported:
+        raise ValueError(f"AudioTracks {unreported} differ but the patch did not report changing them")
+    return dict(schema=RECORD_SCHEMA, tool="Source/grid_phase_fix.py",
+                constants=dict(MAX_DRIFT_MS=MAX_DRIFT_MS, MAX_SLIDE_MS=MAX_SLIDE_MS),
+                original_als_sha256=_sha256(original), phased_als_sha256=_sha256(phased), tracks=entries)
+
+
 # ------------------------------------------------------------------ the whole run
 
 @dataclass
@@ -536,7 +594,9 @@ def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
         raise ValueError("the output must be a new file, never the input")
     refused_path = out_path.with_name(out_path.stem + " REFUSED.als")
     partial = out_path.with_name(out_path.name + ".partial")
-    for old in (out_path, refused_path, partial):      # nothing from an earlier run may pass for this run's result
+    record_path = Path(report_dir) / RECORD_NAME
+    record_partial = record_path.with_name(record_path.name + ".partial")
+    for old in (out_path, refused_path, partial, record_path, record_partial):   # nothing from an earlier run may pass for this run's result
         old.unlink(missing_ok=True)
     tracks = kac.read_als(als_path)
     transitions = kac.find_transitions(tracks)
@@ -645,7 +705,19 @@ def run(als_path, audio_dir, out_path, report_dir, progress=lambda text: None):
     outcome.refusals = refusals(before, outcome.after) + prediction_refusals(blends, outcome.predicted, outcome.after)
     if outcome.refusals:
         return refuse("the result is not the improvement that was meant: " + "; ".join(outcome.refusals))
+    try:
+        record = build_record(als_path, partial, outcome.changed)
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        record_partial.write_text(json.dumps(record, indent=1, allow_nan=False), encoding="ascii")
+    except ValueError as exc:
+        record_partial.unlink(missing_ok=True)
+        return refuse(f"the grid phase record could not be made: {exc}")
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        record_partial.unlink(missing_ok=True)
+        raise
     partial.replace(out_path)
+    record_partial.replace(record_path)
     outcome.status = PHASED
     outcome.reason = "drift corrected and slid" if any(r.slide for r in outcome.tracks) else "drift corrected"
     if outcome.still_flamming:

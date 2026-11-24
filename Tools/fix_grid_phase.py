@@ -7,6 +7,10 @@ Writes a NEW ALS (default: "<name> Phased.als" beside the input; the input is ne
 pictures of the new file. The report lists every transition before and after (edge, click, main hit, verdict) and, per
 track, the drift correction range and the slide. A mix whose judged blends are all under the kick check's WARN figure is
 left alone (the new file is then a byte copy of the input).
+When it writes a phased file it also writes "grid_phase.json" in the report folder: the record of exactly which tracks it
+moved (their original markers and the largest shift), which "validate_mix_plan_als.py --grid-phase" checks the phased file
+by. A run that writes no phased file (nothing to do, refused, failed) writes no record and leaves none behind. The json copy
+of the report is "grid_phase_report.json".
 Exit codes:
   0  done, or nothing to do.
   2  could not run (unreadable ALS or wav, missing library, any other error); the class and message go to stderr.
@@ -41,6 +45,8 @@ def main(argv=None):
     if out.resolve() != src.resolve():             # nothing from an earlier run may pass for this run's result
         for old in (out, out.with_name(out.stem + " REFUSED.als"), out.with_name(out.name + ".partial")):
             old.unlink(missing_ok=True)
+    for old in ("grid_phase.json", "grid_phase.json.partial"):   # a record without its phased file proves nothing
+        (report / old).unlink(missing_ok=True)
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Source"))
         import grid_phase_fix as gpf
@@ -50,7 +56,7 @@ def main(argv=None):
         outcome = gpf.run(src, args.audio, out, report)
         text = gpf.report_text(outcome, src)
         (report / "grid_phase_report.txt").write_text(text, encoding="ascii", errors="replace")
-        (report / "grid_phase.json").write_text(json.dumps(gpf.report_json(outcome), indent=1), encoding="ascii")
+        (report / "grid_phase_report.json").write_text(json.dumps(gpf.report_json(outcome), indent=1), encoding="ascii")
         if outcome.after:
             kac.write_json(outcome.after, report / "kick_alignment.json")
     except Exception as exc:

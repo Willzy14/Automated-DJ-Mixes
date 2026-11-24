@@ -8,13 +8,15 @@ import hashlib
 import html
 import json
 import math
+import sys
 
 from automated_dj_mixes.warping import (
     WARP_MODE_COMPLEX_PRO, WARP_MODE_REPITCH)
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from automated_dj_mixes.warp_contract import summarize_track_warp_grids
+from automated_dj_mixes.warp_contract import (
+    summarize_marker_pairs, summarize_track_warp_grids, track_marker_pairs)
 
 # The aligner's landmark-mode policy names. Imported from align_engine (the
 # single source of truth) so a future policy cannot silently bypass the
@@ -142,7 +144,134 @@ def _main_tempo_state(root: ET.Element) -> tuple[float | None, list[tuple[float,
     return manual, events
 
 
-def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
+GRID_PHASE_SCHEMA = "grid-phase/1"
+# The most a recorded grid phase may move any warp marker. A hard cap of this
+# validator, never read from the record: the tool's own limits (12 ms drift plus
+# 15 ms slide) sit inside it, and a forged record cannot widen it.
+MAX_PHASE_SHIFT_MS = 30.0
+_SHA256_HEX = frozenset("0123456789abcdef")
+
+
+def _reject_constant(name: str):
+    raise ValueError(f"{name} is not a number")
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_finite(value) -> bool:
+    try:
+        return _is_number(value) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _is_sha256(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and set(value) <= _SHA256_HEX)
+
+
+def _load_grid_phase(path: Path) -> tuple[dict | None, list[str]]:
+    """The grid phase record, checked for shape only. A record that is missing,
+    unreadable or malformed comes back as errors, never as an exception."""
+    try:
+        record = json.loads(
+            path.read_text(encoding="utf-8"), parse_constant=_reject_constant)
+    except (OSError, ValueError, RecursionError) as exc:
+        return None, [f"grid phase record {path.name} cannot be read: {exc}"]
+    if not isinstance(record, dict):
+        return None, ["grid phase record is not a JSON object"]
+    problems: list[str] = []
+    if record.get("schema") != GRID_PHASE_SCHEMA:
+        problems.append(
+            f"grid phase record schema {record.get('schema')!r} is not "
+            f"{GRID_PHASE_SCHEMA!r}")
+    for key in ("original_als_sha256", "phased_als_sha256"):
+        if not _is_sha256(record.get(key)):
+            problems.append(f"grid phase record {key} is missing or not a sha256")
+    entries = record.get("tracks")
+    if not isinstance(entries, list) or not entries:
+        problems.append("grid phase record lists no changed track")
+        entries = []
+    for number, entry in enumerate(entries):
+        where = f"grid phase record track {number}"
+        if not isinstance(entry, dict):
+            problems.append(f"{where} is not an object")
+            continue
+        if not isinstance(entry.get("name"), str) or not entry["name"]:
+            problems.append(f"{where} has no name")
+        index = entry.get("doc_index")
+        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+            problems.append(f"{where} has no doc_index")
+        shift = entry.get("max_abs_shift_ms")
+        if not _is_finite(shift) or shift < 0:
+            problems.append(f"{where} has no max_abs_shift_ms")
+        markers = entry.get("original_markers")
+        if (not isinstance(markers, list)
+                or not all(isinstance(pair, list) and len(pair) == 2
+                           and all(_is_number(value) for value in pair)
+                           for pair in markers)):
+            problems.append(f"{where} original_markers is not a list of [SecTime, BeatTime]")
+    return (None, problems) if problems else (record, [])
+
+
+def _check_phased_track(
+    name: str, contract: dict, entry: dict, track: ET.Element,
+) -> tuple[list[str], float]:
+    """Verify one track the grid phase tool changed: (errors, largest shift in ms).
+
+    The recorded ORIGINAL markers must hash to the plan's pinned grid (the pin is
+    still honoured, against the original); the ALS markers must then be the
+    recorded ones with the SecTimes moved by at most MAX_PHASE_SHIFT_MS.
+    """
+    try:
+        original = tuple((float(sec), float(beat))
+                         for sec, beat in entry["original_markers"])
+        recorded = summarize_marker_pairs(original)
+    except (ValueError, OverflowError) as exc:
+        return [f"{name}: grid phase record markers are not a warp grid: {exc}"], 0.0
+    expected = (
+        int(contract["warp_marker_count"]),
+        contract["warp_grid_sha256"],
+        float(contract["source_grid_bpm"]),
+    )
+    got = (recorded.marker_count, recorded.grid_sha256, recorded.source_grid_bpm)
+    if got[:2] != expected[:2] or not math.isclose(got[2], expected[2], abs_tol=1e-9):
+        return [f"{name}: grid phase record does not hold the pinned original "
+                f"warp grid {got} != {expected}"], 0.0
+    try:
+        actual = track_marker_pairs(track)
+    except ValueError as exc:
+        return [f"{name}: {exc}"], 0.0
+    if len(actual) != len(original):
+        return [f"{name}: phased grid has {len(actual)} markers, the record has "
+                f"{len(original)}"], 0.0
+    errors: list[str] = []
+    beat_moved = [i for i, (a, o) in enumerate(zip(actual, original)) if a[1] != o[1]]
+    if beat_moved:
+        errors.append(f"{name}: BeatTime differs from the record at markers {beat_moved[:5]}")
+    for axis, label in ((0, "SecTime"), (1, "BeatTime")):
+        if any(b[axis] <= a[axis] for a, b in zip(actual, actual[1:])):
+            errors.append(f"{name}: phased {label} is not strictly increasing")
+    shifts = [abs(a[0] - o[0]) * 1000.0 for a, o in zip(actual, original)]
+    worst = max(shifts)
+    over = [i for i, shift in enumerate(shifts) if shift > MAX_PHASE_SHIFT_MS]
+    if over:
+        errors.append(
+            f"{name}: phased SecTime moved {worst:.3f} ms at marker {shifts.index(worst)}, "
+            f"more than {MAX_PHASE_SHIFT_MS:g} ms")
+    if not math.isclose(worst, float(entry["max_abs_shift_ms"]), abs_tol=1e-6):
+        errors.append(
+            f"{name}: the record says the largest shift is "
+            f"{float(entry['max_abs_shift_ms']):.6f} ms, the ALS shows {worst:.6f} ms")
+    return errors, worst
+
+
+def reconcile(
+    plan_path: Path, report_path: Path, als_path: Path,
+    grid_phase_path: Path | None = None,
+) -> dict:
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     report = json.loads(report_path.read_text(encoding="utf-8"))
     errors: list[str] = []
@@ -169,6 +298,36 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
         errors.append(f"Active track sequence mismatch: {actual_names} != {expected_names}")
     else:
         checks.append("main_track_sequence")
+
+    phase_entries: dict[str, dict] = {}
+    phase_shifts: dict[str, float] = {}
+    if grid_phase_path is not None:
+        record, problems = _load_grid_phase(grid_phase_path)
+        errors.extend(problems)
+        if record is not None:
+            if record["phased_als_sha256"] != _sha256(als_path):
+                errors.append(
+                    "grid phase record belongs to another ALS: it describes "
+                    f"{record['phased_als_sha256']}, this file is {_sha256(als_path)}")
+            document_index = {
+                id(track): index
+                for index, track in enumerate(root.iter("AudioTrack"))
+            }
+            actual_by_name = {name: track for name, track, _clips in active_tracks}
+            for entry in record["tracks"]:
+                name = entry["name"]
+                if name in phase_entries:
+                    errors.append(f"grid phase record lists {name} twice")
+                elif name not in expected_names:
+                    errors.append(f"grid phase record lists {name}, which is not in the MixPlan")
+                elif name not in actual_by_name:
+                    errors.append(f"grid phase record lists {name}, which is not in the ALS")
+                elif document_index[id(actual_by_name[name])] != entry["doc_index"]:
+                    errors.append(
+                        f"grid phase record puts {name} at AudioTrack {entry['doc_index']}, "
+                        f"the ALS has it at {document_index[id(actual_by_name[name])]}")
+                else:
+                    phase_entries[name] = entry
 
     overrides = {item["name"]: item["value"] for item in plan.get("human_overrides", [])}
     expected_bpm = float(plan.get("project_bpm") or overrides.get("project_bpm", "nan"))
@@ -243,6 +402,13 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
             errors.append(f"{name}: WarpMode mismatch {modes} != {expected_warp}")
         else:
             checks.append(f"warp:{contract['track_instance_id']}")
+        if name in phase_entries:
+            phase_errors, phase_shifts[name] = _check_phased_track(
+                name, contract, phase_entries[name], _track)
+            errors.extend(phase_errors)
+            if not phase_errors:
+                checks.append(f"warp_grid_phased:{contract['track_instance_id']}")
+            continue
         try:
             warp_grid = summarize_track_warp_grids(_track)
         except ValueError as exc:
@@ -422,6 +588,20 @@ def reconcile(plan_path: Path, report_path: Path, als_path: Path) -> dict:
         "checks": checks,
         "errors": errors,
     }
+    if grid_phase_path is not None and not errors:
+        result["grid_phase"] = {
+            "record_sha256": _sha256(grid_phase_path),
+            "original_als_sha256": record["original_als_sha256"],
+            "phased_als_sha256": record["phased_als_sha256"],
+            "track_count": len(phase_shifts),
+            "max_shift_ms": max(phase_shifts.values()),
+            "max_allowed_shift_ms": MAX_PHASE_SHIFT_MS,
+            "tracks": [
+                {"name": name, "doc_index": phase_entries[name]["doc_index"],
+                 "max_shift_ms": shift}
+                for name, shift in phase_shifts.items()
+            ],
+        }
     if errors:
         raise ValueError("; ".join(errors))
     return result
@@ -433,11 +613,28 @@ def main() -> int:
     parser.add_argument("arrangement_report", type=Path)
     parser.add_argument("als", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--grid-phase", type=Path,
+        help="grid_phase.json written with a phased ALS: the tracks it lists are "
+             "checked against their recorded original grid instead of the pinned one")
     args = parser.parse_args()
-    result = reconcile(args.mix_plan, args.arrangement_report, args.als)
+    if args.grid_phase is None:
+        result = reconcile(args.mix_plan, args.arrangement_report, args.als)
+    else:
+        try:
+            result = reconcile(
+                args.mix_plan, args.arrangement_report, args.als, args.grid_phase)
+        except ValueError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
     if args.output:
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(f"PASS: {len(result['checks'])} MixPlan-to-ALS checks")
+    line = f"PASS: {len(result['checks'])} MixPlan-to-ALS checks"
+    if "grid_phase" in result:
+        phase = result["grid_phase"]
+        line += (f", grid_phase: {phase['track_count']} tracks, "
+                 f"max shift {phase['max_shift_ms']:.3f} ms")
+    print(line)
     return 0
 
 
