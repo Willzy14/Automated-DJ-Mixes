@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Tools"))
 
 import plan_mix_decisions as tool
 from align_engine import alignment_from_decision, fills_from_decision
-from phrase_blend import Alternative, BlendPlan
+from phrase_blend import ALT_MARGIN, Alternative, BlendPlan, plan_blend
 from propose_arrangement import propose_arrangement
 from section_format import SectionFormatError
 from test_arrangement_decisions import blend_layout
@@ -252,6 +252,8 @@ def test_writer_refuses_empty_layout_tracks_and_aliased_outputs(tmp_path, capsys
 # T3 of that mix: the top plan lined the swap up on a fill end half a bar in (entry 168.5), a
 # decisions file names whole bars only, and the pair fell to the rule-based aligner, which stopped.
 # The outgoing is 184 bars long, so a plan that ends at bar 184 needs no tail edit.
+# Every plan below is built with keyword arguments: BlendPlan's fourth and fifth fields are
+# out_looped_bars then in_intro_looped_bars (checked against the dataclass), not the reverse.
 OUT_BARS, IN_BARS = 184, 200
 
 # What the writer produced for this whole-bar mix before the fallback existed (taken from main).
@@ -259,22 +261,29 @@ WHOLE_BAR_MIX_FILE = b'{\n  "transitions": [\n    {\n      "pair_index": 1,\n   
 WHOLE_BAR_MIX_LOG = 'T1: A -> B\n  Top: entry 72, swap 88, end 100, cost 3.25 [ONE-SIDED / UNPAIRED]\n    Incoming source at swap 16, trim 0, repeat 0 at 0; outgoing extension 0 from None, cut 0\n    First pair.\n  Alternative 1: entry 80.5, swap 90, end 100, cost 0.00 [ONE-SIDED / UNPAIRED]\n    Incoming source at swap 9.5, trim 0, repeat 0 at 0; outgoing extension 0 from None, cut 0\n    r. f\nT2: B -> C\n  Top: entry 78, swap 92, end 105, cost 4.50\n    Incoming source at swap 10, trim 0, repeat 4 at 8; outgoing extension 5 from (84, 92), cut 0\n    Second pair.\n    Tail repeats.\n'
 
 
-def fractional_top(**kwargs):
-    return BlendPlan(168.5, 176, 184, 0, 0, swap_incoming_bar=7.5, cost=7.81,
-                     why=["Top, fill end."], **kwargs)
+def plan(entry, swap, cost, *, end=184, swap_in=None, **kwargs):
+    return BlendPlan(in_starts_at_out_bar=entry, bass_switch_out_bar=swap, out_end_bar=end,
+                     out_looped_bars=kwargs.pop("out_looped", 0),
+                     in_intro_looped_bars=kwargs.pop("in_looped", 0), cost=cost,
+                     swap_incoming_bar=swap - entry if swap_in is None else swap_in, **kwargs)
+
+
+def fractional_top(cost=7.81, **kwargs):
+    kwargs.setdefault("why", ["Top, fill end."])
+    return plan(168.5, 176, cost, end=184, swap_in=7.5, **kwargs)
 
 
 def fractional_plan(cost=8.0):
-    return BlendPlan(176.5, 184, 184, 0, 0, swap_incoming_bar=7.5, cost=cost)
+    return plan(176.5, 184, cost, swap_in=7.5)
 
 
-def whole_plan(entry, swap, cost):
-    return BlendPlan(entry, swap, 184, 0, 0, swap_incoming_bar=swap - entry, cost=cost,
-                     why=[f"Whole entry {entry:g}."])
+def whole_plan(entry, swap, cost, **kwargs):
+    kwargs.setdefault("why", [f"Whole entry {entry:g}."])
+    return plan(entry, swap, cost, **kwargs)
 
 
-def alt(plan):
-    return Alternative(plan, plan.bass_switch_out_bar, "an alternative", "a feel")
+def alt(candidate):
+    return Alternative(candidate, candidate.bass_switch_out_bar, "an alternative", "a feel")
 
 
 def write_pair(monkeypatch, tmp_path, top, ranked=()):
@@ -295,22 +304,49 @@ def fractional_numbers(node):
 
 def test_fractional_top_uses_first_whole_alternative_and_says_so(tmp_path, monkeypatch, capsys):
     top = fractional_top(alternatives=[alt(whole_plan(152, 160, 8.37)),
-                                       alt(whole_plan(150, 160, 9.10))])
+                                       alt(whole_plan(150, 164, 9.10))])
     data = tool.read_json(write_pair(monkeypatch, tmp_path, top))
     [decision] = data["transitions"]
     assert (decision["entry_out_bar"], decision["swap_in_bar"], decision["out_end_bar"]) == (152, 8, 184)
-    said = ("T1: top plan (entry 168.5, cost 7.81) has a fractional bar; used alternative 1 "
-            "(entry 152, swap 160, end 184, cost 8.37, +0.56)")
+    said = ("T1: top plan (entry 168.5, cost 7.81) has a fractional bar (decision for pair 1: "
+            "entry_out_bar 168.5 is not a whole bar - decisions name whole musical bars, not "
+            "fractional positions); used alternative 1 (entry 152, swap 160, end 184, "
+            "cost 8.37 vs the planner's best 7.81 (+0.56))")
     lines = capsys.readouterr().out.splitlines()
     assert said in lines
-    assert lines[-1] == "1 pairs used a whole-bar alternative: T1 (+0.56)"
+    assert lines[-1] == "1 pair used a whole-bar alternative: T1 (+0.56)"
     assert decision["reason"].startswith(said + " | Whole entry 152.")
     assert data["whole_bar_alternative_count"] == 1
     [row] = data["whole_bar_alternatives"]
     assert (row["pair_index"], row["used"], row["top_entry_out_bar"], row["top_cost"]) == (
         1, "alternative 1", 168.5, 7.81)
     assert (row["entry_out_bar"], row["cost"], row["cost_difference"]) == (152, 8.37, 0.56)
+    assert row["swap_out_bar"] == 160 != top.bass_switch_out_bar    # the used plan's swap, not the top's
+    assert "entry_out_bar 168.5 is not a whole bar" in row["top_error"]
     assert "fallback_pairs" not in data
+
+
+def test_the_log_names_the_field_that_was_fractional_not_the_entry(tmp_path, monkeypatch, capsys):
+    # a whole entry, but the tail loop's source window starts half a bar in
+    top = plan(168, 176, 5.0, end=190, swap_in=8, out_looped=6, out_loop_source_bars=(176.5, 184.5),
+               alternatives=[alt(whole_plan(160, 168, 6.0))])
+    data = tool.read_json(write_pair(monkeypatch, tmp_path, top))
+    said = next(line for line in capsys.readouterr().out.splitlines() if "has a fractional bar" in line)
+    assert "tail_loop source 176.5 is not a whole bar" in said
+    assert "entry_out_bar" not in said
+    assert "tail_loop source 176.5 is not a whole bar" in data["transitions"][0]["reason"]
+
+
+def test_two_pairs_say_pairs_and_a_lower_ranked_cheaper_plan_says_so(tmp_path, monkeypatch, capsys):
+    tops = iter([fractional_top(alternatives=[alt(whole_plan(152, 160, 8.37))]),
+                 fractional_top(cost=10.0, alternatives=[alt(whole_plan(152, 160, 7.0))])])
+    monkeypatch.setattr(tool, "plan_blend", lambda *_, **__: next(tops))
+    monkeypatch.setattr(tool, "candidates", lambda *_, **__: [], raising=False)
+    tool.write_decisions(tmp_path / "d.json", ["A", "B", "C"], [{"n_bars": OUT_BARS}] * 3)
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.endswith("cost 7.00 vs the planner's best 10.00 "
+                             "(-3.00, ranked lower by the planner's own order))") for line in lines)
+    assert lines[-1] == "2 pairs used a whole-bar alternative: T1 (+0.56), T2 (-3.00)"
 
 
 def test_fractional_first_alternative_is_skipped_for_the_next_whole_one(tmp_path, monkeypatch, capsys):
@@ -318,21 +354,83 @@ def test_fractional_first_alternative_is_skipped_for_the_next_whole_one(tmp_path
     [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top))["transitions"]
     assert decision["entry_out_bar"] == 150
     out = capsys.readouterr().out
-    assert "used alternative 2 (entry 150, swap 160, end 184, cost 8.90, +1.09)" in out
+    assert "used alternative 2 (entry 150, swap 160, end 184, cost 8.90 vs the planner's best 7.81 (+1.09))" in out
     assert "alternative 1 skipped" in out and "176.5 is not a whole bar" in out
 
 
-def test_cheapest_whole_alternative_wins_even_when_listed_last(tmp_path, monkeypatch, capsys):
+def test_the_planners_own_order_picks_the_first_whole_plan_even_if_listed_last(tmp_path, monkeypatch, capsys):
     top = fractional_top(alternatives=[alt(whole_plan(140, 150, 9.9)), alt(whole_plan(152, 160, 8.4)),
-                                       alt(whole_plan(150, 160, 9.1))])
+                                       alt(whole_plan(150, 164, 9.1))])
     [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top))["transitions"]
     assert decision["entry_out_bar"] == 152
     assert "used alternative 2 (entry 152" in capsys.readouterr().out
 
 
-def test_alternative_the_decision_check_refuses_is_skipped(tmp_path, monkeypatch, capsys):
+def test_a_sane_plan_is_preferred_over_a_cheaper_one_sided_plan(tmp_path, monkeypatch, capsys):
+    one_sided = whole_plan(150, 164, 8.0, paired=False, sane=False)
+    sane = whole_plan(152, 160, 9.5, paired=True, sane=True)
+    top = fractional_top(paired=True, sane=True, alternatives=[alt(one_sided), alt(sane)])
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top))["transitions"]
+    assert decision["entry_out_bar"] == 152                 # not the cheaper one-sided 150
+    assert "used alternative 2" in capsys.readouterr().out
+
+
+def test_the_sane_tier_orders_the_search_even_when_the_top_is_not_sane(tmp_path, monkeypatch, capsys):
+    # nothing refuses the cheaper one-sided plan here (the top is not sane), so only the planner's
+    # own order, sane pairings first, keeps the pricier sane plan ahead of it
+    one_sided = whole_plan(150, 164, 8.0, paired=False, sane=False)
+    sane = whole_plan(152, 160, 9.5, paired=True, sane=True)
+    top = fractional_top(alternatives=[alt(one_sided), alt(sane)])
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top))["transitions"]
+    assert decision["entry_out_bar"] == 152
+    assert "used alternative 2" in capsys.readouterr().out
+
+
+def test_an_unsane_top_may_use_an_unsane_replacement_within_the_limit(tmp_path, monkeypatch, capsys):
+    top = fractional_top(alternatives=[alt(whole_plan(150, 164, 8.0, paired=False, sane=False))])
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top))["transitions"]
+    assert decision["entry_out_bar"] == 150
+    assert "used alternative 1" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("paired, reason", [(False, "one-sided"), (True, "not a sane pairing")])
+def test_a_sane_top_refuses_a_replacement_that_is_not_sane(tmp_path, monkeypatch, capsys, paired, reason):
+    top = fractional_top(paired=True, sane=True,
+                         alternatives=[alt(whole_plan(150, 164, 8.0, paired=paired, sane=False))])
+    with pytest.raises(ValueError, match="entry_out_bar 168.5 is not a whole bar"):
+        write_pair(monkeypatch, tmp_path, top)
+    out = capsys.readouterr().out
+    assert "no whole-bar plan qualified" in out and f"nearest was +0.2, {reason}" in out
+    assert "used alternative" not in out
+
+
+def test_a_plan_beyond_the_alt_margin_is_refused_and_the_log_says_how_far(tmp_path, monkeypatch, capsys):
+    top = fractional_top(cost=8.0, alternatives=[alt(whole_plan(152, 160, 8.0 + ALT_MARGIN + 0.5))])
+    with pytest.raises(ValueError, match="not a whole bar"):
+        write_pair(monkeypatch, tmp_path, top)
+    out = capsys.readouterr().out
+    assert (f"T1: no whole-bar plan qualified (limit +{ALT_MARGIN:.1f} over the best 8.00, "
+            "sane if the best is sane, no outro cut, no flat stretch); nearest was +5.5, over the limit") in out
+
+
+def test_a_plan_exactly_at_the_alt_margin_is_still_allowed(tmp_path, monkeypatch, capsys):
+    top = fractional_top(cost=8.0, alternatives=[alt(whole_plan(152, 160, 8.0 + ALT_MARGIN))])
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top))["transitions"]
+    assert decision["entry_out_bar"] == 152
+    assert "(+5.00)" in capsys.readouterr().out
+
+
+def test_the_nearest_refused_plan_is_the_one_the_log_names(tmp_path, monkeypatch, capsys):
+    top = fractional_top(cost=8.0, alternatives=[alt(whole_plan(152, 160, 20.0)),
+                                                 alt(whole_plan(150, 164, 14.0))])
+    with pytest.raises(ValueError, match="not a whole bar"):
+        write_pair(monkeypatch, tmp_path, top)
+    assert "nearest was +6.0, over the limit" in capsys.readouterr().out
+
+
+def test_an_alternative_the_decision_check_refuses_is_skipped(tmp_path, monkeypatch, capsys):
     # whole bars, but the swap cannot be reproduced (160 != 152 + 7): the normal check refuses it
-    broken = BlendPlan(152, 160, 184, 0, 0, swap_incoming_bar=7, cost=8.0)
+    broken = plan(152, 160, 8.0, swap_in=7)
     top = fractional_top(alternatives=[alt(broken), alt(whole_plan(150, 160, 8.9))])
     [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top))["transitions"]
     assert decision["entry_out_bar"] == 150
@@ -341,22 +439,58 @@ def test_alternative_the_decision_check_refuses_is_skipped(tmp_path, monkeypatch
     assert "used alternative 2" in out
 
 
-def test_ranked_candidates_are_used_when_no_alternative_is_whole(tmp_path, monkeypatch, capsys):
-    flat = whole_plan(148, 160, 8.0)
-    flat.terms["flat"] = 2.0
-    cut = whole_plan(146, 160, 8.1)
-    cut.out_cut_bars = 2
-    top = fractional_top(alternatives=[alt(fractional_plan())])
-    ranked = [top, whole_plan(144, 160, 9.5), flat, cut, whole_plan(152, 160, 8.5)]
+def cutting_plan(entry, swap, cost):
+    cut = whole_plan(entry, swap, cost, end=182)
+    cut.out_cut_bars = 2                      # 182 - 184 == 0 - 2 - 0: valid for the decision check
+    return cut
+
+
+@pytest.mark.parametrize("listed", ["alternative", "ranked option"])
+def test_a_plan_that_cuts_the_outro_is_refused_wherever_it_comes_from(tmp_path, monkeypatch, capsys, listed):
+    cut = cutting_plan(146, 160, 8.0)
+    fine = whole_plan(152, 160, 9.0)
+    top = fractional_top(alternatives=[alt(cut)] if listed == "alternative" else [])
+    ranked = [top, cut, fine] if listed == "ranked option" else [top, fine]
     [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top, ranked))["transitions"]
     assert decision["entry_out_bar"] == 152
-    assert "used candidate 5 (entry 152, swap 160, end 184, cost 8.50, +0.69)" in capsys.readouterr().out
+    assert "cuts the outgoing's outro" in capsys.readouterr().out
+
+
+def test_a_plan_with_a_flat_stretch_is_refused(tmp_path, monkeypatch, capsys):
+    flat = whole_plan(148, 160, 8.0)
+    flat.terms["flat"] = 2.0
+    top = fractional_top(alternatives=[alt(flat), alt(whole_plan(152, 160, 9.0))])
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top))["transitions"]
+    assert decision["entry_out_bar"] == 152
+    assert "has a flat stretch" in capsys.readouterr().out
+
+
+def test_ranked_options_are_used_when_no_alternative_is_whole(tmp_path, monkeypatch, capsys):
+    top = fractional_top(alternatives=[alt(fractional_plan())])
+    ranked = [top, whole_plan(144, 160, 9.5), whole_plan(152, 160, 8.5)]
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top, ranked))["transitions"]
+    assert decision["entry_out_bar"] == 152
+    out = capsys.readouterr().out
+    assert "used ranked option 3 (entry 152, swap 160, end 184, cost 8.50 vs the planner's best 7.81 (+0.69))" in out
+    assert "candidate" not in out
+
+
+def test_alternatives_and_ranked_options_are_one_list_in_the_planners_order(tmp_path, monkeypatch, capsys):
+    # a whole alternative AND a whole ranked option: the one the planner ranks first wins
+    top = fractional_top(alternatives=[alt(whole_plan(150, 164, 8.4))])
+    ranked = [top, whole_plan(152, 160, 9.5)]
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top, ranked))["transitions"]
+    assert decision["entry_out_bar"] == 150 and "used alternative 1" in capsys.readouterr().out
+    top = fractional_top(alternatives=[alt(whole_plan(150, 164, 9.5))])
+    ranked = [top, whole_plan(152, 160, 8.4)]
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top, ranked))["transitions"]
+    assert decision["entry_out_bar"] == 152 and "used ranked option 2" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("allow_partial", [False, True])
 def test_no_whole_plan_anywhere_falls_back_exactly_as_before(tmp_path, monkeypatch, capsys, allow_partial):
     top = fractional_top(alternatives=[alt(fractional_plan())])
-    results = iter([BlendPlan(72, 88, 184, 0, 0, swap_incoming_bar=16), top])
+    results = iter([plan(72, 88, 1.0, swap_in=16), top])
     monkeypatch.setattr(tool, "plan_blend", lambda *_, **__: next(results))
     monkeypatch.setattr(tool, "candidates", lambda *_, **__: [top, fractional_plan()], raising=False)
     path = tmp_path / "decisions.json"
@@ -374,7 +508,8 @@ def test_no_whole_plan_anywhere_falls_back_exactly_as_before(tmp_path, monkeypat
     assert "whole_bar_alternatives" not in data and "whole_bar_alternative_count" not in data
     lines = capsys.readouterr().out.splitlines()
     assert "FALLBACK T2: " + fallback["reason"] in lines
-    assert not any("pairs used a whole-bar alternative" in line for line in lines)
+    assert "T2: no whole-bar plan among 1 ranked options" in lines
+    assert not any("used a whole-bar alternative" in line for line in lines)
 
 
 def test_a_fractional_bar_is_never_rounded_into_the_file(tmp_path, monkeypatch):
@@ -389,19 +524,116 @@ def test_a_fractional_bar_is_never_rounded_into_the_file(tmp_path, monkeypatch):
     assert list((tmp_path / "none").iterdir()) == []
 
 
-def test_only_a_fractional_bar_sends_the_planner_to_its_alternatives(tmp_path, monkeypatch, capsys):
-    top = BlendPlan(float("inf"), 176, 184, 0, 0, swap_incoming_bar=7.5, cost=7.81,
-                    alternatives=[alt(whole_plan(152, 160, 8.37))])
-    with pytest.raises(ValueError, match="cannot convert float infinity to integer"):
-        write_pair(monkeypatch, tmp_path, top)
-    assert "used alternative" not in capsys.readouterr().out
+def non_fractional_tops():
+    return {
+        "infinity": plan(float("inf"), 176, 7.81, swap_in=7.5),
+        "swap that cannot be reproduced": plan(152, 160, 7.81, swap_in=7),
+        "tail loop without source bars": plan(152, 160, 7.81, end=190, out_looped=6),
+    }
+
+
+@pytest.mark.parametrize("kind, error", [
+    ("infinity", "cannot convert float infinity to integer"),
+    ("swap that cannot be reproduced", "cannot reproduce the planner swap"),
+    ("tail loop without source bars", "tail_loop is missing its source bars"),
+])
+def test_only_a_fractional_bar_sends_the_planner_to_its_alternatives(
+        tmp_path, monkeypatch, capsys, kind, error):
+    top = non_fractional_tops()[kind]
+    top.alternatives = [alt(whole_plan(150, 164, 8.37))]
+    with pytest.raises(ValueError, match=error):
+        write_pair(monkeypatch, tmp_path, top, [top, whole_plan(144, 160, 9.0)])
+    out = capsys.readouterr().out
+    assert "used alternative" not in out and "used ranked" not in out
+    assert "no whole-bar plan" not in out
+
+
+def odd_plan(failure):
+    odd = whole_plan(146, 160, 8.0)
+    if failure == "terms is None":
+        odd.terms = None                                  # AttributeError in the screen
+    elif failure == "cost is text":
+        odd.cost = "cheap"                                # TypeError in the rank key
+    else:
+        odd.out_looped_bars = None                        # TypeError in the decision check
+    return odd
+
+
+@pytest.mark.parametrize("failure", ["terms is None", "cost is text", "looped is None"])
+def test_an_odd_replacement_is_skipped_with_its_reason_and_never_crashes(
+        tmp_path, monkeypatch, capsys, failure):
+    top = fractional_top()
+    ranked = [top, odd_plan(failure), whole_plan(152, 160, 9.0)]
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top, ranked))["transitions"]
+    assert decision["entry_out_bar"] == 152
+    out = capsys.readouterr().out
+    assert "ranked option 2 skipped:" in out and "used ranked option 3" in out
+
+
+def test_ranked_options_that_cannot_be_listed_are_reported_and_the_pair_falls_back(
+        tmp_path, monkeypatch, capsys):
+    def boom(*_, **__):
+        raise KeyError("n_bars")
+
+    top = fractional_top(alternatives=[alt(fractional_plan())])
+    monkeypatch.setattr(tool, "plan_blend", lambda *_, **__: top)
+    monkeypatch.setattr(tool, "candidates", boom, raising=False)
+    with pytest.raises(ValueError, match="not a whole bar"):
+        tool.write_decisions(tmp_path / "d.json", ["A", "B"], [{"n_bars": OUT_BARS}, {"n_bars": IN_BARS}])
+    assert "the ranked options could not be listed: 'n_bars'" in capsys.readouterr().out
+
+
+def test_skipped_lines_are_capped_at_five_per_pair_and_the_rest_counted(tmp_path, monkeypatch, capsys):
+    ranked = [fractional_plan(8.0 + i / 1000) for i in range(8)]
+    for i, option in enumerate(ranked):
+        option.in_starts_at_out_bar = 100.5 + i
+    top = fractional_top()
+    ranked = [top, *ranked, whole_plan(152, 160, 9.0)]
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top, ranked))["transitions"]
+    assert decision["entry_out_bar"] == 152
+    out = capsys.readouterr().out
+    assert out.count(" skipped: ") == 5 and "  and 3 more not whole-bar" in out.splitlines()
+
+
+def test_the_search_stops_after_200_ranked_options_and_says_so(tmp_path, monkeypatch, capsys):
+    ranked = []
+    for i in range(250):
+        option = fractional_plan(8.0 + i / 1000)
+        option.in_starts_at_out_bar = 100.5 + i
+        ranked.append(option)
+    late = whole_plan(152, 160, 8.9)           # ranks 251st: beyond the search
+    top = fractional_top()
+    with pytest.raises(ValueError, match="not a whole bar"):
+        write_pair(monkeypatch, tmp_path, top, [top, *ranked, late])
+    out = capsys.readouterr().out
+    assert "stopped after 200 ranked options for T1; 51 not tried" in out
+    assert out.count(" skipped: ") == 5 and "and 195 more not whole-bar" in out
+    assert "used ranked option" not in out
+
+
+def test_a_whole_plan_inside_the_200_is_still_found(tmp_path, monkeypatch, capsys):
+    ranked = []
+    for i in range(150):
+        option = fractional_plan(8.0 + i / 1000)
+        option.in_starts_at_out_bar = 100.5 + i
+        ranked.append(option)
+    top = fractional_top()
+    [decision] = tool.read_json(write_pair(monkeypatch, tmp_path, top,
+                                           [top, *ranked, whole_plan(152, 160, 9.0)]))["transitions"]
+    assert decision["entry_out_bar"] == 152
+    assert "stopped after" not in capsys.readouterr().out
 
 
 def test_whole_bar_top_never_looks_at_alternatives_and_writes_the_same_bytes(tmp_path, monkeypatch, capsys):
     plans = iter([
-        BlendPlan(72, 88, 100, 0, 0, swap_incoming_bar=16, cost=3.25, why=["First pair."],
-                  alternatives=[Alternative(BlendPlan(80.5, 90, 100, 0, 0, swap_incoming_bar=9.5), 90, "r", "f")]),
-        BlendPlan(78, 92, 105, 5, 4, swap_incoming_bar=10, in_loop_phrase_end=8,
+        BlendPlan(in_starts_at_out_bar=72, bass_switch_out_bar=88, out_end_bar=100, out_looped_bars=0,
+                  in_intro_looped_bars=0, swap_incoming_bar=16, cost=3.25, why=["First pair."],
+                  alternatives=[Alternative(BlendPlan(in_starts_at_out_bar=80.5, bass_switch_out_bar=90,
+                                                      out_end_bar=100, out_looped_bars=0,
+                                                      in_intro_looped_bars=0, swap_incoming_bar=9.5),
+                                            90, "r", "f")]),
+        BlendPlan(in_starts_at_out_bar=78, bass_switch_out_bar=92, out_end_bar=105, out_looped_bars=5,
+                  in_intro_looped_bars=4, swap_incoming_bar=10, in_loop_phrase_end=8,
                   out_loop_source_bars=(84, 92), paired=True, in_point_kind="fill end",
                   out_point_kind="drop", cost=4.5, why=["Second pair.", "Tail repeats."]),
     ])
@@ -418,10 +650,11 @@ def test_whole_bar_top_never_looks_at_alternatives_and_writes_the_same_bytes(tmp
 
 
 def test_cli_counts_whole_bar_alternatives_in_the_planner_json(planner_inputs, monkeypatch, capsys):
-    results = iter([BlendPlan(1, 2, 3, 0, 0, swap_incoming_bar=1),
-                    BlendPlan(1.5, 2, 3, 0, 0, swap_incoming_bar=0.5, cost=1.0, alternatives=[
-                        alt(BlendPlan(1, 2, 3, 0, 0, swap_incoming_bar=1, cost=1.5))])])
+    results = iter([whole_plan(1, 2, 1.0, end=3),
+                    plan(1.5, 2, 1.0, end=3, swap_in=0.5,
+                         alternatives=[alt(whole_plan(1, 2, 1.5, end=3))])])
     monkeypatch.setattr(tool, "plan_blend", lambda *_, **__: next(results))
+    monkeypatch.setattr(tool, "candidates", lambda *_, **__: [], raising=False)
     args, output = planner_inputs
     assert tool.main([*args, "--allow-partial"]) == 0
     data = tool.read_json(output)
@@ -429,4 +662,61 @@ def test_cli_counts_whole_bar_alternatives_in_the_planner_json(planner_inputs, m
     assert data["fallback_pairs"] == []
     assert data["whole_bar_alternative_count"] == 1
     assert [(row["pair_index"], row["cost_difference"]) for row in data["whole_bar_alternatives"]] == [(2, 0.5)]
-    assert "1 pairs used a whole-bar alternative: T2 (+0.50)" in capsys.readouterr().out.splitlines()
+    assert "1 pair used a whole-bar alternative: T2 (+0.50)" in capsys.readouterr().out.splitlines()
+
+
+# ---- the real planner, no stubs ------------------------------------------------------------
+PAIR3 = Path(__file__).parent / "Fixtures" / "planner_pair3.json"
+
+
+def pair3():
+    data = json.loads(PAIR3.read_text(encoding="ascii"))
+    return data["outgoing"], data["incoming"]
+
+
+def test_real_planner_pair3_ends_on_the_whole_bar_alternative(tmp_path, capsys):
+    outgoing, incoming = pair3()
+    top = plan_blend(outgoing, incoming)
+    assert top.in_starts_at_out_bar == 168.5                  # the failure the fresh mix found
+    path = tmp_path / "decisions.json"
+    tool.write_decisions(path, ["A", "B"], [outgoing, incoming])
+    [decision] = tool.read_json(path)["transitions"]
+    assert (decision["entry_out_bar"], decision["out_end_bar"]) == (152, 184)
+    assert decision["entry_out_bar"] + decision["swap_in_bar"] == 160
+    assert ("used alternative 1 (entry 152, swap 160, end 184, cost 8.37 vs the planner's best 7.81 (+0.56))"
+            in capsys.readouterr().out)
+
+
+def test_real_ranked_options_find_the_same_plan_when_the_alternatives_are_gone(tmp_path, monkeypatch, capsys):
+    outgoing, incoming = pair3()
+
+    def without_alternatives(out_track, in_track, **kwargs):
+        top = plan_blend(out_track, in_track, **kwargs)
+        top.alternatives = []
+        return top
+
+    monkeypatch.setattr(tool, "plan_blend", without_alternatives)
+    path = tmp_path / "decisions.json"
+    tool.write_decisions(path, ["A", "B"], [outgoing, incoming])
+    [decision] = tool.read_json(path)["transitions"]
+    assert (decision["entry_out_bar"], decision["out_end_bar"]) == (152, 184)
+    assert "used ranked option" in capsys.readouterr().out
+
+
+# ---- the consumers ---------------------------------------------------------------------------
+def test_the_arranger_reads_a_decisions_file_with_the_substitution_record(blend_layout):
+    als, sections, output, decisions = blend_layout()
+    plain = propose_arrangement(als, sections, output, decisions_path=decisions)
+    data = tool.read_json(decisions)
+    said = ("T1: top plan (entry 168.5, cost 7.81) has a fractional bar (decision for pair 1: "
+            "entry_out_bar 168.5 is not a whole bar); used alternative 1 (entry 152, swap 160, "
+            "end 184, cost 8.37 vs the planner's best 7.81 (+0.56))")
+    data["transitions"][0]["reason"] = said + " | the planner's own reasons"
+    data["whole_bar_alternative_count"] = 1
+    data["whole_bar_alternatives"] = [{"pair_index": 1, "used": "alternative 1", "top_entry_out_bar": 168.5,
+                                       "top_error": "entry_out_bar 168.5 is not a whole bar",
+                                       "cost_difference": 0.5563}]
+    tool.write_json_atomically(decisions, data)
+    marked = propose_arrangement(als, sections, output.with_name("marked.als"), decisions_path=decisions)
+    assert [ov.decision_exit for ov in marked.overlaps] == [ov.decision_exit for ov in plain.overlaps]
+    assert [ov.decision_exit for ov in marked.overlaps][0] is not None

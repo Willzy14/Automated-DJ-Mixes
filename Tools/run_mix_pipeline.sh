@@ -116,9 +116,12 @@ from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 planned = len(data["transitions"])
 fallback = ["T{}".format(pair["pair_index"]) for pair in data["fallback_pairs"]]
+whole_bar = ["T{} ({:+.2f})".format(row["pair_index"], row["cost_difference"]) for row in data.get("whole_bar_alternatives", [])]
 summary = f"{planned} of {planned + len(fallback)} pairs planned"
 if fallback:
     summary += ", fallback: " + ",".join(fallback)
+if whole_bar:
+    summary += ", whole-bar alternative: " + ",".join(whole_bar)
 print(summary)
 ' "$planned" 2>> "$P/Output/planner.log") || fail "planner (see planner.log)"
         say "arranger: planner ($summary)"
