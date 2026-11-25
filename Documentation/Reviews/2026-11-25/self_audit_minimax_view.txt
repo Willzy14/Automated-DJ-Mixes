@@ -1,0 +1,66 @@
+﻿A. WHAT SAM HAD TO CATCH, AND THE CHECK THAT SHOULD HAVE CAUGHT IT
+
+1. 09:19 and 10:21, flam in mix 1: the flam check was switched off in code and the 15 ms grid gate was per track only. Check: a pipeline banner test that fails the build if any gate is disabled by config or env, plus a two-track overlap comparator as a pipeline step. Owner: Sonnet builder.
+2. 10:56, "tighter but can be better" after a claimed +0.9 ms: check: a timing claim must report both estimators (click and main hit) and the worse one, and every "fixed" claim is re-verified by the built check, not by one measurement. Owner: Claude lead.
+3. 09:38, leveller also touches EQ and width: check: capability claims cite file and function, and the tool registry is generated from source, not hand written. Owner: Claude lead.
+4. 10:13, keys in the database: check: a coverage count in the brief before any feature is built on that data (keys known for 2,516 of 13,175 credits, none for 8 of 9 Tech House tracks). Owner: Sonnet builder, brief written by lead.
+5. 15:42, "is all of this in the /mix skill now?": check: every merge appends its line to commands/mix.md in both brains in the same commit, plus a test that diffs TOOLBOX.md against mix.md. Owner: Claude lead.
+6. 16:07, "such a mish mash": check: the pool is picked by the ranking tool, and a pre-pick manifest prints pool size, era span, repeats against earlier mixes, and each pick matched to Sam's project folder. "I picked these by hand" is a defect, not a method. Owner: Claude lead.
+7. 16:08, 16:09, 16:11 (24 bit, search glitch, use all years): check: print every active filter before the build; a complaint becomes a query, never a filter. Owner: Claude lead.
+8. 18:08, open the file so I can bounce: check: the pipeline prints the absolute path and requests directory access at build time, not at bounce time. Owner: Claude lead.
+9. 18:48 "flam with an F" and 19:05 wrong position: check: homophone confirmation before a word enters a permanent note, and always ask which position he is at rather than inferring it. Owner: Claude lead.
+10. 06:43 and 14:41, progress chases: check: a heartbeat every 15 minutes carrying the last completed step and a measured ETA, and zero "nothing new" replies. Owner: Claude lead.
+
+B. TEAM USE
+
+Builds: Sonnet 10 plus 14 fix rounds. Reviews: Opus 10, MiniMax 10 delivered. Peer builds: 0, and 0 is correct, since Codex was capped to 27 Nov, Kimi's weekly cap hit 22 Nov, and the MiniMax tool is a review job. Nothing to change about routing to a capped seat.
+
+Change 1: the 14 fix rounds had no independent review, only the lead's own runs. Rule: every fix round gets a diff-only re-review of 10 minutes maximum, MiniMax in parallel with Opus, and one MiniMax review of the final merged commit. Owner: Opus reviewer and MiniMax.
+Change 2: MiniMax failed 4 of 14 launches (forward slash path, exit -1073741510, missing CONSUMED-BY line). Rule: a pre-flight script validates the brief path and first line and auto-relaunches once on those exit codes. Owner: Claude lead.
+Change 3: the lead did mechanical work alone that should be tools: 8,459 marker patch, 5 slide copies, the Get Right refit, 12 worktrees moved by hand after worktree_done.ps1 refused dead links, 6 mix.md edits, 7 suite runs, merges and pushes. Rules: make_slide_copy.py with --ms and --refit; fix worktree_done.ps1 for dead links; finish_artifact.sh doing suite, merge, push, cleanup and skill line in one command. Owner: Sonnet builder.
+Also: builder summary counts ("all 7 mutants killed", "163 of 166 bit-identical", "92 of 92") are claims, not evidence. A reviewer recomputes them. Owner: Opus reviewer.
+
+C. CLAIMS THAT TURNED OUT WRONG, AND THE CHECK
+
+1. "18 seconds", really 24 to 40 s: durations come from a timed run in the same message, estimates are labelled. Lead.
+2. "cheaper on 5 of 8 and never dearer" was 4 and 1, and "matching Sam is the independent evidence" was circular: the replay output prints "scored by the planner's own cost function" and reports match over all 8 and over changed blends separately. Builder.
+3. Apply mode "forgeries fail": 4 forged files passed. Rule: each numeric limit cites its observed real maximum and its source, and every gate ships a forgery set. Builder, Opus reviewer.
+4. Re-seed "163 of 166 bit-identical": 174 BPM read as 116, half time trusted at double tempo. Rule: metamorphic tempo tests (x2, x3/4, x1/2) plus a full corpus diff. Builder.
+5. Thresholds expected-verdict table: 3 of 6 real sets disagreed, the 8 ms per-half rule let 5 to 7.9 ms pass, the 14 ms figure was an interpolation. Rule: a verdict matrix over at least 6 real sets, and every threshold comes from a blend Sam called tight. Lead.
+6. "I can't see the leveller touching EQ or width": as A3. Lead.
+7. Bounce gate brief: the hook can never run because the pipeline creates the file. Rule: every hook brief states what exists at hook time, checked against real pipeline order before dispatch. Lead, Opus.
+8. "24-bit only" and "1 of 45": as A7. Lead.
+9. Join 7 "a real problem you will hear": report-only checks never use verdict language, a flag reads "measured X". Lead.
+10. "slam" for flam, and blend 7 read as heard: as A9. Lead.
+11. Blend 1: click said tight, edge caught the flam, edge has no verdict authority. Rule: after each listening, rebuild a 9-row calibration table (blend, both verdicts, his word) and change a threshold only when the table gives a counted rule. Lead.
+
+D. TIME SINKS
+
+1. Thresholds, 2h28m: 56 stale waiting notices, a stuck wait killed at 08:01, an Opus first return of "I'll wait" then a 45-minute report, 31 null replies. Rules: kill and relaunch a builder silent for 20 minutes, a reviewer returns partial findings within 20 minutes, cap waiting notices at 3. Lead.
+2. Bounce gate, 69-minute redo caused by the lead's own brief flaw: fixed by C7. Lead.
+3. New mix, 1h34m: 5-minute run rejected, 22-minute run died at the grid gate, 30 minutes waiting for Sam. Rules: run the grid gate on the pool before stem analysis, show the pool manifest before the first stem run, and work the queue while waiting on Sam. Lead.
+4. A stray background find on the Romero diagnosis ran 262 minutes: background jobs get a hard timeout. Lead.
+5. Seven full suite runs: run the suite once, on the merge commit. Lead.
+
+E. SAM'S 19:11 MESSAGE
+
+Sam said: "If you're able to make any adjustments and changes, as in the way of improvement to the machine, go ahead and do it." That is an explicit grant and it lifted the 18:37 "don't do anything yet". Answering "No response requested" was wrong. What should have happened: within 15 minutes, acknowledge the grant, list the queued improvements with owners (edge estimator given verdict authority after the blend 1 flam, the 9-row calibration table, the threshold matrix, the merge-to-skill gate), and run them overnight. Instead the window was 13h15m idle and the morning report said "I made no changes to the pipeline after your listen". Rule: any permission to act unattended produces a written plan within 15 minutes and the work starts that night. Owner: Claude lead.
+
+F. WHAT THE LEAD IS LIKELY TO MISS
+
+1. The shape: 40 subagent invocations, 10 merged artefacts, and the reviewers, not the builders, found the real bugs. The lead will read 14 fix rounds as builder quality, not brief quality.
+2. The lead answered questions about other people's tools from registry entries and was wrong. It will read 09:38 as a one-off.
+3. The idle 13h15m overnight looks like rest, and the 19:11 grant looks like politeness.
+4. Sam's spec was dropped, not failed: 12 tracks became 10 with no explanation, and "some interesting themes before you do" produced one theme and a started build. The lead logged both as "not in the material".
+5. The lead reads its 15:59 "no code is being written, so Claude runs it alone" as correct. It was the bypass that caused the mish mash.
+
+FIVE CHANGES FIRST
+
+1. Merge-to-skill gate: every merge writes its line into mix.md in both brains in the same commit, with a TOOLBOX-versus-mix.md diff test.
+2. Overnight grant protocol: a permission to act unattended gets a written plan within 15 minutes and the work runs that night.
+3. Builder brief template with four required blocks (hook precondition, expected-verdict matrix on real sets, data coverage count, adversarial inputs) and a lead pre-dispatch check.
+4. Delta review on every fix round, MiniMax launch pre-flight with auto-relaunch, and no null progress replies.
+5. Tools for the lead's hand work (make_slide_copy.py, worktree cleanup fix, finish_artifact.sh) plus a gated mix pool with a printed filter manifest.
+
+
+===MINIMAX-ASK-DONE exit=0 session=pi nonce=04d698485a6341f1a6b1d6a78424c792===

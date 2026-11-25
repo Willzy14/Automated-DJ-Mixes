@@ -126,6 +126,31 @@
       "status": "working",
       "added": "2026-11-23",
       "brain": "MiniMax"
+    },
+    "kick_alignment_check": {
+      "path": "Source/kick_alignment_check.py",
+      "purpose": "Per-blend kick alignment check on the source audio through the warp markers: click, main-hit and edge lag per blend with per-estimator thresholds Sam set on 2026-11-24 (click 2.5/5.0 ms, main 8/14 ms, edge report-only), a picture per blend; pipeline hook",
+      "status": "working"
+    },
+    "grid_phase_fix": {
+      "path": "Source/grid_phase_fix.py",
+      "purpose": "Automatic grid phase fix: per-track drift fit and fewest-smallest slides so judged blends sit within about 1.5 ms; suggest mode writes a Phased ALS, apply mode makes it final only if validate_als and the MixPlan reconciliation pass",
+      "status": "working"
+    },
+    "bounce_check": {
+      "path": "Source/bounce_check.py",
+      "purpose": "Measures every join on the rendered WAV (loudness step, band tone, low-end level and correlation, width, kick doubles) against ranges from Sam's accepted joins; ATTENTION.md plus a report-only pipeline hook; Tools/check_bounce.py --project",
+      "status": "working"
+    },
+    "tweak_replay": {
+      "path": "Source/tweak_replay.py",
+      "purpose": "Replays Sam's hand tweak of a mix through the blend planner (Tools/score_tweak.py): his placement against the planner's pick, rank and cost terms",
+      "status": "working"
+    },
+    "phrase_blend": {
+      "path": "Source/phrase_blend.py",
+      "purpose": "Blend planner: hand-set cost rules over candidate placements; since 2026-11-24 also soft vocal-clash and key-clash costs (capped below the cut cost); default arranger in run_mix_pipeline.sh (PLANNER=off falls back)",
+      "status": "working"
     }
   },
   "standalone_scripts": {
@@ -880,7 +905,19 @@
         "the spike inside one waveform preview render (needs a simpler drawing, changes the picture)",
         "Braydon Terzo - Impressive master is online-only in Dropbox"
       ]
+    },
+    {
+      "date": "2026-11-25",
+      "brain": "Claude (Sonnet 5.5) lead, Sonnet subagent builders, Opus and MiniMax reviewers",
+      "summary": "47-hour session (2026-11-23 to 25): kick alignment check with picture, automatic grid phase fix (suggest and apply), per-estimator thresholds, planner replay, vocal and key planner costs, bounce check and report-only bounce gate, /mix skill updated in both brains, first full /mix run (Rise Classic House to Tech House, 10 tracks) that Sam rated good on all nine blends; self-audit written; pushed at 963e7b0.",
+      "pending": [
+        "add a pick manifest to Tools/playlist_builder.py (Master Board card)",
+        "Sam's yes for a CLAUDE.md interrupted-marker line and a merge-to-skill line in /orchestrate",
+        "Sam listens to the remaining Tech House items from 2026-11-24",
+        "Codex back 2026-11-27"
+      ],
+      "brain_note": "peer builds: Codex 0, MiniMax 0, Kimi 0, Claude subagents 10"
     }
   ],
-  "last_modified": "2026-11-23"
+  "last_modified": "2026-11-25"
 }
