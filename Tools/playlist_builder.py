@@ -214,24 +214,32 @@ def report(picked, a, resolver=None):
 GRID_FAIL_MS = 15.0     # same rule as validate_beatgrid.STEM_KF_FAIL_MS: a stem grid >15 ms off its own kicks fails the gate
 GATE_NAME_WIDTH = 54    # the gate prints track[:54], so a name that long may have been cut
 DASHES = chr(0x2013) + chr(0x2014)
-DELIVERY_JUNK = re.compile(r'\b(sw v\d+( \d+)*|\d+ ?bit|master|amended|v\d+( \d+)*|update( \d+)+|wav)\b')
-GRID_LINE = re.compile(r'^\s*\[(PASS|FAIL|WARN)\s*\] (.{56}) (.*)$')
+DELIVERY_JUNK = re.compile(r'(?:\s+(?:sw v\d+(?: \d+)*|\d+ ?bit|master|amended|v\d+(?: \d+)*|update(?: \d+)+|wav))+\s*$')   # delivery words, at the END only
+# validate_beatgrid.py prints f"  [{verdict:4s}] {track[:54]:56s} {stats:22s} {detail}", stats = 'R=0.50 ph=advisory' | 'R=0.50 ph=+3ms[ticks]' | '-'
+GRID_LINE = re.compile(r'^\s*\[(PASS|FAIL|WARN)\s*\] (.{56}) (R=-?\d+\.\d\d ph=(?:advisory|[+-]\d+ms\[ticks\])|-)(?=\s|$)\s*(.*)$')
 NAME_SPLIT = re.compile(r'\s+[-' + DASHES + r']\s*|\s*[' + DASHES + r']\s*')
 TRACK_PREFIX = re.compile(r'^(?:\d{1,2}[AB] - |\d{1,3} - |\d{1,3}\. )', re.I)
 FEAT_PAREN = re.compile(r'[(\[]\s*(?:feat|ft|featuring)\b[^)\]]*[)\]]', re.I)
-ARTIST_SPLIT = re.compile(r'\s*(?:[&,]|(?<!\w)(?:and|feat|ft|featuring|vs|with|x)(?!\w)\.?)\s*', re.I)
+ARTIST_SPLIT = re.compile(r'\s*([&,]|(?<!\w)(?:and|feat|ft|featuring|vs|with|x)(?!\w)\.?)\s*', re.I)
 VERSION_NOISE = {'mix', 'remix', 'extended', 'original', 'main'}
 VERDICT_RANK = {'FAIL': 2, 'WARN': 1, 'PASS': 0}
 
 def fold(x): return norm(unicodedata.normalize('NFKD', x if isinstance(x, str) else '').encode('ascii', 'ignore').decode())
 
 def artist_set(s):
-    """Artist credit as a SET of whole folded names, so 'A & B' equals 'A, B' but 'DJ' is not 'DJ Koze'."""
-    return frozenset(p for p in (fold(x) for x in ARTIST_SPLIT.split(s if isinstance(s, str) else '')) if p)
+    """Artist credit as a SET of whole folded names, so 'A & B' equals 'A, B' but 'DJ' is not 'DJ Koze'. A separator word (x, and, vs...)
+    with no name on one side belongs to the name: 'DJ X' stays 'dj x' and a solo artist 'X' stays 'x'."""
+    parts = ARTIST_SPLIT.split(s if isinstance(s, str) else '')            # name, separator, name, separator, ...
+    names, cur = [], parts[0]
+    for k in range(1, len(parts), 2):
+        sep, nxt = parts[k], parts[k + 1]
+        if fold(cur) and fold(nxt): names.append(cur); cur = nxt
+        else: cur = f"{cur} {sep} {nxt}"
+    return frozenset(n for n in map(fold, names + [cur]) if n)
 
 def version_class(v):
     """A version as a comparable token set. Extended/original/main/mix are not version markers; a remixer's name is."""
-    toks = DELIVERY_JUNK.sub(' ', fold(v)).split()
+    toks = DELIVERY_JUNK.sub('', fold(v)).split()                 # a remixer called Master or V2 is not delivery junk: only the tail is
     return frozenset(toks) - VERSION_NOISE or (frozenset({'remix'}) if 'remix' in toks else frozenset())
 
 def pick_version(r):
@@ -277,7 +285,12 @@ def default_mix_roots():
 
 def explicit_mix_roots(a):
     """--mixes-dir and DJMIX_MIX_ROOTS; when any is given they REPLACE the default roots."""
-    return list(getattr(a, 'mixes_dir', None) or []) + [p for p in os.environ.get('DJMIX_MIX_ROOTS', '').split(os.pathsep) if p]
+    given = list(getattr(a, 'mixes_dir', None) or []) + os.environ.get('DJMIX_MIX_ROOTS', '').split(os.pathsep)
+    return [p.strip() for p in given if p and p.strip()]           # an empty or blank entry is nothing, never the current folder
+
+def root_problems(roots):
+    """Messages for explicit roots that are not folders: a file is 'not a folder', anything else 'path not found'."""
+    return [f"not a folder: {p}" if os.path.exists(p) else f"path not found: {p}" for p in roots if not os.path.isdir(p)]
 
 def mix_dirs(roots):
     """Earlier-mix folders: a root that holds Audio/ is itself one mix, otherwise its children with Audio/ are (names starting _ are corpora)."""
@@ -312,33 +325,39 @@ def repeats_in(r, mixes): return [name for name, entries in mixes if any(entry_m
 GATE_LOG_GLOBS = ('*.txt', '*.log', os.path.join('Output', '*.txt'), os.path.join('Output', '*.log'))
 
 def read_grid_cache(dirs):
-    """Per-track grid verdicts from earlier runs, read from files only: the gate lines (`[PASS] <name cut at 54> ...`) in <mix>/*.txt,
-    <mix>/*.log and <mix>/Output/*.{txt,log}, and Hints/grid_overrides.json (a fallback: its grid_vs_kick_ms re-derives a verdict).
-    A name cut at 54 chars is accepted only when exactly ONE distinct known file starts with it, else the line is skipped.
+    """Per-track grid verdicts from earlier runs, read from files only: the gate lines (`[PASS] <name cut at 54> R=.. ph=.. detail`) in
+    <mix>/*.txt, <mix>/*.log and <mix>/Output/*.{txt,log}, and Hints/grid_overrides.json (its grid_vs_kick_ms re-derives a verdict).
+    The gate prints the whole file name with its .wav; a name that does not end in .wav was cut at 54 chars and is accepted only when
+    exactly ONE distinct known file starts with it AND that file is not newer than the log (it may have been swapped since).
     -> [(mtime, entry, verdict, ms or None, mix name, 'log' or 'override')]."""
     out = []
     for d in dirs:
-        known = sorted({n for sub in ('Audio', '_Excluded Audio', 'Held Back') for n in (wavs_in(os.path.join(d, sub)) or [])})
-        def full(field):
+        known = {}                                                        # distinct file name -> newest mtime across Audio, _Excluded Audio, Held Back
+        for sub in ('Audio', '_Excluded Audio', 'Held Back'):
+            for n in (wavs_in(os.path.join(d, sub)) or []):
+                try: known[n] = max(known.get(n, 0), os.path.getmtime(os.path.join(d, sub, n)))
+                except OSError: known[n] = float('inf')                   # cannot date it: never trust it for a cut name
+        def full(field, log_mtime):
             raw = field.rstrip()
-            if len(raw) < GATE_NAME_WIDTH - 1: return raw                 # short enough to be the whole name
+            if raw.lower().endswith('.wav'): return raw                   # whole name
             hits = [n for n in known if n.startswith(raw)]
-            return hits[0] if len(hits) == 1 else None                    # cut name: unknown unless it names exactly one file
+            return hits[0] if len(hits) == 1 and known[hits[0]] <= log_mtime else None
         paths = sorted({p for pat in GATE_LOG_GLOBS for p in glob.glob(os.path.join(glob.escape(d), pat))})
         for path in paths:
             try:
-                with open(path, encoding='utf-8', errors='replace') as f: lines, mt = f.read().splitlines(), os.path.getmtime(path)
+                with open(path, 'rb') as f: data, mt = f.read(), os.path.getmtime(path)
             except OSError: continue
-            for ln in lines:
+            text = data.decode('utf-16', 'replace') if data[:2] in (b'\xff\xfe', b'\xfe\xff') else data.decode('utf-8', 'replace')
+            for ln in text.splitlines():
                 m = GRID_LINE.match(ln)
                 if not m: continue
-                ms = re.search(r'(\d+(?:\.\d+)?) ?ms OFF', m.group(3)) or re.search(r'grid_vs_kick (\d+(?:\.\d+)?) ?ms', m.group(3))
-                name = full(m.group(2)); e = parse_track_name(name) if name else None
+                ms = re.search(r'(\d+(?:\.\d+)?) ?ms OFF', m.group(4)) or re.search(r'grid_vs_kick (\d+(?:\.\d+)?) ?ms', m.group(4))
+                name = full(m.group(2), mt); e = parse_track_name(name) if name else None
                 if e: out.append((mt, e, m.group(1), float(ms.group(1)) if ms else None, os.path.basename(d), 'log'))
         p = os.path.join(d, 'Hints', 'grid_overrides.json')
         try:
             with open(p, encoding='utf-8') as f: ov, mt = json.load(f), os.path.getmtime(p)
-        except (OSError, ValueError): continue                     # absent, corrupt or half written: no cache from this file
+        except (OSError, ValueError, RecursionError, MemoryError): continue    # absent, corrupt, half written or absurdly nested: no cache from this file
         for name, v in (ov.items() if isinstance(ov, dict) else ()):
             ms = v.get('grid_vs_kick_ms') if isinstance(v, dict) and v.get('phase_source') == 'drum-stem-kicks' else None
             e = parse_track_name(name)
@@ -347,14 +366,16 @@ def read_grid_cache(dirs):
     return out
 
 def grid_for(r, cache):
-    """Cached verdict for this pick: (verdict, ms, mix name, 'log' or 'override') or None. A gate log line beats an override re-derived
-    from grid_overrides.json whatever the mtimes; newest wins within a kind, and on a tie the WORSE verdict wins."""
+    """Cached verdict for this pick: (verdict, ms, mix name, 'log' or 'override') or None. The gate's own log line decides (newest wins,
+    a tie goes to the WORSE verdict). An override file may only LOWER it: a FAIL re-derived from grid_overrides.json that is newer than
+    the log line turns a log PASS into FAIL, as the real gate would; an override never raises a verdict. With no log line it is the fallback."""
     hits = [c for c in cache if entry_matches(c[1], r)]
-    for kind in ('log', 'override'):
-        k = [c for c in hits if c[5] == kind]
-        if k:
-            c = max(k, key=lambda c: (c[0], VERDICT_RANK.get(c[2], 0))); return c[2], c[3], c[4], c[5]
-    return None
+    key = lambda c: (c[0], VERDICT_RANK.get(c[2], 0))
+    logs, overs = [c for c in hits if c[5] == 'log'], [c for c in hits if c[5] == 'override']
+    best = max(logs, key=key) if logs else None
+    worse = [c for c in overs if best is None or (c[0] > best[0] and VERDICT_RANK.get(c[2], 0) > VERDICT_RANK.get(best[2], 0))]
+    if worse: best = max(worse, key=key)
+    return (best[2], best[3], best[4], best[5]) if best else None
 
 def spread(items):
     c = {}
@@ -375,7 +396,7 @@ def pickable(pool, a, per_artist=None):
         songs |= song_keys(r); used[r['artist']] = used.get(r['artist'], 0) + 1; n += 1
     return n
 
-def manifest(rows, pool, drops, picked, a, mixes=None, bad_mixes=0, grid_cache=None, unparsed=0, missing=()):
+def manifest(rows, pool, drops, picked, a, mixes=None, bad_mixes=0, grid_cache=None, unparsed=0, problems=()):
     """Lines telling the truth about what the picker did. mixes/grid_cache None or empty = no earlier-run data was found."""
     L = [f"built {len(picked)} of {a.n} requested"]
     if len(picked) < a.n:
@@ -402,7 +423,7 @@ def manifest(rows, pool, drops, picked, a, mixes=None, bad_mixes=0, grid_cache=N
     L.append(f"era spread, pool: {spread(era(r) for r in pool)}")
     L.append("heat curve, picked order: " + (' '.join(str(r['heat']) for r in picked) or '-'))
     rep = [repeats_in(r, mixes) if mixes else [] for r in picked]
-    extra = ([f"{bad_mixes} unreadable"] if bad_mixes else []) + ([f"{unparsed} file names could not be read"] if unparsed else []) + [f"path not found: {p}" for p in missing]
+    extra = ([f"{bad_mixes} unreadable"] if bad_mixes else []) + ([f"{unparsed} file names could not be read"] if unparsed else []) + list(problems)
     tail = ''.join('; ' + e for e in extra)
     L.append(f"repeats: {sum(bool(x) for x in rep)} of {len(picked)} picks were in an earlier mix (checked against {len(mixes)} earlier mixes{tail})"
              if mixes else f"repeats: not checked (no earlier mix list found{tail})")
@@ -441,7 +462,7 @@ def main():
     resolver = load_resolver() if a.resolve else None
     rows = fetch(a); drops = {}; pool = prepare(rows, a, drops); picked = build(rows, a)
     explicit = explicit_mix_roots(a); dirs = mix_dirs(explicit or default_mix_roots()); mixes, bad, unparsed = read_earlier_mixes(dirs)
-    lines = manifest(rows, pool, drops, picked, a, mixes, bad, read_grid_cache(dirs), unparsed, [p for p in explicit if not os.path.isdir(p)])
+    lines = manifest(rows, pool, drops, picked, a, mixes, bad, read_grid_cache(dirs), unparsed, root_problems(explicit))
     if len(picked) < a.n: print('[warn] ' + lines[0], file=sys.stderr)
     print(chr(10).join(lines) + chr(10)); report(picked, a, resolver)
 
