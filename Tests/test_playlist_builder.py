@@ -975,4 +975,4 @@ def test_without_credible_preset_any_still_works_and_says_why_it_is_not_coherent
 def test_manifest_has_no_em_dash_and_no_credentials(pb, tmp_path):
     lines, _ = run_manifest(pb, ladder_rows(), args(n=7))
     text = "\n".join(lines)
-    assert "—" not in text and "postgres" not in text.lower()
+    assert chr(0x2014) not in text and "postgres" not in text.lower()
