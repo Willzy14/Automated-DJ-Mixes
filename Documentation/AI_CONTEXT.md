@@ -1518,6 +1518,8 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 
 ## What's Next
 
+- [ ] **Parked, not a priority (Sam, 2026-11-25)** - Two branches that would still help the pipeline stay saved as tags: `archive/e1-arc-click` (a render check for clicks at tempo-ramp points; needs fades modelled and a centred correlation) and `archive/item8-key` (an own key estimator, 47 percent exact on 400 masters; at most a soft tie-break). Reasons in `Documentation/BURN_LIST.md` (E1, D4). Mention them when work touches render checks or keys.
+
 - [ ] **Claude (Sonnet builder)** - Add a pick manifest to `Tools/playlist_builder.py` (filters, pool size, genre and era spread, repeats against earlier mixes, requested n against built n, grid-gate result per pick); a 'credible' request never uses `--preset any` (2026-11-25, Master Board card).
 - [ ] **Sam** - Say yes or no to two global changes the self-audit proposes: a one-line `CLAUDE.md` rule that an interrupted-marker message is still a request, and a merge-to-skill line in `/orchestrate` (2026-11-25).
 - [ ] **Claude** - After the next listening, add its rows to `Documentation/Mix Patterns Library/listening_calibration.md`; change a threshold only when the rows give a counted rule (2026-11-25).
