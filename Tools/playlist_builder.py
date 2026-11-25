@@ -239,7 +239,7 @@ def artist_set(s):
 
 def version_class(v):
     """A version as a comparable token set. Extended/original/main/mix are not version markers; a remixer's name is."""
-    toks = DELIVERY_JUNK.sub('', fold(v)).split()                 # a remixer called Master or V2 is not delivery junk: only the tail is
+    toks = DELIVERY_JUNK.sub('', ' ' + fold(v)).split()                 # a remixer called Master or V2 is not delivery junk: only the tail is
     return frozenset(toks) - VERSION_NOISE or (frozenset({'remix'}) if 'remix' in toks else frozenset())
 
 def pick_version(r):
