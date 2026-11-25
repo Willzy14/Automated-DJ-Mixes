@@ -1581,3 +1581,10 @@ def test_main_says_when_a_blank_mix_folder_entry_was_ignored(pb, monkeypatch, ca
     monkeypatch.setenv("DJMIX_MIX_ROOTS", os.pathsep)
     _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "1")
     assert "ignored blank mix folder entry" in capsys.readouterr().out
+
+
+def test_a_54_char_name_that_a_longer_known_file_continues_is_ambiguous(pb, tmp_path):
+    n54, t54 = _name_of_length(54)
+    longer = n54 + " (Zqbob Remix).wav"                                          # starts with all 54 chars (and the .wav) of the other file
+    make_mix(tmp_path, "Mix A", [n54, longer], logs={"Output/a.log": [gate_line("PASS", n54, PASS_DETAIL)]})
+    assert grid_of(pb, row(t54, artist="Zqa"), tmp_path) is None
