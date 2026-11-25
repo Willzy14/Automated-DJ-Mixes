@@ -288,6 +288,11 @@ def explicit_mix_roots(a):
     given = list(getattr(a, 'mixes_dir', None) or []) + os.environ.get('DJMIX_MIX_ROOTS', '').split(os.pathsep)
     return [p.strip() for p in given if p and p.strip()]           # an empty or blank entry is nothing, never the current folder
 
+def has_blank_root(a):
+    """True when --mixes-dir or DJMIX_MIX_ROOTS holds a blank entry (explicit_mix_roots drops it; the manifest says so)."""
+    env = os.environ.get('DJMIX_MIX_ROOTS', '')
+    return any(not p.strip() for p in list(getattr(a, 'mixes_dir', None) or []) + (env.split(os.pathsep) if env else []))
+
 def root_problems(roots):
     """Messages for explicit roots that are not folders: a file is 'not a folder', anything else 'path not found'."""
     return [f"not a folder: {p}" if os.path.exists(p) else f"path not found: {p}" for p in roots if not os.path.isdir(p)]
@@ -324,30 +329,38 @@ def repeats_in(r, mixes): return [name for name, entries in mixes if any(entry_m
 
 GATE_LOG_GLOBS = ('*.txt', '*.log', os.path.join('Output', '*.txt'), os.path.join('Output', '*.log'))
 
+def file_stamp(path):
+    """When a file could last have been put there: the newest of its mtime, ctime and birth time (on Windows st_ctime is the creation time).
+    A copy that keeps the source's mtime (copy2, Explorer, Dropbox sync) is still created later than the log, so it is never trusted for a
+    cut name. This errs toward unknown: a master created after its log was written loses its cut-name verdict even if it is the same audio."""
+    st = os.stat(path)
+    return max(st.st_mtime, st.st_ctime, getattr(st, 'st_birthtime', 0))
+
 def read_grid_cache(dirs):
     """Per-track grid verdicts from earlier runs, read from files only: the gate lines (`[PASS] <name cut at 54> R=.. ph=.. detail`) in
     <mix>/*.txt, <mix>/*.log and <mix>/Output/*.{txt,log}, and Hints/grid_overrides.json (its grid_vs_kick_ms re-derives a verdict).
     The gate prints the whole file name with its .wav; a name that does not end in .wav was cut at 54 chars and is accepted only when
-    exactly ONE distinct known file starts with it AND that file is not newer than the log (it may have been swapped since).
+    exactly ONE distinct known file starts with it AND that file was not created or changed after the log (it may have been swapped since).
     -> [(mtime, entry, verdict, ms or None, mix name, 'log' or 'override')]."""
     out = []
     for d in dirs:
         known = {}                                                        # distinct file name -> newest mtime across Audio, _Excluded Audio, Held Back
         for sub in ('Audio', '_Excluded Audio', 'Held Back'):
             for n in (wavs_in(os.path.join(d, sub)) or []):
-                try: known[n] = max(known.get(n, 0), os.path.getmtime(os.path.join(d, sub, n)))
+                try: known[n] = max(known.get(n, 0), file_stamp(os.path.join(d, sub, n)))
                 except OSError: known[n] = float('inf')                   # cannot date it: never trust it for a cut name
         def full(field, log_mtime):
             raw = field.rstrip()
-            if raw.lower().endswith('.wav'): return raw                   # whole name
             hits = [n for n in known if n.startswith(raw)]
+            # whole name: ends in .wav, is shorter than the 54-char cut (or IS a known file), and no known file continues it ('x.wav Mix.wav')
+            if raw.lower().endswith('.wav') and (len(raw) < GATE_NAME_WIDTH or raw in known) and not any(n != raw for n in hits): return raw
             return hits[0] if len(hits) == 1 and known[hits[0]] <= log_mtime else None
         paths = sorted({p for pat in GATE_LOG_GLOBS for p in glob.glob(os.path.join(glob.escape(d), pat))})
         for path in paths:
             try:
                 with open(path, 'rb') as f: data, mt = f.read(), os.path.getmtime(path)
             except OSError: continue
-            text = data.decode('utf-16', 'replace') if data[:2] in (b'\xff\xfe', b'\xfe\xff') else data.decode('utf-8', 'replace')
+            text = data.decode('utf-16', 'replace') if data[:2] in (b'\xff\xfe', b'\xfe\xff') else data.decode('utf-8-sig', 'replace')
             for ln in text.splitlines():
                 m = GRID_LINE.match(ln)
                 if not m: continue
@@ -373,7 +386,7 @@ def grid_for(r, cache):
     key = lambda c: (c[0], VERDICT_RANK.get(c[2], 0))
     logs, overs = [c for c in hits if c[5] == 'log'], [c for c in hits if c[5] == 'override']
     best = max(logs, key=key) if logs else None
-    worse = [c for c in overs if best is None or (c[0] > best[0] and VERDICT_RANK.get(c[2], 0) > VERDICT_RANK.get(best[2], 0))]
+    worse = [c for c in overs if best is None or (c[0] >= best[0] and VERDICT_RANK.get(c[2], 0) > VERDICT_RANK.get(best[2], 0))]
     if worse: best = max(worse, key=key)
     return (best[2], best[3], best[4], best[5]) if best else None
 
@@ -462,7 +475,7 @@ def main():
     resolver = load_resolver() if a.resolve else None
     rows = fetch(a); drops = {}; pool = prepare(rows, a, drops); picked = build(rows, a)
     explicit = explicit_mix_roots(a); dirs = mix_dirs(explicit or default_mix_roots()); mixes, bad, unparsed = read_earlier_mixes(dirs)
-    lines = manifest(rows, pool, drops, picked, a, mixes, bad, read_grid_cache(dirs), unparsed, root_problems(explicit))
+    lines = manifest(rows, pool, drops, picked, a, mixes, bad, read_grid_cache(dirs), unparsed, root_problems(explicit) + (['ignored blank mix folder entry'] if has_blank_root(a) else []))
     if len(picked) < a.n: print('[warn] ' + lines[0], file=sys.stderr)
     print(chr(10).join(lines) + chr(10)); report(picked, a, resolver)
 
