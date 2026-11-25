@@ -1521,10 +1521,8 @@ Wrote `Test Project/Black Book x Defected V2/Hints/track_hints.json` with all 4 
 - [ ] **Parked, not a priority (Sam, 2026-11-25)** - Two branches that would still help the pipeline stay saved as tags: `archive/e1-arc-click` (a render check for clicks at tempo-ramp points; needs fades modelled and a centred correlation) and `archive/item8-key` (an own key estimator, 47 percent exact on 400 masters; at most a soft tie-break). Reasons in `Documentation/BURN_LIST.md` (E1, D4). Mention them when work touches render checks or keys.
 
 - [ ] **Claude (Sonnet builder)** - Add a pick manifest to `Tools/playlist_builder.py` (filters, pool size, genre and era spread, repeats against earlier mixes, requested n against built n, grid-gate result per pick); a 'credible' request never uses `--preset any` (2026-11-25, Master Board card).
-- [ ] **Sam** - Say yes or no to two global changes the self-audit proposes: a one-line `CLAUDE.md` rule that an interrupted-marker message is still a request, and a merge-to-skill line in `/orchestrate` (2026-11-25).
 - [ ] **Claude** - After the next listening, add its rows to `Documentation/Mix Patterns Library/listening_calibration.md`; change a threshold only when the rows give a counted rule (2026-11-25).
 
-- [ ] **Sam** - Listen to `Listening Sets/Tech House 2026 Planned.wav` (bounced 2026-11-22).
 - [ ] **Codex** - Cut the beat-grid memory spike after a fresh separation on the Home PC (6 to 7 GB measured) (2026-11-22).
 
 - **Codex** - Rerun DFTD with the upstream Call 911 grid fix and listen to the blends. The cached replay still flags a two-beat offset on Call 911. The Passion into Ninetoes entry and the Ninetoes into Ashibah entry and swap are 16 bars earlier than Sam's key. The hints gate flags fallback outro hints for Call 911 and A Little Affection for review.
