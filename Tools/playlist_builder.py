@@ -361,9 +361,9 @@ def manifest(rows, pool, drops, picked, a, mixes=None, bad_mixes=0, grid_cache=N
     L.append("picks:")
     for i, r in enumerate(picked):
         g = gr[i]
-        gtxt = "grid: unknown (never analysed)" if g is None else f"grid: {g[0]}{f' {g[1]:g} ms' if g[1] is not None else ''} (cached) [{g[2]}]"
+        gtxt = "grid: unknown (never analysed)" if g is None else f"grid: {g[0]}{f' {g[1]:.1f} ms' if g[1] is not None else ''} (cached) [{g[2]}]"
         L.append(f"  #{i + 1} {r['artist']} - {r['title']}: {gtxt}" + (f"; repeat of: {', '.join(rep[i])}" if rep[i] else ''))
-    fails = [f"{r['artist']} - {r['title']}" + (f" ({g[1]:g} ms)" if g[1] is not None else '') for r, g in zip(picked, gr) if g and g[0] == 'FAIL']
+    fails = [f"{r['artist']} - {r['title']}" + (f" ({g[1]:.1f} ms)" if g[1] is not None else '') for r, g in zip(picked, gr) if g and g[0] == 'FAIL']
     L.append(f"summary: built {len(picked)} of {a.n}; {sum(bool(x) for x in rep)} repeats" + ("" if mixes else " (not checked)") +
              f"; grid known {known} of {len(picked)}" + (f"; CACHED GRID FAIL: {'; '.join(fails)}" if fails else ""))
     return L

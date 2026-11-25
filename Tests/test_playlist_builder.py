@@ -44,12 +44,13 @@ def pb(_pb_module, monkeypatch):
     monkeypatch.setitem(sys.modules, "psycopg2", None)            # `import psycopg2` raises ImportError
     monkeypatch.setitem(sys.modules, "psycopg2.extras", None)
     monkeypatch.delenv("MIX_PLANNER_RO_DATABASE_URL", raising=False)
+    monkeypatch.setattr(_pb_module, "default_mix_roots", lambda: [])    # no test reads earlier mixes from this machine's disk
     return _pb_module
 
 
 def args(**kw):
     base = dict(cmd="build", label=[], artist=[], year_from=None, year_to=None, min_streams=None, arc="rise",
-                preset="any", n=12, max_per_artist=1, heat_min=0, heat_max=10, rows=None)
+                preset="any", n=12, max_per_artist=1, heat_min=0, heat_max=10, rows=None, credible=False, mixes_dir=[])
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -468,7 +469,10 @@ def test_main_without_resolve_keeps_the_existing_report(pb, monkeypatch, capsys,
     rows_file = resolver_tools / "rows.json"
     rows_file.write_text(json.dumps([row()]), encoding="utf-8")
     _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "1")
-    assert capsys.readouterr().out == (
+    out = capsys.readouterr().out
+    manifest_text, _, report_text = out.partition("\n# Playlist draft")     # the manifest now comes first; the report is unchanged
+    assert manifest_text.splitlines()[0] == "built 1 of 1 requested"
+    assert "# Playlist draft" + report_text == (
         "# Playlist draft: arc=rise preset=any n=1  (source: Neon credits ledger)\n\n"
         "Each row is one VERSION with its own streams (a remix and an original are different tracks). "
         "Genre is a DB DRAFT tag.\n\n"
@@ -631,3 +635,344 @@ def test_credentials_reader_returns_none_without_the_key_or_the_file(tmp_path):
     assert mod.ro_url_from_credentials_file() is None
     mod2 = _copy_with_synthetic_credentials(tmp_path / "b", None)
     assert mod2.ro_url_from_credentials_file() is None
+
+
+# --- manifest: requested vs built, pool counts, spreads, repeats, cached grid, --credible ----------------------------------
+# Earlier mixes and gate logs are synthetic folders under tmp_path (names with spaces); nothing reads this machine's real disk.
+
+def make_mix(root, name, wavs, log_lines=None, overrides=None, excluded=()):
+    mix = root / name
+    (mix / "Audio").mkdir(parents=True)
+    for w in wavs: (mix / "Audio" / w).touch()
+    if excluded:
+        (mix / "_Excluded Audio").mkdir()
+        for w in excluded: (mix / "_Excluded Audio" / w).touch()
+    if log_lines is not None:
+        (mix / "Output").mkdir()
+        (mix / "Output" / "relay.log").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    if overrides is not None:
+        (mix / "Hints").mkdir()
+        (mix / "Hints" / "grid_overrides.json").write_text(overrides if isinstance(overrides, str) else json.dumps(overrides), encoding="utf-8")
+    return mix
+
+
+def gate_line(verdict, name, detail):
+    return f"  [{verdict:4s}] {name[:54]:56s} R=0.50 ph=advisory     {detail}"
+
+
+PASS_DETAIL = "stem-kick grid (whole-mix R=0.50 is not the ruler; grid_vs_kick 4.1ms - sits on the transients)"
+FAIL_DETAIL = "stem grid is 127ms OFF its own kicks (>15ms) - the detector can't grid this track"
+
+
+def run_manifest(pb, rows, a, roots=(), **kw):
+    drops = {}
+    pool = pb.prepare(rows, a, drops)
+    picked = pb.build(rows, a)
+    dirs = pb.mix_dirs(list(roots))
+    mixes, bad = pb.read_earlier_mixes(dirs)
+    return pb.manifest(rows, pool, drops, picked, a, mixes, bad, pb.read_grid_cache(dirs), **kw), picked
+
+
+def test_manifest_first_line_built_against_requested(pb):
+    lines, picked = run_manifest(pb, ladder_rows(), args(n=7))
+    assert lines[0] == "built 7 of 7 requested" and len(picked) == 7
+
+
+def test_manifest_short_build_says_pool_too_small(pb):
+    lines, _ = run_manifest(pb, ladder_rows()[:2], args(n=5))
+    assert lines[0] == "built 2 of 5 requested: pool too small (2 usable tracks after the filters)"
+
+
+def test_manifest_short_build_says_max_per_artist(pb):
+    rows = [row(f"T{i}", artist="Same", genre="House", streams=1000 + i) for i in range(6)]
+    lines, _ = run_manifest(pb, rows, args(n=4))
+    assert lines[0].startswith("built 1 of 4 requested: ") and "max-per-artist 1" in lines[0] and "leave 1 pickable" in lines[0]
+
+
+def test_manifest_empty_pool_and_n_of_one(pb):
+    lines, picked = run_manifest(pb, [], args(n=3))
+    assert picked == [] and lines[0].startswith("built 0 of 3 requested: pool too small (0 usable")
+    assert "dropped: nothing" in " ".join(lines) and "heat curve, picked order: -" in lines
+    lines, picked = run_manifest(pb, ladder_rows(), args(n=1))
+    assert lines[0] == "built 1 of 1 requested" and len(picked) == 1
+
+
+def test_manifest_n_zero_is_built_zero_of_zero(pb):
+    assert run_manifest(pb, ladder_rows(), args(n=0))[0][0] == "built 0 of 0 requested"
+
+
+def test_manifest_lists_the_filters_as_given(pb):
+    lines, _ = run_manifest(pb, ladder_rows(), args(label=["Defected", "DFTD"], artist=["Eli"], year_from=2015, year_to=2020,
+                                                    min_streams=5000, heat_min=2, heat_max=8, preset="cool", arc="wave", n=3,
+                                                    max_per_artist=2, credible=True))
+    f = lines[1]
+    for part in ("label=Defected,DFTD", "artist=Eli", "year=2015-2020", "min_streams=5000", "heat=2-8", "preset=cool", "arc=wave",
+                 "max_per_artist=2", "n=3", "credible=True"):
+        assert part in f
+
+
+def test_prepare_drops_count_each_reason_and_leave_the_pool_unchanged(pb):
+    rows = [row("Song (Acapella)"), row("Odd", genre="Polka"), row("Hard", genre="Techno (Peak Time / Driving)"),
+            row("Fast", bpm=170), row("Old", release_date="2001-01-01"), row("Undated", release_date=None), row("Fine")]
+    a = args(heat_max=7, year_from=2010)
+    drops = {}
+    assert [r["title"] for r in pb.prepare(rows, a, drops)] == ["Fine"]
+    assert drops == {"not a playlist track": 1, "genre not on the ladder": 1, "heat outside range": 1, "tempo outside band": 1,
+                     "year filter": 2}
+    assert pb.prepare(rows, a) == pb.prepare(rows, a, {})            # drops is optional and changes nothing
+
+
+def test_manifest_pool_line_and_coverage_counts(pb):
+    rows = [row("A", artist="A1", bpm=124, musical_key="8A"), row("B", artist="B1", genre=None, release_date=None), row("C", genre="Polka")]
+    lines, _ = run_manifest(pb, rows, args(n=3))
+    assert "pool: 3 rows fetched; 1 after prepare; dropped: genre not on the ladder 2" in lines
+    assert "coverage of the 3 rows: genre 2, bpm 1, musical_key 1, release_date 2" in lines
+
+
+def test_manifest_rows_missing_release_date_and_genre_do_not_crash(pb):
+    rows = [row("A", artist="A1", release_date=None), row("B", artist="B1", genre=None), {"artist": "X", "title": "Y", "streams_plays": 5}]
+    lines, picked = run_manifest(pb, rows, args(n=3))
+    assert len(picked) == 1 and "era spread, picked: undated 1" in lines
+
+
+def test_manifest_spreads_show_a_flat_pick_against_a_narrow_pool(pb):
+    rows = [row(f"T{i}", artist=f"A{i}", genre="Tech House", streams=1000 + i, release_date=f"20{10 + i}-01-01") for i in range(6)]
+    lines, _ = run_manifest(pb, rows, args(n=4))
+    assert "genre spread, picked: Tech House 4 (1 distinct of 1 in the pool)" in lines
+    assert any(l.startswith("era spread, picked: ") for l in lines) and any(l.startswith("era spread, pool: ") for l in lines)
+    lines, _ = run_manifest(pb, ladder_rows(), args(n=7))
+    assert any(l.startswith("genre spread, picked") and l.endswith("(7 distinct of 7 in the pool)") for l in lines)
+
+
+def test_manifest_heat_curve_matches_the_report(pb):
+    lines, picked = run_manifest(pb, ladder_rows(), args(n=7))
+    assert "heat curve, picked order: " + " ".join(str(r["heat"]) for r in picked) in lines
+
+
+def test_manifest_preset_any_note_unless_credible(pb):
+    note = "preset any ranks by stream percentile across all genres; use --credible --preset cool for a coherent set"
+    assert note in run_manifest(pb, ladder_rows(), args(n=3))[0]
+    assert note not in run_manifest(pb, ladder_rows(), args(n=3, preset="cool", credible=True))[0]
+    assert note not in run_manifest(pb, ladder_rows(), args(n=3, preset="cool"))[0]
+
+
+# --- repeats --------------------------------------------------------------------------------------------------------------
+
+def test_repeats_not_checked_when_no_earlier_mix_is_readable(pb, tmp_path):
+    lines, _ = run_manifest(pb, ladder_rows(), args(n=3), roots=[tmp_path / "nowhere"])
+    assert "repeats: not checked (no earlier mix list found)" in lines
+    assert not any("none" in l.lower() for l in lines if l.startswith("repeats"))
+    assert "(not checked)" in lines[-1]
+
+
+def test_repeats_flag_a_pick_named_with_the_mix_and_print_the_coverage_count(pb, tmp_path):
+    root = tmp_path / "Earlier Mixes"
+    make_mix(root, "24.11.26 Fresh Mix", ["Artist 5 - Track Tech House.wav", "Other - Elsewhere SW V2.wav"])
+    make_mix(root, "21.11.26 Second Mix", ["Nobody - Nothing 24 Bit MASTER.wav"])
+    lines, picked = run_manifest(pb, ladder_rows(), args(n=7), roots=[root])
+    assert "repeats: 1 of 7 picks were in an earlier mix (checked against 2 earlier mixes)" in lines
+    assert [l for l in lines if "Track Tech House" in l and l.startswith("  #")][0].endswith("repeat of: 24.11.26 Fresh Mix")
+    assert len([l for l in lines if "repeat of:" in l]) == 1
+
+
+def test_repeats_zero_when_mixes_are_readable_but_nothing_repeats(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", ["Nobody - Nothing.wav"])
+    lines, _ = run_manifest(pb, ladder_rows(), args(n=3), roots=[tmp_path])
+    assert "repeats: 0 of 3 picks were in an earlier mix (checked against 1 earlier mixes)" in lines
+
+
+def test_a_remix_and_an_original_are_different_versions_not_repeats(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", ["Mr. V - Mr. Bongo (Butch Remix).wav", "Artist - Plain Song (Extended Mix) SW V3.wav"])
+    orig = row("Mr. Bongo", artist="Mr. V")
+    remix = row("Mr. Bongo", artist="Mr. V", remixer="Butch")
+    plain = row("Plain Song", artist="Artist")
+    plain_other_remix = row("Plain Song", artist="Artist", remixer="Bob")
+    mixes, _ = pb.read_earlier_mixes(pb.mix_dirs([tmp_path]))
+    assert pb.repeats_in(orig, mixes) == []
+    assert pb.repeats_in(remix, mixes) == ["Mix A"]
+    assert pb.repeats_in(plain, mixes) == ["Mix A"]                       # extended mix is the original version
+    assert pb.repeats_in(plain_other_remix, mixes) == []
+
+
+def test_repeat_match_needs_a_word_boundary_and_a_title_made_of_letters(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", ["Artist - Taste Of Honey.wav", "Artist - !!!.wav"])
+    mixes, _ = pb.read_earlier_mixes(pb.mix_dirs([tmp_path]))
+    assert pb.repeats_in(row("Taste", artist="Artist"), mixes) == []      # "Taste" is not "Taste Of Honey"
+    assert pb.repeats_in(row("!!!", artist="Artist"), mixes) == []        # punctuation-only title never matches anything
+    assert pb.repeats_in(row("", artist="Artist"), mixes) == []
+
+
+def test_repeat_match_folds_accents_and_ignores_the_delivery_suffix(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", ["Michaël Canitrot - Renaissance (Extended Mix) 24 Bit MASTER AMENDED V3.wav", "10A - Duo - Song SW V1.wav"])
+    mixes, _ = pb.read_earlier_mixes(pb.mix_dirs([tmp_path]))
+    assert pb.repeats_in(row("Renaissance", artist="Michael Canitrot"), mixes) == ["Mix A"]
+    assert pb.repeats_in(row("Renaissance", artist="Michaël Canitrot"), mixes) == ["Mix A"]
+    assert pb.repeats_in(row("Song", artist="Duo"), mixes) == ["Mix A"]    # a leading key prefix is ignored
+
+
+def test_non_latin_artist_names_do_not_crash_or_match(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", ["Кино - Группа крови.wav"])
+    mixes, _ = pb.read_earlier_mixes(pb.mix_dirs([tmp_path]))
+    assert pb.repeats_in(row("Группа крови", artist="Кино"), mixes) == []   # unknown, never a false repeat
+
+
+def test_unreadable_mix_names_are_skipped_and_unlistable_mixes_are_counted(pb, tmp_path, monkeypatch):
+    make_mix(tmp_path, "Mix A", ["no separator here.wav", "notes.txt", " - .wav", "Artist - Song.wav"])
+    make_mix(tmp_path, "_Corpus", ["Artist - Song.wav"])                  # names starting with _ are corpora, not mixes
+    mixes, bad = pb.read_earlier_mixes(pb.mix_dirs([tmp_path]))
+    assert [m[0] for m in mixes] == ["Mix A"] and len(mixes[0][1]) == 1 and bad == 0
+    monkeypatch.setattr(pb, "wavs_in", lambda d: None)                    # the Audio folder cannot be listed
+    mixes, bad = pb.read_earlier_mixes(pb.mix_dirs([tmp_path]))
+    assert mixes == [] and bad == 1
+
+
+def test_mix_roots_come_from_the_environment_and_the_flag(pb, monkeypatch, tmp_path):
+    make_mix(tmp_path / "Env Root", "Mix A", ["Artist - Song.wav"])
+    make_mix(tmp_path / "Flag Root", "Mix B", ["Artist - Song.wav"])
+    monkeypatch.undo()                                                     # the real default_mix_roots, no autouse stubs
+    monkeypatch.setenv("DJMIX_MIX_ROOTS", str(tmp_path / "Env Root"))
+    assert str(tmp_path / "Env Root") in pb.default_mix_roots()
+    assert [os.path.basename(d) for d in pb.mix_dirs([str(tmp_path / "Env Root"), str(tmp_path / "Flag Root")])] == ["Mix A", "Mix B"]
+    assert pb.mix_dirs([str(tmp_path / "Env Root"), str(tmp_path / "Env Root")]) == pb.mix_dirs([str(tmp_path / "Env Root")])
+
+
+# --- cached beat-grid verdicts --------------------------------------------------------------------------------------------
+
+GRID_ROWS = [row("Pass Track", artist="Ann"), row("Fail Track", artist="Bob", genre="Tech House"), row("New Track", artist="Cat", genre="Deep House")]
+
+
+def test_grid_pass_fail_and_unknown_from_earlier_gate_logs(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", ["Ann - Pass Track (Extended Mix) SW V2.wav"], excluded=["Bob - Fail Track SW V1.wav"], log_lines=[
+        "Beatgrid verification (whole-track onset-vs-grid sweep test)...",
+        gate_line("PASS", "Ann - Pass Track (Extended Mix) SW V2.wav", PASS_DETAIL),
+        gate_line("FAIL", "Bob - Fail Track SW V1.wav", FAIL_DETAIL)])
+    lines, _ = run_manifest(pb, GRID_ROWS, args(n=3, max_per_artist=3), roots=[tmp_path])
+    picks = {l.strip().split(": ")[0].split(" ", 1)[1]: l for l in lines if l.startswith("  #")}
+    assert "grid: PASS 4.1 ms (cached) [Mix A]" in picks["Ann - Pass Track"]
+    assert "grid: FAIL 127.0 ms (cached) [Mix A]" in picks["Bob - Fail Track"]
+    assert "grid: unknown (never analysed)" in picks["Cat - New Track"]
+    assert "grid known for 2 of 3 picks" in lines
+    assert lines[-1].endswith("CACHED GRID FAIL: Bob - Fail Track (127.0 ms)")
+
+
+def test_grid_unknown_is_never_printed_as_a_pass(pb, tmp_path):
+    lines, _ = run_manifest(pb, GRID_ROWS, args(n=3), roots=[tmp_path])
+    assert "grid known for 0 of 3 picks (no earlier gate output found)" in lines
+    assert not any("grid: PASS" in l for l in lines) and not any("CACHED GRID FAIL" in l for l in lines)
+    assert all("grid: unknown (never analysed)" in l for l in lines if l.startswith("  #"))
+
+
+def test_grid_long_names_cut_at_54_chars_are_resolved_through_the_audio_folder(pb, tmp_path):
+    long_name = "Harry Romero, Jose Nunez, Alex Alicea & Shawnee Taylor - I Wanna Thank You 24 Bit MASTER.wav"
+    make_mix(tmp_path, "Mix A", [long_name], log_lines=[gate_line("PASS", long_name, PASS_DETAIL)])
+    r = row("I Wanna Thank You", artist="Harry Romero, Jose Nunez, Alex Alicea & Shawnee Taylor")
+    cache = pb.read_grid_cache(pb.mix_dirs([tmp_path]))
+    assert pb.grid_for(r, cache) == ("PASS", 4.1, "Mix A")
+
+
+def test_grid_a_remix_is_not_the_originals_result(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", ["Ann - Song (Bob Remix).wav"], log_lines=[gate_line("FAIL", "Ann - Song (Bob Remix).wav", FAIL_DETAIL)])
+    cache = pb.read_grid_cache(pb.mix_dirs([tmp_path]))
+    assert pb.grid_for(row("Song", artist="Ann"), cache) is None
+    assert pb.grid_for(row("Song", artist="Ann", remixer="Bob"), cache)[0] == "FAIL"
+
+
+def test_grid_newest_cached_result_wins(pb, tmp_path):
+    old = make_mix(tmp_path, "Old Mix", ["Ann - Song.wav"], log_lines=[gate_line("FAIL", "Ann - Song.wav", FAIL_DETAIL)])
+    new = make_mix(tmp_path, "New Mix", ["Ann - Song.wav"], log_lines=[gate_line("PASS", "Ann - Song.wav", PASS_DETAIL)])
+    os.utime(old / "Output" / "relay.log", (1_000_000, 1_000_000))
+    os.utime(new / "Output" / "relay.log", (2_000_000, 2_000_000))
+    assert pb.grid_for(row("Song", artist="Ann"), pb.read_grid_cache(pb.mix_dirs([tmp_path])))[0] == "PASS"
+
+
+def test_grid_overrides_json_is_read_and_applies_the_15_ms_rule(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", [], overrides={"Ann - Near.wav": {"phase_source": "drum-stem-kicks", "grid_vs_kick_ms": 3.2},
+                                                "Ann - Far.wav": {"phase_source": "drum-stem-kicks", "grid_vs_kick_ms": 88.0},
+                                                "Ann - Other.wav": {"phase_source": "ableton-ticks", "grid_vs_kick_ms": 1.0},
+                                                "Ann - Bad.wav": {"phase_source": "drum-stem-kicks", "grid_vs_kick_ms": "x"}})
+    cache = pb.read_grid_cache(pb.mix_dirs([tmp_path]))
+    assert pb.grid_for(row("Near", artist="Ann"), cache)[:2] == ("PASS", 3.2)
+    assert pb.grid_for(row("Far", artist="Ann"), cache)[:2] == ("FAIL", 88.0)
+    assert pb.grid_for(row("Other", artist="Ann"), cache) is None          # only stem-kick grids carry the kick figure
+    assert pb.grid_for(row("Bad", artist="Ann"), cache) is None
+
+
+@pytest.mark.parametrize("content", ["{", "", "[1, 2]", "null", '{"Ann - Song.wav": 5}', '{"Ann - Song.wav": {"grid_vs_kick_ms": 2}}'])
+def test_grid_corrupt_or_half_written_cache_files_give_unknown_not_a_crash(pb, tmp_path, content):
+    make_mix(tmp_path, "Mix A", ["Ann - Song.wav"], overrides=content,
+             log_lines=["  [PASS", gate_line("PASS", "Ann - Song.wav", PASS_DETAIL)[:30], "garbage \x00 line"])
+    cache = pb.read_grid_cache(pb.mix_dirs([tmp_path]))
+    assert pb.grid_for(row("Song", artist="Ann"), cache) is None
+
+
+def test_grid_log_with_invalid_bytes_is_still_read(pb, tmp_path):
+    mix = make_mix(tmp_path, "Mix A", ["Ann - Song.wav"], log_lines=[gate_line("PASS", "Ann - Song.wav", PASS_DETAIL)])
+    with open(mix / "Output" / "relay.log", "ab") as f: f.write(b"\xff\xfe bad bytes \x80\n")
+    assert pb.grid_for(row("Song", artist="Ann"), pb.read_grid_cache(pb.mix_dirs([tmp_path])))[0] == "PASS"
+
+
+# --- main: the manifest comes first, stderr warns when short, --credible refuses preset any -------------------------------
+
+def test_main_prints_the_manifest_before_the_track_rows_and_warns_on_stderr_when_short(pb, monkeypatch, capsys, tmp_path):
+    rows_file = tmp_path / "rows.json"
+    rows_file.write_text(json.dumps(ladder_rows()[:3]), encoding="utf-8")
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "5")
+    cap = capsys.readouterr()
+    assert cap.out.startswith("built 3 of 5 requested: pool too small (3 usable tracks after the filters)\n")
+    assert cap.out.index("summary:") < cap.out.index("# Playlist draft")
+    assert "[warn] built 3 of 5 requested: pool too small" in cap.err
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "3")
+    assert "built 3 of 3" not in capsys.readouterr().err
+
+
+def test_main_mixes_dir_flag_feeds_the_repeat_and_grid_checks(pb, monkeypatch, capsys, tmp_path):
+    rows_file = tmp_path / "rows.json"
+    rows_file.write_text(json.dumps([row("Song", artist="Ann")]), encoding="utf-8")
+    make_mix(tmp_path / "My Earlier Mixes", "Mix A", ["Ann - Song.wav"], log_lines=[gate_line("FAIL", "Ann - Song.wav", FAIL_DETAIL)])
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "1", "--mixes-dir", str(tmp_path / "My Earlier Mixes"))
+    out = capsys.readouterr().out
+    assert "repeats: 1 of 1 picks were in an earlier mix (checked against 1 earlier mixes)" in out
+    assert "  #1 Ann - Song: grid: FAIL 127.0 ms (cached) [Mix A]; repeat of: Mix A" in out
+    assert "CACHED GRID FAIL: Ann - Song (127.0 ms)" in out
+
+
+def test_main_manifest_never_writes_a_file_or_reaches_the_network(pb, monkeypatch, capsys, tmp_path):
+    rows_file = tmp_path / "rows.json"
+    rows_file.write_text(json.dumps(ladder_rows()), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "4")
+    capsys.readouterr()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["rows.json"]
+
+
+@pytest.mark.parametrize("preset", ["cool", "cult", "hits"])
+def test_credible_accepts_the_coherent_presets(pb, monkeypatch, capsys, tmp_path, preset):
+    rows_file = tmp_path / "rows.json"
+    rows_file.write_text(json.dumps(ladder_rows()), encoding="utf-8")
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "3", "--credible", "--preset", preset)
+    out = capsys.readouterr().out
+    assert f"preset={preset}" in out and "credible=True" in out and "preset any ranks by stream percentile" not in out
+
+
+@pytest.mark.parametrize("argv", [["--credible", "--preset", "any"], ["--credible"]])
+def test_credible_refuses_preset_any_with_exit_2_and_a_one_line_reason(pb, monkeypatch, capsys, tmp_path, argv):
+    rows_file = tmp_path / "rows.json"
+    rows_file.write_text(json.dumps(ladder_rows()), encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), *argv)
+    assert e.value.code == 2
+    cap = capsys.readouterr()
+    assert cap.out == "" and "--credible refuses --preset any" in cap.err and "use --preset cool, cult or hits" in cap.err
+
+
+def test_without_credible_preset_any_still_works_and_says_why_it_is_not_coherent(pb, monkeypatch, capsys, tmp_path):
+    rows_file = tmp_path / "rows.json"
+    rows_file.write_text(json.dumps(ladder_rows()), encoding="utf-8")
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "3")
+    assert "preset any ranks by stream percentile across all genres; use --credible --preset cool for a coherent set" in capsys.readouterr().out
+
+
+def test_manifest_has_no_em_dash_and_no_credentials(pb, tmp_path):
+    lines, _ = run_manifest(pb, ladder_rows(), args(n=7))
+    text = "\n".join(lines)
+    assert "—" not in text and "postgres" not in text.lower()
