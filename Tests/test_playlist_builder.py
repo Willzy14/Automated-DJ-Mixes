@@ -1467,3 +1467,117 @@ def test_a_remixer_named_like_a_delivery_word_is_not_the_bare_remix(pb, tmp_path
 def test_delivery_words_at_the_end_are_still_ignored(pb, tmp_path, fname):
     make_mix(tmp_path, "Mix A", [fname])
     assert repeats_of(pb, row("Bb", artist="Aa"), tmp_path) == ["Mix A"]
+
+
+# --- round 3: copies that keep an old mtime, .wav inside a title, BOM, ties, blank entries --------------------------------------
+
+FUTURE = 4_000_000_000          # a log time later than any file created today
+SOON = 3_000_000_000
+
+
+def test_file_stamp_is_the_newest_of_mtime_and_creation_time(pb, tmp_path):
+    f = tmp_path / "a.wav"
+    f.touch()
+    os.utime(f, (1_000_000, 1_000_000))                  # what copy2 / Explorer / Dropbox do: keep the source's old mtime
+    assert os.path.getmtime(f) == 1_000_000 and pb.file_stamp(str(f)) > 1_500_000_000
+
+
+def test_a_swapped_in_copy_that_keeps_an_old_mtime_is_still_unknown(pb, tmp_path):
+    # the remix's PASS is in an old log; the remix is gone and a copy of the original, created today but carrying an OLD mtime, took its place
+    mix = make_mix(tmp_path, "Mix A", [LONG_ORIG], logs={"Output/a.log": [gate_line("PASS", LONG_RMX, PASS_DETAIL)]}, mtime=2_000_000)
+    os.utime(mix / "Audio" / LONG_ORIG, (1_000_000, 1_000_000))
+    assert grid_of(pb, prow(LONG_ORIG_ROW), tmp_path) is None
+    assert grid_of(pb, prow(LONG_RMX_ROW), tmp_path) is None
+
+
+def test_a_cut_name_still_resolves_when_the_log_is_newer_than_the_files_creation(pb, tmp_path):
+    mix = make_mix(tmp_path, "Mix A", [LONG_ORIG], logs={"Output/a.log": [gate_line("PASS", LONG_ORIG, PASS_DETAIL)]}, mtime=FUTURE)
+    os.utime(mix / "Audio" / LONG_ORIG, (1_000_000, 1_000_000))
+    assert grid_of(pb, prow(LONG_ORIG_ROW), tmp_path) == ("PASS", 4.1, "Mix A", "log")
+
+
+# a '.wav' inside a title: the gate's 54-char cut can land right after it
+WAV_TITLE_PREFIX = "Zqlongartist - Zqa very long title Songxxxxxxxxxxx.wav"            # 54 chars, ends in .wav, is only the START of the name
+WAV_TITLE_FILE = WAV_TITLE_PREFIX + " Mix (Zqbob Remix).wav"
+WAV_TITLE_ROW = dict(artist="Zqlongartist", title="Zqa very long title Songxxxxxxxxxxx", mix_name="Original Mix")
+
+
+def test_a_cut_that_lands_right_after_a_wav_inside_the_title_is_not_a_whole_name(pb, tmp_path):
+    assert len(WAV_TITLE_PREFIX) == 54 and gate_line("PASS", WAV_TITLE_FILE, "x")[9:63] == WAV_TITLE_PREFIX
+    make_mix(tmp_path, "Mix A", [], logs={"Output/a.log": [gate_line("PASS", WAV_TITLE_FILE, PASS_DETAIL)]})          # file not kept
+    assert grid_of(pb, prow(WAV_TITLE_ROW), tmp_path) is None
+
+
+def test_a_longer_known_file_means_a_wav_ending_field_is_a_cut_name(pb, tmp_path):
+    make_mix(tmp_path, "Mix A", [WAV_TITLE_FILE], logs={"Output/a.log": [gate_line("PASS", WAV_TITLE_FILE, PASS_DETAIL)]})
+    assert grid_of(pb, prow(WAV_TITLE_ROW), tmp_path) is None
+
+
+def _name_of_length(n):
+    stem = "Zqa - " + "t" * (n - len("Zqa - .wav")) + ".wav"
+    assert len(stem) == n
+    return stem, "t" * (n - len("Zqa - .wav"))
+
+
+def test_a_whole_name_of_53_chars_is_taken_but_one_of_exactly_54_is_a_cut_unless_the_file_is_known(pb, tmp_path):
+    n53, t53 = _name_of_length(53)
+    n54, t54 = _name_of_length(54)
+    make_mix(tmp_path, "Mix A", [], logs={"Output/a.log": [gate_line("PASS", n53, PASS_DETAIL), gate_line("PASS", n54, PASS_DETAIL)]})
+    assert grid_of(pb, row(t53, artist="Zqa"), tmp_path)[0] == "PASS"                    # shorter than the cut width and ends in .wav: whole
+    assert grid_of(pb, row(t54, artist="Zqa"), tmp_path) is None                         # exactly the cut width and not a known file: a cut
+    make_mix(tmp_path, "Mix B", [n54], logs={"Output/a.log": [gate_line("PASS", n54, PASS_DETAIL)]})
+    assert grid_of(pb, row(t54, artist="Zqa"), tmp_path)[0] == "PASS"                    # a known file with exactly that name: whole
+
+
+def test_a_log_starting_with_a_bom_is_read(pb, tmp_path):
+    line = gate_line("PASS", "Ann - Song.wav", PASS_DETAIL)
+    make_mix(tmp_path, "Mix A", ["Ann - Song.wav"], logs={"Output/a.log": (chr(0xFEFF) + line + chr(10)).encode("utf-8")})
+    assert grid_of(pb, row("Song", artist="Ann"), tmp_path)[0] == "PASS"
+
+
+def test_a_tie_on_mtime_between_a_log_pass_and_an_override_fail_goes_to_the_fail(pb, tmp_path):
+    ov = {"Ann - Song.wav": {"phase_source": "drum-stem-kicks", "grid_vs_kick_ms": 88.0}}
+    make_mix(tmp_path, "Mix A", ["Ann - Song.wav"], logs={"Output/a.log": [gate_line("PASS", "Ann - Song.wav", PASS_DETAIL)]}, overrides=ov, mtime=1_500_000)
+    assert grid_of(pb, row("Song", artist="Ann"), tmp_path) == ("FAIL", 88.0, "Mix A", "override")
+
+
+# hollow-test fixes: what the mtime rule does with two copies, an unreadable file and equal times
+def test_a_file_in_both_audio_and_held_back_is_dated_by_its_newer_copy(pb, tmp_path):
+    mix = make_mix(tmp_path, "Mix A", [LONG_ORIG], held=[LONG_ORIG], logs={"Output/a.log": [gate_line("PASS", LONG_ORIG, PASS_DETAIL)]}, mtime=SOON)
+    os.utime(mix / "Audio" / LONG_ORIG, (1_000_000, 1_000_000))                          # the Audio copy is old (and created before the log)
+    os.utime(mix / "Held Back" / LONG_ORIG, (FUTURE, FUTURE))                           # the Held Back copy is newer than the log
+    assert grid_of(pb, prow(LONG_ORIG_ROW), tmp_path) is None
+    os.utime(mix / "Held Back" / LONG_ORIG, (1_000_000, 1_000_000))
+    os.utime(mix / "Audio" / LONG_ORIG, (FUTURE, FUTURE))                                # and the other way round
+    assert grid_of(pb, prow(LONG_ORIG_ROW), tmp_path) is None
+
+
+def test_a_file_whose_time_cannot_be_read_is_never_trusted_for_a_cut_name(pb, tmp_path, monkeypatch):
+    make_mix(tmp_path, "Mix A", [LONG_ORIG], logs={"Output/a.log": [gate_line("PASS", LONG_ORIG, PASS_DETAIL)]}, mtime=FUTURE)
+    assert grid_of(pb, prow(LONG_ORIG_ROW), tmp_path)[0] == "PASS"                        # control: readable, so it resolves
+    real_stat = os.stat
+    def stat(path, *a, **k):
+        if str(path).endswith(LONG_ORIG): raise PermissionError("denied")
+        return real_stat(path, *a, **k)
+    monkeypatch.setattr(os, "stat", stat)
+    assert grid_of(pb, prow(LONG_ORIG_ROW), tmp_path) is None
+
+
+def test_a_file_exactly_as_old_as_the_log_is_trusted_and_one_second_newer_is_not(pb, tmp_path):
+    mix = make_mix(tmp_path, "Mix A", [LONG_ORIG], logs={"Output/a.log": [gate_line("PASS", LONG_ORIG, PASS_DETAIL)]}, mtime=FUTURE)
+    os.utime(mix / "Audio" / LONG_ORIG, (FUTURE, FUTURE))                                 # explicit equal times
+    assert grid_of(pb, prow(LONG_ORIG_ROW), tmp_path)[0] == "PASS"
+    os.utime(mix / "Audio" / LONG_ORIG, (FUTURE + 1, FUTURE + 1))
+    assert grid_of(pb, prow(LONG_ORIG_ROW), tmp_path) is None
+
+
+def test_main_says_when_a_blank_mix_folder_entry_was_ignored(pb, monkeypatch, capsys, tmp_path):
+    rows_file = tmp_path / "rows.json"
+    rows_file.write_text(json.dumps([row()]), encoding="utf-8")
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "1", "--mixes-dir", "  ")
+    assert "repeats: not checked (no earlier mix list found; ignored blank mix folder entry)" in capsys.readouterr().out
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "1")
+    assert "ignored blank" not in capsys.readouterr().out
+    monkeypatch.setenv("DJMIX_MIX_ROOTS", os.pathsep)
+    _run_main(pb, monkeypatch, "build", "--rows", str(rows_file), "--n", "1")
+    assert "ignored blank mix folder entry" in capsys.readouterr().out
